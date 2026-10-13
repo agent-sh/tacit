@@ -1,0 +1,53 @@
+name: portable client
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "31 4 * * *"
+
+permissions:
+  contents: read
+
+# Native hosted platform checks run only on the public repository after its
+# owner opts in. This private archive has no hosted-runner jobs.
+jobs:
+  native:
+    if: ${{ vars.CI_PUBLIC == '1' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: client/go.mod
+          cache-dependency-path: client/go.sum
+      - run: go test ./internal/platform ./internal/settings
+      - run: go test -run '^TestLocal' ./internal/store
+      - run: go build -o tacit-native.exe ./cmd/tacit
+      - run: go run ./tools/smoke -binary ./tacit-native.exe
+      - name: Native Windows task registration
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./tools/windows-jobs-smoke.ps1 -Binary ./tacit-native.exe
+
+  archives:
+    if: ${{ vars.CI_PUBLIC == '1' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: client/go.mod
+          cache-dependency-path: client/go.sum
+      - run: go run ./tools/dist -out ../dist
+        working-directory: client
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portable-client
+          path: dist/

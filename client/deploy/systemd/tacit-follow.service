@@ -1,0 +1,11 @@
+[Unit]
+Description=tacit follower: sync the store when the server's change feed reports a push
+
+[Service]
+ExecStart=%h/.local/bin/tacit follow
+Restart=always
+RestartSec=5
+RestartPreventExitStatus=78
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,11 @@
+/.cache/
+*.db
+__pycache__/
+.test-data/
+# The binary `go build ./cmd/tacit` leaves in client/.
+/client/tacit
+/client/tacit-app
+# Local agent harness state (worktrees, settings) never belongs in the repo.
+/.claude/
+.DS_Store
+/dist/

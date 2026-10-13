@@ -1,0 +1,3 @@
+name: tacit
+version: 0.1.0
+description: "Shared tacit facts for Hermes: the session-start and per-prompt facts every harness gets, and Hermes' own memory writes mirrored into the tacit inbox. Additive to built-in memory."

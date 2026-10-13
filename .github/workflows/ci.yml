@@ -1,0 +1,70 @@
+name: ci
+
+# Thin on purpose: format, vet and build on every push and pull request.
+# The full suites run for pull requests from forks, once a day, and on demand.
+# Jobs run only when a repository variable says where: CI_CPU_RUNNER names a
+# self-hosted runner (the only option while the repository is private), or
+# CI_PUBLIC=1 on a public repository uses GitHub-hosted runners. With neither,
+# every job is skipped. Pull requests from forks never reach the self-hosted
+# runner of a public repository.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  client:
+    if: ${{ vars.CI_CPU_RUNNER != '' || vars.CI_PUBLIC == '1' }}
+    runs-on: ${{ vars.CI_CPU_RUNNER != '' && (github.event.repository.private || !github.event.pull_request.head.repo.fork) && format('{0}-{1}', vars.CI_CPU_RUNNER, github.run_id) || 'ubuntu-24.04' }}
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: client/go.mod
+          cache-dependency-path: client/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: go build ./cmd/tacit
+      - name: cross-build for macOS
+        run: GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o /dev/null ./cmd/tacit
+      - name: cross-build for Windows
+        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/tacit
+      - name: test (fork PRs, daily, on demand)
+        if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.fork }}
+        run: go test -count=1 ./...
+
+  server:
+    if: ${{ vars.CI_CPU_RUNNER != '' || vars.CI_PUBLIC == '1' }}
+    runs-on: ${{ vars.CI_CPU_RUNNER != '' && (github.event.repository.private || !github.event.pull_request.head.repo.fork) && format('{0}-{1}', vars.CI_CPU_RUNNER, github.run_id) || 'ubuntu-24.04' }}
+    defaults:
+      run:
+        working-directory: server
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v5
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.5"
+          elixir-version: "1.20.4"
+      - run: mix deps.get
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      - name: test (fork PRs, daily, on demand)
+        if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.fork }}
+        run: mix test

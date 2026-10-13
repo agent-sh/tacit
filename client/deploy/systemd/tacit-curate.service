@@ -1,0 +1,16 @@
+[Unit]
+Description=tacit curator: inbox notes to curated facts, conflict check, verify findings against sources, push
+
+[Service]
+EnvironmentFile=%h/.config/tacit/env
+Type=oneshot
+# The staleness scan runs git over the checkouts ($TACIT_PROJECTS, else
+# ~/projects) for up to 45 minutes, often on a desktop machine: lowest CPU and
+# idle disk priority.
+Nice=19
+IOSchedulingClass=idle
+ExecStart=-%h/.local/bin/tacit curate --max-batches 16
+ExecStart=%h/.local/bin/tacit verify --max 60
+# curate starts no batch after its --budget (2h30m) and ends by budget + 75 min;
+# verify follows.
+TimeoutStartSec=5h

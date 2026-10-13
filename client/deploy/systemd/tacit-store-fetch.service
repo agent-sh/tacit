@@ -1,0 +1,7 @@
+[Unit]
+Description=Optional: keep a local mirror of the tacit store (create it once with git clone --mirror <server>/git ~/.local/share/tacit/mirror)
+
+[Service]
+Type=oneshot
+Nice=19
+ExecStart=/usr/bin/git -C %h/.local/share/tacit/mirror remote update --prune

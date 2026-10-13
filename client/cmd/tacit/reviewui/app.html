@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tacit</title>
+<script src="/theme.js"></script>
+<link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/desk.css">
+<script src="/api.js" defer></script>
+<script src="/app.js" defer></script>
+<script src="/desk.js" defer></script>
+<meta name="tacit-token" content="{{TOKEN}}">
+<link rel="icon" href="/icon.svg">
+</head>
+<body class="desk" data-view="needs">
+<a class="skip" href="#sheet">Skip to the page</a>
+<header class="top">
+  <span class="brand">tacit</span>
+  <nav class="places" aria-label="Places">
+    <button type="button" class="place" data-view="needs" aria-pressed="true">Needs you<span class="n" id="needs-n"></span></button>
+    <button type="button" class="place" data-view="rules" aria-pressed="false">Your rules</button>
+    <button type="button" class="place" data-view="believed" aria-pressed="false">What agents believe you prefer</button>
+    <button type="button" class="place" data-view="facts" aria-pressed="false">All facts</button>
+    <button type="button" class="place" data-view="inbox" aria-pressed="false">Inbox</button>
+  </nav>
+  <div class="top-actions">
+    <button type="button" class="btn ghost" id="new-ruling" data-icon="plus"><span class="label">New rule</span><kbd>n</kbd></button>
+    <button type="button" class="btn ghost" id="lights"></button>
+  </div>
+</header>
+<main class="sheet" id="sheet" tabindex="-1">
+  <section class="needs" id="needs" aria-label="Needs you">
+    <div class="needs-top">
+      <p class="left-n" id="left-n" aria-live="polite"></p>
+      <span class="where-host" id="host"></span>
+      <div class="nav-btns">
+        <button type="button" class="btn ghost" id="prev" data-icon="prev"><span class="label">Previous</span><kbd>k</kbd></button>
+        <button type="button" class="btn ghost" id="next" data-icon="next"><span class="label">Next</span><kbd>j</kbd></button>
+        <button type="button" class="btn ghost" id="filter-btn" data-icon="filter" aria-expanded="false" aria-controls="filter-panel"><span class="label">Filter</span><kbd>/</kbd></button>
+      </div>
+    </div>
+    <div class="filter-panel" id="filter-panel" hidden>
+      <label class="search"><span class="ic-slot" data-icon="search"></span><input id="find" type="text" placeholder="Find a word" aria-label="Find a word" autocomplete="off" spellcheck="false"></label>
+      <div class="chips" id="kinds" role="group" aria-label="Kind"></div>
+      <div class="selects">
+        <select id="status" aria-label="Show"><option value="open">Needs you</option><option value="decided">Past answers</option><option value="all">Everything</option></select>
+        <select id="scope" aria-label="Where"><option value="">Anywhere</option></select>
+      </div>
+    </div>
+    <div class="sheet-inner" id="sheet-inner"><div class="done"><p>Reading the store.</p></div></div>
+  </section>
+  <section class="browse" id="browse" aria-label="Facts" hidden>
+    <aside class="list-pane">
+      <div class="list-head">
+        <p class="intro" id="intro"></p>
+        <div class="search-row">
+          <label class="search"><span class="ic-slot" data-icon="search"></span><input id="q" type="text" placeholder="Search" aria-label="Search" autocomplete="off" spellcheck="false"></label>
+          <button type="button" class="btn ghost" id="f-btn" data-icon="filter" aria-expanded="false" aria-controls="f-panel"><span class="label">Filter</span></button>
+        </div>
+        <div class="filter-panel" id="f-panel" hidden>
+          <div class="selects">
+            <select id="f-status" aria-label="Status"><option value="live">In use</option><option value="retired">Retired</option><option value="replaced">Replaced</option><option value="all">Any status</option></select>
+            <select id="f-where" aria-label="Include"><option value="curated">Facts only</option><option value="all">Facts and inbox notes</option></select>
+          </div>
+          <div class="selects">
+            <select id="f-scope" aria-label="Who it reaches"><option value="">Anyone</option></select>
+            <select id="f-repo" aria-label="Repo"><option value="">Any repo</option></select>
+          </div>
+          <div class="selects">
+            <select id="f-type" aria-label="Kind"><option value="">Any kind</option></select>
+            <select id="f-kind" aria-label="Source"><option value="">Any source</option></select>
+          </div>
+          <button type="button" class="link-btn" id="f-clear">Clear the filter</button>
+        </div>
+        <p class="tally" id="facts-tally" aria-live="polite"></p>
+      </div>
+      <ul class="rows" id="facts"></ul>
+    </aside>
+    <div class="fact-pane"><div class="fact-inner" id="fact-sheet"><div class="done"><p>Reading the store.</p></div></div></div>
+  </section>
+</main>
+<div class="slip" id="slip" role="status" aria-live="polite"></div>
+</body>
+</html>

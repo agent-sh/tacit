@@ -1,0 +1,90 @@
+[Unit]
+Description=tacit fact store server
+After=network-online.target tailscaled.service
+Wants=network-online.target tailscaled.service
+
+[Service]
+Type=exec
+User=tacit
+Group=tacit
+WorkingDirectory=/opt/tacit/rel
+Environment=TACIT_DATA=/var/lib/tacit
+Environment=TACIT_PORT=7447
+# The public path: loopback only, reached through Tailscale Funnel (deploy/funnel.sh).
+# Every request on it needs a key token and nothing can push through it.
+Environment=TACIT_PUBLIC_PORT=7448
+# Distribution settings live in rel/env.sh.eex so rpc and start agree.
+Environment=RELEASE_TMP=/var/lib/tacit/tmp
+Environment="ERL_FLAGS=+sbwt none +sbwtdcpu none +sbwtdio none +S 2:2 -kernel inet_dist_use_interface {127,0,0,1}"
+Environment=LANG=C.UTF-8
+ExecStart=/opt/tacit/rel/bin/tacit_server start
+ExecStop=/opt/tacit/rel/bin/tacit_server stop
+Restart=on-failure
+RestartSec=3
+KillMode=mixed
+TimeoutStopSec=30
+
+# Resource bounds for a small always-on service.
+MemoryHigh=1G
+MemoryMax=2G
+TasksMax=512
+
+# Sandbox. The service reads its release, writes /var/lib/tacit, talks to
+# tailscaled over a unix socket, listens on one tailnet address, and starts
+# git (receive-pack, upload-pack, the pre-receive hook with sh, grep, mktemp).
+# Checked by running the server test suite and a built release (start, rpc
+# enroll, push, kill -9 and restart, stop) under these directives with a denied
+# system call set to kill the process, so a call the filter blocks cannot go
+# unnoticed. Re-check the same way when a new subprocess or file API is added.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/var/lib/tacit
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+RemoveIPC=true
+SystemCallArchitectures=native
+
+# No writable-and-executable memory. The BeamAsm JIT of OTP 28 maps its code
+# area twice from a memfd (one writable view, one executable view), so it does
+# not need W+X; the whole suite and a release start/stop pass with this on.
+# If a different OTP or kernel ever fails to start under it, delete this line.
+MemoryDenyWriteExecute=true
+
+# No capabilities at all: the unit runs as an unprivileged user, binds a port
+# above 1023 and needs neither DAC override nor chown.
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Sockets: AF_UNIX for tailscaled's LocalAPI and the VM's own plumbing, AF_INET
+# for the listener and the loopback distribution port and epmd. AF_INET6 stays
+# for resolver lookups and a future IPv6 bind. AF_NETLINK is left out on
+# purpose: strace of the whole suite and of `tailscale ip -4` (run once at boot
+# when TACIT_BIND is unset) shows only AF_UNIX and AF_INET sockets.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+# System calls: the systemd baseline for services, minus privileged and
+# resource-control calls nothing here uses. A denied call fails with EPERM
+# instead of killing the VM with SIGSYS. (EPERM is not ENOSYS, so a glibc or
+# OTP fallback that keys on ENOSYS will not fire for a call outside the filter;
+# re-check with the SIGSYS method above after an OTP or glibc upgrade.)
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# Erlang's file:change_mode (File.chmod) calls chown(path, -1, -1) first. With
+# no CAP_CHOWN that can only be a no-op, so it is allowed back.
+SystemCallFilter=@chown
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target
