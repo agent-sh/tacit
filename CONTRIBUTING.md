@@ -22,7 +22,7 @@ go vet ./...
 go test ./...
 ```
 
-Tests that need [scrump](https://github.com/avifenesh/scrump) with its text profile skip when it is not on `PATH`. Install it to run them (see the README).
+Tests that need [scrump](https://github.com/avifenesh/scrump) with its text profile skip when it is not on `PATH`. Install it to run them (see [redaction setup](docs/portable.md#redaction)).
 
 Server (Elixir 1.20, OTP 28):
 
@@ -39,10 +39,18 @@ Desktop app (optional): `go build -tags desktop,production,webkit2_41 ./cmd/taci
 
 ## CI
 
-CI checks format, vet and build on every pull request. The full suites run on pull requests from forks, once a day, and on demand. A fork of this repo runs CI once its owner sets `CI_PUBLIC=1` (GitHub-hosted runners) or `CI_CPU_RUNNER` (a self-hosted runner). Run the suites locally before you push.
+CI checks format, vet and build on every pull request. The full suites run on pull requests from forks, once a day, and on demand. Public forks enable GitHub-hosted CI with `CI_PUBLIC=1`. Private repositories use `CI_CPU_RUNNER` to select a self-hosted runner. Run the suites locally before you push.
+
+## Agent configuration checks
+
+[agnix](https://github.com/agent-sh/agnix) runs in strict mode on every pull request and push to main. The action and binary are pinned to 0.57.0. Run `agnix --strict .` for the repository check.
+
+CI also builds Tacit and runs `scripts/agent-configs.py` in a disposable profile. It lints the actual Claude hooks, Codex hooks and Codex MCP settings printed by the installer. To repeat this locally, pass a built client with `--binary` and a new directory with `--out`, then run `agnix --strict` on that directory. The generator refuses existing profiles. Agnix 0.57 recognizes the Claude-compatible hook schema at `.claude/settings.json`, so a byte-for-byte copy of Codex's generated hooks is checked at that path too.
+
+Synthetic evaluation corpora and build artifacts are excluded from the repository scan. All generated integration files are in scope for the separate check.
 
 ## Pull requests
 
 - One change per pull request, with the why in the description.
 - Say what you ran: the commands and their result.
-- New flags, environment variables or defaults go in the README configuration table and in SPEC.md.
+- New flags, environment variables or defaults go in the [configuration reference](docs/portable.md#configuration) and in SPEC.md.

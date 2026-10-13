@@ -9,10 +9,10 @@ permissions:
   contents: read
 
 # Native hosted platform checks run only on the public repository after its
-# owner opts in. This private archive has no hosted-runner jobs.
+# owner opts in. Private repositories do not run these hosted jobs.
 jobs:
   native:
-    if: ${{ vars.CI_PUBLIC == '1' }}
+    if: ${{ !github.event.repository.private && vars.CI_PUBLIC == '1' }}
     strategy:
       fail-fast: false
       matrix:
@@ -37,7 +37,7 @@ jobs:
         run: ./tools/windows-jobs-smoke.ps1 -Binary ./tacit-native.exe
 
   archives:
-    if: ${{ vars.CI_PUBLIC == '1' }}
+    if: ${{ !github.event.repository.private && vars.CI_PUBLIC == '1' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

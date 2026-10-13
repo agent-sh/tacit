@@ -1,0 +1,41 @@
+name: agnix
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agnix-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agent-configs:
+    if: ${{ vars.CI_CPU_RUNNER != '' || (!github.event.repository.private && vars.CI_PUBLIC == '1') }}
+    runs-on: ${{ vars.CI_CPU_RUNNER != '' && (github.event.repository.private || !github.event.pull_request.head.repo.fork) && format('{0}-{1}', vars.CI_CPU_RUNNER, github.run_id) || 'ubuntu-24.04' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: client/go.mod
+          cache-dependency-path: client/go.sum
+      - name: Build client
+        working-directory: client
+        run: go build -o "$RUNNER_TEMP/tacit" ./cmd/tacit
+      - name: Generate agent configurations
+        run: python3 scripts/agent-configs.py --binary "$RUNNER_TEMP/tacit" --out "$RUNNER_TEMP/tacit-agent-configs"
+      - name: Lint repository agent configuration
+        uses: agent-sh/agnix@2c0e4efede3181599eca37619e8067ae2d941c00 # v0.57.0
+        with:
+          version: v0.57.0
+          strict: 'true'
+      - name: Lint generated hooks and MCP configuration
+        uses: agent-sh/agnix@2c0e4efede3181599eca37619e8067ae2d941c00 # v0.57.0
+        with:
+          version: v0.57.0
+          path: ${{ runner.temp }}/tacit-agent-configs
+          strict: 'true'

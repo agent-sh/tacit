@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   client:
-    if: ${{ vars.CI_CPU_RUNNER != '' || vars.CI_PUBLIC == '1' }}
+    if: ${{ vars.CI_CPU_RUNNER != '' || (!github.event.repository.private && vars.CI_PUBLIC == '1') }}
     runs-on: ${{ vars.CI_CPU_RUNNER != '' && (github.event.repository.private || !github.event.pull_request.head.repo.fork) && format('{0}-{1}', vars.CI_CPU_RUNNER, github.run_id) || 'ubuntu-24.04' }}
     defaults:
       run:
@@ -49,7 +49,7 @@ jobs:
         run: go test -count=1 ./...
 
   server:
-    if: ${{ vars.CI_CPU_RUNNER != '' || vars.CI_PUBLIC == '1' }}
+    if: ${{ vars.CI_CPU_RUNNER != '' || (!github.event.repository.private && vars.CI_PUBLIC == '1') }}
     runs-on: ${{ vars.CI_CPU_RUNNER != '' && (github.event.repository.private || !github.event.pull_request.head.repo.fork) && format('{0}-{1}', vars.CI_CPU_RUNNER, github.run_id) || 'ubuntu-24.04' }}
     defaults:
       run:

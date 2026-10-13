@@ -1,0 +1,2 @@
+# Synthetic memory corpora and historical evaluation prose are test data.
+exclude = ["eval/**", "dist/**"]
