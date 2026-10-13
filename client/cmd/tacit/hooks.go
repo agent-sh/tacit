@@ -81,6 +81,9 @@ func openIndex(ctx context.Context, s *store.Store) (*search.Index, error) {
 // context), and exits 0 on every failure: a missing store or a slow network
 // must never cost the user a turn.
 func runHook(args []string) int {
+	if os.Getenv("TACIT_MODEL_JOB") == "1" {
+		return 0
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Fprintln(os.Stderr, "tacit hook:", r)

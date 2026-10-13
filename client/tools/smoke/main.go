@@ -140,6 +140,9 @@ func main() {
 	if !strings.Contains(search, "review-first") {
 		check(fmt.Errorf("new ruling was not searchable"))
 	}
+	for _, harness := range []string{"muse", "agy"} {
+		check(memorySmoke(abs, env, harness, *redactor))
+	}
 	run("lint")
 	run("install", "follow")
 	follow := exec.Command(abs, "follow")

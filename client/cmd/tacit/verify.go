@@ -15,6 +15,8 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/gitev"
+	"github.com/agent-sh/tacit/client/internal/modelrun"
+	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
@@ -174,7 +176,7 @@ func claudeVerifier(ctx context.Context, model, prompt, cwd string, budget float
 			return nil, "", 0, fmt.Errorf("verifier directory %s is missing", d)
 		}
 	}
-	args := []string{"-p", prompt, "--bare", "--restricted", "--strict-mcp-config", "--mcp-config", string(mcpCfg), "--settings", verifySettings(append([]string{cwd}, addDirs...)),
+	args := []string{"-p", "--bare", "--restricted", "--strict-mcp-config", "--mcp-config", string(mcpCfg), "--settings", verifySettings(append([]string{cwd}, addDirs...)),
 		"--no-session-persistence", "--model", model, "--output-format", "json", "--json-schema", verifySchema,
 		"--tools", "Read", "--permission-mode", "dontAsk", "--max-turns", "120",
 		"--max-budget-usd", fmt.Sprintf("%.2f", budget)}
@@ -182,6 +184,13 @@ func claudeVerifier(ctx context.Context, model, prompt, cwd string, budget float
 		args = append(args, "--add-dir", d)
 	}
 	args = append(args, "--allowedTools", "Read", "mcp__tacit__tacit_probe")
+	if raw := os.Getenv("TACIT_CLAUDE_ARGS"); raw != "" {
+		var extra []string
+		if err := json.Unmarshal([]byte(raw), &extra); err != nil {
+			return nil, "", 0, fmt.Errorf("Claude runner arguments must be a JSON array: %w", err)
+		}
+		args = append(extra, args...)
+	}
 	var res struct {
 		Result     string  `json:"result"`
 		Cost       float64 `json:"total_cost_usd"`
@@ -195,9 +204,12 @@ func claudeVerifier(ctx context.Context, model, prompt, cwd string, budget float
 	var cost float64
 	var raw, stderr string
 	for attempt := 0; attempt < 3; attempt++ {
-		cmd := exec.CommandContext(ctx, "claude", args...)
+		cmd := exec.CommandContext(ctx, modelrun.Command("claude"), args...)
 		cmd.Dir = cwd
-		cmd.Stdin = nil
+		cmd.Stdin = strings.NewReader(prompt)
+		cmd.Env = append(os.Environ(), "TACIT_MODEL_JOB=1")
+		platform.Prepare(cmd)
+		cmd.WaitDelay = 2 * time.Second
 		out, runErr := cmd.Output()
 		stderr = ""
 		var ee *exec.ExitError
@@ -311,7 +323,7 @@ func runVerify(args []string) int {
 			r.only = append(r.only, it.ID)
 		}
 	}
-	n, cost, err := r.run(context.Background(), s, claudeVerifier)
+	n, cost, err := r.run(context.Background(), s, configuredVerifier)
 	fmt.Printf("verify: %d finding(s) settled or asked, $%.2f%s\n", n, cost, r.modelSummary())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "verify:", err)
@@ -541,12 +553,23 @@ func (r *verifyRun) callBatch(ctx context.Context, call verifierRunner, prompt s
 	vs, c, timedOut, err := one(r.model)
 	var ce *capacityError
 	if err == nil || r.fallback == "" || r.fallback == r.model || !errors.As(err, &ce) || ctx.Err() != nil {
-		return vs, r.model, c, timedOut, err
+		return vs, verifierModelLabel(r.model), c, timedOut, err
 	}
 	fmt.Fprintf(os.Stderr, "verify: %v; this batch runs again on %s\n", err, r.fallback)
 	r.fellBack++
 	vs, c2, timedOut, err := one(r.fallback)
-	return vs, r.fallback, c + c2, timedOut, err
+	return vs, verifierModelLabel(r.fallback), c + c2, timedOut, err
+}
+
+func verifierModelLabel(model string) string {
+	name, _ := modelrun.Name("verify")
+	if name == "claude" {
+		return model
+	}
+	if model == "" {
+		model = "default"
+	}
+	return name + "/" + model
 }
 
 func (r *verifyRun) count(model string, n int) {

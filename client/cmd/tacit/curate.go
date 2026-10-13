@@ -191,7 +191,7 @@ func runCurate(args []string) int {
 			fmt.Fprintf(os.Stderr, "curate: budget %s spent, %d batch(es) wait for the next run\n", *budget, len(batches)-bi)
 			break
 		}
-		res, cost, err := curate.ClaudeCLI(ctx, *model, fmt.Sprintf(curate.SplitPrompt, host, host, curate.Render(batch)))
+		res, cost, err := curate.RunCLI(ctx, *model, fmt.Sprintf(curate.SplitPrompt, host, host, curate.Render(batch)))
 		rep.CostUSD += cost
 		if err != nil {
 			rep.FailedBatches++
@@ -210,7 +210,7 @@ func runCurate(args []string) int {
 			rulings = []string{"(none)"}
 		}
 		recovered := 0
-		if res2, c3, err := curate.ClaudeCLI(ctx, curate.JudgeModel, fmt.Sprintf(curate.RulingsPrompt, strings.Join(rulings, "\n"), curate.Render(batch))); err == nil {
+		if res2, c3, err := curate.JudgeCLI(ctx, curate.JudgeModel, fmt.Sprintf(curate.RulingsPrompt, strings.Join(rulings, "\n"), curate.Render(batch))); err == nil {
 			rep.CostUSD += c3
 			for _, e := range curate.Parse(res2) {
 				e.Kind = "user"

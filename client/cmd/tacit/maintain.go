@@ -7,14 +7,15 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/curate"
 	"github.com/agent-sh/tacit/client/internal/dream"
+	"github.com/agent-sh/tacit/client/internal/modelrun"
 )
 
 func refreshModels() {
-	curate.DefaultModel = envOr("TACIT_CURATE_MODEL", "opus")
-	curate.JudgeModel = envOr("TACIT_JUDGE_MODEL", "haiku")
-	dream.DefaultModel = envOr("TACIT_DREAM_MODEL", "haiku")
-	verifyModel = envOr("TACIT_VERIFY_MODEL", "opus")
-	verifyFallbackModel = envOr("TACIT_VERIFY_FALLBACK_MODEL", "sonnet")
+	curate.DefaultModel = modelrun.Model("curate", "opus")
+	curate.JudgeModel = modelrun.Model("judge", "haiku")
+	dream.DefaultModel = modelrun.Model("dream", "haiku")
+	verifyModel = modelrun.Model("verify", "opus")
+	verifyFallbackModel = modelrun.Model("verify_fallback", "sonnet")
 }
 
 // maintain is the same daily sequence as the curator unit, on every OS.
@@ -37,4 +38,15 @@ func runMaintain(args []string) int {
 		return curated
 	}
 	return verified
+}
+
+// A command-line selection remains authoritative after a job env file loads.
+func setExplicitRunner() {
+	if explicitRunner == "" {
+		return
+	}
+	os.Setenv("TACIT_RUNNER", explicitRunner)
+	for _, role := range []string{"DREAM", "CURATE", "JUDGE", "VERIFY"} {
+		os.Setenv("TACIT_"+role+"_RUNNER", explicitRunner)
+	}
 }

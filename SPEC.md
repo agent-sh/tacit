@@ -32,7 +32,7 @@ MEMORY.md                  generated index; never edited by hand
 README.md                  optional, ignored by lint and index
 ```
 
-`<harness>` is one of `claude`, `codex`, `pi`, `hermes`, `grok`, `dreamer`, `import`, `curator`, `human`, `reader`. `<host>` is the short hostname. A reader key only reads (see Public path).
+`<harness>` is one of `claude`, `codex`, `pi`, `hermes`, `grok`, `muse`, `agy`, `dreamer`, `import`, `curator`, `human`, `reader`. `<host>` is the short hostname. A reader key only reads (see Public path).
 
 ## Ordering
 
@@ -57,7 +57,7 @@ applies_to:                               # situation join key; any subset
   hosts: ["workstation"]
   commands: ["git commit", "cargo fmt"]   # prefixes
 source:
-  harness: claude                         # claude | codex | pi | hermes | grok | dreamer | import | curator | human
+  harness: claude                         # claude | codex | pi | hermes | grok | muse | agy | dreamer | import | curator | human
   host: workstation
   session: 7146f42d-...                   # optional
   kind: observed                          # user | observed | web | derived
@@ -336,7 +336,7 @@ Every commit subject starts `owner: ` (`owner: edit <name> (<fields>)`, `owner: 
 
 ## Models
 
-The client calls models through `claude -p`, so the provider is whatever `claude` on that machine is set up for (an Anthropic API key, Bedrock, Vertex). The defaults are Claude CLI aliases; each step has an environment override, which a job takes from its env file (`EnvironmentFile`, `--env-file`):
+The client calls models through the configured runner: Claude, Codex, Hermes, Grok, pi, Muse or agy. `runner` selects the default CLI and `runners` overrides each role. Claude remains the default, with the aliases below; other runners use their own configured model when no model override is set. See [runner configuration and boundaries](docs/portable.md#model-runners). Each step has an environment override, which a job takes from its env file (`EnvironmentFile`, `--env-file`):
 
 | Step | Default | Override |
 |---|---|---|
@@ -359,7 +359,7 @@ A `--model` flag, where a command has one, wins over the variable. On a provider
 | `dream [--env-file F]` | `tacit-dream.service` (`EnvironmentFile=F`, default `~/.config/tacit/env`) and `tacit-dream.timer` | `~/Library/LaunchAgents/ai.tacit.dream.plist` running `tacit dream --env-file F` (default `~/.config/tacit/env`) |
 | `app` (desktop build) | `tacit.desktop` and the SVG icon | `~/Applications/tacit.app` |
 
-**launchd.** launchd has no `EnvironmentFile` and no `RestartPreventExitStatus`, so the two differences are carried by the binary, not the job file. The follower's agent runs `tacit follow --launchd`, `RunAtLoad`, `KeepAlive {SuccessfulExit: false, Crashed: true}` (restart after any failing exit or crash, as `Restart=always`), `ThrottleInterval` 5 (`RestartSec=5`); under `--launchd` the config exit 78 becomes exit 0, which KeepAlive does not restart, after the reason is logged. The follower writes its own log (`--log ~/Library/Logs/tacit/follow.log`): each line stamped with the local time, and a line that would take the file past 1 MiB first moves it to `follow.log.1` (replacing the older one), so the log never holds more than about 2 MiB; launchd's own `StandardErrorPath` is `follow.err.log`, which gets only start-up errors and panics. The dreamer's agent runs `tacit dream --env-file F` every 14400 s (`StartInterval`, not at load), and `--env-file` loads the file's `KEY=VALUE` lines (optional `export`, `#` comments, one pair of quotes removed) into the process before any `claude -p`; a missing file or a malformed line fails the run (exit 2) and no value is ever printed. Both agents: `ProcessType Background`, `LowPriorityIO`, `Nice` 10 (follower) or 19 (dreamer), stdout and stderr to `~/Library/Logs/tacit/` (the directory is created by install, since launchd does not), and `EnvironmentVariables` with `TACIT_STORE` when set at install time and a `PATH` of the binary's directory, `~/.local/bin`, the directories where `git`, `scrump` and `claude` were found at install time, `~/.cargo/bin`, `/opt/homebrew/bin`, `/usr/local/bin` and the system directories (launchd's own PATH lacks all of the first). Load with `launchctl bootout gui/$(id -u)/<label>; launchctl bootstrap gui/$(id -u) <plist>`. The curator and the verifier have no macOS target: they run on the curator's machine.
+**launchd.** launchd has no `EnvironmentFile` and no `RestartPreventExitStatus`, so the two differences are carried by the binary, not the job file. The follower's agent runs `tacit follow --launchd`, `RunAtLoad`, `KeepAlive {SuccessfulExit: false, Crashed: true}` (restart after any failing exit or crash, as `Restart=always`), `ThrottleInterval` 5 (`RestartSec=5`); under `--launchd` the config exit 78 becomes exit 0, which KeepAlive does not restart, after the reason is logged. The follower writes its own log (`--log ~/Library/Logs/tacit/follow.log`): each line stamped with the local time, and a line that would take the file past 1 MiB first moves it to `follow.log.1` (replacing the older one), so the log never holds more than about 2 MiB; launchd's own `StandardErrorPath` is `follow.err.log`, which gets only start-up errors and panics. The dreamer's agent runs `tacit dream --env-file F` every 14400 s (`StartInterval`, not at load), and `--env-file` loads the file's `KEY=VALUE` lines (optional `export`, `#` comments, one pair of quotes removed) into the process before any model job; a missing file or a malformed line fails the run (exit 2) and no value is ever printed. Both agents: `ProcessType Background`, `LowPriorityIO`, `Nice` 10 (follower) or 19 (dreamer), stdout and stderr to `~/Library/Logs/tacit/` (the directory is created by install, since launchd does not), and `EnvironmentVariables` with `TACIT_STORE` when set at install time and a `PATH` of the binary's directory, `~/.local/bin`, the directories where `git`, `scrump` and the configured runners were found at install time, `~/.cargo/bin`, `/opt/homebrew/bin`, `/usr/local/bin` and the system directories (launchd's own PATH lacks all of the first). Load with `launchctl bootout gui/$(id -u)/<label>; launchctl bootstrap gui/$(id -u) <plist>`. The curator and the verifier have no macOS target: they run on the curator's machine.
 
 **The app bundle.** `tacit.app/Contents/` holds `Info.plist` (`CFBundleIdentifier ai.tacit.app`, `CFBundleExecutable tacit-app`, `CFBundleIconFile tacit`, `LSEnvironment` with the same `PATH` and `TACIT_STORE`, since Finder starts apps with launchd's PATH), `MacOS/tacit-app` (a copy of the running binary: macOS reads a bundle's Info.plist and icon only for an executable inside it; skipped when install runs from that copy), and `Resources/tacit.icns` (embedded in the desktop build from `client/cmd/tacit/macos/tacit.icns`, made by `scripts/make-icns.sh` from `reviewui/icon.svg`). The bundle is signed ad hoc with `codesign --force --sign -` when codesign exists. Finder starts the executable with no arguments (or `-psn_...`): run from inside a `.app` bundle, `tacit` then opens the window instead of printing usage.
 

@@ -21,8 +21,8 @@
 # overlay (~/.local/share/tacit/local), redacted with scrump, shared by the
 # harnesses here. Never a dreamer.
 #
-# --with-dream: also the dreamer every 4 h (writer mode only; needs claude,
-# scrump and the variables claude -p needs in --env-file). The curator and
+# --with-dream: also the dreamer every 4 h (writer mode only; needs the selected runner,
+# scrump and the selected runner's provider variables in --env-file). The curator and
 # the verifier run on the curator's machine only and are never installed here.
 #
 # No sudo. Nothing secret is printed: only public keys and paths.
@@ -329,8 +329,8 @@ load_agent ai.tacit.follow
 
 if [[ $with_dream -eq 1 ]]; then
   say "dreamer (launchd, every 4 h)"
-  command -v claude >/dev/null 2>&1 || warn "claude is not on PATH; the dreamer runs claude -p and fails without it"
-  [[ -f "$env_file" ]] || warn "$env_file is missing: put the variables claude -p needs there (KEY=VALUE, chmod 600; for example the Bedrock ones), or leave it empty if claude here is logged in another way"
+  # The runner can come from YAML or the env file; Tacit resolves it at job startup.
+  [[ -f "$env_file" ]] || warn "$env_file is missing: put the selected runner's provider variables there (KEY=VALUE, chmod 600; for example the Bedrock ones), or leave it empty if the selected runner is already logged in"
   run "$tacit" install dream --env-file "$env_file"
   load_agent ai.tacit.dream
 fi

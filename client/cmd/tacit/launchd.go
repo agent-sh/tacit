@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/xml"
+	"github.com/agent-sh/tacit/client/internal/modelrun"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,11 +44,17 @@ func launchdLogDir(home string) string { return filepath.Join(home, "Library", "
 
 // servicePATH is the PATH a background job gets. launchd starts agents with
 // /usr/bin:/bin:/usr/sbin:/sbin only, and the jobs run git, and the dreamer
-// also scrump and claude: the directories where those were found at install
+// also scrump and its configured runner: directories found at install
 // time come first, after the binary's own directory and ~/.local/bin.
 func servicePATH(home, exe string, look func(string) (string, error)) string {
 	dirs := []string{filepath.Dir(exe), filepath.Join(home, ".local", "bin")}
-	for _, tool := range []string{"git", "scrump", "claude"} {
+	tools := []string{"git", "scrump"}
+	for _, role := range []string{"dream", "curate", "judge", "verify"} {
+		if name, err := modelrun.Name(role); err == nil {
+			tools = append(tools, modelrun.Command(name))
+		}
+	}
+	for _, tool := range tools {
 		if p, err := look(tool); err == nil && filepath.IsAbs(p) {
 			dirs = append(dirs, filepath.Dir(p))
 		}

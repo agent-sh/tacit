@@ -101,3 +101,7 @@ For a real evaluation:
 6. Evaluate the dreamer against facts that were never written, and the verifier against owner-labelled findings. Report missed facts and wrong retirements as well as successes. Keep held-out agreement separate from tuning agreement.
 
 [eval/README.md](../eval/README.md) maps the scripts, flags, dependencies and model calls. [VALUE.md](../eval/VALUE.md) keeps the original measurements, sample sizes and negative results. Original store contents, transcripts and task answers stay private. You can repeat the methods on your own data; you cannot recreate those exact results from the synthetic sample.
+
+## Choosing the model runner
+
+Dreaming, splitting, judging and verification use independently configurable agent CLIs. Claude and its measured role models remain the defaults. Muse and agy also expose memory through MCP, alongside the existing integrations. Changing a runner does not change the prompts, owner-proof rules, redaction or review requirements. Quality on another model needs its own evaluation; the published measurements do not transfer automatically. See [configuration and validation limits](portable.md#model-runners).

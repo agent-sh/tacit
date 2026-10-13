@@ -3,6 +3,7 @@ package settings
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -21,7 +22,19 @@ type Models struct {
 	Fallback string `yaml:"verify_fallback"`
 }
 
+type Runners struct {
+	Dream  string `yaml:"dream"`
+	Curate string `yaml:"curate"`
+	Judge  string `yaml:"judge"`
+	Verify string `yaml:"verify"`
+}
+
 type Config struct {
+	RunnerArgs map[string][]string `yaml:"runner_args"`
+	Runner     string              `yaml:"runner"`
+	Runners    Runners             `yaml:"runners"`
+	Commands   map[string]string   `yaml:"commands"`
+
 	Store       string   `yaml:"store"`
 	Projects    string   `yaml:"projects"`
 	Index       string   `yaml:"index"`
@@ -88,6 +101,38 @@ func Load(path string, required bool) error {
 		return filepath.Clean(p)
 	}
 	values := map[string]string{"TACIT_STORE": resolve(c.Store), "TACIT_PROJECTS": resolve(c.Projects), "TACIT_INDEX": resolve(c.Index), "TACIT_CONFIG": resolve(c.Keys), "TACIT_LOCAL": resolve(c.Local), "TACIT_OWNER_NAMES": strings.Join(c.OwnerNames, ","), "TACIT_CURATE_MODEL": c.Models.Curate, "TACIT_JUDGE_MODEL": c.Models.Judge, "TACIT_DREAM_MODEL": c.Models.Dream, "TACIT_VERIFY_MODEL": c.Models.Verify, "TACIT_VERIFY_FALLBACK_MODEL": c.Models.Fallback}
+	values["TACIT_RUNNER"] = c.Runner
+	for role, name := range map[string]string{"DREAM": c.Runners.Dream, "CURATE": c.Runners.Curate, "JUDGE": c.Runners.Judge, "VERIFY": c.Runners.Verify} {
+		values["TACIT_"+role+"_RUNNER"] = name
+	}
+	validRunner := func(name string) bool {
+		switch name {
+		case "", "claude", "codex", "hermes", "grok", "pi", "muse", "agy":
+			return true
+		}
+		return false
+	}
+	for key, value := range values {
+		if strings.HasSuffix(key, "_RUNNER") && !validRunner(value) {
+			return fmt.Errorf("unknown runner %q in %s", value, key)
+		}
+	}
+	for name, command := range c.Commands {
+		if name == "" || !validRunner(name) {
+			return fmt.Errorf("unknown runner command %q", name)
+		}
+		if strings.ContainsAny(command, "/\\") {
+			command = resolve(command)
+		}
+		values["TACIT_"+strings.ToUpper(name)+"_COMMAND"] = command
+	}
+	for name, args := range c.RunnerArgs {
+		if name == "" || !validRunner(name) {
+			return fmt.Errorf("unknown runner arguments %q", name)
+		}
+		b, _ := json.Marshal(args)
+		values["TACIT_"+strings.ToUpper(name)+"_ARGS"] = string(b)
+	}
 	var roots []string
 	for _, p := range c.VerifyRoots {
 		if p != "" {
