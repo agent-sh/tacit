@@ -351,12 +351,28 @@ func installHooksFor(path, exe, goos string) error {
 		placed := false
 		if list, ok := hooks[event].([]any); ok {
 			for _, e := range list {
-				switch {
-				case !mentionsTacit(e):
+				m, ok := e.(map[string]any)
+				if !ok {
 					kept = append(kept, e)
-				case !placed:
-					kept = append(kept, entry)
-					placed = true
+					continue
+				}
+				children, ok := m["hooks"].([]any)
+				if !ok {
+					kept = append(kept, e)
+					continue
+				}
+				var remaining []any
+				for _, child := range children {
+					if !mentionsTacit(map[string]any{"hooks": []any{child}}) {
+						remaining = append(remaining, child)
+					} else if !placed {
+						remaining = append(remaining, handler)
+						placed = true
+					}
+				}
+				if len(remaining) > 0 {
+					m["hooks"] = remaining
+					kept = append(kept, m)
 				}
 			}
 		}

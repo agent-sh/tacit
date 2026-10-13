@@ -202,12 +202,11 @@ The applied audit writes `review/rulings-audit.json` and the proof ledger to the
 On the curator's machine, install the daily timer:
 
 ```
-mkdir -p ~/.config/systemd/user
-cp client/deploy/systemd/tacit-curate.{service,timer} ~/.config/systemd/user/
-systemctl --user daemon-reload && systemctl --user enable --now tacit-curate.timer
+tacit install curate
+# Run the native start commands it prints after configuring the env file.
 ```
 
-That runs `tacit curate` (split, rulings check, contradiction check, then derive, results, links and stale) and `tacit verify`.
+The installer carries the selected settings into the job. It runs `tacit curate` (split, rulings check, contradiction check, then derive, results, links and stale) and `tacit verify`.
 
 ### 6. The app
 
