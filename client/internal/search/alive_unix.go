@@ -1,0 +1,15 @@
+//go:build unix
+
+package search
+
+import (
+	"errors"
+	"syscall"
+)
+
+// processAlive reports whether pid is a running process (signal 0 checks
+// without sending; EPERM means it exists under another user).
+func processAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
+}

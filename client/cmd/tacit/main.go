@@ -1,0 +1,344 @@
+// Command tacit is the client: lint, index and import in phase 1.
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/agent-sh/tacit/client/internal/auth"
+	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/importer"
+	"github.com/agent-sh/tacit/client/internal/index"
+	"github.com/agent-sh/tacit/client/internal/lint"
+	"github.com/agent-sh/tacit/client/internal/ownerwords"
+	"github.com/agent-sh/tacit/client/internal/settings"
+	tstore "github.com/agent-sh/tacit/client/internal/store"
+)
+
+func usage() {
+	fmt.Fprint(os.Stderr, `usage:
+  tacit [--config FILE] <command>
+  tacit init   [--store DIR]    initialize a local store (no server or keys)
+  tacit maintain [--env-file FILE]   curate then verify on this machine
+  tacit lint   [--store DIR]
+  tacit index  [--store DIR] [--check]
+  tacit import [--store DIR] [--host NAME] claude <memory-dir>...
+  tacit import [--store DIR] [--host NAME] codex  <memories-dir>
+  tacit clone <url> <harness>     clone the store and set up the credential helper
+  tacit clone --read-only [--as reader] <url>   clone that never pushes; --as signs fetches with that key (the server's public path asks one); agents' adds stay on this machine
+  tacit sync                       fast-forward the store and refresh the index
+  tacit follow [--url U] [--as H]  hold the server's change feed; sync on each push (a systemd user service)
+  tacit search [--repo R] [--limit N] [--inbox] [--json] <query...>
+  tacit fact <name>                print one fact
+  tacit add --harness H --desc "..." [--type T] [--scope S] [--kind K] <name>
+  tacit hook session-start|prompt  Claude Code hooks (JSON on stdin, block on stdout)
+  tacit mcp [--harness H]          MCP stdio server: tacit_search, tacit_fact, tacit_add
+  tacit install claude|codex|hermes|grok|pi|follow|dream|curate|app
+  tacit install dream [--env-file F]   the dreamer every 4 h (a systemd timer on Linux, a launchd agent on macOS)
+  tacit dream [--model M] [--dry-run] [--max-calls N] [--env-file F]   transcript deltas -> facts in inbox/dreamer@<host>/
+  tacit curate [--model M] [--dry-run] [--max-batches N] [--budget D] [--recheck-conflicts --since D] inbox notes -> curated one-fact entries, conflict check, index, push; then the derive step
+  tacit derive [--dry-run] [--out DIR] [--repo R] [--force] [--take-over] [--no-fetch] [--projects DIR] [-v]   hot spots, co-change and module map from git -> derived/<repo>/ (no model)
+  tacit derive --set-branch <repo>=<branch>   read that repo at a branch other than the remote default (empty branch removes it)
+  tacit results [--dry-run] [--out DIR] [--repo R] [--take-over] [--projects DIR] [-v]   measured results committed to repos -> derived/<repo>/ result facts with their commit; saved facts quoting a replaced value -> review/<date>-results.md (no model)
+  tacit links [--dry-run]   dead [[links]] in curated facts -> rewritten to the one live fact that clearly answers to them, else plain text; an owner ruling gets a LINK? line in review/<date>.md instead (no model; a step of curate, after results)
+  tacit stale [--dry-run] [--max N] [--fact NAME] [--as-of T] [--json] [-v]   curated facts whose subject changed in git after their date -> stale? findings in review/<date>.md (no model; flags, never retires)
+  tacit rulings audit [--dry-run] [--strict] [--recheck] [--digests DIR] [--digests-only] [--sample N] [--seed N] [--json FILE]   keep a ruling only with the owner's own words as evidence (a verified quote, their decision, written by them); the rest -> source.kind observed (no model)
+  tacit resolve supersede <old> <new> | conflict <a> <b> | clear <name>   the owner's answer to a review item
+  tacit review [--addr 127.0.0.1:7448] [--no-open]   local page to triage review items
+  tacit review --label SAMPLE.json [--labels OUT.jsonl]   label mode: the owner's ground truth for a sample, written outside the store
+  tacit app                        the desktop window: what needs you, every fact, edit, retire, new rulings (a build with -tags desktop)
+  tacit app --browser [--addr 127.0.0.1:7450] [--no-open]   the same page in a browser tab
+  tacit review apply VERDICTS.json...   apply a verifier's checked marks (with evidence) in one commit
+  tacit verify [--model M] [--max N] [--batch N] [--budget USD] [--ids SAMPLE.json] [--dry-run]   settle open findings against their sources; leave the owner only real questions
+  tacit timeline [--as-of T] [--json] [--ids SAMPLE.json] [ID...]   the git timeline of review findings: fact dates, commits on their subject, what HEAD shows; no model
+  tacit probe <verb> ...           the read-only commands a verifier may run (git-log, git-show, git-blame, git-grep, git-ls, git-tags, grep, find, ls, gh view/list, unit, units, sys)
+  tacit keygen <harness>          create the writer key <harness>@<host> and print its public line
+  tacit pubkey <harness>          print the public key line
+  tacit authcheck <harness> [--url BASE]   does the server take <harness>@<host> as a writer (for reader: as a reader)? exit 0 yes, 1 not yet, 3 waiting will not help
+  tacit token  <harness>          print a fresh push token
+  tacit credential <harness> get  git credential helper: credential.helper "tacit credential <harness>"
+
+--store defaults to $TACIT_STORE, then ~/.local/share/tacit/store.
+exit codes: 0 ok, 1 lint findings or stale index, 2 error.
+`)
+	os.Exit(2)
+}
+
+func storeFlag(fs *flag.FlagSet) *string {
+	def := os.Getenv("TACIT_STORE")
+	if def == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			def = filepath.Join(home, ".local/share/tacit/store")
+		}
+	}
+	return fs.String("store", def, "store root")
+}
+
+func main() {
+	configPath := settings.Path()
+	required := os.Getenv("TACIT_SETTINGS") != ""
+	if len(os.Args) > 2 && os.Args[1] == "--config" {
+		configPath, _ = filepath.Abs(os.Args[2])
+		required = true
+		os.Setenv("TACIT_SETTINGS", configPath)
+		os.Args = append(os.Args[:1], os.Args[3:]...)
+	}
+	configPath, _ = filepath.Abs(configPath)
+	if required {
+		os.Setenv("TACIT_SETTINGS", configPath)
+	}
+	if err := settings.Load(configPath, required); err != nil {
+		if len(os.Args) > 1 && os.Args[1] == "hook" {
+			os.Exit(0)
+		}
+		fmt.Fprintln(os.Stderr, "tacit:", err)
+		os.Exit(2)
+	}
+	refreshModels()
+	// Finder starts an app bundle's executable with no arguments (older
+	// macOS adds -psn_...): from ~/Applications/tacit.app that means the window.
+	if len(os.Args) < 2 || strings.HasPrefix(os.Args[1], "-psn_") {
+		if exe, err := os.Executable(); err == nil && launchedFromBundle(exe) {
+			os.Exit(runApp(nil))
+		}
+		usage()
+	}
+	switch os.Args[1] {
+	case "maintain":
+		os.Exit(runMaintain(os.Args[2:]))
+	case "init":
+		os.Exit(runInit(os.Args[2:]))
+	case "lint":
+		os.Exit(runLint(os.Args[2:]))
+	case "index":
+		os.Exit(runIndex(os.Args[2:]))
+	case "import":
+		os.Exit(runImport(os.Args[2:]))
+	case "keygen", "pubkey", "token", "credential":
+		os.Exit(runKey(os.Args[1], os.Args[2:]))
+	case "clone":
+		os.Exit(runClone(os.Args[2:]))
+	case "sync":
+		os.Exit(runSync(os.Args[2:]))
+	case "authcheck":
+		os.Exit(runAuthcheck(os.Args[2:]))
+	case "follow":
+		os.Exit(runFollow(os.Args[2:]))
+	case "search":
+		os.Exit(runSearch(os.Args[2:]))
+	case "fact":
+		os.Exit(runFact(os.Args[2:]))
+	case "add":
+		os.Exit(runAdd(os.Args[2:]))
+	case "hook":
+		os.Exit(runHook(os.Args[2:]))
+	case "mcp":
+		os.Exit(runMCP(os.Args[2:]))
+	case "install":
+		os.Exit(runInstall(os.Args[2:]))
+	case "dream":
+		os.Exit(runDream(os.Args[2:]))
+	case "curate":
+		os.Exit(runCurate(os.Args[2:]))
+	case "rulings":
+		os.Exit(runRulings(os.Args[2:]))
+	case "derive":
+		os.Exit(runDerive(os.Args[2:]))
+	case "results":
+		os.Exit(runResults(os.Args[2:]))
+	case "links":
+		os.Exit(runLinks(os.Args[2:]))
+	case "stale":
+		os.Exit(runStale(os.Args[2:]))
+	case "resolve":
+		os.Exit(runResolve(os.Args[2:]))
+	case "probe":
+		os.Exit(runProbe(os.Args[2:]))
+	case "verify":
+		os.Exit(runVerify(os.Args[2:]))
+	case "review":
+		os.Exit(runReview(os.Args[2:]))
+	case "app":
+		os.Exit(runApp(os.Args[2:]))
+	case "timeline":
+		os.Exit(runTimeline(os.Args[2:]))
+	default:
+		usage()
+	}
+}
+
+func runLint(args []string) int {
+	fs := flag.NewFlagSet("lint", flag.ExitOnError)
+	store := storeFlag(fs)
+	fs.Parse(args)
+	findings, err := lint.Run(*store)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "lint:", err)
+		return 2 // could not lint; 1 means findings
+	}
+	for _, f := range findings {
+		fmt.Println(f)
+	}
+	if len(findings) > 0 {
+		fmt.Fprintf(os.Stderr, "%d finding(s)\n", len(findings))
+		return 1
+	}
+	return 0
+}
+
+func runIndex(args []string) int {
+	fs := flag.NewFlagSet("index", flag.ExitOnError)
+	store := storeFlag(fs)
+	check := fs.Bool("check", false, "exit 1 if MEMORY.md differs instead of writing it")
+	fs.Parse(args)
+	facts, perrs, err := fact.Walk(*store)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "index:", err)
+		return 1
+	}
+	if len(perrs) > 0 {
+		for _, e := range perrs {
+			fmt.Fprintln(os.Stderr, "index:", e)
+		}
+		return 1
+	}
+	want := index.Generate(facts)
+	dst := filepath.Join(*store, "MEMORY.md")
+	if *check {
+		have, _ := os.ReadFile(dst)
+		if string(have) != want {
+			fmt.Fprintln(os.Stderr, "MEMORY.md is stale")
+			return 1
+		}
+		return 0
+	}
+	tmp := dst + ".tmp"
+	if err := os.WriteFile(tmp, []byte(want), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, "index:", err)
+		return 1
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		fmt.Fprintln(os.Stderr, "index:", err)
+		return 1
+	}
+	return 0
+}
+
+func runImport(args []string) int {
+	fs := flag.NewFlagSet("import", flag.ExitOnError)
+	store := storeFlag(fs)
+	hostname, _ := os.Hostname()
+	host := fs.String("host", shortHost(hostname), "short host name for inbox/import@<host>")
+	fs.Parse(args)
+	rest := fs.Args()
+	if len(rest) < 2 {
+		usage()
+	}
+	home, _ := os.UserHomeDir()
+	o := importer.Options{Store: *store, Host: *host, Home: home}
+	if err := o.Validate(); err != nil {
+		fmt.Fprintln(os.Stderr, "import:", err)
+		return 2
+	}
+	// Import writes inbox files: never into a read-only clone.
+	if (&tstore.Store{Dir: *store}).ReadOnly(context.Background()) {
+		fmt.Fprintln(os.Stderr, "import: nothing done:", tstore.ErrReadOnly)
+		return 2
+	}
+	// A memory filed as the owner's is kind user only with their words in it,
+	// checked against their turns on this machine (SPEC.md, Rulings). Without
+	// them nothing is imported (fail closed).
+	corpus, cerr := loadOwnerCorpus(home, ownerwords.DefaultDigests(home), false)
+	if cerr != nil {
+		fmt.Fprintln(os.Stderr, "import: the owner's words cannot be read:", cerr)
+		return 2
+	}
+	aud := newRulingAuditor(nil, nil, nil, nil, corpus)
+	w := whereFor(aud)
+	o.OwnerWords = func(q, session string) string { from, _ := w(q, session); return from }
+	var r importer.Result
+	switch rest[0] {
+	case "claude":
+		r = importer.Claude(o, rest[1:]...)
+	case "codex":
+		if len(rest) != 2 {
+			usage()
+		}
+		r = importer.Codex(o, rest[1])
+	default:
+		usage()
+	}
+	fmt.Println("import " + rest[0] + ": " + r.String())
+	for _, e := range r.Errors {
+		fmt.Fprintln(os.Stderr, "import:", e)
+	}
+	if len(r.Errors) > 0 {
+		return 2
+	}
+	return 0
+}
+
+// runKey covers keygen, pubkey, token and the git credential helper. The
+// key id is <harness>@<host>, host being this machine's short name, which
+// the server checks against the tailnet node that makes the request.
+func runKey(cmd string, args []string) int {
+	if len(args) < 1 || !fact.IsSlug(args[0]) {
+		usage()
+	}
+	hostname, _ := os.Hostname()
+	harness := args[0]
+	// A push made on behalf of another writer (dreamer, curator, import) sets
+	// TACIT_WRITER; the credential helper then signs with that key.
+	if cmd == "credential" {
+		if w := os.Getenv("TACIT_WRITER"); w != "" && fact.IsSlug(w) {
+			harness = w
+		}
+	}
+	id := harness + "@" + shortHost(hostname)
+	dir, err := auth.Dir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, cmd+":", err)
+		return 2
+	}
+	switch cmd {
+	case "keygen":
+		k, err := auth.Generate(dir, id)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "keygen:", err)
+			return 2
+		}
+		fmt.Println(k.PublicOpenSSH())
+		return 0
+	case "credential":
+		// Git calls `<helper> get|store|erase` and feeds key=value lines on stdin.
+		if len(args) < 2 || args[1] != "get" {
+			return 0
+		}
+		_, _ = io.ReadAll(os.Stdin)
+	}
+	k, err := auth.Load(dir, id)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, cmd+": no key for "+id+"; run `tacit keygen "+harness+"` and enroll it:", err)
+		return 2
+	}
+	switch cmd {
+	case "pubkey":
+		fmt.Println(k.PublicOpenSSH())
+	case "token":
+		fmt.Println(k.Token(time.Now()))
+	case "credential":
+		fmt.Printf("username=%s\npassword=%s\n", id, k.Token(time.Now()))
+	}
+	return 0
+}
+
+func shortHost(h string) string {
+	h, _, _ = strings.Cut(h, ".")
+	return importer.Slug(h, 40)
+}

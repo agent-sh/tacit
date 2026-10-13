@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>ai.tacit.follow</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/someone/.local/bin/tacit</string>
+		<string>follow</string>
+		<string>--launchd</string>
+		<string>--log</string>
+		<string>/Users/someone/Library/Logs/tacit/follow.log</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/Users/someone/.local/bin:/usr/bin:/opt/homebrew/bin:/Users/someone/.cargo/bin:/usr/local/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+		<key>Crashed</key>
+		<true/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>5</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>Nice</key>
+	<integer>10</integer>
+	<key>LowPriorityIO</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/Users/someone/Library/Logs/tacit/follow.err.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/someone/Library/Logs/tacit/follow.err.log</string>
+</dict>
+</plist>

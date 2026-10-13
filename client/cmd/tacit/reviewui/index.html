@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tacit review</title>
+<script src="/theme.js"></script>
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+<meta name="tacit-token" content="{{TOKEN}}">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 20 20%22%3E%3Cpath d=%22M4.5 10.5l3.5 3.5 7.5-8%22 fill=%22none%22 stroke=%22%23b3262c%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E">
+</head>
+<body>
+<a class="skip" href="#sheet">Skip to the page</a>
+<header class="top">
+  <span class="brand">tacit review</span>
+  <nav class="places" aria-label="Places"><span class="place" aria-current="page">Needs you<span class="n" id="needs-n"></span></span></nav>
+  <div class="top-actions"><button type="button" class="btn ghost" id="lights"></button></div>
+</header>
+<main class="sheet" id="sheet" tabindex="-1">
+  <section class="needs" id="needs" aria-label="Needs you">
+    <div class="needs-top">
+      <p class="left-n" id="left-n" aria-live="polite"></p>
+      <span class="where-host" id="host"></span>
+      <div class="nav-btns">
+        <button type="button" class="btn ghost" id="prev" data-icon="prev"><span class="label">Previous</span><kbd>k</kbd></button>
+        <button type="button" class="btn ghost" id="next" data-icon="next"><span class="label">Next</span><kbd>j</kbd></button>
+        <button type="button" class="btn ghost" id="filter-btn" data-icon="filter" aria-expanded="false" aria-controls="filter-panel"><span class="label">Filter</span><kbd>/</kbd></button>
+      </div>
+    </div>
+    <div class="filter-panel" id="filter-panel" hidden>
+      <label class="search"><span class="ic-slot" data-icon="search"></span><input id="find" type="text" placeholder="Find a word" aria-label="Find a word" autocomplete="off" spellcheck="false"></label>
+      <div class="chips" id="kinds" role="group" aria-label="Kind"></div>
+      <div class="selects">
+        <select id="status" aria-label="Show"><option value="open">Needs you</option><option value="decided">Past answers</option><option value="all">Everything</option></select>
+        <select id="scope" aria-label="Where"><option value="">Anywhere</option></select>
+      </div>
+    </div>
+    <div class="sheet-inner" id="sheet-inner"></div>
+  </section>
+</main>
+<div class="slip" id="slip" role="status" aria-live="polite"></div>
+</body>
+</html>

@@ -1,0 +1,25 @@
+# Builds the tacit_server release on the same Ubuntu base as the host
+# (noble), so the release with its bundled ERTS runs natively under systemd.
+# Only the build happens in Docker; the release is copied out and the image
+# is discarded. Pin the tag; see deploy/deploy.sh.
+ARG BUILDER_IMAGE
+FROM ${BUILDER_IMAGE} AS build
+
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends build-essential git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV MIX_ENV=prod LANG=C.UTF-8
+WORKDIR /src
+RUN mix local.hex --force && mix local.rebar --force
+
+COPY mix.exs mix.lock ./
+RUN mix deps.get --only prod && mix deps.compile
+
+COPY config config
+COPY lib lib
+COPY priv priv
+COPY rel rel
+RUN mix compile --warnings-as-errors && mix release --overwrite
+
+FROM scratch AS release
+COPY --from=build /src/_build/prod/rel/tacit_server /tacit_server

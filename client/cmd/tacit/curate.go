@@ -1,0 +1,485 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/agent-sh/tacit/client/internal/curate"
+	"github.com/agent-sh/tacit/client/internal/derive"
+	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/index"
+	"github.com/agent-sh/tacit/client/internal/ledger"
+	"github.com/agent-sh/tacit/client/internal/lint"
+	"github.com/agent-sh/tacit/client/internal/ownerwords"
+	"github.com/agent-sh/tacit/client/internal/search"
+	"github.com/agent-sh/tacit/client/internal/store"
+)
+
+// curatorState remembers inbox notes the split produced nothing for, so
+// they are not re-sent every day.
+type curatorState struct {
+	Empty map[string]string `json:"empty_origins"` // origin -> date
+	// Restated holds the notes that only restate a curated fact or an earlier
+	// note (curate.Restated, no model): note -> the fact it restates.
+	Restated map[string]string `json:"restated,omitempty"`
+}
+
+// runCurate implements `tacit curate [--model M] [--max-batches N] [--dry-run]`.
+//
+// Per batch of pending inbox notes (no curated child by origin, not known
+// empty): split with the curator model; judge every new fact against its
+// closest existing curated fact and against the other new facts of the
+// same scope, in one batched judge call; write; regenerate the index;
+// commit and push. A batch is pushed before the next starts, so a deadline
+// or crash leaves nothing half-done, and nothing is counted as curated
+// unless it reached the server.
+func runCurate(args []string) int {
+	fs := flag.NewFlagSet("curate", flag.ExitOnError)
+	model := fs.String("model", curate.DefaultModel, "split model")
+	maxBatches := fs.Int("max-batches", 16, "cap on split batches per run (about 85 dreamer notes and $0.83 each, 2026-10-11)")
+	budget := fs.Duration("budget", 150*time.Minute, "no split batch starts after this long; the derive, links and staleness steps run after")
+	dry := fs.Bool("dry-run", false, "split and check, write nothing")
+	recheck := fs.Bool("recheck-conflicts", false, "run only the conflict check again, for the curated facts made from --since on (a run whose check failed)")
+	since := fs.String("since", "", "with --recheck-conflicts: first creation day, YYYY-MM-DD")
+	until := fs.String("until", "", "with --recheck-conflicts: last creation day, YYYY-MM-DD (default: no end)")
+	limit := fs.Int("limit", 0, "with --recheck-conflicts: check only the first N facts (trial runs)")
+	fs.Parse(args)
+	if *recheck && *since == "" {
+		fmt.Fprintln(os.Stderr, "curate: --recheck-conflicts needs --since YYYY-MM-DD")
+		return 2
+	}
+
+	s, err := store.Default()
+	if err != nil || !s.Exists() {
+		fmt.Fprintln(os.Stderr, "curate: no store")
+		return 2
+	}
+	// Before any work: a machine that cannot write as curator does nothing.
+	if !*dry && refuseWriter(context.Background(), s, "curator", "curate") {
+		return 2
+	}
+	host := store.ShortHost()
+	// The batches stop at --budget; the steps after them (derive, results,
+	// links, staleness: about 25 minutes on the author's workstation) have the rest.
+	ctx, cancel := context.WithTimeout(context.Background(), *budget+75*time.Minute)
+	defer cancel()
+	batchesUntil := time.Now().Add(*budget)
+	if err := s.Sync(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "curate: sync:", err)
+		return 1
+	}
+	if *recheck {
+		return recheckConflicts(ctx, s, host, *since, *until, *limit, *dry)
+	}
+	home, _ := os.UserHomeDir()
+	stateDir := filepath.Join(home, ".local", "state", "tacit")
+	cst := loadCuratorState(filepath.Join(stateDir, "curator.json"))
+
+	facts, perrs, err := fact.Walk(s.Dir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "curate:", err)
+		return 2
+	}
+	if len(perrs) > 0 {
+		fmt.Fprintf(os.Stderr, "curate: %d unparsable fact file(s) skipped\n", len(perrs))
+	}
+	// Their notes count as theirs only when the app added them (an owner commit).
+	added := appNoteCommits(ctx, s.Dir)
+	for _, f := range facts {
+		if c, ok := added[f.Path]; ok && f.InInbox() {
+			f.AppNote = strings.HasPrefix(c.subject, ownerCommit)
+		}
+	}
+	curatedOrigins := map[string]bool{}
+	names := map[string]bool{}
+	for _, f := range facts {
+		names[f.Meta.Name] = true
+		if !f.InInbox() && f.Meta.Origin != "" {
+			curatedOrigins[f.Meta.Origin] = true
+		}
+	}
+	var pending []*fact.Fact
+	noteByName := map[string]*fact.Fact{}
+	for _, f := range facts {
+		if f.InInbox() {
+			noteByName[f.Meta.Name] = f
+		}
+		// An owner note saying facts are not their words is not split into
+		// facts: the disowned step acts on it (curateDisowned).
+		if f.InInbox() && !curatedOrigins[f.Meta.Name] && cst.Empty[f.Meta.Name] == "" && cst.Restated[f.Meta.Name] == "" && !disowningNote(f) {
+			pending = append(pending, f)
+		}
+	}
+	sort.Slice(pending, func(i, j int) bool { return pending[i].Path < pending[j].Path })
+	// Notes that only restate a curated fact or an earlier note go before the
+	// split (no model): 23 of the 2,108 pending notes (1.1 percent) on 2026-10-11.
+	var curated []*fact.Fact
+	for _, f := range facts {
+		if !f.InInbox() {
+			curated = append(curated, f)
+		}
+	}
+	restated := curate.Restated(pending, curated)
+	if len(restated) > 0 {
+		kept := pending[:0]
+		for _, f := range pending {
+			if by, ok := restated[f.Meta.Name]; ok {
+				cst.Restated[f.Meta.Name] = by
+				if *dry {
+					fmt.Printf("- restated, not split: %s (restates [[%s]])\n", f.Meta.Name, by)
+				}
+				continue
+			}
+			kept = append(kept, f)
+		}
+		pending = kept
+	}
+	rep := curate.Report{At: time.Now().Format(time.RFC3339), Notes: len(pending), Restated: len(restated)}
+	batches := curate.Batches(pending)
+	if len(batches) > *maxBatches {
+		batches = batches[:*maxBatches]
+	}
+	rep.Batches = len(batches)
+	if len(batches) == 0 {
+		fmt.Println("curate: nothing pending")
+	}
+	// Their words decide what stays kind user. When they cannot be read (a
+	// machine without their transcripts, a broken source), no note is split:
+	// they stay pending for a run that can (fail closed).
+	var where curate.Where
+	if len(batches) > 0 {
+		corpus, cerr := loadOwnerCorpus(home, ownerwords.DefaultDigests(home), false)
+		if cerr != nil {
+			fmt.Fprintln(os.Stderr, "curate: the owner's words cannot be read, so no note is curated this run:", cerr)
+			return 1
+		}
+		_, aud, aerr := auditorFor(ctx, s.Dir, corpus)
+		if aerr != nil {
+			fmt.Fprintln(os.Stderr, "curate:", aerr)
+			return 1
+		}
+		where = whereFor(aud)
+		// An index that cannot be opened at all stops the run before any
+		// model call (the check itself opens it again after each split).
+		head, herr := s.Head(ctx)
+		if herr == nil {
+			var ix conflictIndex
+			if ix, herr = openConflictIndex(ctx, s.Dir, head); herr == nil {
+				ix.Close()
+			}
+		}
+		if herr != nil {
+			fmt.Fprintln(os.Stderr, "curate: index:", herr)
+			return 2
+		}
+	}
+
+	for bi, batch := range batches {
+		if err := ctx.Err(); err != nil {
+			fmt.Fprintf(os.Stderr, "curate: %v, %d batch(es) wait for the next run\n", err, len(batches)-bi)
+			break
+		}
+		if time.Now().After(batchesUntil) {
+			fmt.Fprintf(os.Stderr, "curate: budget %s spent, %d batch(es) wait for the next run\n", *budget, len(batches)-bi)
+			break
+		}
+		res, cost, err := curate.ClaudeCLI(ctx, *model, fmt.Sprintf(curate.SplitPrompt, host, host, curate.Render(batch)))
+		rep.CostUSD += cost
+		if err != nil {
+			rep.FailedBatches++
+			fmt.Fprintln(os.Stderr, "curate:", err)
+			continue
+		}
+		entries := curate.Parse(res)
+		// Second pass: rulings the split may have folded away.
+		var rulings []string
+		for _, e := range entries {
+			if e.Kind == "user" {
+				rulings = append(rulings, "- ("+e.Origin+") "+e.Description)
+			}
+		}
+		if len(rulings) == 0 {
+			rulings = []string{"(none)"}
+		}
+		recovered := 0
+		if res2, c3, err := curate.ClaudeCLI(ctx, curate.JudgeModel, fmt.Sprintf(curate.RulingsPrompt, strings.Join(rulings, "\n"), curate.Render(batch))); err == nil {
+			rep.CostUSD += c3
+			for _, e := range curate.Parse(res2) {
+				e.Kind = "user"
+				entries = append(entries, e)
+				recovered++
+			}
+		} else {
+			rep.CostUSD += c3
+			rep.Errors++
+		}
+		var newFacts []*fact.Fact
+		var ledgerLines []byte
+		produced := map[string]bool{}
+		nRulings, notWords := 0, 0
+		for _, e := range entries {
+			f := curate.ToFact(e, host, names)
+			// A ruling is the owner's own words: kind user stays only with their
+			// quote found in the note and in their turns or notes.
+			if q, ok := curate.ApplyEvidence(f, e, noteByName[e.Origin], where); ok {
+				nRulings++
+				ledgerLines = append(ledgerLines, q.Line()...)
+			} else if e.Kind == "user" {
+				notWords++
+			}
+			newFacts = append(newFacts, f)
+			produced[e.Origin] = true
+		}
+
+		// Conflict pairs: closest existing fact per new fact, and new facts of
+		// the same scope that share most of their terms. The index is opened
+		// here, after the split, at the HEAD the batch will be written on.
+		pairs, refs, err := conflictPairs(ctx, s, newFacts, host, true, nil)
+		if err != nil {
+			// A fact written without its conflict check is what the check is
+			// for: the batch is not written, its notes stay pending, and the
+			// run stops here and exits non-zero.
+			rep.Errors++
+			rep.FailedBatches++
+			fmt.Fprintf(os.Stderr, "curate: conflict check failed, batch %d not written and its %d note(s) stay pending: %v\n", bi+1, len(batch), err)
+			break
+		}
+		rep.Facts += len(newFacts)
+		rep.Rulings += nRulings
+		rep.NotOwnerWords += notWords
+		rep.RecoveredRulings += recovered
+		for _, n := range batch {
+			if !produced[n.Meta.Name] {
+				cst.Empty[n.Meta.Name] = time.Now().Format("2006-01-02")
+			}
+		}
+		rep.Checked += len(pairs)
+		review, written := judgePairs(ctx, s, pairs, refs, newFacts, *dry, &rep)
+
+		if *dry {
+			for _, f := range newFacts {
+				fmt.Printf("- [%s/%s/%s] %s\n", f.Meta.Scope, f.Meta.Type, f.Meta.Source.Kind, f.Meta.Description)
+			}
+			for _, r := range review {
+				fmt.Println(r)
+			}
+			continue
+		}
+		for _, f := range newFacts {
+			b, err := f.Encode()
+			if err != nil {
+				rep.Errors++
+				continue
+			}
+			full := filepath.Join(s.Dir, f.Path)
+			os.MkdirAll(filepath.Dir(full), 0o755)
+			if err := os.WriteFile(full, b, 0o644); err != nil {
+				rep.Errors++
+				continue
+			}
+			written = append(written, f.Path)
+		}
+		if len(ledgerLines) > 0 {
+			full := filepath.Join(s.Dir, filepath.FromSlash(ledger.QuotesPath))
+			os.MkdirAll(filepath.Dir(full), 0o755)
+			if fh, err := os.OpenFile(full, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+				fh.Write(ledgerLines)
+				fh.Close()
+				written = append(written, ledger.QuotesPath)
+			} else {
+				rep.Errors++
+			}
+		}
+		if len(review) > 0 {
+			rel := "review/" + time.Now().Format("2006-01-02") + ".md"
+			full := filepath.Join(s.Dir, rel)
+			os.MkdirAll(filepath.Dir(full), 0o755)
+			if fh, err := os.OpenFile(full, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+				fmt.Fprintf(fh, "## curator run %s, batch %d\n\n%s\n\n", rep.At, bi+1, strings.Join(review, "\n"))
+				fh.Close()
+				written = append(written, rel)
+			}
+		}
+		all, _, _ := fact.Walk(s.Dir)
+		os.WriteFile(filepath.Join(s.Dir, "MEMORY.md"), []byte(index.Generate(all)), 0o644)
+		written = append(written, "MEMORY.md")
+		if findings, err := lint.Run(s.Dir); err == nil && len(findings) > 0 {
+			fmt.Fprintf(os.Stderr, "curate: lint: %d finding(s) remain (first: %s)\n", len(findings), findings[0])
+		}
+		msg := fmt.Sprintf("curator: %d fact(s) from %d note(s), %d contradiction(s), %d supersede(s)", len(newFacts), len(batch), rep.Contradicts, rep.Supersedes)
+		if err := s.CommitPush(ctx, dedupe(written), msg, "curator"); err != nil {
+			rep.Errors++
+			var rej *store.Rejected
+			if errors.As(err, &rej) {
+				fmt.Fprintln(os.Stderr, "curate: server refused the batch; files set aside:", rej.Files)
+			} else {
+				fmt.Fprintln(os.Stderr, "curate: push:", err)
+			}
+			break
+		}
+		fmt.Printf("curate: batch %d pushed: %d fact(s) from %d note(s)\n", bi+1, len(newFacts), len(batch))
+	}
+
+	// The derived-facts step needs no inbox notes and no model: hot spots,
+	// co-change and module maps from git, as curator. It runs even when
+	// nothing was pending.
+	var drep *derive.Report
+	dopts, derr := deriveOptions(s.Dir, host)
+	if derr == nil {
+		dopts.Projects = defaultProjects()
+		drep, derr = deriveStep(ctx, s, dopts, *dry)
+	}
+	derr = errors.Join(derr, curateResults(ctx, s, dopts, *dry)) // results from git: result facts and the saved facts they replace
+	printDerive(drep, false)
+	if drep != nil {
+		for _, r := range drep.Repos {
+			if r.Status != derive.Failed {
+				rep.DerivedFiles += len(r.Paths)
+			}
+		}
+		if drep.Count(derive.Failed) > 0 {
+			rep.Errors++
+		}
+	}
+	if derr != nil {
+		rep.Errors++
+		fmt.Fprintln(os.Stderr, "curate: derive:", derr)
+	}
+	// Facts the owner's notes say are not their words lose kind user. No model.
+	rep.Errors += curateDisowned(ctx, s, *dry)
+	// Dead [[links]] in curated facts: rewritten to a clear match or made plain
+	// text; owner rulings get a review line instead (links.go). No model.
+	rep.Errors += curateLinks(ctx, s, *dry)
+	if len(batches) == 0 {
+		rep.Errors += curateStale(ctx, s, *dry)
+		if rep.Errors > 0 {
+			return 1
+		}
+		return 0
+	}
+
+	if !*dry {
+		saveCuratorState(filepath.Join(stateDir, "curator.json"), cst)
+		if f, err := os.OpenFile(filepath.Join(stateDir, "curator.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+			json.NewEncoder(f).Encode(rep)
+			f.Close()
+		}
+	}
+	// The staleness step (stale.go) runs last, after this run's state is saved:
+	// it can take most of an hour and must not be what a kill loses. It flags
+	// curated facts git has overtaken; it never retires.
+	rep.Errors += curateStale(ctx, s, *dry)
+	fmt.Printf("curate: %d notes in %d batches -> %d facts (%d rulings), %d pairs in %d judge calls, %d contradictions, %d supersedes, $%.2f, %d error(s)\n", rep.Notes, rep.Batches, rep.Facts, rep.Rulings, rep.Checked, rep.JudgeCalls, rep.Contradicts, rep.Supersedes, rep.CostUSD, rep.Errors)
+	if rep.Errors > 0 {
+		return 1
+	}
+	return 0
+}
+
+// supersedeRoute is what the curator does with a judge's "supersedes" on an
+// existing fact: retire it (retire true; the caller writes superseded_by), or
+// leave a review line for the owner. Never retire on a judge's word an owner
+// ruling (RULING CHANGE?) or a fact that holds words of theirs (supersedes?,
+// owner decides). Otherwise retire only when the two facts clearly cover the
+// same thing: same origin note, or most of their terms shared. The first live
+// run retired a broad fact (several repos) with a narrower one about one of
+// them; a judge sees "same subject" too easily.
+func supersedeRoute(storeDir string, nf *fact.Fact, ex *search.Hit) (line string, retire bool) {
+	if ex.Ruling {
+		return fmt.Sprintf("- RULING CHANGE? new [[%s]] may supersede owner ruling [[%s]]; owner decides\n  new: %s\n  ruling: %s", nf.Meta.Name, ex.Name, nf.Meta.Description, ex.Description), false
+	}
+	if ex.Words || nf.Meta.Origin == "" || ex.Name == "" || (overlap(nf.Meta.Description, ex.Description) < 0.6 && !sameOrigin(storeDir, ex.Path, nf.Meta.Origin)) {
+		return fmt.Sprintf("- supersedes? [[%s]] may replace [[%s]]; owner decides\n  new: %s\n  old: %s", nf.Meta.Name, ex.Name, nf.Meta.Description, ex.Description), false
+	}
+	return "", true
+}
+
+// sameOrigin reports whether the existing fact at rel came from the same
+// inbox note as origin.
+func sameOrigin(storeDir, rel, origin string) bool {
+	b, err := os.ReadFile(filepath.Join(storeDir, rel))
+	if err != nil {
+		return false
+	}
+	f, err := fact.Parse(rel, b)
+	return err == nil && f.Meta.Origin != "" && f.Meta.Origin == origin
+}
+
+// overlap is the Jaccard overlap of two descriptions' search terms.
+func overlap(a, b string) float64 {
+	ta, tb := search.Terms(a), search.Terms(b)
+	if len(ta) == 0 || len(tb) == 0 {
+		return 0
+	}
+	set := map[string]bool{}
+	for _, t := range ta {
+		set[t] = true
+	}
+	inter := 0
+	for _, t := range tb {
+		if set[t] {
+			inter++
+		}
+	}
+	return float64(inter) / float64(len(ta)+len(tb)-inter)
+}
+
+func loadCuratorState(path string) *curatorState {
+	st := &curatorState{Empty: map[string]string{}, Restated: map[string]string{}}
+	if b, err := os.ReadFile(path); err == nil {
+		json.Unmarshal(b, st)
+		if st.Empty == nil {
+			st.Empty = map[string]string{}
+		}
+		if st.Restated == nil {
+			st.Restated = map[string]string{}
+		}
+	}
+	return st
+}
+
+func saveCuratorState(path string, st *curatorState) {
+	os.MkdirAll(filepath.Dir(path), 0o700)
+	b, _ := json.MarshalIndent(st, "", " ")
+	os.WriteFile(path, b, 0o600)
+}
+
+// markSuperseded adds superseded_by to an existing curated fact file.
+func markSuperseded(storeDir, rel, by string) (string, bool) {
+	full := filepath.Join(storeDir, rel)
+	b, err := os.ReadFile(full)
+	if err != nil {
+		return "", false
+	}
+	f, err := fact.Parse(rel, b)
+	if err != nil || f.Meta.SupersededBy != "" {
+		return "", false
+	}
+	f.Meta.SupersededBy = by
+	f.Meta.Updated = time.Now().Format("2006-01-02")
+	out, err := f.Encode()
+	if err != nil {
+		return "", false
+	}
+	return rel, os.WriteFile(full, out, 0o644) == nil
+}
+
+func dedupe(xs []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, x := range xs {
+		if !seen[x] {
+			seen[x] = true
+			out = append(out, x)
+		}
+	}
+	return out
+}

@@ -1,0 +1,7 @@
+# Test vectors for the secret redactor are secret-shaped by design.
+version: 2
+secret:
+  ignored_paths:
+    - client/internal/digest/redact_test.go
+    - client/internal/digest/digest_test.go
+    - client/cmd/tacit/probe_test.go

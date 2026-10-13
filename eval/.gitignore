@@ -1,0 +1,7 @@
+# Your own truth set, tasks and run outputs are mined from your transcripts
+# and store. Keep them out of the repo; the synthetic sample is in examples/.
+/truth.jsonl
+/ab/tasks.json
+/ab/results/
+/baseline/corpus-manifest.json
+__pycache__/

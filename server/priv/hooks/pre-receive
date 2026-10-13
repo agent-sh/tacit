@@ -1,0 +1,74 @@
+#!/bin/bash
+# tacit pre-receive: one run per push, stdin "<old> <new> <ref>" lines.
+# Enforces the SPEC.md write rules while objects are still quarantined:
+#   - only refs/heads/main may change; no deletes (git config also denies them)
+#   - a writer may touch only inbox/<writer>/...; curator@* may touch anything
+#   - writers may not push merge commits, symlinks or submodules
+#   - no new blob may contain an obvious secret
+# The net tree diff old..new is checked (not per commit), so a merge cannot
+# smuggle changes. Any error fails closed: non-zero exit rejects the push and
+# nothing persists.
+set -euo pipefail
+
+writer="${TACIT_WRITER:-}"
+[ -n "$writer" ] || { echo "tacit: no writer identity" >&2; exit 1; }
+zero=0000000000000000000000000000000000000000
+empty_tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+case "$writer" in
+  curator@*) curator=1 ;;
+  *) curator=0; scope="inbox/$writer/" ;;
+esac
+
+fail() { echo "tacit: $*" >&2; exit 1; }
+difffile=$(mktemp "${TMPDIR:-/tmp}/tacit-diff.XXXXXX")
+blobfile=$(mktemp "${TMPDIR:-/tmp}/tacit-blob.XXXXXX")
+trap 'rm -f "$difffile" "$blobfile"' EXIT
+secret_re='(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|(^|[^A-Za-z0-9])sk-(proj-|ant-)?[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|tskey-[A-Za-z0-9-]{10,}|(^|[^A-Za-z0-9])hf_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+
+while read -r old new ref; do
+  [ "$ref" = "refs/heads/main" ] || fail "only refs/heads/main may be pushed (got $ref)"
+  [ "$new" != "$zero" ] || fail "deleting main is not allowed"
+  base="$old"
+  [ "$old" != "$zero" ] || base="$empty_tree"
+
+  if [ "$curator" = 0 ]; then
+    merges=$(git rev-list --min-parents=2 "$new" --not "$old" 2>/dev/null | head -1 || true)
+    [ -z "$merges" ] || fail "$writer may not push merge commits (rebase instead)"
+  fi
+
+  # Net change between base and new: ":<old mode> <new mode> <old sha> <new sha> <status>\t<path>[\t<path2>]"
+  git -c core.quotePath=false diff-tree -r --raw --no-renames "$base" "$new" > "$difffile"
+  while IFS=$'\t' read -r meta path; do
+    [ -n "$meta" ] || continue
+    set -- $meta
+    new_mode="$2"; new_sha="$4"; status="${5:0:1}"
+    if [ "$curator" = 0 ]; then
+      case "$path" in
+        "$scope"*) ;;
+        *) fail "$writer may write only under $scope (tried $path)" ;;
+      esac
+      [ "$status" != "D" ] || fail "$writer may not delete $path (supersede, never delete)"
+      case "$new_mode" in
+        100644|100755) ;;
+        *) fail "$writer may not add $path with mode $new_mode (symlinks and submodules are not facts)" ;;
+      esac
+    fi
+    case "$path" in
+      *..*) fail "path $path contains .." ;;
+    esac
+    if [ "$status" != "D" ]; then
+      # Through a file, not a pipe: under pipefail, `grep -q` matching early
+      # kills `git cat-file` with SIGPIPE (141), the pipeline reads as "no
+      # match", and a secret near the top of a blob over the pipe buffer got in.
+      # A failing cat-file stops the hook here (set -e): fail closed.
+      git cat-file -p "$new_sha" > "$blobfile"
+      if grep -Eq "$secret_re" "$blobfile"; then
+        fail "$path looks like it contains a secret"
+      fi
+    fi
+  done < "$difffile"
+done
+# Accepted pushes are not logged here: the server journals every ref move
+# (state.db, `GET /journal`) and logs `push by <writer>` to systemd's journal,
+# so a hook-side log file would only duplicate them and grow without bound.
+exit 0

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>tacit</string>
+	<key>CFBundleExecutable</key>
+	<string>tacit-app</string>
+	<key>CFBundleIconFile</key>
+	<string>tacit</string>
+	<key>CFBundleIdentifier</key>
+	<string>ai.tacit.app</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>tacit</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.developer-tools</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>LSEnvironment</key>
+	<dict>
+		<key>PATH</key>
+		<string>/Users/someone/Applications/tacit.app/Contents/MacOS:/Users/someone/.local/bin:/usr/bin:/opt/homebrew/bin:/Users/someone/.cargo/bin:/usr/local/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+</dict>
+</plist>
