@@ -40,6 +40,31 @@ Precedence is file defaults, then `TACIT_*` environment overrides, then command 
 
 `init --store DIR` overrides that invocation only. Put a custom path in the file or environment for subsequent commands. The file loads before model defaults are selected. A job's explicitly selected env file loads at runtime as well. Installers carry an explicit config selection into their generated jobs and hooks.
 
+### Environment variables
+
+| variable | default | what |
+|---|---|---|
+| `TACIT_SETTINGS` | platform config file above | optional client YAML settings |
+| `TACIT_STORE` | `~/.local/share/tacit/store` | the store clone |
+| `TACIT_CONFIG` | `~/.config/tacit` | keys |
+| `TACIT_INDEX` | `~/.local/state/tacit/index` | FTS5 index files |
+| `TACIT_LOCAL` | `~/.local/share/tacit/local` | local overlay of a read-only clone |
+| `TACIT_FOLLOW_STATE` | `~/.local/state/tacit/follow.json` | follower heartbeat |
+| `TACIT_PROJECTS` | `~/projects` | where repo checkouts live: derive, results, stale, the timeline, the verifier, the dreamer and import |
+| `TACIT_DERIVE_CONFIG` | `~/.config/tacit/derive.yaml` | `branches:` the branch to read per repo (`tacit derive --set-branch repo=branch`); `ordinary_names:` repo names that are also plain words, so a bare mention is not evidence a fact is about that repo |
+| `TACIT_WRITER` | | the key a push signs with |
+| `TACIT_OWNER_NAMES` | | names agents use for the owner in facts ("Dana 2026-09-05: ..."), comma separated; each counts like "owner" when the rulings audit reads a clause attributed without quote marks |
+| `TACIT_CURATE_MODEL` | `opus` | curator split |
+| `TACIT_JUDGE_MODEL` | `haiku` | contradiction judge |
+| `TACIT_DREAM_MODEL` | `haiku` | dreamer |
+| `TACIT_VERIFY_ROOTS` | | extra read-only source directories, separated like `PATH`; each must exist. Claude auto-memory is included when present |
+| `TACIT_VERIFY_MODEL` | `opus` | verifier |
+| `TACIT_VERIFY_FALLBACK_MODEL` | `sonnet` | verifier when the first model has no capacity (429, 503, 529) |
+| `TACIT_SERVER`, `TACIT_ENROLL_SSH` | | `scripts/mac-setup.sh`: server URL, and the ssh target that runs the enroll command |
+
+Model values are anything `claude --model` takes. A `--model` flag wins over the variable. Server variables (`TACIT_DATA`, `TACIT_BIND`, `TACIT_PORT`, `TACIT_PUBLIC_PORT`, ...) are listed in `server/lib/tacit_server/config.ex`.
+
+
 ## Linux and macOS
 
 Build the CLI with Go 1.27 and git on PATH. The included browser UI needs no GTK, WebKit or macOS SDK build step:
