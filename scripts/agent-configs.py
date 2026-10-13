@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import shutil
+import shlex
 from pathlib import Path
 import subprocess
 
@@ -39,6 +40,27 @@ def main():
             (root / ".codex" / "config.toml").write_text(
                 marker + body, encoding="utf-8",
             )
+    for harness in ("muse", "agy"):
+        result = subprocess.run(
+            [str(binary), "--config", str(config), "install", harness],
+            env=env, check=True, capture_output=True, text=True, timeout=30,
+        )
+        if harness == "muse":
+            snippet = json.loads(result.stdout[result.stdout.index("{"):])
+            server = snippet["mcpServers"]["tacit"]
+        else:
+            command = shlex.split(result.stdout.splitlines()[-1])
+            if command[:5] != ["agy", "mcp", "add", "tacit", "--"]:
+                raise RuntimeError("Invalid agy registration command")
+            server = {"command": command[5], "args": command[6:]}
+        if server["command"] != str(binary) or server["args"] != [
+            "--config", str(config), "mcp", "--harness", harness
+        ]:
+            raise RuntimeError(f"Invalid {harness} memory server arguments")
+        # Generic MCP validation also covers clients without an agnix path alias.
+        (root / f"{harness}.mcp.json").write_text(
+            json.dumps({"mcpServers": {"tacit": server}}, indent=2), encoding="utf-8"
+        )
     for path in (root / ".claude" / "settings.json", root / ".codex" / "hooks.json"):
         hooks = json.loads(path.read_text(encoding="utf-8"))["hooks"]
         if not all(hooks.get(event) for event in ("SessionStart", "UserPromptSubmit")):
@@ -49,7 +71,7 @@ def main():
     mirror = root / "codex-hooks" / ".claude" / "settings.json"
     mirror.parent.mkdir(parents=True)
     shutil.copyfile(root / ".codex" / "hooks.json", mirror)
-    print(f"Generated Claude hooks, Codex hooks and Codex MCP configuration in {root}")
+    print(f"Generated Claude/Codex hooks and Codex/Muse/agy MCP configuration in {root}")
 
 
 if __name__ == "__main__":

@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -25,6 +24,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/importer"
+	"github.com/agent-sh/tacit/client/internal/modelrun"
 )
 
 // DefaultModel is the extraction model: $TACIT_DREAM_MODEL (a provider's
@@ -111,30 +111,20 @@ type Window struct {
 // Runner is the LLM call; tests substitute it.
 type Runner func(ctx context.Context, model, prompt string) (result string, costUSD float64, inTokens int, err error)
 
-// ClaudeCLI runs `claude -p` with tools off, one turn, JSON output.
-func ClaudeCLI(ctx context.Context, model, prompt string) (string, float64, int, error) {
-	// --bare: no CLAUDE.md, no hooks (a hook would call tacit from inside tacit
-	// and the instructions files cost about 100k tokens per call).
+// RunCLI uses the configured dream runner, retaining Claude as the default.
+func RunCLI(ctx context.Context, model, prompt string) (string, float64, int, error) {
 	sid := newUUID()
 	_ = Exclude(sid)
-	cmd := exec.CommandContext(ctx, "claude", "-p", prompt, "--bare", "--session-id", sid, "--model", model, "--output-format", "json", "--tools", "", "--max-turns", "1")
-	out, err := cmd.Output()
-	if err != nil {
-		return "", 0, 0, fmt.Errorf("claude -p: %w", err)
+	res, err := modelrun.Run(ctx, "dream", model, prompt, sid)
+	if res.SessionID != "" {
+		_ = Exclude(res.SessionID)
 	}
-	var res struct {
-		Result string  `json:"result"`
-		Cost   float64 `json:"total_cost_usd"`
-		Usage  struct {
-			In     int `json:"input_tokens"`
-			CacheC int `json:"cache_creation_input_tokens"`
-			CacheR int `json:"cache_read_input_tokens"`
-		} `json:"usage"`
-	}
-	if err := json.Unmarshal(out, &res); err != nil {
-		return "", 0, 0, fmt.Errorf("claude -p output: %w", err)
-	}
-	return res.Result, res.Cost, res.Usage.In + res.Usage.CacheC + res.Usage.CacheR, nil
+	return res.Text, res.CostUSD, res.InputTokens, err
+}
+
+// ClaudeCLI is retained for callers built against the original runner API.
+func ClaudeCLI(ctx context.Context, model, prompt string) (string, float64, int, error) {
+	return RunCLI(ctx, model, prompt)
 }
 
 // NewSessionID returns a fresh UUID for a `claude -p --session-id` call.
@@ -368,6 +358,32 @@ func chunk(lines []string, maxChars int) [][]string {
 }
 
 var arrayRx = regexp.MustCompile(`(?s)\[.*\]`)
+
+// ParseChecked distinguishes a valid empty result from a failed extraction.
+// A malformed answer must not advance the transcript cursor.
+func ParseChecked(result string) ([]Extracted, error) {
+	text := strings.TrimSpace(result)
+	if strings.HasPrefix(text, "```json") {
+		text = strings.TrimSpace(strings.TrimPrefix(text, "```json"))
+		text = strings.TrimSpace(strings.TrimSuffix(text, "```"))
+	} else if strings.HasPrefix(text, "```") {
+		text = strings.TrimSpace(strings.TrimPrefix(text, "```"))
+		text = strings.TrimSpace(strings.TrimSuffix(text, "```"))
+	}
+	if !strings.HasPrefix(text, "[") {
+		return nil, fmt.Errorf("dreamer did not return a JSON array")
+	}
+	var rows []Extracted
+	if err := json.Unmarshal([]byte(text), &rows); err != nil {
+		return nil, fmt.Errorf("invalid dreamer JSON: %w", err)
+	}
+	for _, row := range rows {
+		if strings.TrimSpace(row.Description) == "" {
+			return nil, fmt.Errorf("dreamer returned a fact without a description")
+		}
+	}
+	return Parse(text), nil
+}
 
 // Parse extracts the JSON array from a model answer.
 func Parse(result string) []Extracted {

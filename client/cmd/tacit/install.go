@@ -33,7 +33,7 @@ import (
 //     the commands; it never loads or starts it.
 //   - dream: the dreamer every 4 h, the same way (a service and a timer on
 //     Linux, a launchd agent on macOS), with --env-file naming the file with
-//     the variables claude -p needs. Prints the commands; starts nothing.
+//     the selected runner’s provider variables. Prints the commands; starts nothing.
 //   - grok, pi, mcp: Grok ignores what start and prompt hooks print, so these
 //     get the MCP server only; the snippet is printed.
 func runInstall(args []string) int {
@@ -171,6 +171,26 @@ func runInstall(args []string) int {
 			fmt.Println("wrote", p)
 		}
 		fmt.Println("tacit is in the applications menu; the entry runs", exe, "app")
+	case "muse":
+		var args []string
+		_ = json.Unmarshal([]byte(mcpArguments("muse")), &args)
+		b, _ := json.MarshalIndent(map[string]any{"mcpServers": map[string]any{"tacit": map[string]any{"command": exe, "args": args}}}, "", "  ")
+		fmt.Println("Merge into Muse's existing settings.json (keep its schema_version and other settings):")
+		fmt.Println(string(b))
+	case "agy":
+		var args []string
+		_ = json.Unmarshal([]byte(mcpArguments("agy")), &args)
+		quote := shellQuote
+		if goos == "windows" {
+			quote = psQuote
+		}
+		parts := []string{"agy", "mcp", "add", "tacit", "--", quote(exe)}
+		for _, arg := range args {
+			parts = append(parts, quote(arg))
+		}
+		fmt.Println("Register Tacit's memory tools with agy:")
+		fmt.Println(strings.Join(parts, " "))
+
 	case "grok":
 		fmt.Printf("Add to ~/.grok/config.toml:\n[mcp_servers.tacit]\ncommand = %q\nargs = %s\nenabled = true\n", exe, mcpArguments("grok"))
 	case "pi", "mcp":
@@ -184,7 +204,7 @@ func runInstall(args []string) int {
 // installDream implements `tacit install dream [--env-file F]`.
 func installDream(goos, home, exe string, args []string) int {
 	fs := flag.NewFlagSet("install dream", flag.ContinueOnError)
-	envFile := fs.String("env-file", defaultDreamEnv(goos, home), "KEY=VALUE file with the variables claude -p needs (for example the Bedrock ones); never copied into the job")
+	envFile := fs.String("env-file", defaultDreamEnv(goos, home), "KEY=VALUE file with the selected runner’s provider variables (for example the Bedrock ones); never copied into the job")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return 2
 	}
@@ -220,7 +240,7 @@ func installDream(goos, home, exe string, args []string) int {
 		return 1
 	}
 	if _, err := os.Stat(env); err != nil {
-		fmt.Println("missing:", env, "- the dreamer fails until it exists. It holds KEY=VALUE lines for claude -p (provider variables, for example CLAUDE_CODE_USE_BEDROCK=1 and AWS_REGION for Bedrock, and TACIT_DREAM_MODEL to name a full model id); keep it chmod 600. It may be empty when claude on this machine is logged in another way.")
+		fmt.Println("missing:", env, "- the dreamer fails until it exists. It holds KEY=VALUE lines for the selected runner (provider variables, for example CLAUDE_CODE_USE_BEDROCK=1 and AWS_REGION for Bedrock, and TACIT_DREAM_MODEL to name a full model id); keep it chmod 600. It may be empty when the selected runner is already logged in.")
 	}
 	if goos == "windows" {
 		printWindowsJob(paths[0], "dream")
@@ -240,7 +260,7 @@ func installDream(goos, home, exe string, args []string) int {
 	if !local && !hasKey("dreamer") {
 		fmt.Println("no dreamer@" + shortHost(mustHostname()) + " key here yet: each run refuses before any model call until `tacit keygen dreamer` is run and the key enrolled.")
 	}
-	fmt.Println("the dreamer needs claude and scrump (text profile) on the job's PATH.")
+	fmt.Println("the dreamer needs its selected runner and scrump (text profile) on the job's PATH.")
 	if local {
 		fmt.Println("Local mode: no dreamer enrollment key is needed")
 	}

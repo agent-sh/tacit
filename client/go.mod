@@ -4,6 +4,7 @@ go 1.27
 
 require (
 	github.com/modelcontextprotocol/go-sdk v1.8.0
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/wailsapp/wails/v2 v2.16.0
 	go.yaml.in/yaml/v3 v3.0.5
 	modernc.org/sqlite v1.60.1

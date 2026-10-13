@@ -23,7 +23,7 @@ var (
 	// server keeps the same list (server/lib/tacit_server/auth/key_id.ex).
 	// "reader" is a key that only reads (the Mac over the public path): the
 	// server refuses its pushes, and no fact is ever written as it.
-	Harnesses   = set("claude", "codex", "pi", "hermes", "grok", "dreamer", "import", "curator", "human", "reader")
+	Harnesses   = set("claude", "codex", "pi", "hermes", "grok", "muse", "agy", "dreamer", "import", "curator", "human", "reader")
 	SourceKinds = set("user", "observed", "web", "derived")
 	ScopeRoots  = set("system", "user", "projects", "machines", "derived")
 )

@@ -119,3 +119,16 @@ func TestRepoOfCwd(t *testing.T) {
 		t.Errorf("TACIT_PROJECTS root: %q, want none", got)
 	}
 }
+
+func TestParseCheckedDistinguishesEmptyFromFailure(t *testing.T) {
+	for _, body := range []string{"[]", "```json\n[]\n```"} {
+		if rows, err := ParseChecked(body); err != nil || len(rows) != 0 {
+			t.Fatalf("empty result %q: %v %v", body, rows, err)
+		}
+	}
+	for _, body := range []string{"model unavailable", "{}", "[{\"description\":", "[1]", "[null]", "[{}]"} {
+		if _, err := ParseChecked(body); err == nil {
+			t.Fatalf("accepted %q", body)
+		}
+	}
+}

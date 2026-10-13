@@ -23,7 +23,7 @@ import (
 
 func usage() {
 	fmt.Fprint(os.Stderr, `usage:
-  tacit [--config FILE] <command>
+  tacit [--config FILE] [--runner TOOL] <command>
   tacit init   [--store DIR]    initialize a local store (no server or keys)
   tacit maintain [--env-file FILE]   curate then verify on this machine
   tacit lint   [--store DIR]
@@ -39,7 +39,7 @@ func usage() {
   tacit add --harness H --desc "..." [--type T] [--scope S] [--kind K] <name>
   tacit hook session-start|prompt  Claude Code hooks (JSON on stdin, block on stdout)
   tacit mcp [--harness H]          MCP stdio server: tacit_search, tacit_fact, tacit_add
-  tacit install claude|codex|hermes|grok|pi|follow|dream|curate|app
+  tacit install claude|codex|hermes|grok|pi|muse|agy|follow|dream|curate|app
   tacit install dream [--env-file F]   the dreamer every 4 h (a systemd timer on Linux, a launchd agent on macOS)
   tacit dream [--model M] [--dry-run] [--max-calls N] [--env-file F]   transcript deltas -> facts in inbox/dreamer@<host>/
   tacit curate [--model M] [--dry-run] [--max-batches N] [--budget D] [--recheck-conflicts --since D] inbox notes -> curated one-fact entries, conflict check, index, push; then the derive step
@@ -80,13 +80,20 @@ func storeFlag(fs *flag.FlagSet) *string {
 	return fs.String("store", def, "store root")
 }
 
+var explicitRunner string
+
 func main() {
 	configPath := settings.Path()
 	required := os.Getenv("TACIT_SETTINGS") != ""
-	if len(os.Args) > 2 && os.Args[1] == "--config" {
-		configPath, _ = filepath.Abs(os.Args[2])
-		required = true
-		os.Setenv("TACIT_SETTINGS", configPath)
+	for len(os.Args) > 2 && (os.Args[1] == "--config" || os.Args[1] == "--runner") {
+		if os.Args[1] == "--config" {
+			configPath, _ = filepath.Abs(os.Args[2])
+			required = true
+			os.Setenv("TACIT_SETTINGS", configPath)
+		} else {
+			explicitRunner = os.Args[2]
+			setExplicitRunner()
+		}
 		os.Args = append(os.Args[:1], os.Args[3:]...)
 	}
 	configPath, _ = filepath.Abs(configPath)

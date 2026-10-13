@@ -19,10 +19,11 @@ model=""; prompt=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --model) model="$2"; shift ;;
-    -p) prompt="$2"; shift ;;
+    -p) ;;
   esac
   shift
 done
+prompt=$(cat)
 echo "$model" >> "$FAKE_LOG"
 mode="$FAKE_SONNET"
 [ "$model" = "$FAKE_PRIMARY" ] && mode="$FAKE_OPUS"
