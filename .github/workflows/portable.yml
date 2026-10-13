@@ -28,7 +28,7 @@ jobs:
           go-version-file: client/go.mod
           cache-dependency-path: client/go.sum
       - run: go test ./internal/platform ./internal/settings
-      - run: go test -run '^TestLocal' ./internal/store
+      - run: go test ./internal/store
       - run: go build -o tacit-native.exe ./cmd/tacit
       - run: go run ./tools/smoke -binary ./tacit-native.exe
       - name: Native Windows task registration
