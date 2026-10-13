@@ -301,8 +301,13 @@ func (s *Store) IntegrateLocked(ctx context.Context) error {
 	if s.Local(ctx) {
 		return nil
 	}
-	if _, err := git(ctx, s.Dir, "merge", "--ff-only", "--quiet", "origin/main"); err == nil {
+	if _, err := git(ctx, s.Dir, "merge", "--ff-only", "--no-overwrite-ignore", "--quiet", "origin/main"); err == nil {
 		return nil
+	}
+	// Rebase and hard reset can overwrite ignored or untracked files. Once
+	// a fast-forward fails, leave a dirty working tree for its owner to fix.
+	if err := s.requireClean(ctx); err != nil {
+		return err
 	}
 	_, err := git(ctx, s.Dir, "rebase", "--quiet", "origin/main")
 	if err == nil {
@@ -313,7 +318,7 @@ func (s *Store) IntegrateLocked(ctx context.Context) error {
 	// Keep them on a ref a person can inspect, and follow the server.
 	cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if _, derr := git(cctx, s.Dir, "diff", "--quiet", "HEAD"); derr != nil {
+	if derr := s.requireClean(cctx); derr != nil {
 		return fmt.Errorf("the clone has local commits that conflict with the server and uncommitted changes; fix %s by hand: %w", s.Dir, err)
 	}
 	ref := fmt.Sprintf("refs/tacit/stranded/%d", time.Now().Unix())
@@ -324,6 +329,19 @@ func (s *Store) IntegrateLocked(ctx context.Context) error {
 		return rerr
 	}
 	return &Stranded{Ref: ref}
+}
+
+// requireClean includes untracked and ignored files, neither of which is
+// recoverable from a stranded commit ref.
+func (s *Store) requireClean(ctx context.Context) error {
+	out, err := git(ctx, s.Dir, "status", "--porcelain", "--untracked-files=all", "--ignored")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(out) != "" {
+		return fmt.Errorf("the clone has uncommitted, untracked or ignored files; fix %s by hand before syncing", s.Dir)
+	}
+	return nil
 }
 
 // Stranded means local commits conflicted with the server and were moved
@@ -447,7 +465,22 @@ func (s *Store) commitPush(ctx context.Context, rels []string, message, writer s
 		}
 		only = true // unrelated staged changes never ride a local write
 	}
-	s.ensureAttributes(ctx)
+	// Store-wide merge rules belong to the curator, never an inbox writer.
+	curator := writer == "curator" || strings.HasPrefix(writer, "curator@")
+	if local || curator {
+		s.ensureAttributes(ctx)
+	}
+	if !local && curator {
+		// Include generated attributes in named commits and in rollback. A
+		// rejected race must not leave our new file blocking the next sync.
+		found := false
+		for _, rel := range rels {
+			found = found || rel == ".gitattributes"
+		}
+		if !found {
+			rels = append(append([]string{}, rels...), ".gitattributes")
+		}
+	}
 	args := append([]string{"add", "--"}, rels...)
 	if _, err := git(ctx, s.Dir, args...); err != nil {
 		return err
@@ -469,7 +502,7 @@ func (s *Store) commitPush(ctx context.Context, rels []string, message, writer s
 		// No --quiet: it hides the server's "remote:" lines, which carry the
 		// reason for a refusal (firstLine and Rejected.Remote read them). The
 		// output is only looked at when the push fails.
-		_, err := gitEnv(ctx, s.Dir, []string{"TACIT_WRITER=" + writer}, append(httpArgs, "push", "origin", "HEAD:main")...)
+		failedCommit, err := s.pushPending(ctx)
 		if err == nil {
 			return nil
 		}
@@ -477,6 +510,10 @@ func (s *Store) commitPush(ctx context.Context, rels []string, message, writer s
 		msg := err.Error()
 		switch {
 		case refused(msg):
+			head, herr := s.Head(ctx)
+			if herr != nil || failedCommit != head {
+				return fmt.Errorf("an earlier pending commit was refused; all local commits and files are kept for repair: %w", err)
+			}
 			return s.undoRejected(ctx, rels, msg)
 		case authFailed(msg):
 			return fmt.Errorf("the server did not accept this machine's key (%s); the commit is kept and goes up with the next push", firstLine(msg))
@@ -502,6 +539,32 @@ func (s *Store) commitPush(ctx context.Context, rels []string, message, writer s
 		break
 	}
 	return last
+}
+
+// pushPending sends each retained commit with the writer that made it.
+// The server checks the whole tree diff per push; sending a mixed-writer
+// backlog as HEAD would assign every change to the last writer.
+func (s *Store) pushPending(ctx context.Context) (string, error) {
+	args := []string{"rev-list", "--reverse", "HEAD"}
+	if _, err := git(ctx, s.Dir, "rev-parse", "--verify", "origin/main"); err == nil {
+		args = append(args, "^origin/main")
+	}
+	out, err := git(ctx, s.Dir, args...)
+	if err != nil {
+		return "", err
+	}
+	for _, commit := range strings.Fields(out) {
+		writer, err := git(ctx, s.Dir, "show", "-s", "--format=%an", commit)
+		if err != nil {
+			return commit, err
+		}
+		_, err = gitEnv(ctx, s.Dir, []string{"TACIT_WRITER=" + strings.TrimSpace(writer)},
+			append(httpArgs, "push", "origin", commit+":main")...)
+		if err != nil {
+			return commit, err
+		}
+	}
+	return "", nil
 }
 
 // undoLocal drops the newest local commit and puts its tracked files back
