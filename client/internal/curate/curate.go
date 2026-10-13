@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
 	"strings"
 	"time"
@@ -22,6 +21,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/dream"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/importer"
+	"github.com/agent-sh/tacit/client/internal/modelrun"
 )
 
 // The split model and the judge (conflict and ruling checks). The defaults
@@ -141,23 +141,24 @@ type Entry struct {
 // Runner is the model call; tests substitute it.
 type Runner func(ctx context.Context, model, prompt string) (string, float64, error)
 
-// ClaudeCLI runs `claude -p` with tools off.
-func ClaudeCLI(ctx context.Context, model, prompt string) (string, float64, error) {
-	// --bare: no CLAUDE.md and no hooks inside the curator's own model calls.
+// RunCLI and JudgeCLI select independent runners for curation and judging.
+func RunCLI(ctx context.Context, model, prompt string) (string, float64, error) {
+	return runRole(ctx, "curate", model, prompt)
+}
+func JudgeCLI(ctx context.Context, model, prompt string) (string, float64, error) {
+	return runRole(ctx, "judge", model, prompt)
+}
+func runRole(ctx context.Context, role, model, prompt string) (string, float64, error) {
 	sid := dream.NewSessionID()
 	_ = dream.Exclude(sid)
-	out, err := exec.CommandContext(ctx, "claude", "-p", prompt, "--bare", "--session-id", sid, "--model", model, "--output-format", "json", "--tools", "", "--max-turns", "1").Output()
-	if err != nil {
-		return "", 0, fmt.Errorf("claude -p: %w", err)
+	res, err := modelrun.Run(ctx, role, model, prompt, sid)
+	if res.SessionID != "" {
+		_ = dream.Exclude(res.SessionID)
 	}
-	var res struct {
-		Result string  `json:"result"`
-		Cost   float64 `json:"total_cost_usd"`
-	}
-	if err := json.Unmarshal(out, &res); err != nil {
-		return "", 0, err
-	}
-	return res.Result, res.Cost, nil
+	return res.Text, res.CostUSD, err
+}
+func ClaudeCLI(ctx context.Context, model, prompt string) (string, float64, error) {
+	return RunCLI(ctx, model, prompt)
 }
 
 // Batches groups inbox notes so each prompt stays under batchChars.

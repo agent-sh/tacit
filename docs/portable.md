@@ -26,6 +26,7 @@ keys: ~/.config/tacit
 local_overlay: ~/.local/share/tacit/local
 owner_names: [dana]
 verify_roots: []
+runner: claude
 models:
   curate: opus
   judge: haiku
@@ -39,6 +40,31 @@ Use your own values. `~` is the current user's home. Relative paths resolve agai
 Precedence is file defaults, then `TACIT_*` environment overrides, then command flags. `tacit --config FILE init` or `TACIT_SETTINGS` selects another file. Unknown fields and a missing explicitly selected file are errors. A hook with bad configuration fails open without output. Keep provider credentials in the provider's own configuration or the job env file, not this settings file.
 
 `init --store DIR` overrides that invocation only. Put a custom path in the file or environment for subsequent commands. The file loads before model defaults are selected. A job's explicitly selected env file loads at runtime as well. Installers carry an explicit config selection into their generated jobs and hooks.
+
+### Model runners
+
+Claude is optional. Supported runner names are `claude`, `codex`, `hermes`, `grok`, `pi`, `muse` and `agy`. Install and log in to the CLI you select. Tacit uses that CLI's provider configuration; it holds no provider credentials.
+
+The defaults above preserve the original setup. For another runner, omit the Claude model aliases and let the CLI select its model, or set a model ID accepted by that CLI:
+
+```yaml
+runner: codex
+runners:
+  dream: muse
+  judge: agy
+commands:
+  muse: ~/.local/bin/muse
+runner_args:
+  codex: ["--profile", "work"]
+```
+
+`runners` accepts `dream`, `curate`, `judge` and `verify`. An omitted role inherits `runner`. `tacit --runner muse dream` overrides all role selections for that invocation. `models` accepts the same roles plus `verify_fallback`; those values go to the selected CLI's `--model`. For non-Claude runners an omitted fallback disables the capacity fallback; set a distinct fallback model when needed.
+
+`commands` overrides executable paths, including Windows paths with spaces. `runner_args` adds an argument array without a shell, for provider or profile options. These are trusted operator settings: avoid options that replace Tacit's tool restrictions, output format or prompt source. Command flags take precedence over the job env file too.
+
+The integrations and model runners are separate. You can use Muse for memory and Codex for dreaming. `tacit install muse` prints a `mcpServers` entry for Muse's existing settings (preserve its `schema_version` and other keys). `tacit install agy` prints an `agy mcp add` command. Both expose `tacit_search`, `tacit_fact` and `tacit_add`; shared stores also need their writer keys enrolled.
+
+Transcript mining and automatic owner-quote lookup currently read Claude Code and Codex histories. Muse, agy, Grok, pi and Hermes can read and write memory through their integrations; their transcripts are not yet mined. Owner contributions and decisions in the app remain available without Claude. Curation refuses an empty owner-evidence corpus rather than guessing whether an agent paraphrase is an owner ruling.
 
 ### Environment variables
 
@@ -54,6 +80,10 @@ Precedence is file defaults, then `TACIT_*` environment overrides, then command 
 | `TACIT_DERIVE_CONFIG` | `~/.config/tacit/derive.yaml` | `branches:` the branch to read per repo (`tacit derive --set-branch repo=branch`); `ordinary_names:` repo names that are also plain words, so a bare mention is not evidence a fact is about that repo |
 | `TACIT_WRITER` | | the key a push signs with |
 | `TACIT_OWNER_NAMES` | | names agents use for the owner in facts ("Dana 2026-09-05: ..."), comma separated; each counts like "owner" when the rulings audit reads a clause attributed without quote marks |
+| `TACIT_RUNNER` | `claude` | default model-job CLI |
+| `TACIT_DREAM_RUNNER`, `TACIT_CURATE_RUNNER`, `TACIT_JUDGE_RUNNER`, `TACIT_VERIFY_RUNNER` | global runner | per-job CLI |
+| `TACIT_<TOOL>_COMMAND` | tool name | executable path, e.g. `TACIT_MUSE_COMMAND` |
+| `TACIT_<TOOL>_ARGS` | | JSON argv array, e.g. `["--profile","work"]` |
 | `TACIT_CURATE_MODEL` | `opus` | curator split |
 | `TACIT_JUDGE_MODEL` | `haiku` | contradiction judge |
 | `TACIT_DREAM_MODEL` | `haiku` | dreamer |
@@ -62,7 +92,7 @@ Precedence is file defaults, then `TACIT_*` environment overrides, then command 
 | `TACIT_VERIFY_FALLBACK_MODEL` | `sonnet` | verifier when the first model has no capacity (429, 503, 529) |
 | `TACIT_SERVER`, `TACIT_ENROLL_SSH` | | `scripts/mac-setup.sh`: server URL, and the ssh target that runs the enroll command |
 
-Model values are anything `claude --model` takes. A `--model` flag wins over the variable. Server variables (`TACIT_DATA`, `TACIT_BIND`, `TACIT_PORT`, `TACIT_PUBLIC_PORT`, ...) are listed in `server/lib/tacit_server/config.ex`.
+The model defaults in this table apply only to Claude. Other runners use their CLI default unless a model is explicitly configured. Model values are anything that runner's `--model` takes. A `--model` flag wins over the variable. Server variables (`TACIT_DATA`, `TACIT_BIND`, `TACIT_PORT`, `TACIT_PUBLIC_PORT`, ...) are listed in `server/lib/tacit_server/config.ex`.
 
 
 ## Linux and macOS
@@ -103,7 +133,7 @@ Pop-Location
 
 Claude hooks use its [executable-plus-arguments form](https://code.claude.com/docs/en/hooks#exec-form-and-shell-form), preserving paths with spaces without shell quoting. Codex hooks use an encoded PowerShell command that preserves arguments and exit codes. MCP uses the executable and argument array directly. No integration depends on `%USERNAME%`.
 
-Model jobs need a native Claude executable and compatible scrump on PATH. Verifier filesystem probes also need Git for Windows' Unix utilities: include its `usr\bin` directory in the job PATH for grep, find and ls.
+Model jobs need the selected native agent executable and compatible scrump on PATH. Verifier filesystem probes also need Git for Windows' Unix utilities: include its `usr\bin` directory in the job PATH for grep, find and ls.
 
 `install dream`, `install curate` and server-mode `install follow` write Task Scheduler XML under `~\.config\tacit\tasks`. Run the printed PowerShell registration/start commands under the current Windows account. No administrator account or stored password is requested. Tasks run while that account is logged in and suppress overlapping instances. `install app` writes a PowerShell browser launcher.
 
@@ -151,3 +181,13 @@ This is a Recovery environment, not a normal logged-in desktop. It has no `open`
 The manual/daily `portable client` workflow runs native Linux, macOS and Windows smoke checks and builds archives after the public repository's owner sets `CI_PUBLIC=1`. A skipped private-repository job is not a platform test result.
 
 On Windows, `./tools/windows-jobs-smoke.ps1 -Binary ./tacit.exe` also registers both generated jobs with Task Scheduler in a temporary profile, then removes the tasks and profile. This check runs in the portable workflow. Job execution and default-browser launching are separate checks that need a logged-in desktop, as used in the VM above.
+
+### Runner validation and limits
+
+The adapters have subprocess tests for all seven protocols, large prompts, cancellation, malformed results and role selection. Installed Linux CLIs completed synthetic calls for Claude, Codex, Hermes, Muse and agy. Pi completed against a localhost synthetic provider; the configured local provider was unavailable. Grok's installed CLI reached a prompt with zero model tools, skills and agent instructions, but did not return a model response before the deadline. Its JSON parser is checked against the upstream result contract; successful provider execution remains unverified. These checks establish protocol compatibility, not equal extraction quality. The published quality measurements remain Claude measurements.
+
+Model jobs use a private temporary directory and stdin or a private prompt file. File, shell and MCP tools are disabled for extraction and judging. Muse uses an empty toolset; agy uses a dedicated agent with an empty external-tool list (internal task bookkeeping can remain). Codex retains only provider/model settings in a disposable profile. Hermes safe mode retains provider settings while excluding plugins and MCP. Grok uses a restricted agent profile, removes its remaining file tool and denies MCP calls. It can still start the operator's configured hooks and MCP servers; those startup integrations are trusted local configuration, and may affect job startup.
+
+Claude verification with API or third-party provider authentication retains its restricted Read/MCP verifier. Claude OAuth and other runners request evidence as JSON; Tacit executes each request through its guarded, redacted probes. No native tool access is needed for this path. Provider context windows still bound the amount of evidence a model can use.
+
+Dollar totals contain only costs the CLI reports. Tacit prints a notice when cost is unavailable. The verifier's dollar threshold cannot enforce unreported spend; its deadline and turn bound still apply. Use provider-side spending controls when a hard monetary limit is required. CLI flags can change between releases; unsupported flags or incomplete output fail the job without advancing its transcript cursor.

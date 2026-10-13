@@ -15,7 +15,7 @@ defmodule TacitServer.Auth.KeyId do
 
   # `reader` is a key that only reads: it may fetch (also over the public
   # path) and is refused at every push (`TacitServer.Git.Http`).
-  @harnesses ~w(claude codex pi hermes grok dreamer import curator human reader)
+  @harnesses ~w(claude codex pi hermes grok muse agy dreamer import curator human reader)
 
   @doc "A key id whose harness is `reader`: it may read and never push."
   def reader?(keyid) when is_binary(keyid), do: match?({:ok, "reader", _}, parse(keyid))

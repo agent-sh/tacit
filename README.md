@@ -8,7 +8,7 @@
 
 A decision made in one session should survive into the next. Tacit keeps project decisions, past mistakes and machine facts in a git repository, then gives your agents a small set of facts matched to the repo and prompt.
 
-Run a local store on your laptop, or share one across machines. Works with **Claude Code, Codex, Hermes, Grok and pi** on **Linux, macOS and Windows**.
+Run a local store on your laptop, or share one across machines. Works with **Claude Code, Codex, Hermes, Grok, pi, Muse and agy** on **Linux, macOS and Windows**.
 
 - **Files you own.** One fact per Markdown file, with its source, scope and git history.
 - **Context that fits.** Local full-text search and small context blocks. Hooks avoid repeating facts within a session.
@@ -16,7 +16,7 @@ Run a local store on your laptop, or share one across machines. Works with **Cla
 
 ## Quick start
 
-Install git 2.29+, Go 1.27 and [scrump with its text profile](docs/portable.md#redaction). Scrump is required for agent writes. Model jobs also need the `claude` CLI and your provider configuration; search, owner edits and review work without a model account.
+Install git 2.29+, Go 1.27 and [scrump with its text profile](docs/portable.md#redaction). Scrump is required for agent writes. Model jobs need one supported agent CLI and its provider configuration. Claude is the default, and can be replaced globally or per job; search, owner edits and review work without a model account.
 
 ```sh
 git clone https://github.com/agent-sh/tacit.git
@@ -54,7 +54,8 @@ Choose the integration for your agent:
 | Claude Code | `tacit install claude` | Session-start and prompt hooks |
 | Codex | `tacit install codex` | Hooks; trust them once in `/hooks` |
 | Hermes | `tacit install hermes` | Memory provider; follow the printed configuration steps |
-| Grok / pi | `tacit install grok` / `tacit install pi` | Prints the MCP configuration |
+| Grok / pi / Muse | `tacit install grok` / `pi` / `muse` | Prints the MCP configuration |
+| agy | `tacit install agy` | Prints the MCP registration command |
 
 [Portable setup](docs/portable.md) covers dependencies, native jobs, build archives and platform validation. To exchange facts between machines, follow the [shared-store setup](docs/setup.md#install-the-shared-store).
 
@@ -73,7 +74,7 @@ The [methods guide](docs/methods.md) explains the ranker, curation, ruling proof
 
 ### Architecture
 
-The Go client holds the git store and search index locally. Hooks and MCP read from that local copy. Model jobs run through `claude -p` on the machine you configure for them.
+The Go client holds the git store and search index locally. Hooks and MCP read from that local copy. Model jobs run through your selected agent CLI on the machine you configure for them. The dreamer, curator, conflict judge and verifier can each use a different runner.
 
 For shared stores, a small Elixir server adds git transport, signed writer identities and a change feed. Writers add notes to their own inboxes; the curator writes the rest of the store. Clients fetch changes and rebuild their local indexes. The server holds no model credentials.
 
@@ -85,7 +86,13 @@ Put optional settings in `~/.config/tacit/config.yaml` on Linux/macOS or `%APPDA
 store: ~/my-facts
 projects: ~/projects
 owner_names: [dana]
+runner: claude
+runners:
+  dream: muse
+  judge: agy
 ```
+
+Omit `runner` and `runners` to keep the original Claude setup: Haiku for dreaming and judging, Opus for curation and verification, Sonnet as the capacity fallback. A different runner uses its own configured model unless you set one in `models`.
 
 Use your own paths and names. Relative paths resolve against the settings file. `tacit --config FILE` selects another file; environment variables override file values, and command flags take precedence.
 
@@ -109,7 +116,7 @@ Agent writes and model digests pass through scrump before storage or a model cal
 
 Local mode uses your OS account for access. Shared mode adds tailnet identity, signed keys and per-writer inbox enforcement. An optional public listener accepts signed readers only.
 
-Model jobs send redacted digests and fact excerpts to the provider configured in Claude CLI. The verifier can read permitted source files. Choose the provider with that access in mind.
+Model jobs send redacted digests and fact excerpts to the provider configured in the selected CLI. The verifier can read permitted source files. Choose the provider with that access in mind.
 
 [Security policy and private reporting](SECURITY.md) · [Shared-store details](server/README.md)
 

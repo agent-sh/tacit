@@ -18,7 +18,7 @@ import (
 )
 
 // judgeRun is the conflict judge's model call; tests substitute it.
-var judgeRun curate.Runner = curate.ClaudeCLI
+var judgeRun curate.Runner = curate.JudgeCLI
 
 // judgedPair says where a judged pair came from: the fact under check
 // (newIdx), and either the existing fact the index found or another fact of

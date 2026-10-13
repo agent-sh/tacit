@@ -12,6 +12,7 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/dream"
+	"github.com/agent-sh/tacit/client/internal/modelrun"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
@@ -37,6 +38,9 @@ func runDream(args []string) int {
 		explicit := false
 		fs.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "model" })
 		*model = dreamModel(*model, explicit)
+		if !explicit {
+			*model = modelrun.Model("dream", "haiku")
+		}
 	}
 
 	// Before any model call or cursor move: a read-only clone, or one without
@@ -110,7 +114,11 @@ func runDream(args []string) int {
 			continue
 		}
 		prompt := fmt.Sprintf(dream.Prompt, w.Repo, host, strings.Join(lines, "\n"))
-		res, cost, in, err := dream.ClaudeCLI(ctx, *model, prompt)
+		res, cost, in, err := dream.RunCLI(ctx, *model, prompt)
+		var extracted []dream.Extracted
+		if err == nil {
+			extracted, err = dream.ParseChecked(res)
+		}
 		meter.Calls++
 		meter.CostUSD += cost
 		meter.InTokens += in
@@ -125,7 +133,7 @@ func runDream(args []string) int {
 			st.Offsets[w.File] = w.End
 		}
 		session := strings.TrimSuffix(filepath.Base(w.File), ".jsonl")
-		for _, x := range dream.Parse(res) {
+		for _, x := range extracted {
 			f := dream.ToFact(x, w.Repo, host, session)
 			meter.Facts++
 			if *dry {
@@ -186,6 +194,7 @@ func dreamModel(flagModel string, explicit bool) string {
 }
 
 func loadEnvFile(path string) error {
+	defer setExplicitRunner()
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("env file: %w (it holds the variables claude -p needs, for example the Bedrock ones; it may be empty)", err)

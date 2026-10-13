@@ -379,3 +379,24 @@ func TestLoadEnvFileWindowsUTF8BOM(t *testing.T) {
 		t.Fatalf("BOM-prefixed key was not read: %q", got)
 	}
 }
+
+func TestExplicitRunnerWinsOverJobEnvFile(t *testing.T) {
+	old := explicitRunner
+	explicitRunner = "muse"
+	defer func() { explicitRunner = old }()
+	for _, role := range []string{"", "DREAM_", "CURATE_", "JUDGE_", "VERIFY_"} {
+		t.Setenv("TACIT_"+role+"RUNNER", "")
+	}
+	path := filepath.Join(t.TempDir(), "job.env")
+	if err := os.WriteFile(path, []byte("TACIT_RUNNER=claude\nTACIT_DREAM_RUNNER=agy\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := loadEnvFile(path); err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []string{"", "DREAM_", "CURATE_", "JUDGE_", "VERIFY_"} {
+		if got := os.Getenv("TACIT_" + role + "RUNNER"); got != "muse" {
+			t.Fatalf("%s: %q", role, got)
+		}
+	}
+}

@@ -21,3 +21,5 @@ Include what you found, how to reproduce it, and what an attacker gains. A fix s
 ## Design
 
 The security model is in the README ("Security model") and SPEC.md ("Public path", "Rulings").
+
+Model jobs use the operator-selected CLI and provider. `commands` and `runner_args` are trusted local configuration, not memory content. Extraction and judging disable native tools; portable verification supplies redacted evidence through Tacit's guarded probes. See [runner boundaries](docs/portable.md#runner-validation-and-limits) for native Claude verification and cost-reporting limits.
