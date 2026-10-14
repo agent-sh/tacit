@@ -98,7 +98,7 @@ The shipped plan is [config/default.yaml](config/default.yaml):
 | Curator | Claude Opus 5.5 | medium | Astra on Bedrock through Codex, high |
 | Verifier | Astra on Bedrock through Codex | high | Claude Opus 5.5, medium |
 | Dreamer | Grok 4.7 through Grok CLI | xhigh | Claude Haiku |
-| Conflict judge | Claude Haiku | CLI default | none |
+| Conflict judge | Grok 4.7 through Grok CLI | xhigh | none |
 
 The Astra route uses your Codex `astra` profile. [Set up that profile](docs/portable.md#model-runners), or select your own runners, models and fallbacks. An explicit runner selection uses that CLI's model default unless you supply one.
 

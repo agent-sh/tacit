@@ -88,7 +88,7 @@ touch ~/.config/tacit/env
 chmod 600 ~/.config/tacit/env
 ```
 
-Put any model and path overrides there as `KEY=VALUE` lines. The shipped plan uses Claude Opus 5.5 medium for curation, Astra high through Codex's Bedrock `astra` profile for verification, Grok 4.7 xhigh for dreaming, and Haiku for judging. Opus and Astra fall back to each other; Grok falls back to Haiku. Use your own provider credentials and [configure the roles and fallbacks](portable.md#model-runners).
+Put any model and path overrides there as `KEY=VALUE` lines. The shipped plan uses Claude Opus 5.5 medium for curation, Astra high through Codex's Bedrock `astra` profile for verification, Grok 4.7 xhigh for dreaming, and Grok 4.7 xhigh for conflict judging. Opus and Astra fall back to each other. The dreamer falls back to Haiku. Use your own provider credentials and [configure the roles and fallbacks](portable.md#model-runners).
 
 Systemd user services do not inherit your shell's exports. The curator job also needs a `PATH` that finds the selected runner, `scrump` and `git`. Use absolute directories in the file; `~` and `$HOME` are not shell-expanded by systemd. To append the current shell's already expanded path:
 

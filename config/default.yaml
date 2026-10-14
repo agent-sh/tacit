@@ -3,16 +3,17 @@ runners:
   curate: claude
   verify: codex
   dream: grok
-  judge: claude
+  judge: grok
 models:
   curate: claude-opus-5-5
   verify: openai.gpt-6-astra
   dream: grok-4.7
-  judge: haiku
+  judge: grok-4.7
 efforts:
   curate: medium
   verify: high
   dream: xhigh
+  judge: xhigh
 profiles:
   verify: astra
 fallbacks:
