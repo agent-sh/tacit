@@ -24,9 +24,9 @@ import (
 	"github.com/agent-sh/tacit/client/internal/modelrun"
 )
 
-// The split model and the judge (conflict and ruling checks). The defaults
-// are Claude CLI aliases; $TACIT_CURATE_MODEL and $TACIT_JUDGE_MODEL name
-// others (a provider's full model ids). --model on tacit curate wins.
+// The split model and conflict judge use independently configured routes.
+// The shipped plan uses Opus 5.5 for splitting and Grok 4.7 for judging.
+// Model overrides accept the selected CLI's IDs; --model on curate wins.
 var (
 	DefaultModel = modelrun.Model("curate", "opus")
 	JudgeModel   = modelrun.Model("judge", "haiku")

@@ -28,7 +28,7 @@ func Default(role string) Route {
 	case "dream":
 		return Route{Runner: "grok", Model: "grok-4.7", Effort: "xhigh"}
 	case "judge":
-		return Route{Runner: "claude", Model: "haiku"}
+		return Route{Runner: "grok", Model: "grok-4.7", Effort: "xhigh"}
 	}
 	return Route{Runner: "claude"}
 }
