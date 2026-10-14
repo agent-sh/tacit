@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -21,15 +22,27 @@ import (
 func main() {
 	out := flag.String("out", "../dist", "archive output directory")
 	version := flag.String("version", "dev", "archive version label")
+	targetOS := flag.String("os", "", "build only this operating system (requires -arch)")
+	targetArch := flag.String("arch", "", "build only this architecture (requires -os)")
+	scrump := flag.String("scrump", "", "native scrump binary to bundle with a single target")
+	scrumpLicense := flag.String("scrump-license", "", "scrump license file for a bundled binary")
 	flag.Parse()
-	if strings.ContainsAny(*version, "/\\\n\r") {
+	if !regexp.MustCompile(`^(dev|v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?)$`).MatchString(*version) {
 		fail(fmt.Errorf("version must be a filename label"))
 	}
 	if err := os.MkdirAll(*out, 0o755); err != nil {
 		fail(err)
 	}
 	var sums strings.Builder
+	if (*targetOS == "") != (*targetArch == "") || (*scrump != "" && (*targetOS == "" || *scrumpLicense == "")) {
+		fail(fmt.Errorf("a bundled scrump requires -os, -arch and -scrump-license; -os and -arch must be paired"))
+	}
+	built := false
 	for _, target := range []struct{ os, arch string }{{"linux", "amd64"}, {"linux", "arm64"}, {"darwin", "amd64"}, {"darwin", "arm64"}, {"windows", "amd64"}, {"windows", "arm64"}} {
+		if *targetOS != "" && (target.os != *targetOS || target.arch != *targetArch) {
+			continue
+		}
+		built = true
 		dir, err := os.MkdirTemp(*out, ".build-")
 		if err != nil {
 			fail(err)
@@ -40,7 +53,7 @@ func main() {
 		}
 		bin := filepath.Join(dir, name)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-		cmd := exec.CommandContext(ctx, "go", "build", "-buildvcs=false", "-trimpath", "-ldflags=-s -w", "-o", bin, "./cmd/tacit")
+		cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags=-s -w -X main.version="+*version, "-o", bin, "./cmd/tacit")
 		cmd.Env = append(os.Environ(), "GOOS="+target.os, "GOARCH="+target.arch, "CGO_ENABLED=0")
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		err = cmd.Run()
@@ -56,6 +69,14 @@ func main() {
 		}
 		path := filepath.Join(*out, stem+ext)
 		files := map[string]string{name: bin, "LICENSE": "../LICENSE", "NOTICE": "../NOTICE", "README.md": "../README.md"}
+		if *scrump != "" {
+			redactor := "scrump"
+			if target.os == "windows" {
+				redactor += ".exe"
+			}
+			files[redactor] = *scrump
+			files["SCRUMP-LICENSE"] = *scrumpLicense
+		}
 		for _, font := range []string{"OFL-AtkinsonHyperlegibleNext.txt", "OFL-Literata.txt"} {
 			files["client/cmd/tacit/reviewui/fonts/"+font] = "cmd/tacit/reviewui/fonts/" + font
 		}
@@ -70,6 +91,9 @@ func main() {
 		}
 		fmt.Fprintf(&sums, "%x  %s\n", sha256.Sum256(b), filepath.Base(path))
 		fmt.Println(path)
+	}
+	if !built {
+		fail(fmt.Errorf("unsupported target %s/%s", *targetOS, *targetArch))
 	}
 	if err := os.WriteFile(filepath.Join(*out, "SHA256SUMS"), []byte(sums.String()), 0o644); err != nil {
 		fail(err)
@@ -121,7 +145,7 @@ func archive(path, stem string, files map[string]string, windows bool) error {
 			return err
 		}
 		h := &tar.Header{Name: stem + "/" + name, Mode: 0o644, Size: st.Size()}
-		if name == "tacit" {
+		if name == "tacit" || name == "scrump" {
 			h.Mode = 0o755
 		}
 		if err := t.WriteHeader(h); err != nil {

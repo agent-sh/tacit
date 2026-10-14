@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -24,6 +25,14 @@ import (
 
 var dreamRun dream.Runner = dream.RunCLI
 
+var errDreamRuntime = errors.New("dreamer runtime limit")
+var dreamBatchContext = func(limit time.Duration) (context.Context, context.CancelFunc) {
+	if limit == 0 {
+		return context.WithCancel(context.Background())
+	}
+	return context.WithTimeoutCause(context.Background(), limit, errDreamRuntime)
+}
+
 // runDream implements `tacit dream [--model M] [--dry-run] [--max-calls N]`:
 // digest transcript deltas since the last run, extract facts with the
 // dreamer model, write them to inbox/dreamer@<host>/, push, and append a
@@ -33,6 +42,7 @@ func runDream(args []string) int {
 	model := fs.String("model", dream.DefaultModel, "extraction model")
 	dry := fs.Bool("dry-run", false, "extract and print, write nothing, keep cursors")
 	maxCalls := fs.Int("max-calls", 40, "cap on model calls per run")
+	maxRuntime := fs.String("max-runtime", "45m", "batch runtime before pausing; 0 disables the batch limit")
 	envFile := fs.String("env-file", "", "KEY=VALUE lines (the variables claude -p needs, for example the Bedrock ones) set before `claude -p` runs; for launchd, which has no EnvironmentFile")
 	fs.Parse(args)
 	if *maxCalls < 0 {
@@ -53,6 +63,18 @@ func runDream(args []string) int {
 		if !explicit {
 			*model = modelrun.Model("dream", "haiku")
 		}
+	}
+	explicitRuntime := false
+	fs.Visit(func(f *flag.Flag) { explicitRuntime = explicitRuntime || f.Name == "max-runtime" })
+	if !explicitRuntime {
+		if value := os.Getenv("TACIT_DREAM_MAX_RUNTIME"); value != "" {
+			*maxRuntime = value
+		}
+	}
+	limit, err := time.ParseDuration(*maxRuntime)
+	if err != nil || limit < 0 {
+		fmt.Fprintln(os.Stderr, "dream: --max-runtime must be a nonnegative duration")
+		return 2
 	}
 
 	// Before any model call or cursor move: a read-only clone, or one without
@@ -136,19 +158,29 @@ func runDream(args []string) int {
 		fmt.Fprintln(os.Stderr, "dream: no store")
 		return 2
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
+	ctx, cancel := dreamBatchContext(limit)
 	defer cancel()
 
 	meter := dream.Meter{At: time.Now().Format(time.RFC3339), Windows: len(windows)}
 	meter.ModelCalls = &modelrun.Trace{}
 	ctx = modelrun.WithTrace(ctx, meter.ModelCalls)
 	var written []string
+	completed := 0
+	paused := func(err error) bool {
+		if errors.Is(context.Cause(ctx), errDreamRuntime) && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+			meter.PauseReason = "runtime"
+			return true
+		}
+		return false
+	}
 	// Cursor per file advances only when every window of that file succeeded.
 	failed := map[string]bool{}
 	for _, w := range windows {
 		if err := ctx.Err(); err != nil {
-			meter.Errors++
-			fmt.Fprintln(os.Stderr, "dream:", err)
+			if !paused(err) {
+				meter.Errors++
+				fmt.Fprintln(os.Stderr, "dream:", err)
+			}
 			break
 		}
 		// Redact here, one scrump call per window that is actually sent, and
@@ -161,6 +193,13 @@ func runDream(args []string) int {
 			fmt.Fprintln(os.Stderr, "dream: redaction:", err)
 			continue
 		}
+		if err := ctx.Err(); err != nil {
+			if !paused(err) {
+				meter.Errors++
+				fmt.Fprintln(os.Stderr, "dream:", err)
+			}
+			break
+		}
 		prompt := fmt.Sprintf(dream.Prompt, w.Repo, host, strings.Join(lines, "\n"))
 		res, cost, in, err := dreamRun(ctx, *model, prompt)
 		var extracted []dream.Extracted
@@ -172,6 +211,9 @@ func runDream(args []string) int {
 		meter.InTokens += in
 		pending[w.File]--
 		if err != nil {
+			if paused(err) {
+				break
+			}
 			meter.Errors++
 			failed[w.File] = true
 			fmt.Fprintln(os.Stderr, "dream:", err)
@@ -191,10 +233,14 @@ func runDream(args []string) int {
 		if !*dry {
 			paths, err := persistDreamWindow(ctx, s, facts)
 			if err != nil {
+				if paused(err) {
+					break
+				}
 				meter.Errors++
 				failed[w.File] = true
 				fmt.Fprintln(os.Stderr, "dream: persist:", err)
 			} else {
+				completed++
 				written = append(written, paths...)
 				if st.Completed == nil {
 					st.Completed = map[string][]string{}
@@ -210,7 +256,13 @@ func runDream(args []string) int {
 					fmt.Fprintln(os.Stderr, "dream: state:", err)
 				}
 			}
+		} else {
+			completed++
 		}
+	}
+	meter.RemainingWindows = len(remaining) - completed
+	if meter.PauseReason == "" && len(remaining) > *maxCalls {
+		meter.PauseReason = "call_limit"
 	}
 	if !*dry {
 		st.LastRun = meter.At
@@ -222,6 +274,9 @@ func runDream(args []string) int {
 			json.NewEncoder(f).Encode(meter)
 			f.Close()
 		}
+	}
+	if meter.PauseReason != "" {
+		fmt.Printf("dream: paused (%s); %d window(s) remain for the next run\n", meter.PauseReason, meter.RemainingWindows)
 	}
 	fmt.Printf("dream: %d window(s), %d call(s), %d fact(s), %d written, %d in-tokens, %s, %d error(s)\n", meter.Windows, meter.Calls, meter.Facts, len(written), meter.InTokens, meter.ModelCalls.CostSummary(meter.CostUSD), meter.Errors)
 	if meter.Errors > 0 {
@@ -291,6 +346,9 @@ func dreamUncommitted(ctx context.Context, s *store.Store, paths []string) ([]st
 	cmd.Dir = s.Dir
 	out, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		return nil, fmt.Errorf("read committed dreamer paths: %w", err)
 	}
 	committed := map[string]bool{}

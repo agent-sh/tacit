@@ -1,0 +1,133 @@
+name: release
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/install.sh
+      - scripts/install.ps1
+      - client/tools/dist/**
+      - client/tools/install-smoke/**
+  push:
+    tags: ["v[0-9]*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version label for validation-only builds of the selected ref
+        default: v0.1.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: ${{ !github.event.repository.private && vars.CI_PUBLIC == '1' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            os: linux
+            arch: amd64
+            rust: x86_64-unknown-linux-musl
+            exe: ""
+          - runner: ubuntu-24.04-arm
+            os: linux
+            arch: arm64
+            rust: aarch64-unknown-linux-musl
+            exe: ""
+          - runner: macos-15-intel
+            os: darwin
+            arch: amd64
+            rust: x86_64-apple-darwin
+            exe: ""
+          - runner: macos-latest
+            os: darwin
+            arch: arm64
+            rust: aarch64-apple-darwin
+            exe: ""
+          - runner: windows-latest
+            os: windows
+            arch: amd64
+            rust: x86_64-pc-windows-msvc
+            exe: .exe
+          - runner: windows-11-arm
+            os: windows
+            arch: arm64
+            rust: aarch64-pc-windows-msvc
+            exe: .exe
+    runs-on: ${{ matrix.runner }}
+    env:
+      RELEASE_VERSION: ${{ inputs.version || (github.event_name == 'pull_request' && 'v0.0.0-preview') || github.ref_name }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: client/go.mod
+          cache-dependency-path: client/go.sum
+      - name: Checkout the text-profile redactor
+        uses: actions/checkout@v5
+        with:
+          repository: avifenesh/scrump
+          ref: 17cd5abc9ce19d4fdec51588a35ef73a644e36bb
+          path: .release-deps/scrump
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249
+        with:
+          toolchain: stable
+          targets: ${{ matrix.rust }}
+      - uses: actions/cache@v4
+        with:
+          path: .release-deps/scrump/target
+          key: scrump-text-${{ matrix.rust }}-17cd5abc-v1
+      - name: Linux static C toolchain
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y musl-tools
+      - name: Build scrump from pinned source
+        working-directory: .release-deps/scrump
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then export CC=musl-gcc; fi
+          cargo build --locked --release --target '${{ matrix.rust }}' -p scrump-cli
+      - name: Test client and package native binaries
+        working-directory: client
+        run: |
+          export PATH="$PWD/../.release-deps/scrump/target/${{ matrix.rust }}/release:$PATH"
+          go test ./internal/platform ./internal/settings ./internal/modelrun ./internal/store
+          go test ./cmd/tacit -run 'TestDreamBatchRuntime|TestDreamInterruptedWrite|TestDreamCappedTranscript'
+          go run ./tools/dist -out ../dist -version "$RELEASE_VERSION" -os '${{ matrix.os }}' -arch '${{ matrix.arch }}' -scrump '../.release-deps/scrump/target/${{ matrix.rust }}/release/scrump${{ matrix.exe }}' -scrump-license ../.release-deps/scrump/LICENSE
+          go run ./tools/install-smoke -archives ../dist -version "$RELEASE_VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          path: release-assets
+          pattern: release-*
+      - name: Assemble checksums and installers
+        run: |
+          mkdir -p dist
+          find release-assets -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} dist/ \;
+          cat release-assets/*/SHA256SUMS > dist/SHA256SUMS
+          cp scripts/install.sh scripts/install.ps1 dist/
+          (cd dist && sha256sum -c SHA256SUMS)
+      - name: Publish the verified release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" dist/* --verify-tag --title "Tacit $RELEASE_TAG" --notes-file docs/release-notes.md
