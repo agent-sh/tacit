@@ -68,14 +68,19 @@ func Path() string {
 // Load applies file values only where the environment has no override. Relative
 // paths are resolved against the configuration file, not a hook's working dir.
 func Load(path string, required bool) error {
-	source, err := filepath.EvalSymlinks(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) && !required {
-			if _, linkErr := os.Lstat(path); os.IsNotExist(linkErr) {
-				return nil
-			}
+			return nil
 		}
 		return fmt.Errorf("read config %s: %w", path, err)
+	}
+	source := path
+	if info.Mode()&os.ModeSymlink != 0 {
+		source, err = filepath.EvalSymlinks(path)
+		if err != nil {
+			return fmt.Errorf("read config %s: %w", path, err)
+		}
 	}
 	b, err := os.ReadFile(source)
 	if err != nil {

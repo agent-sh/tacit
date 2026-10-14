@@ -239,7 +239,11 @@ func TestUserConfigLinkLoadsPrivateSettingsFromAnyDirectory(t *testing.T) {
 	if err != nil || route.Runner != "muse" || route.Model != "chosen-model" || route.Effort != "high" {
 		t.Fatal("private route not loaded", err)
 	}
-	if got := os.Getenv("TACIT_STORE"); got != filepath.Join(filepath.Dir(local), "facts") {
+	target, err := filepath.EvalSymlinks(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("TACIT_STORE"); got != filepath.Join(filepath.Dir(target), "facts") {
 		t.Fatal("relative path did not resolve against link target")
 	}
 	if err := os.Remove(local); err != nil {
@@ -258,5 +262,27 @@ func TestPrivateConfigIsIgnoredByRepositoryRule(t *testing.T) {
 	out, err := cmd.Output()
 	if err != nil || !strings.HasPrefix(string(out), ".gitignore:") {
 		t.Fatalf("private config lacks repository ignore rule: %v", err)
+	}
+}
+
+func TestRegularConfigPreservesSymlinkedParentPath(t *testing.T) {
+	clear(t, "TACIT_STORE")
+	root := t.TempDir()
+	real := filepath.Join(root, "real")
+	alias := filepath.Join(root, "alias")
+	if err := os.Mkdir(real, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "config.yaml"), []byte("store: ./facts\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Load(filepath.Join(alias, "config.yaml"), true); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("TACIT_STORE"); got != filepath.Join(alias, "facts") {
+		t.Fatal("regular config path spelling changed")
 	}
 }
