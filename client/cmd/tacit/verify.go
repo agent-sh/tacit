@@ -107,33 +107,12 @@ type capacityError struct {
 func (e *capacityError) Error() string { return e.model + " has no capacity: " + e.err.Error() }
 func (e *capacityError) Unwrap() error { return e.err }
 
-// capacityMarkers are the texts claude -p and Bedrock use for a refusal
-// that says nothing about the request itself: Anthropic's overloaded_error
-// (529), Bedrock's ThrottlingException (429), ServiceUnavailableException
-// (503) and ModelNotReadyException, and Claude Code's own "high load" note.
-var capacityMarkers = []string{"overloaded", "throttl", "too many requests", "rate limit", "unavailable", "model not ready", "modelnotready", "high load", "capacity"}
-
-// capacityFailure reads a failed claude -p call: the HTTP status it reports
-// in api_error_status and the text of its result and stderr. A 400 such as
-// an invalid model id, a 403 or 404, a budget stop, a schema failure or a crash is not a
-// capacity failure and never moves to the fallback.
+// Native Claude classifies provider metadata at the adapter boundary.
 func capacityFailure(status int, text string) bool {
-	switch status {
-	case 429, 503, 529:
-		return true
-	}
-	t := strings.ToLower(text)
-	// A 403 or 404 (Opus access lost, the model not offered here) is not
-	// capacity: it fails the run loudly instead of silently switching providers.
-	if status != 0 && status != 500 && status != 502 && status != 504 {
-		return false // another 4xx: the request, not the provider
-	}
-	for _, m := range capacityMarkers {
-		if strings.Contains(t, m) {
-			return true
-		}
-	}
-	return false
+	failure := modelrun.ProviderFailure(status, "", text)
+	// Native retries already handle ordinary 500 failures. Only explicit
+	// capacity failures move this legacy verifier to another model.
+	return failure.Kind == "capacity"
 }
 
 // providerRetryWait is the first wait before claudeVerifier tries the same
@@ -228,14 +207,42 @@ func claudeVerifier(ctx context.Context, model, prompt, cwd string, budget float
 		if i := strings.IndexByte(string(out), '{'); i >= 0 {
 			_ = json.Unmarshal(out[i:], &res)
 		}
+		var metadata struct {
+			Cost  any `json:"total_cost_usd"`
+			Usage struct {
+				Input int `json:"input_tokens"`
+				Read  int `json:"cache_read_input_tokens"`
+				Write int `json:"cache_creation_input_tokens"`
+			} `json:"usage"`
+		}
+		if i := strings.IndexByte(string(out), '{'); i >= 0 {
+			_ = json.Unmarshal(out[i:], &metadata)
+		}
+		reportedCost, costKnown := metadata.Cost.(float64)
+		if !costKnown || reportedCost < 0 {
+			reportedCost, costKnown = 0, false
+		}
+		res.Cost = reportedCost
 		cost += res.Cost
+		route, _ := modelrun.FromContext(ctx, "verify", model)
+		recordErr := runErr
+		if res.IsError {
+			recordErr = modelrun.ProviderFailure(res.APIStatus, "", res.Result)
+		}
+		modelrun.Record(ctx, "verify", modelrun.Result{Route: route, CostUSD: res.Cost, CostReported: costKnown, InputTokens: metadata.Usage.Input + metadata.Usage.Read + metadata.Usage.Write}, recordErr)
 		raw = digest.Redact(string(out)) // once; saveRaw writes it as is
 		if runErr != nil && res.Cost == 0 && len(res.Structured.Verdicts) == 0 && res.APIStatus == 0 {
 			// A result object with is_error and no status (Claude Code's own
 			// "Repeated 529 Overloaded errors") is read like any other: its
 			// text says what failed.
 			text := strings.TrimSpace(res.Result + "\n" + stderr)
-			err := fmt.Errorf("claude -p: %w: %s", runErr, shortText(digest.Redact(text)))
+			cause := runErr
+			if ctx.Err() != nil {
+				cause = ctx.Err()
+			} else {
+				cause = errors.Join(runErr, modelrun.ProviderFailure(0, "", shortText(digest.Redact(text))))
+			}
+			err := fmt.Errorf("claude -p: %w", cause)
 			if ctx.Err() == nil && capacityFailure(0, text) {
 				return nil, raw, cost, &capacityError{model, err}
 			}
@@ -253,7 +260,7 @@ func claudeVerifier(ctx context.Context, model, prompt, cwd string, budget float
 		break
 	}
 	if res.IsError || (len(res.Structured.Verdicts) == 0 && res.Subtype != "success") {
-		err := fmt.Errorf("verifier ended with %s (status %d): %s", res.Subtype, res.APIStatus, shortText(digest.Redact(res.Result)))
+		err := fmt.Errorf("verifier ended with %s: %w", res.Subtype, modelrun.ProviderFailure(res.APIStatus, "", shortText(digest.Redact(res.Result))))
 		// A refusal for capacity, even after some turns ran, moves the batch.
 		if res.IsError && capacityFailure(res.APIStatus, res.Result+"\n"+stderr) {
 			return nil, raw, cost, &capacityError{model, err}
@@ -344,8 +351,20 @@ func runVerify(args []string) int {
 			r.only = append(r.only, it.ID)
 		}
 	}
-	n, cost, err := r.run(context.Background(), s, configuredVerifier)
-	fmt.Printf("verify: %d finding(s) settled or asked, $%.2f%s\n", n, cost, r.modelSummary())
+	trace := &modelrun.Trace{}
+	n, cost, err := r.run(modelrun.WithTrace(context.Background(), trace), s, configuredVerifier)
+	if !r.dry {
+		os.MkdirAll(r.stateDir, 0700)
+		if f, ferr := os.OpenFile(filepath.Join(r.stateDir, "verifier.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); ferr == nil {
+			json.NewEncoder(f).Encode(struct {
+				At         string          `json:"at"`
+				CostUSD    float64         `json:"cost_usd"`
+				ModelCalls *modelrun.Trace `json:"model_calls"`
+			}{time.Now().Format(time.RFC3339), cost, trace})
+			f.Close()
+		}
+	}
+	fmt.Printf("verify: %d finding(s) settled or asked, %s%s\n", n, trace.CostSummary(cost), r.modelSummary())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "verify:", err)
 		return 1
@@ -569,10 +588,13 @@ func (r *verifyRun) callBatch(ctx context.Context, call verifierRunner, prompt s
 	if err != nil {
 		return nil, "", 0, false, err
 	}
-	one := func(model string, route *modelrun.Route) ([]verifyVerdict, float64, bool, error) {
+	one := func(model string, route *modelrun.Route, fallback bool) ([]verifyVerdict, float64, bool, error) {
 		attemptCtx := ctx
 		if route != nil {
 			attemptCtx = modelrun.WithRoute(ctx, *route)
+		}
+		if fallback {
+			attemptCtx = modelrun.FallbackContext(attemptCtx)
 		}
 		bctx, cancel := context.WithTimeout(attemptCtx, timeout)
 		defer cancel()
@@ -586,7 +608,7 @@ func (r *verifyRun) callBatch(ctx context.Context, call verifierRunner, prompt s
 		}
 		return model
 	}
-	vs, c, timedOut, err := one(r.model, r.route)
+	vs, c, timedOut, err := one(r.model, r.route, false)
 	var ce *capacityError
 	eligible := errors.As(err, &ce) || (r.route != nil && (modelrun.CanFallback(err) || timedOut))
 	noFallback := r.fallbackRoute == nil && r.fallback == ""
@@ -599,7 +621,7 @@ func (r *verifyRun) callBatch(ctx context.Context, call verifierRunner, prompt s
 	}
 	fmt.Fprintf(os.Stderr, "verify: %v; this batch runs again on %s\n", err, label(r.fallback, r.fallbackRoute))
 	r.fellBack++
-	vs, c2, timedOut, err := one(r.fallback, r.fallbackRoute)
+	vs, c2, timedOut, err := one(r.fallback, r.fallbackRoute, true)
 	return vs, label(r.fallback, r.fallbackRoute), c + c2, timedOut, err
 }
 

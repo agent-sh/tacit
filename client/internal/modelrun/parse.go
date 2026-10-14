@@ -33,6 +33,7 @@ func content(v any) string {
 func parse(name string, data []byte) (Result, error) {
 	var result Result
 	done := false
+	piCalls := 0
 	var pendingErr error
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	for {
@@ -46,9 +47,6 @@ func parse(name string, data []byte) (Result, error) {
 		}
 		switch name {
 		case "claude":
-			if bad, _ := event["is_error"].(bool); bad {
-				return result, fmt.Errorf("model reported an error: %s %s %v", str(event, "result"), str(event, "subtype"), event["errors"])
-			}
 			if text := str(event, "result"); text != "" {
 				result.Text = text
 				done = true
@@ -57,24 +55,25 @@ func parse(name string, data []byte) (Result, error) {
 				result.Text = text
 				done = true
 			}
-			result.CostUSD = num(event, "total_cost_usd")
-			_, result.CostReported = event["total_cost_usd"]
+			result.CostUSD, result.CostReported = costValue(event, "total_cost_usd")
 			result.SessionID = str(event, "session_id")
 			u := obj(event, "usage")
 			result.InputTokens = int(num(u, "input_tokens") + num(u, "cache_creation_input_tokens") + num(u, "cache_read_input_tokens"))
+			if bad, _ := event["is_error"].(bool); bad {
+				return result, eventFailure(event, fmt.Sprintf("%s %s %v", str(event, "result"), str(event, "subtype"), event["errors"]))
+			}
 		case "grok":
-			result.CostUSD = num(event, "total_cost_usd")
-			_, result.CostReported = event["total_cost_usd"]
+			result.CostUSD, result.CostReported = costValue(event, "total_cost_usd")
+			u := obj(event, "usage")
+			result.InputTokens = int(num(u, "input_tokens") + num(u, "cache_read_input_tokens") + num(u, "cache_creation_input_tokens"))
 			if str(event, "type") == "error" {
-				return result, fmt.Errorf("model reported an error: %s", str(event, "message"))
+				return result, eventFailure(event, str(event, "message"))
 			}
 			if reason := str(event, "stopReason"); reason != "end_turn" {
-				return result, fmt.Errorf("model did not complete: %s", reason)
+				return result, eventFailure(event, "model did not complete: "+reason)
 			}
 			result.Text = str(event, "text")
 			result.SessionID = str(event, "sessionId")
-			u := obj(event, "usage")
-			result.InputTokens = int(num(u, "input_tokens") + num(u, "cache_read_input_tokens") + num(u, "cache_creation_input_tokens"))
 			done = true
 		case "codex":
 			switch str(event, "type") {
@@ -90,7 +89,7 @@ func parse(name string, data []byte) (Result, error) {
 				u := obj(event, "usage")
 				result.InputTokens = int(num(u, "input_tokens"))
 			case "turn.failed", "error":
-				return result, fmt.Errorf("model reported a failed turn: %s %s", str(event, "message"), str(obj(event, "error"), "message"))
+				return result, eventFailure(event, strings.TrimSpace(str(event, "message")+" "+str(obj(event, "error"), "message")))
 			}
 		case "muse":
 			p := obj(event, "payload")
@@ -99,35 +98,37 @@ func parse(name string, data []byte) (Result, error) {
 				done = true
 			}
 			if str(p, "kind") == "run_terminal" && str(p, "terminal") != "completed" {
-				return result, errors.New("model run did not complete")
+				return result, eventFailure(p, "model run did not complete")
 			}
 		case "agy":
 			if str(event, "event") == "result" {
 				p := obj(event, "result")
+				u := obj(p, "usage")
+				result.InputTokens = int(num(u, "input_tokens") + num(u, "cache_read_tokens"))
 				if str(p, "status") != "SUCCESS" {
-					return result, fmt.Errorf("model ended with %s", str(p, "status"))
+					return result, eventFailure(p, "model ended with "+str(p, "status"))
 				}
 				result.Text = str(p, "response")
 				result.SessionID = str(p, "conversation_id")
 				done = true
-				u := obj(p, "usage")
-				result.InputTokens = int(num(u, "input_tokens") + num(u, "cache_read_tokens"))
 			}
 		case "pi":
 			if str(event, "type") == "message_end" {
 				m := obj(event, "message")
 				if str(m, "role") == "assistant" {
 					if s := str(m, "stopReason"); s == "error" || s == "aborted" {
-						pendingErr = fmt.Errorf("model did not complete: %s", str(m, "errorMessage"))
+						pendingErr = eventFailure(m, str(m, "errorMessage"))
 					}
 					if str(m, "stopReason") != "error" && str(m, "stopReason") != "aborted" {
 						pendingErr = nil
 					}
 					result.Text = content(m["content"])
 					u := obj(m, "usage")
-					result.InputTokens = int(num(u, "input") + num(u, "cacheRead") + num(u, "cacheWrite"))
-					result.CostUSD += num(obj(u, "cost"), "total")
-					_, result.CostReported = obj(u, "cost")["total"]
+					result.InputTokens += int(num(u, "input") + num(u, "cacheRead") + num(u, "cacheWrite"))
+					cost, reported := costValue(obj(u, "cost"), "total")
+					result.CostUSD += cost
+					result.CostReported = (piCalls == 0 || result.CostReported) && reported
+					piCalls++
 				}
 			}
 			if str(event, "type") == "agent_end" {
@@ -137,21 +138,20 @@ func parse(name string, data []byte) (Result, error) {
 		case "hermes":
 			switch str(event, "type") {
 			case "result":
+				result.CostUSD, result.CostReported = costValue(event, "total_cost_usd")
+				u := obj(event, "tokens")
+				result.InputTokens = int(num(u, "input") + num(u, "cache_read") + num(u, "cache_write"))
 				if num(event, "exit_code") != 0 {
-					return result, errors.New("model reported an error")
+					return result, eventFailure(event, str(event, "result"))
 				}
 				if bad, _ := event["is_error"].(bool); bad {
-					return result, errors.New("model reported an error")
+					return result, eventFailure(event, str(event, "result"))
 				}
 				result.Text = str(event, "result")
 				if result.Text == "" {
 					result.Text = str(event, "text")
 				}
 				done = true
-				result.CostUSD = num(event, "total_cost_usd")
-				_, result.CostReported = event["total_cost_usd"]
-				u := obj(event, "tokens")
-				result.InputTokens = int(num(u, "input") + num(u, "cache_read") + num(u, "cache_write"))
 			case "assistant":
 				m := obj(event, "message")
 				result.Text = content(m["content"])
@@ -165,4 +165,12 @@ func parse(name string, data []byte) (Result, error) {
 		return result, fmt.Errorf("%w: missing completed model result", ErrInvalidResult)
 	}
 	return result, nil
+}
+
+func costValue(values map[string]any, key string) (float64, bool) {
+	cost, reported := values[key].(float64)
+	if !reported || cost < 0 {
+		return 0, false
+	}
+	return cost, true
 }

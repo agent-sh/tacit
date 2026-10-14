@@ -26,6 +26,7 @@ func usage() {
   tacit [--config FILE] [--runner TOOL] <command>
   tacit init   [--store DIR]    initialize a local store (no server or keys)
   tacit maintain [--env-file FILE]   curate then verify on this machine
+  tacit doctor [--models] [--role dream|curate|judge|verify] [--json]   offline configuration and dependency checks
   tacit lint   [--store DIR]
   tacit index  [--store DIR] [--check]
   tacit import [--store DIR] [--host NAME] claude <memory-dir>...
@@ -117,6 +118,8 @@ func main() {
 		usage()
 	}
 	switch os.Args[1] {
+	case "doctor":
+		os.Exit(runDoctor(os.Args[2:]))
 	case "maintain":
 		os.Exit(runMaintain(os.Args[2:]))
 	case "init":

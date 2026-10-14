@@ -119,7 +119,7 @@ func TestRecheckConflictsPairsTodaysFactsWithOlderOnes(t *testing.T) {
 	old := judgeRun
 	judgeRun = func(ctx context.Context, model, prompt string) (string, float64, error) {
 		prompts = append(prompts, prompt)
-		return `["supersedes", "supersedes", "supersedes"]`, 0.01, nil
+		return `["supersedes", "supersedes"]`, 0.01, nil
 	}
 	defer func() { judgeRun = old }()
 

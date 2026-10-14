@@ -46,6 +46,12 @@ case "$mode" in
   529nostatus)
     echo '{"type":"result","subtype":"success","is_error":true,"total_cost_usd":0,"result":"Repeated 529 Overloaded errors"}'
     exit 1 ;;
+  unknowncost)
+    echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":"unknown","result":"done","structured_output":{"verdicts":[]}}'
+    ;;
+  401|502|504)
+    echo "{\"type\":\"result\",\"is_error\":true,\"api_error_status\":$mode,\"total_cost_usd\":0.1,\"result\":\"temporarily failed\"}"
+    exit 1 ;;
   403)
     echo '{"type":"result","subtype":"success","is_error":true,"api_error_status":403,"total_cost_usd":0,"result":"API Error: 403 AccessDeniedException: You do not have access to the model with the specified model ID."}'
     exit 1 ;;

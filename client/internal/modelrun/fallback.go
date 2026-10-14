@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
-	"strings"
 )
 
 func CanFallback(err error) bool {
@@ -17,16 +15,11 @@ func CanFallback(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
 		return true
 	}
-	text := strings.ToLower(err.Error())
-	if strings.Contains(text, "accessdenied") || strings.Contains(text, "refusal") || regexp.MustCompile(`(?i)\b(?:http|status|status code|api error|code)\D{0,12}(?:400|403|404)\b`).MatchString(text) {
-		return false
+	var failure *Failure
+	if errors.As(err, &failure) {
+		return failure.Kind == "capacity" || failure.Kind == "unavailable" || failure.Kind == "authentication"
 	}
-	for _, phrase := range []string{"overloaded", "rate limit", "capacity", "throttl", "too many requests", "serviceunavailableexception", "model not ready", "modelnotready", "high load", "connection refused", "connection reset", "not logged in", "authentication expired", "unauthorized"} {
-		if strings.Contains(text, phrase) {
-			return true
-		}
-	}
-	return regexp.MustCompile(`(?i)\b(?:http|status|status code|api error|code)\D{0,12}(?:429|500|503|529)\b`).MatchString(text)
+	return false
 }
 
 func RunWithFallback(ctx context.Context, role, model, prompt, sid string) (Result, error) {
@@ -46,19 +39,23 @@ func runPlan(ctx context.Context, role string, primary Route, fallback *Route, p
 	if err != nil {
 		return Result{}, err
 	}
-	one := func(r Route) (Result, error) {
-		attempt, cancel := context.WithTimeout(WithRoute(ctx, r), timeout)
+	one := func(r Route, fallback bool) (Result, error) {
+		attemptContext := WithRoute(ctx, r)
+		if fallback {
+			attemptContext = FallbackContext(attemptContext)
+		}
+		attempt, cancel := context.WithTimeout(attemptContext, timeout)
 		defer cancel()
 		answer, err := call(attempt, role, r.Model, prompt, sid)
 		answer.Route = r
 		return answer, err
 	}
-	answer, err := one(primary)
+	answer, err := one(primary, false)
 	if err == nil || fallback == nil || *fallback == primary || ctx.Err() != nil || !CanFallback(err) {
 		return answer, err
 	}
 	fmt.Fprintf(os.Stderr, "tacit: %s unavailable (%v); trying %s\n", primary.Label(), err, fallback.Label())
-	next, nextErr := one(*fallback)
+	next, nextErr := one(*fallback, true)
 	next.CostUSD += answer.CostUSD
 	next.InputTokens += answer.InputTokens
 	next.CostReported = answer.CostReported && next.CostReported

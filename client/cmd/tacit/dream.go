@@ -95,6 +95,8 @@ func runDream(args []string) int {
 	defer cancel()
 
 	meter := dream.Meter{At: time.Now().Format(time.RFC3339), Windows: len(windows)}
+	meter.ModelCalls = &modelrun.Trace{}
+	ctx = modelrun.WithTrace(ctx, meter.ModelCalls)
 	var written []string
 	// Cursor per file advances only when every window of that file succeeded.
 	pending := map[string]int{}
@@ -167,12 +169,12 @@ func runDream(args []string) int {
 		if err := dream.SaveState(statePath, st); err != nil {
 			fmt.Fprintln(os.Stderr, "dream: state:", err)
 		}
-		if f, err := os.OpenFile(filepath.Join(stateDir, "dreamer.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		if f, err := os.OpenFile(filepath.Join(stateDir, "dreamer.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
 			json.NewEncoder(f).Encode(meter)
 			f.Close()
 		}
 	}
-	fmt.Printf("dream: %d window(s), %d call(s), %d fact(s), %d written, %d in-tokens, $%.3f, %d error(s)\n", meter.Windows, meter.Calls, meter.Facts, len(written), meter.InTokens, meter.CostUSD, meter.Errors)
+	fmt.Printf("dream: %d window(s), %d call(s), %d fact(s), %d written, %d in-tokens, %s, %d error(s)\n", meter.Windows, meter.Calls, meter.Facts, len(written), meter.InTokens, meter.ModelCalls.CostSummary(meter.CostUSD), meter.Errors)
 	if meter.Errors > 0 {
 		return 1
 	}

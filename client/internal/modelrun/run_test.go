@@ -40,7 +40,14 @@ func TestMain(m *testing.M) {
 		}
 		b, _ := json.Marshal(map[string]any{"args": os.Args[1:], "prompt": string(input), "cwd": cwd, "job": os.Getenv("TACIT_MODEL_JOB")})
 		_ = os.WriteFile(os.Getenv("TACIT_TEST_CAPTURE"), b, 0600)
-		fmt.Println(responses[name])
+		response := responses[name]
+		if override := os.Getenv("TACIT_TEST_RESPONSE"); override != "" {
+			response = override
+		}
+		fmt.Println(response)
+		if os.Getenv("TACIT_TEST_EXIT") == "1" {
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 	os.Exit(m.Run())

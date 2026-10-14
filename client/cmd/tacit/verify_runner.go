@@ -62,7 +62,7 @@ results. Refused requests stay refused. When finished, return the final verdicts
 		cost += answer.CostUSD
 		raw = digest.Redact(answer.Text)
 		if err != nil {
-			if capacityFailure(0, err.Error()) {
+			if modelrun.CanFallback(err) {
 				return nil, raw, cost, &capacityError{model, err}
 			}
 			return nil, raw, cost, err
