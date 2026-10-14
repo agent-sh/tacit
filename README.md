@@ -16,7 +16,7 @@ Run a local store on your laptop, or share one across machines. Works with **Cla
 
 ## Quick start
 
-Install git 2.29+, Go 1.27 and [scrump with its text profile](docs/portable.md#redaction). Scrump is required for agent writes. Model jobs need one supported agent CLI and its provider configuration. The default plan uses Claude, Codex on Bedrock and Grok; select another plan globally or per job. Search, owner edits and review work without a model account.
+Install git 2.29+, Go 1.27 and [scrump with its text profile](docs/portable.md#redaction). Scrump is required for agent writes. Model jobs need one supported agent CLI and its provider configuration. Choose the runners, models and providers in your own settings file. Search, owner edits and review work without a model account.
 
 ```sh
 git clone https://github.com/agent-sh/tacit.git
@@ -80,33 +80,107 @@ For shared stores, a small Elixir server adds git transport, signed writer ident
 
 ## Configuration
 
-Put optional settings in `~/.config/tacit/config.yaml` on Linux/macOS or `%APPDATA%\tacit\config.yaml` on Windows:
+Keep operator settings in an untracked file. The repository ignores `config/local.yaml`; [config/example.yaml](config/example.yaml) contains generic values:
 
-```yaml
-store: ~/my-facts
-projects: ~/projects
-owner_names: [dana]
-runners:
-  dream: muse
-  judge: agy
+```sh
+cp config/example.yaml config/local.yaml
+chmod 600 config/local.yaml
+export TACIT_SETTINGS="$PWD/config/local.yaml"
+tacit init
 ```
 
-The shipped plan is [config/default.yaml](config/default.yaml):
+Or use `tacit --config /absolute/path/config/local.yaml <command>`. On Windows, copy the example with `Copy-Item` and set `$env:TACIT_SETTINGS` to its absolute path. An explicit config selection is carried into installed hooks, MCP commands and jobs.
 
-| Job | Runner and model | Effort | Fallback |
-|---|---|---|---|
-| Curator | Claude Opus 5.5 | medium | Astra on Bedrock through Codex, high |
-| Verifier | Astra on Bedrock through Codex | high | Claude Opus 5.5, medium |
-| Dreamer | Grok 4.7 through Grok CLI | xhigh | Claude Haiku |
-| Conflict judge | Grok 4.7 through Grok CLI | xhigh | none |
+Without an override, Tacit reads `~/.config/tacit/config.yaml` on Linux/macOS or `%APPDATA%\tacit\config.yaml` on Windows. A user-config symlink can point to the ignored repository file so it loads from any working directory. Relative paths resolve against the actual settings file, including a symlink's target. A dangling config link is an error. Tacit loads only the selected file; it does not search other project checkouts for settings.
 
-The Astra route uses your Codex `astra` profile. [Set up that profile](docs/portable.md#model-runners), or select your own runners, models and fallbacks. An explicit runner selection uses that CLI's model default unless you supply one.
+Precedence: command flags, then environment values (including a job's `--env-file`), then YAML, then generic defaults. Unknown fields and missing explicitly selected files fail before model work. Hooks with bad settings fail open without output. Store provider credentials in the selected CLI or the job env file.
 
-Use your own paths and names. Relative paths resolve against the settings file. `tacit --config FILE` selects another file; environment variables override file values, and command flags take precedence.
+### Client settings
 
-[Configuration reference](docs/portable.md#configuration) includes model settings, all environment variables and Windows path examples.
+Every YAML option is listed here:
 
-For optional background work, `tacit install dream` and `tacit install curate` write native job files and print the commands to start them. Configure the provider and job environment before starting them. See [job setup](docs/portable.md#linux-and-macos).
+| Option | Environment equivalent | Meaning / default |
+|---|---|---|
+| `store` | `TACIT_STORE` | Git store; `~/.local/share/tacit/store` |
+| `projects` | `TACIT_PROJECTS` | Checkouts root; `~/projects` |
+| `index` | `TACIT_INDEX` | Local search index; `~/.local/state/tacit/index` |
+| `keys` | `TACIT_CONFIG` | Writer-key directory; `~/.config/tacit` |
+| `local_overlay` | `TACIT_LOCAL` | Local notes for a read-only clone; `~/.local/share/tacit/local` |
+| `owner_names` | `TACIT_OWNER_NAMES` | Owner name aliases; YAML list, comma-separated environment value |
+| `verify_roots` | `TACIT_VERIFY_ROOTS` | Extra permitted source directories; YAML list, `PATH` separator in environment; every directory must exist |
+| `runner` | `TACIT_RUNNER` | Default CLI for all model jobs; `claude` |
+| `runners` | `TACIT_<ROLE>_RUNNER` | Per-role CLI overrides |
+| `models` | `TACIT_<ROLE>_MODEL` | Per-role model IDs accepted by the CLI; Claude aliases `opus` for curate/verify, `haiku` for dream/judge |
+| `models.verify_fallback` | `TACIT_VERIFY_FALLBACK_MODEL` | Legacy same-runner verifier fallback; an empty environment value disables it |
+| `efforts` | `TACIT_<ROLE>_EFFORT` | Per-role reasoning effort; omitted uses the CLI default, empty clears an override |
+| `profiles` | `TACIT_<ROLE>_PROFILE` | Per-role Codex profile name; empty clears it |
+| `timeouts` | `TACIT_<ROLE>_TIMEOUT` | Positive Go duration per model attempt, such as `10m`; default `20m` |
+| `commands` | `TACIT_<TOOL>_COMMAND` | Executable name or path; default is the tool name |
+| `runner_args` | `TACIT_<TOOL>_ARGS` | Extra argv without a shell; YAML list or JSON array in the environment |
+| `fallbacks` | `TACIT_<ROLE>_FALLBACK` | One fallback route per role; JSON object in environment, `null` disables it |
+
+`<ROLE>` is `curate`, `judge`, `dream` or `verify` (uppercase in environment names). `<TOOL>` is `claude`, `codex`, `hermes`, `grok`, `pi`, `muse` or `agy`. An explicit non-Claude runner uses its own model when no model is set. Per-role effort/profile options take precedence over general runner arguments. Accepted effort values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` and `ultra`, subject to the selected CLI/model. Effort adapters exist for Claude, Codex, Grok, Muse and pi; use `runner_args` for other tools.
+
+A fallback route has these fields:
+
+| Field | Meaning |
+|---|---|
+| `runner` | Required supported CLI name |
+| `model` | Model ID; omitted uses that CLI's default |
+| `effort` | Optional reasoning effort |
+| `profile` | Optional Codex profile name |
+
+The generic verifier fallback is Claude `sonnet`; other roles have none. An explicit runner or model selection disables that generic fallback unless one is configured. An explicit `TACIT_<ROLE>_FALLBACK` route wins over the legacy `TACIT_<ROLE>_FALLBACK_MODEL` override. Fallbacks run once for capacity, startup, connection or attempt-deadline failures. They never start another fallback. Refusals, access denial and malformed output stop the job.
+
+For example, users can choose different runners without publishing their settings:
+
+```yaml
+runner: claude
+runners:
+  dream: muse
+models:
+  dream: your-model-id
+commands:
+  muse: ./bin/muse
+fallbacks:
+  dream:
+    runner: claude
+    model: haiku
+```
+
+`~` expands to the current home directory. Windows paths can use forward slashes or single-quoted YAML strings. Command paths containing a directory separator resolve against the config file; bare command names use `PATH`. A CLI `--model` option overrides the configured model. `tacit --runner TOOL` overrides all role runners for that invocation.
+
+### Other environment settings
+
+| Variable | Meaning / default |
+|---|---|
+| `TACIT_SETTINGS` | Select the YAML file; same as `--config FILE` |
+| `TACIT_FOLLOW_STATE` | Follower heartbeat file; `~/.local/state/tacit/follow.json` |
+| `TACIT_DERIVE_CONFIG` | Separate derive YAML; `~/.config/tacit/derive.yaml` |
+| `TACIT_WRITER` | Writer identity used to sign a shared-store push |
+| `TACIT_SERVER` | Server URL for `scripts/mac-setup.sh` |
+| `TACIT_ENROLL_SSH` | SSH enrollment target for `scripts/mac-setup.sh` |
+| `TACIT_REPO` | Code checkout used by `scripts/mac-setup.sh`; script's checkout by default |
+| `TACIT_BIN` | Hermes integration executable override; installer-captured path by default |
+| `TACIT_MODEL_JOB` | Internal recursion guard; Tacit sets it for model subprocesses |
+
+The separate derive file accepts `branches` (repo-to-branch map) and `ordinary_names` (repo names that need explicit evidence because they are common words). Command-specific options, including job `--env-file`, are in the [client reference](docs/client.md). Provider variables belong to the selected CLI and can be supplied through the private job env file.
+
+### Optional server environment
+
+The server reads its own settings at startup:
+
+| Variable | Meaning / default |
+|---|---|
+| `TACIT_DATA` | State root; `$XDG_STATE_HOME/tacit-server` or `~/.local/state/tacit-server` |
+| `TACIT_BIND` | Bind IP; tailnet IPv4 when available, otherwise `127.0.0.1` |
+| `TACIT_PORT` | Git/API port; `7447` |
+| `TACIT_TAILSCALED` | Tailscale LocalAPI socket; `/var/run/tailscale/tailscaled.sock` |
+| `TACIT_WHOIS` | Identity lookup; `localapi`, or `static:<ip>=<login>,...` for tests |
+| `TACIT_ALLOW_LOOPBACK` | `1` permits loopback in the tailnet check; testing only |
+| `TACIT_PUBLIC_PORT` | Optional reader-only listener on `127.0.0.1`; disabled when unset |
+
+For background work, `tacit install dream` and `tacit install curate` write native job files and print start commands. Select the private config and provide the job environment before starting them. See [portable job setup](docs/portable.md#linux-and-macos).
 
 ## What we measured
 

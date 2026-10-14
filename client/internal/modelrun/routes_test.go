@@ -8,13 +8,13 @@ import (
 	"time"
 )
 
-func TestShippedRoutePlan(t *testing.T) {
+func TestGenericRouteDefaults(t *testing.T) {
 	t.Setenv("TACIT_RUNNER", "")
 	for role, want := range map[string]Route{
-		"curate": {Runner: "claude", Model: "claude-opus-5-5", Effort: "medium"},
-		"verify": {Runner: "codex", Model: "openai.gpt-6-astra", Effort: "high", Profile: "astra"},
-		"dream":  {Runner: "grok", Model: "grok-4.7", Effort: "xhigh"},
-		"judge":  {Runner: "grok", Model: "grok-4.7", Effort: "xhigh"},
+		"curate": {Runner: "claude", Model: "opus"},
+		"verify": {Runner: "claude", Model: "opus"},
+		"dream":  {Runner: "claude", Model: "haiku"},
+		"judge":  {Runner: "claude", Model: "haiku"},
 	} {
 		t.Setenv(roleEnv(role, "RUNNER"), "")
 		t.Setenv(roleEnv(role, "MODEL"), "")
@@ -23,16 +23,16 @@ func TestShippedRoutePlan(t *testing.T) {
 			t.Fatalf("%s: %+v %v", role, got, err)
 		}
 		fb, err := Fallback(role, got)
-		if role == "judge" {
+		if role != "verify" {
 			if err != nil || fb != nil {
-				t.Fatalf("judge fallback changed: %+v %v", fb, err)
+				t.Fatalf("%s unexpected fallback: %+v %v", role, fb, err)
 			}
 			continue
 		}
 		if err != nil || fb == nil {
 			t.Fatalf("%s fallback: %v", role, err)
 		}
-		expected := map[string]Route{"curate": Default("verify"), "verify": Default("curate"), "dream": {Runner: "claude", Model: "haiku"}}[role]
+		expected := Route{Runner: "claude", Model: "sonnet"}
 		if *fb != expected {
 			t.Fatalf("%s fallback: %+v", role, *fb)
 		}
@@ -40,8 +40,8 @@ func TestShippedRoutePlan(t *testing.T) {
 }
 
 func TestCrossRunnerFallbackIsBoundedAndReportsCost(t *testing.T) {
-	primary := Default("curate")
-	fallback := Default("verify")
+	primary := Route{Runner: "claude", Model: "primary-model"}
+	fallback := Route{Runner: "codex", Model: "fallback-model"}
 	var calls []Route
 	call := func(ctx context.Context, role, model, prompt, sid string) (Result, error) {
 		r, err := FromContext(ctx, role, model)
@@ -62,8 +62,8 @@ func TestCrossRunnerFallbackIsBoundedAndReportsCost(t *testing.T) {
 
 func TestAttemptTimeoutLeavesFallbackTime(t *testing.T) {
 	t.Setenv("TACIT_DREAM_TIMEOUT", "20ms")
-	primary := Default("dream")
-	fallback := Route{Runner: "claude", Model: "haiku"}
+	primary := Route{Runner: "grok", Model: "primary-model"}
+	fallback := Route{Runner: "claude", Model: "fallback-model"}
 	attempts := 0
 	result, err := runPlan(context.Background(), "dream", primary, &fallback, "p", "sid", func(ctx context.Context, role, model, prompt, sid string) (Result, error) {
 		attempts++
@@ -101,9 +101,9 @@ func TestRouteEffortArgsAndCodexStdin(t *testing.T) {
 		route Route
 		want  []string
 	}{
-		{Default("curate"), []string{"--effort", "medium"}},
-		{Default("dream"), []string{"--reasoning-effort", "xhigh"}},
-		{Default("verify"), []string{"--profile", "astra", "-c", `model_reasoning_effort="high"`}},
+		{Route{Runner: "claude", Effort: "medium"}, []string{"--effort", "medium"}},
+		{Route{Runner: "grok", Effort: "xhigh"}, []string{"--reasoning-effort", "xhigh"}},
+		{Route{Runner: "codex", Profile: "work", Effort: "high"}, []string{"--profile", "work", "-c", `model_reasoning_effort="high"`}},
 	}
 	for _, c := range cases {
 		got, err := Args(c.route)
@@ -111,13 +111,14 @@ func TestRouteEffortArgsAndCodexStdin(t *testing.T) {
 			t.Fatalf("%+v: %v %v", c.route, got, err)
 		}
 	}
-	args, err := appendRouteArgs([]string{"exec", "-"}, Default("verify"))
+	args, err := appendRouteArgs([]string{"exec", "-"}, Route{Runner: "codex", Effort: "high"})
 	if err != nil || args[len(args)-1] != "-" {
 		t.Fatal(args, err)
 	}
 }
 
 func TestConfigOverridesAndDisablesFallback(t *testing.T) {
+	t.Setenv("TACIT_VERIFY_RUNNER", "codex")
 	t.Setenv("TACIT_VERIFY_EFFORT", "xhigh")
 	t.Setenv("TACIT_VERIFY_PROFILE", "work")
 	r, err := Resolve("verify", Default("verify").Model)

@@ -9,3 +9,6 @@ __pycache__/
 /.claude/
 .DS_Store
 /dist/
+
+# Private operator settings. Copy config/example.yaml, then choose it explicitly.
+/config/local.yaml

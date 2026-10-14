@@ -16,7 +16,7 @@ To use a server later, choose a separate store path and use `tacit clone` with y
 
 ## Configuration
 
-Existing explicit environment and file settings take precedence over the shipped model plan. The optional file lives at `~/.config/tacit/config.yaml` on Linux/macOS, or `%APPDATA%\tacit\config.yaml` on Windows:
+Operator settings live in an ignored `config/local.yaml` or the normal user-config location. [The README](../README.md#configuration) lists every client option and environment equivalent. The optional file lives at `~/.config/tacit/config.yaml` on Linux/macOS, or `%APPDATA%\tacit\config.yaml` on Windows:
 
 ```yaml
 store: ~/my-facts
@@ -26,7 +26,7 @@ keys: ~/.config/tacit
 local_overlay: ~/.local/share/tacit/local
 owner_names: [dana]
 verify_roots: []
-# Omit model settings to use config/default.yaml's built-in plan.
+# Model routes belong in your private config; see config/example.yaml.
 ```
 
 Use your own values. `~` is the current user's home. Relative paths resolve against the file's directory, so hook working directories cannot change the store. Windows paths can be single-quoted strings, such as `store: 'C:\Users\Dana\My Facts'`, or use forward slashes.
@@ -39,17 +39,9 @@ Precedence is file defaults, then `TACIT_*` environment overrides, then command 
 
 Claude is optional. Supported runner names are `claude`, `codex`, `hermes`, `grok`, `pi`, `muse` and `agy`. Install and log in to the CLI you select. Tacit uses that CLI's provider configuration; it holds no provider credentials.
 
-The [shipped plan](../config/default.yaml) selects Opus 5.5 medium for curation, Astra high on Bedrock for verification, Grok 4.7 xhigh for dreaming, and Grok 4.7 xhigh for conflict judging. Curation falls back to Astra; verification falls back to Opus; dreaming falls back to Haiku. Each fallback is attempted once. A fallback does not start its own fallback.
+[config/example.yaml](../config/example.yaml) provides generic Claude aliases. Users select their own runners, model versions, effort, profiles and fallback routes in the ignored local file. Each fallback is attempted once and does not start another fallback.
 
-The Astra route requires `~/.codex/astra.config.toml` (or the equivalent under your `CODEX_HOME`), with your own AWS credentials available to Codex:
-
-```toml
-model = "openai.gpt-6-astra"
-model_provider = "amazon-bedrock"
-model_reasoning_effort = "high"
-[model_providers.amazon-bedrock.aws]
-region = "us-west-2"
-```
+A Codex profile is `~/.codex/<name>.config.toml` (or under `CODEX_HOME`). Select it through `profiles`, or use the CLI's provider configuration. Provider credentials stay in Codex's own auth store or environment.
 
 Tacit reads provider/model settings from that profile and supplies explicit Codex configuration overrides. `--ignore-user-config` also ignores named profiles, so passing only `--profile` would silently lose the Bedrock route. Auth remains in Codex's own store or provider environment. Embedded provider credentials and literal provider headers are refused; use `env_key` or `env_http_headers` references instead.
 
@@ -100,18 +92,18 @@ Transcript mining and automatic owner-quote lookup currently read Claude Code an
 | `TACIT_DERIVE_CONFIG` | `~/.config/tacit/derive.yaml` | `branches:` the branch to read per repo (`tacit derive --set-branch repo=branch`); `ordinary_names:` repo names that are also plain words, so a bare mention is not evidence a fact is about that repo |
 | `TACIT_WRITER` | | the key a push signs with |
 | `TACIT_OWNER_NAMES` | | names agents use for the owner in facts ("Dana 2026-09-05: ..."), comma separated; each counts like "owner" when the rulings audit reads a clause attributed without quote marks |
-| `TACIT_RUNNER` | mixed role plan | select one CLI for all roles |
+| `TACIT_RUNNER` | `claude` | select one CLI for all roles |
 | `TACIT_DREAM_RUNNER`, `TACIT_CURATE_RUNNER`, `TACIT_JUDGE_RUNNER`, `TACIT_VERIFY_RUNNER` | global runner | per-job CLI |
 | `TACIT_<TOOL>_COMMAND` | tool name | executable path, e.g. `TACIT_MUSE_COMMAND` |
 | `TACIT_<TOOL>_ARGS` | | JSON argv array, e.g. `["--profile","work"]` |
-| `TACIT_CURATE_MODEL` | `claude-opus-5-5` | curator split |
-| `TACIT_JUDGE_MODEL` | `grok-4.7` | contradiction judge |
-| `TACIT_DREAM_MODEL` | `grok-4.7` | dreamer |
+| `TACIT_CURATE_MODEL` | `opus` | curator split |
+| `TACIT_JUDGE_MODEL` | `haiku` | contradiction judge |
+| `TACIT_DREAM_MODEL` | `haiku` | dreamer |
 | `TACIT_VERIFY_ROOTS` | | extra read-only source directories, separated like `PATH`; each must exist. Claude auto-memory is included when present |
-| `TACIT_VERIFY_MODEL` | `openai.gpt-6-astra` | verifier |
+| `TACIT_VERIFY_MODEL` | `opus` | verifier |
 | `TACIT_VERIFY_FALLBACK_MODEL` | | legacy same-runner fallback model; empty disables it |
-| `TACIT_<ROLE>_EFFORT`, `TACIT_<ROLE>_PROFILE` | role plan | reasoning effort and Codex profile |
-| `TACIT_<ROLE>_FALLBACK` | role plan | JSON route or `null`; explicit route wins over the legacy model override |
+| `TACIT_<ROLE>_EFFORT`, `TACIT_<ROLE>_PROFILE` | CLI default | reasoning effort and Codex profile |
+| `TACIT_<ROLE>_FALLBACK` | CLI default | JSON route or `null`; explicit route wins over the legacy model override |
 | `TACIT_<ROLE>_TIMEOUT` | `20m` | per-attempt deadline |
 | `TACIT_SERVER`, `TACIT_ENROLL_SSH` | | `scripts/mac-setup.sh`: server URL, and the ssh target that runs the enroll command |
 

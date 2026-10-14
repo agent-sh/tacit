@@ -1,10 +1,13 @@
 package settings
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agent-sh/tacit/client/internal/modelrun"
 )
@@ -116,13 +119,13 @@ func TestRoleOptionsAndCrossRunnerFallbackConfig(t *testing.T) {
 	body := `efforts:
   curate: medium
 profiles:
-  verify: astra
+  verify: work
 timeouts:
   dream: 10m
 fallbacks:
   verify:
     runner: claude
-    model: claude-opus-5-5
+    model: fallback-model
     effort: medium
   dream: null
 `
@@ -132,12 +135,12 @@ fallbacks:
 	if err := Load(p, true); err != nil {
 		t.Fatal(err)
 	}
-	for key, want := range map[string]string{"TACIT_CURATE_EFFORT": "medium", "TACIT_VERIFY_PROFILE": "astra", "TACIT_DREAM_TIMEOUT": "10m", "TACIT_DREAM_FALLBACK": "null"} {
+	for key, want := range map[string]string{"TACIT_CURATE_EFFORT": "medium", "TACIT_VERIFY_PROFILE": "work", "TACIT_DREAM_TIMEOUT": "10m", "TACIT_DREAM_FALLBACK": "null"} {
 		if got := os.Getenv(key); got != want {
 			t.Fatalf("%s=%q", key, got)
 		}
 	}
-	if got := os.Getenv("TACIT_VERIFY_FALLBACK"); got != `{"runner":"claude","model":"claude-opus-5-5","effort":"medium"}` {
+	if got := os.Getenv("TACIT_VERIFY_FALLBACK"); got != `{"runner":"claude","model":"fallback-model","effort":"medium"}` {
 		t.Fatal(got)
 	}
 	t.Setenv("TACIT_CURATE_EFFORT", "high")
@@ -187,7 +190,7 @@ func TestLegacyFallbackEnvOverridesFileRoute(t *testing.T) {
 	}
 }
 
-func TestPublishedDefaultPlanMatchesBuiltInRoutes(t *testing.T) {
+func TestPublicExampleMatchesGenericDefaults(t *testing.T) {
 	roles := []string{"curate", "verify", "dream", "judge"}
 	clear(t, "TACIT_RUNNER")
 	for _, role := range roles {
@@ -195,7 +198,7 @@ func TestPublishedDefaultPlanMatchesBuiltInRoutes(t *testing.T) {
 			clear(t, "TACIT_"+strings.ToUpper(role)+"_"+suffix)
 		}
 	}
-	if err := Load("../../../config/default.yaml", true); err != nil {
+	if err := Load("../../../config/example.yaml", true); err != nil {
 		t.Fatal(err)
 	}
 	for _, role := range roles {
@@ -203,5 +206,83 @@ func TestPublishedDefaultPlanMatchesBuiltInRoutes(t *testing.T) {
 		if err != nil || got != modelrun.Default(role) {
 			t.Fatalf("%s: %+v %v", role, got, err)
 		}
+	}
+}
+
+func TestUserConfigLinkLoadsPrivateSettingsFromAnyDirectory(t *testing.T) {
+	for _, key := range []string{"TACIT_SETTINGS", "TACIT_STORE", "TACIT_RUNNER", "TACIT_JUDGE_RUNNER", "TACIT_JUDGE_MODEL", "TACIT_JUDGE_EFFORT"} {
+		clear(t, key)
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+	local := filepath.Join(t.TempDir(), "config", "local.yaml")
+	if err := os.MkdirAll(filepath.Dir(local), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(local, []byte("store: ./facts\nrunners: {judge: muse}\nmodels: {judge: chosen-model}\nefforts: {judge: high}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	user := Path()
+	if err := os.MkdirAll(filepath.Dir(user), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(local, user); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Chdir(t.TempDir())
+	if err := Load(Path(), false); err != nil {
+		t.Fatal(err)
+	}
+	route, err := modelrun.Resolve("judge", modelrun.Model("judge", "haiku"))
+	if err != nil || route.Runner != "muse" || route.Model != "chosen-model" || route.Effort != "high" {
+		t.Fatal("private route not loaded", err)
+	}
+	target, err := filepath.EvalSymlinks(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("TACIT_STORE"); got != filepath.Join(filepath.Dir(target), "facts") {
+		t.Fatal("relative path did not resolve against link target")
+	}
+	if err := os.Remove(local); err != nil {
+		t.Fatal(err)
+	}
+	if err := Load(Path(), false); err == nil {
+		t.Fatal("dangling configured link silently selected defaults")
+	}
+}
+
+func TestPrivateConfigIsIgnoredByRepositoryRule(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "check-ignore", "--no-index", "-v", "config/local.yaml")
+	cmd.Dir = "../../.."
+	out, err := cmd.Output()
+	if err != nil || !strings.HasPrefix(string(out), ".gitignore:") {
+		t.Fatalf("private config lacks repository ignore rule: %v", err)
+	}
+}
+
+func TestRegularConfigPreservesSymlinkedParentPath(t *testing.T) {
+	clear(t, "TACIT_STORE")
+	root := t.TempDir()
+	real := filepath.Join(root, "real")
+	alias := filepath.Join(root, "alias")
+	if err := os.Mkdir(real, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "config.yaml"), []byte("store: ./facts\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Load(filepath.Join(alias, "config.yaml"), true); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("TACIT_STORE"); got != filepath.Join(alias, "facts") {
+		t.Fatal("regular config path spelling changed")
 	}
 }

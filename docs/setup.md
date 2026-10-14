@@ -2,7 +2,7 @@
 
 This guide describes a shared server installation. For a local store and native Windows setup, see [Local and portable tacit](portable.md).
 
-Use your own server, tailnet, keys, transcript sources and model account. The defaults are local paths and the [configurable model plan](portable.md#model-runners). No developer server address, owner name or model credential is required.
+Use your own server, tailnet, keys, transcript sources and model account. Model plans and machine paths belong in [private operator settings](../README.md#configuration). No developer server address, owner name or model credential is required.
 
 The [README quick start](../README.md#quick-start) builds and installs tacit. This guide explains what each machine needs and how to check the installation. Commands below run from the source checkout unless noted otherwise.
 
@@ -88,7 +88,7 @@ touch ~/.config/tacit/env
 chmod 600 ~/.config/tacit/env
 ```
 
-Put any model and path overrides there as `KEY=VALUE` lines. The shipped plan uses Claude Opus 5.5 medium for curation, Astra high through Codex's Bedrock `astra` profile for verification, Grok 4.7 xhigh for dreaming, and Grok 4.7 xhigh for conflict judging. Opus and Astra fall back to each other. The dreamer falls back to Haiku. Use your own provider credentials and [configure the roles and fallbacks](portable.md#model-runners).
+Put job environment overrides there as `KEY=VALUE` lines. Keep runner/model/effort/profile/fallback choices in the ignored local settings file, selected with `--config` or the normal user-config location. The [README](../README.md#configuration) lists all options. Use your own provider login and credentials.
 
 Systemd user services do not inherit your shell's exports. The curator job also needs a `PATH` that finds the selected runner, `scrump` and `git`. Use absolute directories in the file; `~` and `$HOME` are not shell-expanded by systemd. To append the current shell's already expanded path:
 

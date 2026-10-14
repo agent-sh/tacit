@@ -336,15 +336,15 @@ Every commit subject starts `owner: ` (`owner: edit <name> (<fields>)`, `owner: 
 
 ## Models
 
-The client calls models through the configured runner: Claude, Codex, Hermes, Grok, pi, Muse or agy. `runner` selects the default CLI and `runners` overrides each role. The shipped defaults are Opus 5.5 medium for curation, Astra high on Bedrock through Codex for verification, Grok 4.7 xhigh for dreaming, and Grok 4.7 xhigh for conflict judging. Explicit runner selections can use the CLI model default. See [runner configuration and boundaries](docs/portable.md#model-runners). Each step has an environment override, which a job takes from its env file (`EnvironmentFile`, `--env-file`):
+The client calls models through the configured runner: Claude, Codex, Hermes, Grok, pi, Muse or agy. `runner` selects the default CLI and `runners` overrides each role. Generic defaults use Claude aliases (`opus` for curation and verification, `haiku` for dreaming and judging). Operator-specific model versions, effort, profiles and cross-runner fallbacks are loaded from private configuration. Explicit runner selections can use the CLI model default. See [runner configuration and boundaries](docs/portable.md#model-runners). Each step has an environment override, which a job takes from its env file (`EnvironmentFile`, `--env-file`):
 
 | Step | Default | Override |
 |---|---|---|
-| curator split and rulings pass (`tacit curate`) | Claude `claude-opus-5-5`, medium | `TACIT_CURATE_MODEL` |
-| curator contradiction judge | Grok `grok-4.7`, xhigh | `TACIT_JUDGE_MODEL` |
-| dreamer (`tacit dream`) | Grok `grok-4.7`, xhigh | `TACIT_DREAM_MODEL` |
-| verifier (`tacit verify`) | Codex/Bedrock `openai.gpt-6-astra`, high | `TACIT_VERIFY_MODEL` |
-| verifier fallback | Claude `claude-opus-5-5`, medium | `TACIT_VERIFY_FALLBACK` |
+| curator split and rulings pass (`tacit curate`) | Claude `opus` | `TACIT_CURATE_MODEL` |
+| curator contradiction judge | Claude `haiku` | `TACIT_JUDGE_MODEL` |
+| dreamer (`tacit dream`) | Claude `haiku` | `TACIT_DREAM_MODEL` |
+| verifier (`tacit verify`) | Claude `opus` | `TACIT_VERIFY_MODEL` |
+| verifier fallback | Claude `sonnet` | `TACIT_VERIFY_FALLBACK` |
 
 A `--model` flag, where a command has one, wins over the variable. On a provider that needs full model ids (a Bedrock inference profile, for example), set the variables to those ids.
 
@@ -455,4 +455,4 @@ Import never writes outside `inbox/`.
 
 A fact matches a situation when any of its `applies_to` lists matches: a path glob matches the file being read or edited (repo-relative), a `symbols` entry equals a symbol in the edit, a `repos` entry equals the current repo, a `hosts` entry equals the current host, or a `commands` entry is a prefix of the command about to run. Facts with an empty `applies_to` are pull-only.
 
-Role options: `efforts`, `profiles`, `timeouts` and `fallbacks` extend client configuration. The shipped routes are in [config/default.yaml](config/default.yaml). Cross-runner fallback is attempted once, without chaining. The curator falls back to the verifier route; the verifier falls back to the curator route; the dreamer falls back to Claude Haiku.
+Role options: `efforts`, `profiles`, `timeouts` and `fallbacks` extend client configuration. [config/example.yaml](config/example.yaml) is a generic template; `config/local.yaml` is ignored. Cross-runner fallback is attempted once, without chaining. [The README](README.md#configuration) documents every option.
