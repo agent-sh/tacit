@@ -179,3 +179,14 @@ func captureStdout(t *testing.T, fn func()) string {
 	os.Stdout = old
 	return <-done
 }
+
+func TestConflictPairsUseFactHostAcrossMachines(t *testing.T) {
+	s := conflictFixture(t, func(clone string) {
+		curatedFact(t, clone, "old-quokka", "quokka scheduler zebra listens on port 7781 behind the lantern proxy", "2026-10-01", "n0")
+	})
+	nf := &fact.Fact{Meta: fact.Meta{Name: "new", Scope: "machines/host-a", Description: "quokka scheduler zebra now runs on port 7790 behind the lantern proxy"}}
+	pairs, _, err := conflictPairs(context.Background(), s, []*fact.Fact{nf}, "host-b", false, nil)
+	if err != nil || len(pairs) != 1 || pairs[0].ExistingName != "old-quokka" {
+		t.Fatalf("remote machine fact was not checked: %v %v", pairs, err)
+	}
+}

@@ -96,6 +96,13 @@ func Run(ctx context.Context, role, model, prompt, sessionID string) (answer Res
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "TACIT_MODEL_JOB=1")
 	if name == "grok" {
+		home, err := grokHome(dir)
+		if err != nil {
+			return Result{}, err
+		}
+		cmd.Env = append(cmd.Env, "GROK_HOME="+home)
+	}
+	if name == "grok" {
 		// Keep inherited agent integrations out of a text-only model job.
 		for _, source := range []string{"CLAUDE", "CURSOR", "CODEX"} {
 			for _, surface := range []string{"HOOKS", "MCPS", "RULES", "SKILLS", "AGENTS", "SESSIONS"} {

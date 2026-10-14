@@ -38,11 +38,18 @@ func TestMain(m *testing.M) {
 				}
 			}
 		}
-		b, _ := json.Marshal(map[string]any{"args": os.Args[1:], "prompt": string(input), "cwd": cwd, "job": os.Getenv("TACIT_MODEL_JOB")})
+		b, _ := json.Marshal(map[string]any{"args": os.Args[1:], "prompt": string(input), "cwd": cwd, "job": os.Getenv("TACIT_MODEL_JOB"), "grok_home": os.Getenv("GROK_HOME")})
 		_ = os.WriteFile(os.Getenv("TACIT_TEST_CAPTURE"), b, 0600)
 		response := responses[name]
 		if override := os.Getenv("TACIT_TEST_RESPONSE"); override != "" {
 			response = override
+		}
+		if name == "grok" && os.Getenv("TACIT_TEST_STALE_GROK") == "1" {
+			if _, err := os.Stat(filepath.Join(os.Getenv("GROK_HOME"), "agent_id")); err == nil {
+				fmt.Println(`{"type":"error","message":"stale agent registry"}`)
+				os.Exit(1)
+			}
+			os.WriteFile(filepath.Join(os.Getenv("GROK_HOME"), "agent_id"), []byte("synthetic-agent"), 0600)
 		}
 		fmt.Println(response)
 		if os.Getenv("TACIT_TEST_EXIT") == "1" {
@@ -60,6 +67,9 @@ func TestConfiguredRunnersUseTheirProtocolAndKeepPromptsOffArgv(t *testing.T) {
 	}
 	for _, name := range Names {
 		t.Run(name, func(t *testing.T) {
+			if name == "grok" {
+				t.Setenv("GROK_HOME", t.TempDir())
+			}
 			t.Setenv("TACIT_DREAM_RUNNER", name)
 			t.Setenv("TACIT_"+strings.ToUpper(name)+"_COMMAND", exe)
 			t.Setenv("TACIT_TEST_RUNNER", name)
