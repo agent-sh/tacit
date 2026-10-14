@@ -55,3 +55,11 @@ func TestRestated(t *testing.T) {
 		t.Fatalf("Restated = %v, want %v", got, want)
 	}
 }
+
+func TestRestatedKeepsFactWhenNegationWasRemoved(t *testing.T) {
+	old := rf("machines/fixture/old.md", "old", "machines/fixture", "observed", "Fixture controller revision 7 requires synchronous reads; asynchronous reads are not supported on that revision.")
+	note := rf("inbox/muse/new.md", "new", "machines/fixture", "observed", "Fixture controller revision 7 requires asynchronous reads")
+	if got := Restated([]*fact.Fact{note}, []*fact.Fact{old}); len(got) != 0 {
+		t.Fatalf("a changed fact was suppressed: %v", got)
+	}
+}

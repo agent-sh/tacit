@@ -32,6 +32,10 @@ func Preflight(route Route) error {
 	if err != nil {
 		return err
 	}
+	if route.Runner == "grok" {
+		_, err := grokHome(dir)
+		return err
+	}
 	if route.Runner == "codex" {
 		_, cleanup, err := codexProfile(args)
 		defer cleanup()

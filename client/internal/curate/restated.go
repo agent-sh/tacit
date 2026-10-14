@@ -13,9 +13,10 @@ import (
 // pending note restates a fact. Measured on the 2,094 pending dreamer notes
 // of 2026-10-11 with the token guard only: 0.5 dropped 4.9 percent and let
 // through pairs that differ in a detail (one task's lease path against
-// another's), 0.6 dropped 3.4 percent, 0.7 dropped 1.8 percent. With every
-// guard below, 0.6 drops 23 of the 2,108 pending notes (1.1 percent), each
-// a restatement in a sample of six.
+// another's), 0.6 dropped 3.4 percent, 0.7 dropped 1.8 percent. The original guards
+// dropped 23 of the 2,108 pending notes (1.1 percent), each
+// a restatement in a sample of six. The negation guard now checks both
+// directions after a live fixture showed a positive update being dropped.
 const RestateOverlap = 0.6
 
 // specificRx finds the tokens that carry a fact's specifics: anything with a
@@ -81,9 +82,9 @@ func allTerms(s string) map[string]bool {
 // already holds, keyed by note name, with the fact (or earlier pending note)
 // they restate. No model. A note restates a fact when most of its
 // description's terms are the fact's (RestateOverlap), every specific token
-// of the note (a number, a path, a dotted name) is in the fact, and every
-// word of change or negation of the note (not, no longer, now, moved,
-// removed, instead) is in the fact too: a note that says the same thing with
+// of the note (a number, a path, a dotted name) is in the fact, and the same set of
+// words of change or negation in both statements (not, no longer, now, moved,
+// removed, instead) is present: a note that says the same thing with
 // a new port, path or version, or says it stopped being true, is an update
 // the conflict check must see, and it stays.
 //
@@ -166,7 +167,9 @@ func Restated(pending, curated []*fact.Fact) map[string]string {
 			if e.user && !o.user {
 				continue
 			}
-			if subset(e.spec, o.spec) && subset(e.changes, o.changes) {
+			// A removed negation changes the fact too. One-way containment
+			// discarded a positive note against an older negative statement.
+			if subset(e.spec, o.spec) && subset(e.changes, o.changes) && subset(o.changes, e.changes) {
 				hit = o.f.Meta.Name
 			}
 			break // only the closest fact the note can see decides
