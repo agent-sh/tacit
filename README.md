@@ -61,7 +61,7 @@ Choose the integration for your agent:
 
 ## How it works
 
-1. **Collect.** Agents write short inbox notes. Imports bring in existing memory files. An optional dreamer extracts candidates from redacted transcript deltas.
+1. **Collect.** Agents write short inbox notes. Imports bring in existing memory files. An optional dreamer extracts candidates from redacted transcript deltas. It saves each successful window before the next call and recovers pending notes after interrupted runs.
 2. **Curate.** Notes become individual facts with sources and scopes. Contradictions and uncertain changes become review items.
 3. **Deliver.** A local SQLite FTS5 index matches facts to the repo, host and prompt. Hooks supply up to 10 facts at session start and 3 curated facts per prompt, with a separate match for a computed fact. Explicit search can return the full text.
 4. **Check.** A verifier reads code, git, docs and permitted machine sources. It records evidence for its decisions and leaves unresolved questions for you.

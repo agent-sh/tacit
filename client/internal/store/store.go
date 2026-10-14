@@ -396,6 +396,22 @@ func (s *Store) CommitPushOnceLocked(ctx context.Context, rels []string, message
 	return s.commitPush(ctx, rels, message, writer, false, false)
 }
 
+// CommitPushNamedLocked commits only named files and retries a remote race
+// with the same rebase/rollback rules as CommitPushLocked. Caller holds WithLock.
+func (s *Store) CommitPushNamedLocked(ctx context.Context, rels []string, message, writer string) error {
+	return s.commitPush(ctx, rels, message, writer, true, true)
+}
+
+// PushPendingLocked retries retained commits with each original writer. The
+// caller holds WithLock and syncs first; a failed push must block cursor updates.
+func (s *Store) PushPendingLocked(ctx context.Context) error {
+	if s.Local(ctx) {
+		return nil
+	}
+	_, err := s.pushPending(ctx)
+	return err
+}
+
 // CommitPushNamedOnceLocked is CommitPushOnceLocked that commits only the
 // named files (commit --only): a change someone already staged in the clone
 // does not ride along.
@@ -571,7 +587,8 @@ func (s *Store) pushPending(ctx context.Context) (string, error) {
 // to HEAD; new inbox notes stay as untracked files for the next push, other
 // new files are removed (the curator recreates them from the inbox).
 func (s *Store) undoLocal(rels []string) {
-	s.cleanup("reset", "--quiet", "--mixed", "HEAD~1")
+	s.cleanup("reset", "--quiet", "--soft", "HEAD~1")
+	s.cleanup(append([]string{"reset", "--quiet", "--"}, rels...)...)
 	s.Restore(rels)
 }
 
@@ -593,8 +610,11 @@ func (s *Store) undoRejected(_ context.Context, rels []string, reason string) er
 	// Drop the commit, keep the working tree, then move the files aside.
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if _, err := git(ctx, s.Dir, "reset", "--quiet", "--mixed", "HEAD~1"); err != nil {
+	if _, err := git(ctx, s.Dir, "reset", "--quiet", "--soft", "HEAD~1"); err != nil {
 		return fmt.Errorf("%s; and undoing the commit failed: %w", reason, err)
+	}
+	if _, err := git(ctx, s.Dir, append([]string{"reset", "--quiet", "--"}, rels...)...); err != nil {
+		return fmt.Errorf("%s; and resetting rejected paths failed: %w", reason, err)
 	}
 	return s.rejectFiles(ctx, rels, reason)
 }
