@@ -1,0 +1,29 @@
+# Generic example. Copy to ignored config/local.yaml for private settings.
+# Provider credentials stay in the selected CLI or the job environment file.
+store: ~/.local/share/tacit/store
+projects: ~/projects
+index: ~/.local/state/tacit/index
+keys: ~/.config/tacit
+local_overlay: ~/.local/share/tacit/local
+owner_names: []
+verify_roots: []
+runner: claude
+runners: {}
+models:
+  curate: opus
+  judge: haiku
+  dream: haiku
+  verify: opus
+  # verify_fallback: sonnet # Legacy same-runner option; prefer fallbacks below.
+efforts: {}
+profiles: {}
+timeouts: {}
+commands: {}
+runner_args: {}
+fallbacks:
+  curate: null
+  judge: null
+  dream: null
+  verify:
+    runner: claude
+    model: sonnet

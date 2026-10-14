@@ -80,8 +80,8 @@ type verifyVerdict struct {
 	ID, Mark, Keep, Evidence, Fix, Question string
 }
 
-// Shipped verification uses Astra on Bedrock through Codex, with an Opus
-// fallback. Explicit model flags and configuration can replace that plan.
+// Verification and its fallback are selected by operator configuration.
+// Generic Claude aliases keep new installations usable with one CLI.
 var (
 	verifyModel         = modelrun.Model("verify", "opus")
 	verifyFallbackModel = modelrun.Model("verify_fallback", "sonnet")

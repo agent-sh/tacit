@@ -53,8 +53,8 @@ func TestPortableVerifierRejectsMissingVerdicts(t *testing.T) {
 }
 
 func TestVerifierFallsBackAcrossRunnersAndRecordsRoute(t *testing.T) {
-	primary := modelrun.Default("verify")
-	fallback := modelrun.Default("curate")
+	primary := modelrun.Route{Runner: "codex", Model: "primary-model", Effort: "high"}
+	fallback := modelrun.Route{Runner: "claude", Model: "fallback-model", Effort: "medium"}
 	r := verifyRun{model: primary.Model, fallback: fallback.Model, route: &primary, fallbackRoute: &fallback, cwd: t.TempDir(), stateDir: t.TempDir()}
 	var routes []modelrun.Route
 	call := func(ctx context.Context, model, prompt, cwd string, budget float64) ([]verifyVerdict, string, float64, error) {

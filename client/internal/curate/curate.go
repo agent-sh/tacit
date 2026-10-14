@@ -1,7 +1,7 @@
 // Package curate is the curator: it turns inbox notes into one-fact entries
 // under the curated scopes, keeps owner rulings verbatim, checks every new
 // fact against the store for contradictions, regenerates the index and
-// pushes as curator@<host>. Daily, on Opus 5.5, from a machine that has
+// pushes as curator@<host>. Daily, using the configured model, from a machine that has
 // model access (the server has none).
 //
 // Measured in eval/VALUE.md: the split lifts delivery 6 to 7 points at every
@@ -25,7 +25,7 @@ import (
 )
 
 // The split model and conflict judge use independently configured routes.
-// The shipped plan uses Opus 5.5 for splitting and Grok 4.7 for judging.
+// Operator configuration selects model versions, effort and provider profiles.
 // Model overrides accept the selected CLI's IDs; --model on curate wins.
 var (
 	DefaultModel = modelrun.Model("curate", "opus")
