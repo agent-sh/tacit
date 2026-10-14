@@ -2,8 +2,11 @@ package modelrun
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -11,8 +14,8 @@ import (
 
 // codexProfile preserves the user's provider and model settings while excluding
 // hooks, MCP servers, instructions and tool permissions. Auth stays in the real
-// CODEX_HOME; no auth files are copied or read by Tacit. The explicit profile is
-// mode 0600 and removed after the child finishes, including failed runs.
+// CODEX_HOME; no auth files are copied or read by Tacit. The selected profile is
+// reduced to provider/model CLI overrides; embedded credentials are refused.
 func codexProfile(args []string) ([]string, func(), error) {
 	cleanup := func() {}
 	home := os.Getenv("CODEX_HOME")
@@ -102,30 +105,134 @@ func codexProfile(args []string) ([]string, func(), error) {
 	if len(selected) == 0 {
 		return remaining, cleanup, nil
 	}
-	if err := os.MkdirAll(home, 0700); err != nil {
+
+	// --ignore-user-config skips named profiles too. Reconstruct the selected
+	// provider/model settings as explicit CLI overrides; never put credentials
+	// in argv. Native auth still uses the real CODEX_HOME and provider env.
+	if err := publicProviderSettings(selected); err != nil {
 		return nil, cleanup, err
 	}
-	f, err := os.CreateTemp(home, "tacit-job-*.config.toml")
-	if err != nil {
-		return nil, cleanup, err
+	var keys []string
+	for key := range selected {
+		keys = append(keys, key)
 	}
-	cleanup = func() { _ = os.Remove(f.Name()) }
-	b, err := toml.Marshal(selected)
-	if err == nil {
-		_, err = f.Write(b)
-	}
-	closeErr := f.Close()
-	if err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		cleanup()
-		return nil, func() {}, fmt.Errorf("write isolated Codex profile: %w", err)
-	}
-	name := strings.TrimSuffix(filepath.Base(f.Name()), ".config.toml")
-	// Keep stdin's '-' positional marker last.
-	if len(remaining) > 0 && remaining[len(remaining)-1] == "-" {
+	sort.Strings(keys)
+	stdin := len(remaining) > 0 && remaining[len(remaining)-1] == "-"
+	if stdin {
 		remaining = remaining[:len(remaining)-1]
 	}
-	return append(remaining, "--profile", name, "-"), cleanup, nil
+	var defaults []string
+	for _, key := range keys {
+		value, err := tomlLiteral(selected[key])
+		if err != nil {
+			return nil, cleanup, err
+		}
+		defaults = append(defaults, "-c", key+"="+value)
+	}
+	for i, arg := range remaining {
+		if arg == "exec" {
+			withDefaults := append([]string{}, remaining[:i+1]...)
+			withDefaults = append(withDefaults, defaults...)
+			remaining = append(withDefaults, remaining[i+1:]...)
+			break
+		}
+	}
+	if stdin {
+		remaining = append(remaining, "-")
+	}
+	return remaining, cleanup, nil
+}
+
+func publicProviderSettings(value any) error {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, item := range v {
+			normalized := strings.ToLower(key)
+			if normalized == "env_key" || normalized == "env_http_headers" {
+				continue
+			}
+			if secretSettingName(key) || strings.Contains(strings.ReplaceAll(normalized, "_", ""), "headers") {
+				return fmt.Errorf("Codex provider credentials must use native auth or environment references")
+			}
+			if normalized == "base_url" {
+				if address, ok := item.(string); ok {
+					parsed, err := url.Parse(address)
+					if err != nil || parsed.User != nil {
+						return fmt.Errorf("Codex provider URL must not contain credentials")
+					}
+					for queryKey := range parsed.Query() {
+						if secretSettingName(queryKey) {
+							return fmt.Errorf("Codex provider URL must not contain credentials")
+						}
+					}
+				}
+			}
+			if err := publicProviderSettings(item); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, item := range v {
+			if err := publicProviderSettings(item); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func secretSettingName(key string) bool {
+	n := strings.NewReplacer("_", "", "-", "", ".", "").Replace(strings.ToLower(key))
+	if n == "modelautocompacttokenlimit" {
+		return false
+	}
+	for _, part := range []string{"token", "secret", "password", "apikey", "accesskey", "cookie"} {
+		if strings.Contains(n, part) {
+			return true
+		}
+	}
+	switch n {
+	case "key", "auth", "authorization", "signature", "sig":
+		return true
+	}
+	return false
+}
+
+func tomlLiteral(value any) (string, error) {
+	switch v := value.(type) {
+	case string:
+		return strconv.Quote(v), nil
+	case bool:
+		return strconv.FormatBool(v), nil
+	case int64:
+		return strconv.FormatInt(v, 10), nil
+	case float64:
+		return strconv.FormatFloat(v, 'g', -1, 64), nil
+	case map[string]any:
+		var keys, items []string
+		for key := range v {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			literal, err := tomlLiteral(v[key])
+			if err != nil {
+				return "", err
+			}
+			items = append(items, strconv.Quote(key)+" = "+literal)
+		}
+		return "{" + strings.Join(items, ", ") + "}", nil
+	case []any:
+		var items []string
+		for _, item := range v {
+			literal, err := tomlLiteral(item)
+			if err != nil {
+				return "", err
+			}
+			items = append(items, literal)
+		}
+		return "[" + strings.Join(items, ", ") + "]", nil
+	default:
+		return "", fmt.Errorf("unsupported Codex provider setting type %T", value)
+	}
 }

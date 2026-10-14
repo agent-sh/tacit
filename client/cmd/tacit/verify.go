@@ -80,13 +80,11 @@ type verifyVerdict struct {
 	ID, Mark, Keep, Evidence, Fix, Question string
 }
 
-// The verifier runs on Opus; when Opus has no capacity for a batch, that
-// batch runs once more on Sonnet. --model names one model and no fallback.
-// The defaults are Claude CLI aliases; $TACIT_VERIFY_MODEL and
-// $TACIT_VERIFY_FALLBACK_MODEL name others (a provider's full model ids).
+// Shipped verification uses Astra on Bedrock through Codex, with an Opus
+// fallback. Explicit model flags and configuration can replace that plan.
 var (
-	verifyModel         = envOr("TACIT_VERIFY_MODEL", "opus")
-	verifyFallbackModel = envOr("TACIT_VERIFY_FALLBACK_MODEL", "sonnet")
+	verifyModel         = modelrun.Model("verify", "opus")
+	verifyFallbackModel = modelrun.Model("verify_fallback", "sonnet")
 )
 
 // envOr is the value of the environment variable key, or def when it is
@@ -126,7 +124,7 @@ func capacityFailure(status int, text string) bool {
 	}
 	t := strings.ToLower(text)
 	// A 403 or 404 (Opus access lost, the model not offered here) is not
-	// capacity: it fails the run loudly instead of running on Sonnet unseen.
+	// capacity: it fails the run loudly instead of silently switching providers.
 	if status != 0 && status != 500 && status != 502 && status != 504 {
 		return false // another 4xx: the request, not the provider
 	}
@@ -176,6 +174,14 @@ func claudeVerifier(ctx context.Context, model, prompt, cwd string, budget float
 			return nil, "", 0, fmt.Errorf("verifier directory %s is missing", d)
 		}
 	}
+	route, err := modelrun.FromContext(ctx, "verify", model)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	options, err := modelrun.Args(route)
+	if err != nil {
+		return nil, "", 0, err
+	}
 	args := []string{"-p", "--bare", "--restricted", "--strict-mcp-config", "--mcp-config", string(mcpCfg), "--settings", verifySettings(append([]string{cwd}, addDirs...)),
 		"--no-session-persistence", "--model", model, "--output-format", "json", "--json-schema", verifySchema,
 		"--tools", "Read", "--permission-mode", "dontAsk", "--max-turns", "120",
@@ -191,6 +197,7 @@ func claudeVerifier(ctx context.Context, model, prompt, cwd string, budget float
 		}
 		args = append(extra, args...)
 	}
+	args = append(args, options...)
 	var res struct {
 		Result     string  `json:"result"`
 		Cost       float64 `json:"total_cost_usd"`
@@ -305,8 +312,22 @@ func runVerify(args []string) int {
 		stateDir: filepath.Join(home, ".local", "state", "tacit", "verify")}
 	named := false
 	fsf.Visit(func(f *flag.Flag) { named = named || f.Name == "model" })
+	route, err := modelrun.Resolve("verify", *model)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "verify:", err)
+		return 2
+	}
+	r.route = &route
 	if !named {
-		r.fallback = verifyFallbackModel
+		fallback, err := modelrun.Fallback("verify", route)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "verify:", err)
+			return 2
+		}
+		r.fallbackRoute = fallback
+		if fallback != nil {
+			r.fallback = fallback.Model
+		}
 	}
 	if *ids != "" {
 		b, err := os.ReadFile(*ids)
@@ -333,17 +354,18 @@ func runVerify(args []string) int {
 }
 
 type verifyRun struct {
-	only           []string // replay: verify these findings, in this order
-	model          string
-	fallback       string         // a batch the model has no capacity for runs once more on this one; empty: no fallback
-	byModel        map[string]int // verdicts settled or asked, per model that produced them
-	fellBack       int            // batches that ran on the fallback
-	max, per       int
-	budget         float64
-	dry            bool
-	cwd, stateDir  string
-	attemptsBefore int            // a finding is sent at most this many times (default 3)
-	tl             *gitev.Builder // builds the git timeline a stale finding carries; nil builds the usual one
+	route, fallbackRoute *modelrun.Route
+	only                 []string // replay: verify these findings, in this order
+	model                string
+	fallback             string         // a batch the model has no capacity for runs once more on this one; empty: no fallback
+	byModel              map[string]int // verdicts settled or asked, per model that produced them
+	fellBack             int            // batches that ran on the fallback
+	max, per             int
+	budget               float64
+	dry                  bool
+	cwd, stateDir        string
+	attemptsBefore       int            // a finding is sent at most this many times (default 3)
+	tl                   *gitev.Builder // builds the git timeline a stale finding carries; nil builds the usual one
 }
 
 // attempts counts the verifier runs a finding has been sent to without a
@@ -543,33 +565,42 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 // model whose verdicts came back, the cost of both calls, and whether the
 // last call ran out of time.
 func (r *verifyRun) callBatch(ctx context.Context, call verifierRunner, prompt string) ([]verifyVerdict, string, float64, bool, error) {
-	one := func(model string) ([]verifyVerdict, float64, bool, error) {
-		bctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
+	timeout, err := modelrun.Timeout("verify")
+	if err != nil {
+		return nil, "", 0, false, err
+	}
+	one := func(model string, route *modelrun.Route) ([]verifyVerdict, float64, bool, error) {
+		attemptCtx := ctx
+		if route != nil {
+			attemptCtx = modelrun.WithRoute(ctx, *route)
+		}
+		bctx, cancel := context.WithTimeout(attemptCtx, timeout)
 		defer cancel()
 		vs, raw, c, err := call(bctx, model, prompt, r.cwd, r.budget)
 		r.saveRaw(raw)
 		return vs, c, errors.Is(bctx.Err(), context.DeadlineExceeded) && ctx.Err() == nil, err
 	}
-	vs, c, timedOut, err := one(r.model)
-	var ce *capacityError
-	if err == nil || r.fallback == "" || r.fallback == r.model || !errors.As(err, &ce) || ctx.Err() != nil {
-		return vs, verifierModelLabel(r.model), c, timedOut, err
-	}
-	fmt.Fprintf(os.Stderr, "verify: %v; this batch runs again on %s\n", err, r.fallback)
-	r.fellBack++
-	vs, c2, timedOut, err := one(r.fallback)
-	return vs, verifierModelLabel(r.fallback), c + c2, timedOut, err
-}
-
-func verifierModelLabel(model string) string {
-	name, _ := modelrun.Name("verify")
-	if name == "claude" {
+	label := func(model string, route *modelrun.Route) string {
+		if route != nil {
+			return route.Label()
+		}
 		return model
 	}
-	if model == "" {
-		model = "default"
+	vs, c, timedOut, err := one(r.model, r.route)
+	var ce *capacityError
+	eligible := errors.As(err, &ce) || (r.route != nil && (modelrun.CanFallback(err) || timedOut))
+	noFallback := r.fallbackRoute == nil && r.fallback == ""
+	same := r.fallbackRoute == nil && r.fallback == r.model
+	if r.route != nil && r.fallbackRoute != nil {
+		same = *r.route == *r.fallbackRoute
 	}
-	return name + "/" + model
+	if err == nil || noFallback || same || !eligible || ctx.Err() != nil {
+		return vs, label(r.model, r.route), c, timedOut, err
+	}
+	fmt.Fprintf(os.Stderr, "verify: %v; this batch runs again on %s\n", err, label(r.fallback, r.fallbackRoute))
+	r.fellBack++
+	vs, c2, timedOut, err := one(r.fallback, r.fallbackRoute)
+	return vs, label(r.fallback, r.fallbackRoute), c + c2, timedOut, err
 }
 
 func (r *verifyRun) count(model string, n int) {

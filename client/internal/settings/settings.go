@@ -10,6 +10,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
+
+	"github.com/agent-sh/tacit/client/internal/modelrun"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -30,10 +33,14 @@ type Runners struct {
 }
 
 type Config struct {
-	RunnerArgs map[string][]string `yaml:"runner_args"`
-	Runner     string              `yaml:"runner"`
-	Runners    Runners             `yaml:"runners"`
-	Commands   map[string]string   `yaml:"commands"`
+	Efforts    map[string]string          `yaml:"efforts"`
+	Profiles   map[string]string          `yaml:"profiles"`
+	Timeouts   map[string]string          `yaml:"timeouts"`
+	Fallbacks  map[string]*modelrun.Route `yaml:"fallbacks"`
+	RunnerArgs map[string][]string        `yaml:"runner_args"`
+	Runner     string                     `yaml:"runner"`
+	Runners    Runners                    `yaml:"runners"`
+	Commands   map[string]string          `yaml:"commands"`
 
 	Store       string   `yaml:"store"`
 	Projects    string   `yaml:"projects"`
@@ -100,10 +107,45 @@ func Load(path string, required bool) error {
 		}
 		return filepath.Clean(p)
 	}
+	explicitEmpty := map[string]bool{}
 	values := map[string]string{"TACIT_STORE": resolve(c.Store), "TACIT_PROJECTS": resolve(c.Projects), "TACIT_INDEX": resolve(c.Index), "TACIT_CONFIG": resolve(c.Keys), "TACIT_LOCAL": resolve(c.Local), "TACIT_OWNER_NAMES": strings.Join(c.OwnerNames, ","), "TACIT_CURATE_MODEL": c.Models.Curate, "TACIT_JUDGE_MODEL": c.Models.Judge, "TACIT_DREAM_MODEL": c.Models.Dream, "TACIT_VERIFY_MODEL": c.Models.Verify, "TACIT_VERIFY_FALLBACK_MODEL": c.Models.Fallback}
 	values["TACIT_RUNNER"] = c.Runner
 	for role, name := range map[string]string{"DREAM": c.Runners.Dream, "CURATE": c.Runners.Curate, "JUDGE": c.Runners.Judge, "VERIFY": c.Runners.Verify} {
 		values["TACIT_"+role+"_RUNNER"] = name
+	}
+
+	validRole := func(role string) bool {
+		return role == "dream" || role == "curate" || role == "judge" || role == "verify"
+	}
+	for suffix, entries := range map[string]map[string]string{"EFFORT": c.Efforts, "PROFILE": c.Profiles, "TIMEOUT": c.Timeouts} {
+		for role, value := range entries {
+			if !validRole(role) {
+				return fmt.Errorf("unknown job role %q", role)
+			}
+			if suffix == "TIMEOUT" {
+				if d, err := time.ParseDuration(value); err != nil || d <= 0 {
+					return fmt.Errorf("%s timeout must be a positive duration", role)
+				}
+			}
+			key := "TACIT_" + strings.ToUpper(role) + "_" + suffix
+			values[key] = value
+			explicitEmpty[key] = suffix != "TIMEOUT"
+		}
+	}
+	for role, route := range c.Fallbacks {
+		if _, set := os.LookupEnv("TACIT_" + strings.ToUpper(role) + "_FALLBACK_MODEL"); set {
+			continue
+		}
+		if !validRole(role) {
+			return fmt.Errorf("unknown fallback role %q", role)
+		}
+		if route != nil {
+			if err := modelrun.Validate(*route); err != nil {
+				return fmt.Errorf("%s fallback: %w", role, err)
+			}
+		}
+		b, _ := json.Marshal(route)
+		values["TACIT_"+strings.ToUpper(role)+"_FALLBACK"] = string(b)
 	}
 	validRunner := func(name string) bool {
 		switch name {
@@ -141,7 +183,7 @@ func Load(path string, required bool) error {
 	}
 	values["TACIT_VERIFY_ROOTS"] = strings.Join(roots, string(filepath.ListSeparator))
 	for key, value := range values {
-		if _, set := os.LookupEnv(key); !set && value != "" {
+		if _, set := os.LookupEnv(key); !set && (value != "" || explicitEmpty[key]) {
 			if err := os.Setenv(key, value); err != nil {
 				return err
 			}

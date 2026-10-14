@@ -28,8 +28,8 @@ import (
 // are Claude CLI aliases; $TACIT_CURATE_MODEL and $TACIT_JUDGE_MODEL name
 // others (a provider's full model ids). --model on tacit curate wins.
 var (
-	DefaultModel = envOr("TACIT_CURATE_MODEL", "opus")
-	JudgeModel   = envOr("TACIT_JUDGE_MODEL", "haiku")
+	DefaultModel = modelrun.Model("curate", "opus")
+	JudgeModel   = modelrun.Model("judge", "haiku")
 )
 
 const batchChars = 45_000
@@ -151,7 +151,7 @@ func JudgeCLI(ctx context.Context, model, prompt string) (string, float64, error
 func runRole(ctx context.Context, role, model, prompt string) (string, float64, error) {
 	sid := dream.NewSessionID()
 	_ = dream.Exclude(sid)
-	res, err := modelrun.Run(ctx, role, model, prompt, sid)
+	res, err := modelrun.RunWithFallback(ctx, role, model, prompt, sid)
 	if res.SessionID != "" {
 		_ = dream.Exclude(res.SessionID)
 	}
