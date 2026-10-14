@@ -336,12 +336,12 @@ Every commit subject starts `owner: ` (`owner: edit <name> (<fields>)`, `owner: 
 
 ## Models
 
-The client calls models through the configured runner: Claude, Codex, Hermes, Grok, pi, Muse or agy. `runner` selects the default CLI and `runners` overrides each role. The shipped defaults are Opus 5.5 medium for curation, Astra high on Bedrock through Codex for verification, Grok 4.7 xhigh for dreaming, and Haiku for judging. Explicit runner selections can use the CLI model default. See [runner configuration and boundaries](docs/portable.md#model-runners). Each step has an environment override, which a job takes from its env file (`EnvironmentFile`, `--env-file`):
+The client calls models through the configured runner: Claude, Codex, Hermes, Grok, pi, Muse or agy. `runner` selects the default CLI and `runners` overrides each role. The shipped defaults are Opus 5.5 medium for curation, Astra high on Bedrock through Codex for verification, Grok 4.7 xhigh for dreaming, and Grok 4.7 xhigh for conflict judging. Explicit runner selections can use the CLI model default. See [runner configuration and boundaries](docs/portable.md#model-runners). Each step has an environment override, which a job takes from its env file (`EnvironmentFile`, `--env-file`):
 
 | Step | Default | Override |
 |---|---|---|
 | curator split and rulings pass (`tacit curate`) | Claude `claude-opus-5-5`, medium | `TACIT_CURATE_MODEL` |
-| curator contradiction judge | `haiku` | `TACIT_JUDGE_MODEL` |
+| curator contradiction judge | Grok `grok-4.7`, xhigh | `TACIT_JUDGE_MODEL` |
 | dreamer (`tacit dream`) | Grok `grok-4.7`, xhigh | `TACIT_DREAM_MODEL` |
 | verifier (`tacit verify`) | Codex/Bedrock `openai.gpt-6-astra`, high | `TACIT_VERIFY_MODEL` |
 | verifier fallback | Claude `claude-opus-5-5`, medium | `TACIT_VERIFY_FALLBACK` |

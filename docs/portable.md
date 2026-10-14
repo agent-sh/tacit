@@ -39,7 +39,7 @@ Precedence is file defaults, then `TACIT_*` environment overrides, then command 
 
 Claude is optional. Supported runner names are `claude`, `codex`, `hermes`, `grok`, `pi`, `muse` and `agy`. Install and log in to the CLI you select. Tacit uses that CLI's provider configuration; it holds no provider credentials.
 
-The [shipped plan](../config/default.yaml) selects Opus 5.5 medium for curation, Astra high on Bedrock for verification, Grok 4.7 xhigh for dreaming, and Haiku for judging. Curation falls back to Astra; verification falls back to Opus; dreaming falls back to Haiku. Each fallback is attempted once. A fallback does not start its own fallback.
+The [shipped plan](../config/default.yaml) selects Opus 5.5 medium for curation, Astra high on Bedrock for verification, Grok 4.7 xhigh for dreaming, and Grok 4.7 xhigh for conflict judging. Curation falls back to Astra; verification falls back to Opus; dreaming falls back to Haiku. Each fallback is attempted once. A fallback does not start its own fallback.
 
 The Astra route requires `~/.codex/astra.config.toml` (or the equivalent under your `CODEX_HOME`), with your own AWS credentials available to Codex:
 
@@ -105,7 +105,7 @@ Transcript mining and automatic owner-quote lookup currently read Claude Code an
 | `TACIT_<TOOL>_COMMAND` | tool name | executable path, e.g. `TACIT_MUSE_COMMAND` |
 | `TACIT_<TOOL>_ARGS` | | JSON argv array, e.g. `["--profile","work"]` |
 | `TACIT_CURATE_MODEL` | `claude-opus-5-5` | curator split |
-| `TACIT_JUDGE_MODEL` | `haiku` | contradiction judge |
+| `TACIT_JUDGE_MODEL` | `grok-4.7` | contradiction judge |
 | `TACIT_DREAM_MODEL` | `grok-4.7` | dreamer |
 | `TACIT_VERIFY_ROOTS` | | extra read-only source directories, separated like `PATH`; each must exist. Claude auto-memory is included when present |
 | `TACIT_VERIFY_MODEL` | `openai.gpt-6-astra` | verifier |

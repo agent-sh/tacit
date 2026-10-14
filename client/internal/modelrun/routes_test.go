@@ -14,6 +14,7 @@ func TestShippedRoutePlan(t *testing.T) {
 		"curate": {Runner: "claude", Model: "claude-opus-5-5", Effort: "medium"},
 		"verify": {Runner: "codex", Model: "openai.gpt-6-astra", Effort: "high", Profile: "astra"},
 		"dream":  {Runner: "grok", Model: "grok-4.7", Effort: "xhigh"},
+		"judge":  {Runner: "grok", Model: "grok-4.7", Effort: "xhigh"},
 	} {
 		t.Setenv(roleEnv(role, "RUNNER"), "")
 		t.Setenv(roleEnv(role, "MODEL"), "")
@@ -22,6 +23,12 @@ func TestShippedRoutePlan(t *testing.T) {
 			t.Fatalf("%s: %+v %v", role, got, err)
 		}
 		fb, err := Fallback(role, got)
+		if role == "judge" {
+			if err != nil || fb != nil {
+				t.Fatalf("judge fallback changed: %+v %v", fb, err)
+			}
+			continue
+		}
 		if err != nil || fb == nil {
 			t.Fatalf("%s fallback: %v", role, err)
 		}
