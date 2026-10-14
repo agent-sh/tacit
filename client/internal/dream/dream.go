@@ -454,11 +454,12 @@ func strList(xs []any) []string {
 
 // Meter is one run's accounting line.
 type Meter struct {
-	At       string  `json:"at"`
-	Windows  int     `json:"windows"`
-	Calls    int     `json:"calls"`
-	Facts    int     `json:"facts"`
-	InTokens int     `json:"in_tokens"`
-	CostUSD  float64 `json:"cost_usd"`
-	Errors   int     `json:"errors"`
+	ModelCalls *modelrun.Trace `json:"model_calls,omitempty"`
+	At         string          `json:"at"`
+	Windows    int             `json:"windows"`
+	Calls      int             `json:"calls"`
+	Facts      int             `json:"facts"`
+	InTokens   int             `json:"in_tokens"`
+	CostUSD    float64         `json:"cost_usd"`
+	Errors     int             `json:"errors"`
 }

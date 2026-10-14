@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -30,11 +31,21 @@ var costWarnings sync.Map
 // Run starts a fresh CLI process in a private, disposable working directory.
 // Prompts travel through stdin or a mode-0600 file, avoiding command-line
 // length limits and keeping fact text out of process listings.
-func Run(ctx context.Context, role, model, prompt, sessionID string) (Result, error) {
+func Run(ctx context.Context, role, model, prompt, sessionID string) (answer Result, failure error) {
+	var selected Route
+	started := false
+	defer func() {
+		answer.Route = selected
+		if !started {
+			answer.CostReported = true
+		}
+		Record(ctx, role, answer, failure)
+	}()
 	route, err := FromContext(ctx, role, model)
 	if err != nil {
 		return Result{}, err
 	}
+	selected = route
 	name := route.Runner
 	executable, err := exec.LookPath(Command(name))
 	if err != nil {
@@ -101,6 +112,7 @@ func Run(ctx context.Context, role, model, prompt, sessionID string) (Result, er
 	cmd.WaitDelay = 2 * time.Second
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	started = true
 	runErr := cmd.Run()
 	result, parseErr := parse(name, stdout.Bytes())
 	result.Route = route
@@ -116,10 +128,21 @@ func Run(ctx context.Context, role, model, prompt, sessionID string) (Result, er
 		if ctx.Err() != nil {
 			runErr = ctx.Err()
 		}
-		return result, fmt.Errorf("%s runner: %w: %s", name, runErr, detail)
+		cause := runErr
+		if ctx.Err() == nil {
+			var provider *Failure
+			if errors.As(parseErr, &provider) {
+				cause = errors.Join(runErr, parseErr)
+			} else if failure := ProviderFailure(0, "", stderr.String()); failure.Kind != "provider" {
+				cause = errors.Join(runErr, failure)
+			} else {
+				cause = errors.Join(runErr, parseErr)
+			}
+		}
+		return result, &redactedError{fmt.Sprintf("%s runner: %v: %s", name, runErr, detail), cause}
 	}
 	if parseErr != nil {
-		return result, fmt.Errorf("%s runner output: %s", name, digest.Redact(parseErr.Error()))
+		return result, &redactedError{fmt.Sprintf("%s runner output: %s", name, digest.Redact(parseErr.Error())), parseErr}
 	}
 	if !result.CostReported {
 		if _, seen := costWarnings.LoadOrStore(name, true); !seen {
@@ -185,3 +208,12 @@ func invocation(name, model, prompt, promptFile, sid, dir string) ([]string, str
 	}
 	return args, input, nil
 }
+
+// Keep failure identity without leaking raw provider text through Error().
+type redactedError struct {
+	message string
+	cause   error
+}
+
+func (e *redactedError) Error() string { return e.message }
+func (e *redactedError) Unwrap() error { return e.cause }

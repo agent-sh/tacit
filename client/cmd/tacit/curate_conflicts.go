@@ -13,6 +13,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/index"
 	"github.com/agent-sh/tacit/client/internal/lint"
+	"github.com/agent-sh/tacit/client/internal/modelrun"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
@@ -122,59 +123,64 @@ func conflictPairs(ctx context.Context, s *store.Store, facts []*fact.Fact, host
 // verdicts: contradictions go to review lines, supersessions retire the
 // existing fact when supersedeRoute allows it (written lists the files it
 // changed; nothing is changed with dry). Returns the review lines.
-func judgePairs(ctx context.Context, s *store.Store, pairs []curate.Pair, refs []judgedPair, facts []*fact.Fact, dry bool, rep *curate.Report) (review, written []string) {
+func judgePairs(ctx context.Context, s *store.Store, pairs []curate.Pair, refs []judgedPair, facts []*fact.Fact, dry bool, rep *curate.Report) (review, written []string, err error) {
+	var verdicts []curate.Verdict
 	for start := 0; start < len(pairs); start += 25 {
 		end := min(start+25, len(pairs))
 		ans, c2, err := judgeRun(ctx, curate.JudgeModel, fmt.Sprintf(curate.ConflictPrompt, curate.RenderPairs(pairs[start:end])))
 		rep.JudgeCalls++
 		rep.CostUSD += c2
 		if err != nil {
-			rep.Errors++
-			fmt.Fprintln(os.Stderr, "curate: judge:", err)
-			continue
+			return nil, nil, fmt.Errorf("judge: %w", err)
 		}
-		for k, v := range curate.ParseVerdicts(ans, end-start) {
-			pm := refs[start+k]
-			nf := facts[pm.newIdx]
-			switch v {
-			case curate.Contradicts:
-				rep.Contradicts++
-				other, otherDesc := "", ""
-				if pm.existing != nil {
-					other, otherDesc = pm.existing.Name, pm.existing.Description
-				} else {
-					other, otherDesc = facts[pm.otherIdx].Meta.Name, facts[pm.otherIdx].Meta.Description
-				}
-				// Review only: a sampled judge precision of about 30 percent on
-				// "contradicts" is too low to hide either fact at delivery.
-				// conflicts_with is set when the owner confirms (tacit resolve).
-				review = append(review, fmt.Sprintf("- CONTRADICTION?: [[%s]] (%s) vs [[%s]]\n  new: %s\n  other: %s", nf.Meta.Name, nf.Meta.Scope, other, nf.Meta.Description, otherDesc))
-			case curate.Supersedes:
-				rep.Supersedes++
-				if pm.existing == nil {
-					// Two new facts on one subject: keep both, flag for the owner.
-					review = append(review, fmt.Sprintf("- duplicate in one run: [[%s]] and [[%s]]", nf.Meta.Name, facts[pm.otherIdx].Meta.Name))
-					continue
-				}
-				if pm.sibling {
-					review = append(review, fmt.Sprintf("- duplicate in one run: [[%s]] and [[%s]]", nf.Meta.Name, pm.existing.Name))
-					continue
-				}
-				line, retire := supersedeRoute(s.Dir, nf, pm.existing)
-				if !retire {
-					review = append(review, line)
-					continue
-				}
-				if !dry {
-					if rel, ok := markSuperseded(s.Dir, pm.existing.Path, nf.Meta.Name); ok {
-						written = append(written, rel)
-					}
-				}
-				review = append(review, fmt.Sprintf("- supersedes: [[%s]] replaces [[%s]]", nf.Meta.Name, pm.existing.Name))
+		checked, err := curate.ParseVerdictsChecked(ans, end-start)
+		if err != nil {
+			return nil, nil, err
+		}
+		verdicts = append(verdicts, checked...)
+	}
+	// Every call is checked before the first mutation, including later chunks.
+	for k, v := range verdicts {
+		pm := refs[k]
+		nf := facts[pm.newIdx]
+		switch v {
+		case curate.Contradicts:
+			rep.Contradicts++
+			other, otherDesc := "", ""
+			if pm.existing != nil {
+				other, otherDesc = pm.existing.Name, pm.existing.Description
+			} else {
+				other, otherDesc = facts[pm.otherIdx].Meta.Name, facts[pm.otherIdx].Meta.Description
 			}
+			// Review only: a sampled judge precision of about 30 percent on
+			// "contradicts" is too low to hide either fact at delivery.
+			// conflicts_with is set when the owner confirms (tacit resolve).
+			review = append(review, fmt.Sprintf("- CONTRADICTION?: [[%s]] (%s) vs [[%s]]\n  new: %s\n  other: %s", nf.Meta.Name, nf.Meta.Scope, other, nf.Meta.Description, otherDesc))
+		case curate.Supersedes:
+			rep.Supersedes++
+			if pm.existing == nil {
+				// Two new facts on one subject: keep both, flag for the owner.
+				review = append(review, fmt.Sprintf("- duplicate in one run: [[%s]] and [[%s]]", nf.Meta.Name, facts[pm.otherIdx].Meta.Name))
+				continue
+			}
+			if pm.sibling {
+				review = append(review, fmt.Sprintf("- duplicate in one run: [[%s]] and [[%s]]", nf.Meta.Name, pm.existing.Name))
+				continue
+			}
+			line, retire := supersedeRoute(s.Dir, nf, pm.existing)
+			if !retire {
+				review = append(review, line)
+				continue
+			}
+			if !dry {
+				if rel, ok := markSuperseded(s.Dir, pm.existing.Path, nf.Meta.Name); ok {
+					written = append(written, rel)
+				}
+			}
+			review = append(review, fmt.Sprintf("- supersedes: [[%s]] replaces [[%s]]", nf.Meta.Name, pm.existing.Name))
 		}
 	}
-	return review, written
+	return review, written, nil
 }
 
 // recheckConflicts implements `tacit curate --recheck-conflicts --since D`:
@@ -215,6 +221,8 @@ func recheckConflicts(ctx context.Context, s *store.Store, host, since, until st
 		set = set[:limit]
 	}
 	rep := curate.Report{At: time.Now().Format(time.RFC3339), Recheck: true, Facts: len(set)}
+	rep.ModelCalls = &modelrun.Trace{}
+	ctx = modelrun.WithTrace(ctx, rep.ModelCalls)
 	newer := func(f *fact.Fact, h search.Hit) bool { return created[h.Name] > f.Meta.Created }
 	pairs, refs, err := conflictPairs(ctx, s, set, host, false, newer)
 	if err != nil {
@@ -230,7 +238,11 @@ func recheckConflicts(ctx context.Context, s *store.Store, host, since, until st
 		}
 	}
 	rep.Checked = len(pairs)
-	review, written := judgePairs(ctx, s, pairs, refs, set, dry, &rep)
+	review, written, err := judgePairs(ctx, s, pairs, refs, set, dry, &rep)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "curate: recheck:", err)
+		return 1
+	}
 	if dry {
 		for _, r := range review {
 			fmt.Println(r)
@@ -261,12 +273,12 @@ func recheckConflicts(ctx context.Context, s *store.Store, host, since, until st
 			return 1
 		}
 		home, _ := os.UserHomeDir()
-		if f, err := os.OpenFile(filepath.Join(home, ".local", "state", "tacit", "curator.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		if f, err := os.OpenFile(filepath.Join(home, ".local", "state", "tacit", "curator.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
 			json.NewEncoder(f).Encode(rep)
 			f.Close()
 		}
 	}
-	fmt.Printf("curate: recheck: %d fact(s) created %s..%s, %d pairs in %d judge calls, %d contradictions, %d supersedes, $%.2f, %d error(s)\n", len(set), since, orToday(until), rep.Checked, rep.JudgeCalls, rep.Contradicts, rep.Supersedes, rep.CostUSD, rep.Errors)
+	fmt.Printf("curate: recheck: %d fact(s) created %s..%s, %d pairs in %d judge calls, %d contradictions, %d supersedes, %s, %d error(s)\n", len(set), since, orToday(until), rep.Checked, rep.JudgeCalls, rep.Contradicts, rep.Supersedes, rep.ModelCalls.CostSummary(rep.CostUSD), rep.Errors)
 	if rep.Errors > 0 {
 		return 1
 	}

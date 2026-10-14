@@ -47,6 +47,29 @@ func main() {
 		}
 		return string(out)
 	}
+	// The offline doctor must return valid check records on every platform.
+	// Without scrump it reports an unmet dependency, so exit 1 is expected.
+	doctorCtx, doctorCancel := context.WithTimeout(context.Background(), time.Minute)
+	doctor := exec.CommandContext(doctorCtx, abs, "doctor", "--json")
+	doctor.Env = env
+	doctorOut, doctorErr := doctor.Output()
+	doctorCancel()
+	if doctorErr != nil {
+		if exit, ok := doctorErr.(*exec.ExitError); !ok || exit.ExitCode() != 1 {
+			check(doctorErr)
+		}
+	}
+	var checks []struct{ Name, Status string }
+	check(json.Unmarshal(doctorOut, &checks))
+	gitOK, offline := false, false
+	for _, check := range checks {
+		gitOK = gitOK || check.Name == "git" && check.Status == "ok"
+		offline = offline || check.Name == "provider" && check.Status == "info"
+	}
+	if !gitOK || !offline {
+		check(fmt.Errorf("doctor omitted Git or offline provider checks"))
+	}
+	fmt.Println("PASS: offline doctor JSON and Git preflight")
 	run("init")
 	if *redactor {
 		secret := "ghp_" + strings.Repeat("a", 40)

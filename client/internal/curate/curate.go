@@ -300,21 +300,23 @@ func ParseVerdict(s string) Verdict {
 
 // Report is one curator run's accounting.
 type Report struct {
-	At               string  `json:"at"`
-	Notes            int     `json:"notes"`
-	Restated         int     `json:"restated,omitempty"` // pending notes dropped before the split: they restate a curated fact or an earlier note
-	Batches          int     `json:"batches"`
-	Facts            int     `json:"facts"`
-	Rulings          int     `json:"rulings"`
-	NotOwnerWords    int     `json:"not_owner_words,omitempty"` // kind user entries with no verified quote of theirs, filed as observed
-	RecoveredRulings int     `json:"recovered_rulings"`
-	Checked          int     `json:"conflict_checks"`
-	JudgeCalls       int     `json:"judge_calls"`
-	Contradicts      int     `json:"contradicts"`
-	Supersedes       int     `json:"supersedes"`
-	CostUSD          float64 `json:"cost_usd"`
-	Errors           int     `json:"errors"`
-	FailedBatches    int     `json:"failed_batches"`
-	DerivedFiles     int     `json:"derived_files,omitempty"` // derived/ files written or retired by the git pass
-	Recheck          bool    `json:"recheck,omitempty"`       // a --recheck-conflicts run: Facts are the facts checked again
+	ModelCalls       *modelrun.Trace `json:"model_calls,omitempty"`
+	DeferredOwner    int             `json:"deferred_owner_notes,omitempty"`
+	At               string          `json:"at"`
+	Notes            int             `json:"notes"`
+	Restated         int             `json:"restated,omitempty"` // pending notes dropped before the split: they restate a curated fact or an earlier note
+	Batches          int             `json:"batches"`
+	Facts            int             `json:"facts"`
+	Rulings          int             `json:"rulings"`
+	NotOwnerWords    int             `json:"not_owner_words,omitempty"` // kind user entries with no verified quote of theirs, filed as observed
+	RecoveredRulings int             `json:"recovered_rulings"`
+	Checked          int             `json:"conflict_checks"`
+	JudgeCalls       int             `json:"judge_calls"`
+	Contradicts      int             `json:"contradicts"`
+	Supersedes       int             `json:"supersedes"`
+	CostUSD          float64         `json:"cost_usd"`
+	Errors           int             `json:"errors"`
+	FailedBatches    int             `json:"failed_batches"`
+	DerivedFiles     int             `json:"derived_files,omitempty"` // derived/ files written or retired by the git pass
+	Recheck          bool            `json:"recheck,omitempty"`       // a --recheck-conflicts run: Facts are the facts checked again
 }

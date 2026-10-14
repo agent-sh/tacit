@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,6 +19,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/index"
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/lint"
+	"github.com/agent-sh/tacit/client/internal/modelrun"
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
@@ -119,6 +121,35 @@ func runCurate(args []string) int {
 		}
 	}
 	sort.Slice(pending, func(i, j int) bool { return pending[i].Path < pending[j].Path })
+	var where curate.Where
+	noOwnerCorpus := false
+	deferredOwner := 0
+	if len(pending) > 0 {
+		corpus, cerr := loadOwnerCorpus(home, ownerwords.DefaultDigests(home), false)
+		if cerr != nil && !errors.Is(cerr, errNoOwnerWords) {
+			fmt.Fprintln(os.Stderr, "curate: owner history:", cerr)
+			return 1
+		}
+		noOwnerCorpus = corpus.Empty()
+		_, aud, aerr := auditorFor(ctx, s.Dir, corpus)
+		if aerr != nil {
+			fmt.Fprintln(os.Stderr, "curate:", aerr)
+			return 1
+		}
+		where = whereFor(aud)
+		if noOwnerCorpus {
+			var kept []*fact.Fact
+			for _, n := range pending {
+				if ownerNoteNeedsHistory(n) {
+					deferredOwner++
+					continue
+				}
+				kept = append(kept, n)
+			}
+			pending = kept
+			fmt.Fprintf(os.Stderr, "curate: no owner history; observations can be curated, %d owner note(s) stay pending\n", deferredOwner)
+		}
+	}
 	// Notes that only restate a curated fact or an earlier note go before the
 	// split (no model): 23 of the 2,108 pending notes (1.1 percent) on 2026-10-11.
 	var curated []*fact.Fact
@@ -142,7 +173,9 @@ func runCurate(args []string) int {
 		}
 		pending = kept
 	}
-	rep := curate.Report{At: time.Now().Format(time.RFC3339), Notes: len(pending), Restated: len(restated)}
+	rep := curate.Report{At: time.Now().Format(time.RFC3339), Notes: len(pending), Restated: len(restated), DeferredOwner: deferredOwner}
+	rep.ModelCalls = &modelrun.Trace{}
+	ctx = modelrun.WithTrace(ctx, rep.ModelCalls)
 	batches := curate.Batches(pending)
 	if len(batches) > *maxBatches {
 		batches = batches[:*maxBatches]
@@ -151,22 +184,7 @@ func runCurate(args []string) int {
 	if len(batches) == 0 {
 		fmt.Println("curate: nothing pending")
 	}
-	// Their words decide what stays kind user. When they cannot be read (a
-	// machine without their transcripts, a broken source), no note is split:
-	// they stay pending for a run that can (fail closed).
-	var where curate.Where
 	if len(batches) > 0 {
-		corpus, cerr := loadOwnerCorpus(home, ownerwords.DefaultDigests(home), false)
-		if cerr != nil {
-			fmt.Fprintln(os.Stderr, "curate: the owner's words cannot be read, so no note is curated this run:", cerr)
-			return 1
-		}
-		_, aud, aerr := auditorFor(ctx, s.Dir, corpus)
-		if aerr != nil {
-			fmt.Fprintln(os.Stderr, "curate:", aerr)
-			return 1
-		}
-		where = whereFor(aud)
 		// An index that cannot be opened at all stops the run before any
 		// model call (the check itself opens it again after each split).
 		head, herr := s.Head(ctx)
@@ -194,11 +212,18 @@ func runCurate(args []string) int {
 		res, cost, err := curate.RunCLI(ctx, *model, fmt.Sprintf(curate.SplitPrompt, host, host, curate.Render(batch)))
 		rep.CostUSD += cost
 		if err != nil {
+			rep.Errors++
 			rep.FailedBatches++
 			fmt.Fprintln(os.Stderr, "curate:", err)
 			continue
 		}
-		entries := curate.Parse(res)
+		entries, err := curate.ParseChecked(res)
+		if err != nil {
+			rep.Errors++
+			rep.FailedBatches++
+			fmt.Fprintln(os.Stderr, "curate:", err)
+			continue
+		}
 		// Second pass: rulings the split may have folded away.
 		var rulings []string
 		for _, e := range entries {
@@ -210,33 +235,68 @@ func runCurate(args []string) int {
 			rulings = []string{"(none)"}
 		}
 		recovered := 0
-		if res2, c3, err := curate.JudgeCLI(ctx, curate.JudgeModel, fmt.Sprintf(curate.RulingsPrompt, strings.Join(rulings, "\n"), curate.Render(batch))); err == nil {
+		// Recovery needs owner evidence. Ordinary observations do not require
+		// a second model call on a machine without owner history.
+		recoverRulings := !noOwnerCorpus
+		for _, n := range batch {
+			recoverRulings = recoverRulings || fact.OwnerWrote(n)
+		}
+		if recoverRulings {
+			res2, c3, rerr := curate.JudgeCLI(ctx, curate.JudgeModel, fmt.Sprintf(curate.RulingsPrompt, strings.Join(rulings, "\n"), curate.Render(batch)))
 			rep.CostUSD += c3
-			for _, e := range curate.Parse(res2) {
+			var recoveredEntries []curate.Entry
+			if rerr == nil {
+				recoveredEntries, rerr = curate.ParseChecked(res2)
+			}
+			if rerr != nil {
+				rep.Errors++
+				rep.FailedBatches++
+				fmt.Fprintln(os.Stderr, "curate: rulings:", rerr)
+				continue
+			}
+			for _, e := range recoveredEntries {
 				e.Kind = "user"
 				entries = append(entries, e)
 				recovered++
 			}
-		} else {
-			rep.CostUSD += c3
-			rep.Errors++
 		}
+		batchNames := maps.Clone(names)
 		var newFacts []*fact.Fact
 		var ledgerLines []byte
 		produced := map[string]bool{}
 		nRulings, notWords := 0, 0
+		invalidBatch := false
+		batchOrigins := map[string]bool{}
+		for _, n := range batch {
+			batchOrigins[n.Meta.Name] = true
+		}
 		for _, e := range entries {
-			f := curate.ToFact(e, host, names)
+			if !batchOrigins[e.Origin] {
+				invalidBatch = true
+				break
+			}
+			f := curate.ToFact(e, host, batchNames)
 			// A ruling is the owner's own words: kind user stays only with their
 			// quote found in the note and in their turns or notes.
 			if q, ok := curate.ApplyEvidence(f, e, noteByName[e.Origin], where); ok {
 				nRulings++
 				ledgerLines = append(ledgerLines, q.Line()...)
 			} else if e.Kind == "user" {
+				if noOwnerCorpus {
+					invalidBatch = true
+					break
+				}
 				notWords++
 			}
 			newFacts = append(newFacts, f)
 			produced[e.Origin] = true
+		}
+
+		if invalidBatch {
+			rep.Errors++
+			rep.FailedBatches++
+			fmt.Fprintln(os.Stderr, "curate: invalid origin or unbacked owner ruling; batch stays pending")
+			continue
 		}
 
 		// Conflict pairs: closest existing fact per new fact, and new facts of
@@ -252,18 +312,27 @@ func runCurate(args []string) int {
 			fmt.Fprintf(os.Stderr, "curate: conflict check failed, batch %d not written and its %d note(s) stay pending: %v\n", bi+1, len(batch), err)
 			break
 		}
+		rep.Checked += len(pairs)
+		review, written, err := judgePairs(ctx, s, pairs, refs, newFacts, *dry, &rep)
+		if err != nil {
+			rep.Errors++
+			rep.FailedBatches++
+			fmt.Fprintln(os.Stderr, "curate: conflict judge; batch stays pending:", err)
+			continue
+		}
 		rep.Facts += len(newFacts)
 		rep.Rulings += nRulings
 		rep.NotOwnerWords += notWords
 		rep.RecoveredRulings += recovered
-		for _, n := range batch {
-			if !produced[n.Meta.Name] {
-				cst.Empty[n.Meta.Name] = time.Now().Format("2006-01-02")
-			}
-		}
-		rep.Checked += len(pairs)
-		review, written := judgePairs(ctx, s, pairs, refs, newFacts, *dry, &rep)
 
+		if len(newFacts) == 0 {
+			if !*dry {
+				for _, n := range batch {
+					cst.Empty[n.Meta.Name] = time.Now().Format("2006-01-02")
+				}
+			}
+			continue
+		}
 		if *dry {
 			for _, f := range newFacts {
 				fmt.Printf("- [%s/%s/%s] %s\n", f.Meta.Scope, f.Meta.Type, f.Meta.Source.Kind, f.Meta.Description)
@@ -325,6 +394,12 @@ func runCurate(args []string) int {
 			}
 			break
 		}
+		for _, n := range batch {
+			if !produced[n.Meta.Name] {
+				cst.Empty[n.Meta.Name] = time.Now().Format("2006-01-02")
+			}
+		}
+		names = batchNames
 		fmt.Printf("curate: batch %d pushed: %d fact(s) from %d note(s)\n", bi+1, len(newFacts), len(batch))
 	}
 
@@ -360,7 +435,7 @@ func runCurate(args []string) int {
 	rep.Errors += curateLinks(ctx, s, *dry)
 	if len(batches) == 0 {
 		rep.Errors += curateStale(ctx, s, *dry)
-		if rep.Errors > 0 {
+		if rep.Errors > 0 || rep.DeferredOwner > 0 {
 			return 1
 		}
 		return 0
@@ -368,7 +443,7 @@ func runCurate(args []string) int {
 
 	if !*dry {
 		saveCuratorState(filepath.Join(stateDir, "curator.json"), cst)
-		if f, err := os.OpenFile(filepath.Join(stateDir, "curator.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		if f, err := os.OpenFile(filepath.Join(stateDir, "curator.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
 			json.NewEncoder(f).Encode(rep)
 			f.Close()
 		}
@@ -377,8 +452,8 @@ func runCurate(args []string) int {
 	// it can take most of an hour and must not be what a kill loses. It flags
 	// curated facts git has overtaken; it never retires.
 	rep.Errors += curateStale(ctx, s, *dry)
-	fmt.Printf("curate: %d notes in %d batches -> %d facts (%d rulings), %d pairs in %d judge calls, %d contradictions, %d supersedes, $%.2f, %d error(s)\n", rep.Notes, rep.Batches, rep.Facts, rep.Rulings, rep.Checked, rep.JudgeCalls, rep.Contradicts, rep.Supersedes, rep.CostUSD, rep.Errors)
-	if rep.Errors > 0 {
+	fmt.Printf("curate: %d notes in %d batches -> %d facts (%d rulings), %d pairs in %d judge calls, %d contradictions, %d supersedes, %s, %d error(s)\n", rep.Notes, rep.Batches, rep.Facts, rep.Rulings, rep.Checked, rep.JudgeCalls, rep.Contradicts, rep.Supersedes, rep.ModelCalls.CostSummary(rep.CostUSD), rep.Errors)
+	if rep.Errors > 0 || rep.DeferredOwner > 0 {
 		return 1
 	}
 	return 0
@@ -482,4 +557,10 @@ func dedupe(xs []string) []string {
 		}
 	}
 	return out
+}
+
+// Claims of owner authority need transcripts unless the owner wrote the note
+// through the trusted app path. Observations remain usable on fresh installs.
+func ownerNoteNeedsHistory(n *fact.Fact) bool {
+	return !fact.OwnerWrote(n) && (n.Meta.Source.Kind == "user" || fact.ClaimsEvidence(n))
 }
