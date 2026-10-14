@@ -14,6 +14,7 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
+	"github.com/agent-sh/tacit/client/internal/platform"
 )
 
 type doctorCheck struct {
@@ -124,6 +125,8 @@ func doctorChecks(models bool, role string) ([]doctorCheck, bool) {
 				} else {
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					cmd := exec.CommandContext(ctx, executable, "--version")
+					platform.Prepare(cmd)
+					cmd.WaitDelay = 2 * time.Second
 					cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
 					if cmd.Run() != nil {
 						status = "version failed"
