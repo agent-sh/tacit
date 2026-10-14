@@ -18,6 +18,8 @@ models:
 efforts: {}
 profiles: {}
 timeouts: {}
+# Extraction batch limit; 0 disables it. Model attempt timeouts still apply.
+dream_max_runtime: 45m
 commands: {}
 runner_args: {}
 fallbacks:

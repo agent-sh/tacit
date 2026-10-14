@@ -4,6 +4,7 @@
 
 [![CI](https://github.com/agent-sh/tacit/actions/workflows/ci.yml/badge.svg)](https://github.com/agent-sh/tacit/actions/workflows/ci.yml)
 [![agnix](https://github.com/agent-sh/tacit/actions/workflows/agnix.yml/badge.svg)](https://github.com/agent-sh/tacit/actions/workflows/agnix.yml)
+[![Release](https://img.shields.io/github/v/release/agent-sh/tacit)](https://github.com/agent-sh/tacit/releases/latest)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-blue.svg)](LICENSE)
 
 A decision made in one session should survive into the next. Tacit keeps project decisions, past mistakes and machine facts in a git repository, then gives your agents a small set of facts matched to the repo and prompt.
@@ -16,34 +17,29 @@ Run a local store on your laptop, or share one across machines. Works with **Cla
 
 ## Quick start
 
-Install git 2.29+, Go 1.27 and [scrump with its text profile](docs/portable.md#redaction). Scrump is required for agent writes. Model jobs need one supported agent CLI and its provider configuration. Choose the runners, models and providers in your own settings file. Search, owner edits and review work without a model account.
-
-```sh
-git clone https://github.com/agent-sh/tacit.git
-cd tacit
-```
+Install git 2.29+, then use a [prebuilt release](https://github.com/agent-sh/tacit/releases/latest). Each archive includes the CLI, browser app and compatible scrump redactor. No Go or Rust build is needed. Model jobs need a supported agent CLI and its own provider setup. Search, owner edits and review work without a model account.
 
 ### Linux or macOS
 
 ```sh
-mkdir -p ~/.local/bin
-(cd client && go build -o ~/.local/bin/tacit ./cmd/tacit)
+curl -fLsS https://github.com/agent-sh/tacit/releases/latest/download/install.sh -o tacit-install.sh
+sh tacit-install.sh
 export PATH="$HOME/.local/bin:$PATH"
 tacit init
-tacit install claude
 tacit app --browser
 ```
 
 ### Windows
 
 ```powershell
-Push-Location client
-go build -o "$HOME\tacit.exe" ./cmd/tacit
-Pop-Location
-& "$HOME\tacit.exe" init
-& "$HOME\tacit.exe" install claude
-& "$HOME\tacit.exe" app --browser
+Invoke-WebRequest -UseBasicParsing https://github.com/agent-sh/tacit/releases/latest/download/install.ps1 -OutFile tacit-install.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tacit-install.ps1
+$env:PATH = "$env:LOCALAPPDATA\tacit\bin;$env:PATH"
+tacit init
+tacit app --browser
 ```
+
+The installers select amd64 or arm64, verify the archive checksum and test the bundled redactor before replacing executables. They install into your account and leave PATH changes to you. For a specific release or another directory, use `sh tacit-install.sh --version v0.1.0 --bin-dir PATH`, or `-Version v0.1.0 -BinDir PATH` in PowerShell. Git and model CLIs remain separate dependencies. [Source builds](docs/portable.md#source-builds) are also available.
 
 `init` creates a local store. It needs no server, tailnet or enrollment keys. Open the app to add your own rulings, inspect facts and review changes.
 
@@ -56,6 +52,28 @@ Choose the integration for your agent:
 | Hermes | `tacit install hermes` | Memory provider; follow the printed configuration steps |
 | Grok / pi / Muse | `tacit install grok` / `pi` / `muse` | Prints the MCP configuration |
 | agy | `tacit install agy` | Prints the MCP registration command |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/app-dark.png">
+  <img alt="Tacit showing scoped facts, their source and git history in the browser app" src="docs/images/app-light.png" width="1440">
+</picture>
+
+*The browser app, using the public example store. [Screenshot setup](docs/images/README.md).*
+
+### One note, from a mistake to the next session
+
+Record a failure and its fix. This example adds a sample note to your current local store:
+
+```sh
+tacit add --harness codex --kind observed --type past_mistake \
+  --scope projects/demo-api --desc 'Run one database migration worker at a time' \
+  --body 'Parallel migration workers contend for the database lock. Run one migration worker at a time.' migration-lock
+
+tacit search --repo demo-api --inbox 'migration worker'
+tacit app --browser
+```
+
+Open **Inbox** to inspect the note and its source. After curation, installed integrations can retrieve the reviewed fact in later sessions. `search --inbox` lets you inspect the note immediately. The `codex` source label records who wrote the note and does not require running a model for this example.
 
 [Portable setup](docs/portable.md) covers dependencies, native jobs, build archives and platform validation. To exchange facts between machines, follow the [shared-store setup](docs/setup.md#install-the-shared-store).
 
@@ -114,6 +132,7 @@ Every YAML option is listed here:
 | `models.verify_fallback` | `TACIT_VERIFY_FALLBACK_MODEL` | Legacy same-runner verifier fallback; an empty environment value disables it |
 | `efforts` | `TACIT_<ROLE>_EFFORT` | Per-role reasoning effort; omitted uses the CLI default, empty clears an override |
 | `profiles` | `TACIT_<ROLE>_PROFILE` | Per-role Codex profile name; empty clears it |
+| `dream_max_runtime` | `TACIT_DREAM_MAX_RUNTIME` | Extraction batch runtime; default `45m`, `0` disables the batch limit; `dream --max-runtime` wins |
 | `timeouts` | `TACIT_<ROLE>_TIMEOUT` | Positive Go duration per model attempt, such as `10m`; default `20m` |
 | `commands` | `TACIT_<TOOL>_COMMAND` | Executable name or path; default is the tool name |
 | `runner_args` | `TACIT_<TOOL>_ARGS` | Extra argv without a shell; YAML list or JSON array in the environment |
@@ -162,7 +181,9 @@ Malformed extraction or incomplete judge answers leave the batch pending. Every 
 
 Grok jobs use a fresh runtime home for every request. Provider/model settings come from `GROK_HOME` (default `~/.grok`); native sign-in and requirements files are referenced without copying credentials. User hooks, plugins, memory and MCP servers stay outside the job. Managed defaults and mandatory policy hooks are retained. Provider keys and headers in copied settings must use environment references or native auth. On Windows, file references use hard links when symlinks are unavailable; put the job cache and Grok home on the same filesystem in that case.
 
-Local job logs record each model attempt's role, route, fallback status, input tokens and reported cost. A `null` cost means the runner did not report it; zero means a reported zero. Summaries label incomplete totals as reported cost. Logs contain no prompts or model answers in these accounting records.
+Local job logs record each model attempt's role, route, fallback status, input tokens and reported cost. A batch reaching its runtime or call limit pauses successfully and resumes pending windows next run. Attempt deadlines and genuine model, redaction or persistence errors still fail. Accounting records `pause_reason` and `remaining_windows`.
+
+A `null` cost means the runner did not report it; zero means a reported zero. Summaries label incomplete totals as reported cost. Logs contain no prompts or model answers in these accounting records.
 
 `~` expands to the current home directory. Windows paths can use forward slashes or single-quoted YAML strings. Command paths containing a directory separator resolve against the config file; bare command names use `PATH`. A CLI `--model` option overrides the configured model. `tacit --runner TOOL` overrides all role runners for that invocation.
 

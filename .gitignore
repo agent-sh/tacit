@@ -12,3 +12,6 @@ __pycache__/
 
 # Private operator settings. Copy config/example.yaml, then choose it explicitly.
 /config/local.yaml
+
+# Pinned dependencies checked out by release jobs.
+/.release-deps/
