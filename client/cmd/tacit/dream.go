@@ -1,20 +1,28 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/dream"
+	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
+
+var dreamRun dream.Runner = dream.RunCLI
 
 // runDream implements `tacit dream [--model M] [--dry-run] [--max-calls N]`:
 // digest transcript deltas since the last run, extract facts with the
@@ -27,6 +35,10 @@ func runDream(args []string) int {
 	maxCalls := fs.Int("max-calls", 40, "cap on model calls per run")
 	envFile := fs.String("env-file", "", "KEY=VALUE lines (the variables claude -p needs, for example the Bedrock ones) set before `claude -p` runs; for launchd, which has no EnvironmentFile")
 	fs.Parse(args)
+	if *maxCalls < 0 {
+		fmt.Fprintln(os.Stderr, "dream: --max-calls must be nonnegative")
+		return 2
+	}
 	if *envFile != "" {
 		if err := loadEnvFile(*envFile); err != nil {
 			fmt.Fprintln(os.Stderr, "dream:", err)
@@ -56,6 +68,24 @@ func runDream(args []string) int {
 			return 2
 		}
 	}
+	if !*dry {
+		s, _ := store.Default()
+		timeout, err := modelrun.Timeout("dream")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "dream:", err)
+			return 2
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		n, err := recoverDreamNotes(ctx, s)
+		cancel()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "dream: recover:", err)
+			return 1
+		}
+		if n > 0 {
+			fmt.Printf("dream: recovered %d pending note(s)\n", n)
+		}
+	}
 	home, _ := os.UserHomeDir()
 	stateDir := filepath.Join(home, ".local", "state", "tacit")
 	statePath := filepath.Join(stateDir, "dreamer.json")
@@ -77,11 +107,26 @@ func runDream(args []string) int {
 	if fresh {
 		if !*dry {
 			st.LastRun = time.Now().Format(time.RFC3339)
-			dream.SaveState(statePath, st)
+			if err := dream.SaveState(statePath, st); err != nil {
+				fmt.Fprintln(os.Stderr, "dream: state:", err)
+				return 1
+			}
 		}
 		fmt.Printf("dream: first run, recorded cursors for %d transcript files; facts start next run\n", len(st.Offsets))
 		return 0
 	}
+	// Count the full delta before capping calls. Every chunk shares its file's
+	// end offset; advancing after only a prefix would skip the remaining chunks.
+	pending := map[string]int{}
+	var remaining []dream.Window
+	for _, w := range windows {
+		if slices.Contains(st.Completed[w.File], dreamWindowKey(w)) {
+			continue
+		}
+		pending[w.File]++
+		remaining = append(remaining, w)
+	}
+	windows = remaining
 	if len(windows) > *maxCalls {
 		windows = windows[:*maxCalls]
 	}
@@ -99,12 +144,13 @@ func runDream(args []string) int {
 	ctx = modelrun.WithTrace(ctx, meter.ModelCalls)
 	var written []string
 	// Cursor per file advances only when every window of that file succeeded.
-	pending := map[string]int{}
 	failed := map[string]bool{}
 	for _, w := range windows {
-		pending[w.File]++
-	}
-	for _, w := range windows {
+		if err := ctx.Err(); err != nil {
+			meter.Errors++
+			fmt.Fprintln(os.Stderr, "dream:", err)
+			break
+		}
 		// Redact here, one scrump call per window that is actually sent, and
 		// never move the cursor past a window whose redaction failed.
 		lines, err := digest.Finish(w.Lines)
@@ -116,7 +162,7 @@ func runDream(args []string) int {
 			continue
 		}
 		prompt := fmt.Sprintf(dream.Prompt, w.Repo, host, strings.Join(lines, "\n"))
-		res, cost, in, err := dream.RunCLI(ctx, *model, prompt)
+		res, cost, in, err := dreamRun(ctx, *model, prompt)
 		var extracted []dream.Extracted
 		if err == nil {
 			extracted, err = dream.ParseChecked(res)
@@ -131,10 +177,8 @@ func runDream(args []string) int {
 			fmt.Fprintln(os.Stderr, "dream:", err)
 			continue
 		}
-		if pending[w.File] == 0 && !failed[w.File] && !*dry {
-			st.Offsets[w.File] = w.End
-		}
 		session := strings.TrimSuffix(filepath.Base(w.File), ".jsonl")
+		var facts []*fact.Fact
 		for _, x := range extracted {
 			f := dream.ToFact(x, w.Repo, host, session)
 			meter.Facts++
@@ -142,31 +186,36 @@ func runDream(args []string) int {
 				fmt.Printf("- [%s/%s] %s\n", f.Meta.Scope, f.Meta.Type, f.Meta.Description)
 				continue
 			}
-			rel := filepath.ToSlash(filepath.Join("inbox", "dreamer@"+host, f.Meta.Name+".md"))
-			full := filepath.Join(s.Dir, rel)
-			if _, err := os.Stat(full); err == nil {
-				// Same slug already filed; keep the earlier one (the curator merges).
-				continue
-			}
-			b, err := f.Encode()
+			facts = append(facts, f)
+		}
+		if !*dry {
+			paths, err := persistDreamWindow(ctx, s, facts)
 			if err != nil {
-				continue
-			}
-			os.MkdirAll(filepath.Dir(full), 0o755)
-			if err := os.WriteFile(full, b, 0o644); err == nil {
-				written = append(written, rel)
+				meter.Errors++
+				failed[w.File] = true
+				fmt.Fprintln(os.Stderr, "dream: persist:", err)
+			} else {
+				written = append(written, paths...)
+				if st.Completed == nil {
+					st.Completed = map[string][]string{}
+				}
+				st.Completed[w.File] = append(st.Completed[w.File], dreamWindowKey(w))
+				if pending[w.File] == 0 && !failed[w.File] {
+					st.Offsets[w.File] = w.End
+					delete(st.Completed, w.File)
+				}
+				st.LastRun = meter.At
+				if err := dream.SaveState(statePath, st); err != nil {
+					meter.Errors++
+					fmt.Fprintln(os.Stderr, "dream: state:", err)
+				}
 			}
 		}
 	}
 	if !*dry {
-		if len(written) > 0 {
-			if err := s.CommitPush(ctx, written, fmt.Sprintf("dreamer: %d fact(s) from %d window(s)", len(written), meter.Windows), "dreamer"); err != nil {
-				fmt.Fprintln(os.Stderr, "dream: push:", err)
-				meter.Errors++
-			}
-		}
 		st.LastRun = meter.At
 		if err := dream.SaveState(statePath, st); err != nil {
+			meter.Errors++
 			fmt.Fprintln(os.Stderr, "dream: state:", err)
 		}
 		if f, err := os.OpenFile(filepath.Join(stateDir, "dreamer.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
@@ -179,6 +228,12 @@ func runDream(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// Content and chunk position identify durable progress even when a transcript
+// grows between runs. Changed chunks are processed again instead of skipped.
+func dreamWindowKey(w dream.Window) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%d:%d:%s\n%s", w.Start, w.Part, w.Repo, strings.Join(w.Lines, "\n")))))
 }
 
 // loadEnvFile sets the variables of a systemd-style environment file in this
@@ -222,4 +277,153 @@ func loadEnvFile(path string) error {
 		}
 	}
 	return nil
+}
+
+// Existing files from an interrupted write are retried, while a fact already
+// committed at HEAD is left alone. Never include unrelated staged paths.
+func dreamUncommitted(ctx context.Context, s *store.Store, paths []string) ([]string, error) {
+	paths = dedupe(paths)
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	args := append([]string{"ls-tree", "-rz", "--name-only", "HEAD", "--"}, paths...)
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = s.Dir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("read committed dreamer paths: %w", err)
+	}
+	committed := map[string]bool{}
+	for _, p := range strings.Split(string(out), "\x00") {
+		committed[p] = true
+	}
+	var pending []string
+	for _, p := range paths {
+		if !committed[p] {
+			pending = append(pending, p)
+		}
+	}
+	return pending, nil
+}
+
+// Retry only validated notes in this machine's dreamer inbox. Old failed
+// pushes must not leave their notes stranded after a cursor was saved.
+func recoverDreamNotes(ctx context.Context, s *store.Store) (n int, err error) {
+	err = s.WithLock(ctx, func() error { var inner error; n, inner = recoverDreamNotesLocked(ctx, s); return inner })
+	return n, err
+}
+
+func recoverDreamNotesLocked(ctx context.Context, s *store.Store) (int, error) {
+	if err := s.SyncLocked(ctx); err != nil {
+		return 0, err
+	}
+	if err := s.PushPendingLocked(ctx); err != nil {
+		return 0, err
+	}
+	prefix := filepath.ToSlash(filepath.Join("inbox", "dreamer@"+store.ShortHost()))
+	cmd := exec.CommandContext(ctx, "git", "ls-files", "--others", "--exclude-standard", "-z", "--", prefix)
+	cmd.Dir = s.Dir
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, err
+	}
+	var paths []string
+	for _, rel := range strings.Split(string(out), "\x00") {
+		if strings.HasSuffix(rel, ".md") {
+			paths = append(paths, rel)
+		}
+	}
+	if len(paths) == 0 {
+		return 0, nil
+	}
+	fs, perrs, err := fact.Walk(s.Dir)
+	if err != nil {
+		return 0, err
+	}
+	byPath := map[string]*fact.Fact{}
+	for _, f := range fs {
+		byPath[f.Path] = f
+	}
+	for _, rel := range paths {
+		f := byPath[rel]
+		if f == nil || !f.InInbox() || f.Meta.Source.Harness != "dreamer" || f.Meta.Source.Host != store.ShortHost() || fact.ClaimsEvidence(f) {
+			return 0, fmt.Errorf("pending dreamer note is invalid or protected: %s (%d parse errors)", rel, len(perrs))
+		}
+	}
+	err = s.CommitPushNamedLocked(ctx, paths, fmt.Sprintf("dreamer: recover %d note(s) from interrupted runs", len(paths)), "dreamer")
+	if err != nil {
+		return 0, err
+	}
+	return len(paths), nil
+}
+
+// A window's check, writes and push form one locked operation. Another
+// dreamer cannot overwrite the first run's already committed slug.
+func persistDreamWindow(ctx context.Context, s *store.Store, facts []*fact.Fact) (written []string, err error) {
+	err = s.WithLock(ctx, func() error {
+		if err := s.SyncLocked(ctx); err != nil {
+			return err
+		}
+		if err := s.PushPendingLocked(ctx); err != nil {
+			return err
+		}
+		var paths []string
+		for _, f := range facts {
+			rel := filepath.ToSlash(filepath.Join("inbox", "dreamer@"+store.ShortHost(), f.Meta.Name+".md"))
+			full := filepath.Join(s.Dir, rel)
+			if _, err := os.Stat(full); err == nil {
+				paths = append(paths, rel)
+				continue
+			} else if !os.IsNotExist(err) {
+				return err
+			}
+			b, err := f.Encode()
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+				return err
+			}
+			if err := writeDreamNote(full, bytes.NewReader(b)); err != nil {
+				return err
+			}
+			paths = append(paths, rel)
+		}
+		pending, err := dreamUncommitted(ctx, s, paths)
+		if err != nil {
+			return err
+		}
+		if len(pending) > 0 {
+			if err := s.CommitPushNamedLocked(ctx, pending, fmt.Sprintf("dreamer: %d fact(s) from 1 window(s)", len(pending)), "dreamer"); err != nil {
+				return err
+			}
+		}
+		written = pending
+		return nil
+	})
+	return written, err
+}
+
+// Publish only a complete, flushed note. Interrupted writes stay outside the
+// .md namespace, so recovery cannot mistake them for extracted facts.
+func writeDreamNote(path string, content io.Reader) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".dream-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+	if _, err := io.Copy(f, content); err != nil {
+		return err
+	}
+	if err := f.Chmod(0644); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }

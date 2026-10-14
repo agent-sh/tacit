@@ -65,8 +65,9 @@ DIGEST:
 
 // State is the per-file read cursor, persisted between runs.
 type State struct {
-	Offsets map[string]int64 `json:"offsets"`
-	LastRun string           `json:"last_run"`
+	Offsets   map[string]int64    `json:"offsets"`
+	LastRun   string              `json:"last_run"`
+	Completed map[string][]string `json:"completed_windows,omitempty"`
 }
 
 // Source is one transcript root.
@@ -101,6 +102,7 @@ type Window struct {
 	Lines []string
 	Start int64
 	End   int64
+	Part  int
 }
 
 // Runner is the LLM call; tests substitute it.
@@ -225,8 +227,8 @@ func Windows(sources []Source, st *State, fresh bool) ([]Window, error) {
 				st.Offsets[f] = end
 				continue
 			}
-			for _, c := range chunk(lines, maxWindowChars) {
-				ws = append(ws, Window{File: f, Repo: repoOf(f, src.Format, buf), Lines: c, Start: off, End: end})
+			for part, c := range chunk(lines, maxWindowChars) {
+				ws = append(ws, Window{File: f, Repo: repoOf(f, src.Format, buf), Lines: c, Start: off, End: end, Part: part})
 			}
 		}
 	}

@@ -29,6 +29,7 @@ jobs:
           cache-dependency-path: client/go.sum
       - run: go test ./internal/platform ./internal/settings ./internal/modelrun
       - run: go test ./internal/store
+      - run: go test ./cmd/tacit -run TestDreamInterruptedWriteNeverPublishesNote
       - run: go build -o tacit-native.exe ./cmd/tacit
       - run: go run ./tools/smoke -binary ./tacit-native.exe
       - name: Native Windows task registration
