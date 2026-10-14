@@ -156,9 +156,11 @@ tacit doctor --models
 tacit doctor --role dream --json
 ```
 
-`doctor` checks Git 2.29+, scrump's text masking canary, effective role arguments, attempt timeouts and Codex profiles. It checks primary and fallback executables with `--version`. Missing runners are warnings for a memory-only installation. `--models` requires every configured runner; `--role` requires only that role and its fallback. `--json` prints check records. Exit 0 means the requested offline checks passed, 1 means a check failed, and 2 means invalid command options or settings. Provider credentials, model availability and live completions need a separate live test.
+`doctor` checks Git 2.29+, scrump's text masking canary, effective role arguments, attempt timeouts and Codex profiles. It checks primary and fallback executables with `--version`. Missing runners are warnings for a memory-only installation. `--models` requires every configured runner; `--role` requires only that role and its fallback. `--json` prints check records. Exit 0 means the requested offline checks passed, 1 means a check failed, and 2 means invalid command options or settings. Provider credentials, model availability and live completions need a separate live test. Grok preflight also checks the provider settings and native file references needed by its isolated runtime.
 
 Malformed extraction or incomplete judge answers leave the batch pending. Every conflict verdict is validated before any fact is retired. A fresh installation can curate observations without Claude or Codex owner history. Unbacked owner notes stay pending; owner rulings still require proof.
+
+Grok jobs use a fresh runtime home for every request. Provider/model settings come from `GROK_HOME` (default `~/.grok`); native sign-in and requirements files are referenced without copying credentials. User hooks, plugins, memory and MCP servers stay outside the job. Managed defaults and mandatory policy hooks are retained. Provider keys and headers in copied settings must use environment references or native auth. On Windows, file references use hard links when symlinks are unavailable; put the job cache and Grok home on the same filesystem in that case.
 
 Local job logs record each model attempt's role, route, fallback status, input tokens and reported cost. A `null` cost means the runner did not report it; zero means a reported zero. Summaries label incomplete totals as reported cost. Logs contain no prompts or model answers in these accounting records.
 

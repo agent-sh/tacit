@@ -78,7 +78,13 @@ func conflictPairs(ctx context.Context, s *store.Store, facts []*fact.Fact, host
 	var refs []judgedPair
 	seen := map[[2]string]bool{}
 	for i, f := range facts {
-		sit := search.Situation{Repo: strings.TrimPrefix(f.Meta.Scope, "projects/"), Host: host, Query: f.Meta.Description}
+		sit := search.Situation{Host: host, Query: f.Meta.Description}
+		if strings.HasPrefix(f.Meta.Scope, "projects/") {
+			sit.Repo = strings.TrimPrefix(f.Meta.Scope, "projects/")
+		}
+		if strings.HasPrefix(f.Meta.Scope, "machines/") {
+			sit.Host = strings.TrimPrefix(f.Meta.Scope, "machines/")
+		}
 		hits, err := ix.Query(ctx, sit, 4, false)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "curate: index query failed, opening the index again:", err)

@@ -206,3 +206,9 @@ Model jobs use a private temporary directory and stdin or a private prompt file.
 Claude verification with API or third-party provider authentication retains its restricted Read/MCP verifier. Claude OAuth and other runners request evidence as JSON; Tacit executes each request through its guarded, redacted probes. No native tool access is needed for this path. Provider context windows still bound the amount of evidence a model can use.
 
 Dollar totals contain only costs the CLI reports. Tacit prints a notice when cost is unavailable. Local accounting logs retain the actual primary and fallback routes, usage from failed calls, and `null` for unreported cost. Summaries show reported dollars and count calls with unknown cost. The verifier's dollar threshold cannot enforce unreported spend; its deadline and turn bound still apply. Use provider-side spending controls when a hard monetary limit is required. CLI flags can change between releases; unsupported flags or incomplete output fail the job without advancing its transcript cursor.
+
+### Grok model jobs
+
+Each request uses a fresh `GROK_HOME` inside the private job directory. This avoids stale native agent/session state blocking independent headless jobs. Tacit retains provider/model settings and references the original native sign-in and requirements files. It excludes user hooks, plugins, memory and MCP servers, while retaining managed defaults and mandatory policy hooks. Embedded provider keys and literal request headers are refused; use native auth, `env_key` or `env_http_headers`.
+
+The job directory is removed after the process exits. Symlinks keep native files in place; Windows falls back to hard links when symlinks are denied, which requires the source and job cache to share a filesystem.
