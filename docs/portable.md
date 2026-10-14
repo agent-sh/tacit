@@ -229,7 +229,7 @@ At startup, the dreamer retries retained commits and validates untracked notes i
 
 Download `install.sh` or `install.ps1` from the release. Unix defaults to `~/.local/bin`; Windows defaults to `%LOCALAPPDATA%\tacit\bin`. Both accept a version and destination, check the downloaded archive and its reported version, and verify scrump's text profile before replacing files. Installers do not change model configuration, stores, credentials or PATH. `tacit --version` prints the installed release; source builds print `tacit dev`.
 
-A `v*` tag runs the release workflow. All six native package/install checks must pass before publication. Manual workflow runs validate the selected git ref with an explicit version label and upload artifacts; they do not publish or create a tag. The primary commit is retained in Go build metadata, and scrump is always checked out at the pinned source revision.
+Changes to the release workflow, archive builder or installer scripts run native package checks on the PR head with a preview version label. A `v*` tag runs the release workflow. All six native package/install checks must pass before publication. Manual workflow runs validate the selected git ref with an explicit version label and upload artifacts; they do not publish or create a tag. The primary commit is retained in Go build metadata, and scrump is always checked out at the pinned source revision.
 
 ### Runtime pauses
 

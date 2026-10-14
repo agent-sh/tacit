@@ -1,6 +1,13 @@
 name: release
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/install.sh
+      - scripts/install.ps1
+      - client/tools/dist/**
+      - client/tools/install-smoke/**
   push:
     tags: ["v[0-9]*"]
   workflow_dispatch:
@@ -53,12 +60,14 @@ jobs:
             exe: .exe
     runs-on: ${{ matrix.runner }}
     env:
-      RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
+      RELEASE_VERSION: ${{ inputs.version || (github.event_name == 'pull_request' && 'v0.0.0-preview') || github.ref_name }}
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
       - uses: actions/setup-go@v6
         with:
           go-version-file: client/go.mod
