@@ -44,7 +44,13 @@ try {
         try {
             Copy-Item (Join-Path $source $exe) $staged
             $dest = Join-Path $BinDir $exe
-            if (Test-Path $dest) { [System.IO.File]::Replace($staged, $dest, $null) }
+            if (Test-Path $dest) {
+                # Windows PowerShell coerces a null string argument to an empty
+                # backup path. A named backup works on both PowerShell editions.
+                $backup = Join-Path $BinDir ("." + $exe + ".backup." + [Guid]::NewGuid())
+                [System.IO.File]::Replace($staged, $dest, $backup)
+                Remove-Item $backup
+            }
             else { [System.IO.File]::Move($staged, $dest) }
         } finally { if (Test-Path $staged) { Remove-Item $staged } }
     }
