@@ -84,6 +84,10 @@ func storeFlag(fs *flag.FlagSet) *string {
 var explicitRunner string
 
 func main() {
+	if len(os.Args) == 2 && (os.Args[1] == "version" || os.Args[1] == "--version") {
+		fmt.Println("tacit " + version)
+		return
+	}
 	configPath := settings.Path()
 	required := os.Getenv("TACIT_SETTINGS") != ""
 	for len(os.Args) > 2 && (os.Args[1] == "--config" || os.Args[1] == "--runner") {

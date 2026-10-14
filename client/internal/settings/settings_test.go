@@ -286,3 +286,31 @@ func TestRegularConfigPreservesSymlinkedParentPath(t *testing.T) {
 		t.Fatal("regular config path spelling changed")
 	}
 }
+
+func TestDreamRuntimeSetting(t *testing.T) {
+	clear(t, "TACIT_DREAM_MAX_RUNTIME")
+	file := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(file, []byte("dream_max_runtime: 2h\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Load(file, true); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("TACIT_DREAM_MAX_RUNTIME") != "2h" {
+		t.Fatal("runtime setting not applied")
+	}
+	for _, value := range []string{"-1m", "tomorrow"} {
+		os.WriteFile(file, []byte("dream_max_runtime: "+value+"\n"), 0600)
+		if err := Load(file, true); err == nil {
+			t.Fatal("invalid runtime accepted", value)
+		}
+	}
+	os.WriteFile(file, []byte("dream_max_runtime: 0\n"), 0600)
+	t.Setenv("TACIT_DREAM_MAX_RUNTIME", "3h")
+	if err := Load(file, true); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("TACIT_DREAM_MAX_RUNTIME") != "3h" {
+		t.Fatal("config replaced environment override")
+	}
+}

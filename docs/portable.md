@@ -110,7 +110,9 @@ Transcript mining and automatic owner-quote lookup currently read Claude Code an
 The defaults in this table apply when no runner override is supplied. An explicit runner uses its own model unless configured, except that Claude retains its legacy aliases. Model values are anything that runner's `--model` takes. A `--model` flag wins over the variable. Server variables (`TACIT_DATA`, `TACIT_BIND`, `TACIT_PORT`, `TACIT_PUBLIC_PORT`, ...) are listed in `server/lib/tacit_server/config.ex`.
 
 
-## Linux and macOS
+## Source builds
+
+### Linux and macOS
 
 Build the CLI with Go 1.27 and git on PATH. The included browser UI needs no GTK, WebKit or macOS SDK build step:
 
@@ -156,7 +158,9 @@ Real task registration and default-browser launching require Windows. Generating
 
 ## Redaction
 
-Agent writes and model digests need scrump's `text` profile. Published scrump v0.1.8 artifacts lack it. Build the pinned source tacit uses:
+Tacit release archives include scrump with its required `text` profile, built from pinned source [17cd5ab](https://github.com/avifenesh/scrump/commit/17cd5abc9ce19d4fdec51588a35ef73a644e36bb). The installers check a masking canary before installation. A compatible redactor is required for agent writes and model digests.
+
+If building Tacit from source, build the same scrump source:
 
 ```sh
 cargo install --locked --root ~/.local --git https://github.com/avifenesh/scrump \
@@ -173,7 +177,7 @@ From `client/`:
 go run ./tools/dist -out ../dist -version dev
 ```
 
-This builds Linux, macOS and Windows archives, each on amd64/arm64, plus `SHA256SUMS`. Windows gets ZIP; Linux/macOS get tar.gz. License, notice and bundled-font license texts are included. Git is a runtime dependency. Scrump and the model CLI are separate dependencies for features that use them. Archives contain the CLI/browser app, not native desktop-window builds.
+This builds Linux, macOS and Windows archives, each on amd64/arm64, plus `SHA256SUMS`. Windows gets ZIP; Linux/macOS get tar.gz. License, notice and bundled-font license texts are included. This development command builds the CLI only. Published releases also bundle native scrump and its license. Git and the model CLI remain external runtime dependencies. Archives contain the CLI/browser app, not native desktop-window builds.
 
 ## Validation
 
@@ -218,3 +222,17 @@ The job directory is removed after the process exits. Symlinks keep native files
 Each successful transcript window writes complete notes, commits them and pushes them before the next model call. Its cursor advances only after every window for that transcript succeeds. Completed chunk hashes let capped runs resume at the next window; changed chunks are processed again. A failed model call, write, commit or push leaves that transcript available for retry.
 
 At startup, the dreamer retries retained commits and validates untracked notes in its own host inbox before pushing them. It preserves existing note bytes and leaves quarantined `.md.rejected` files alone. `tacit dream --max-calls 0` runs this recovery without new model calls. Note publication is atomic, and named commits and their rollback preserve unrelated staged changes.
+
+## Published releases
+
+[Releases](https://github.com/agent-sh/tacit/releases) provide Linux, macOS and Windows builds on amd64 and arm64. Linux's bundled redactor is built against musl for a static executable. The browser app needs no native desktop SDK. Each archive includes `tacit`, `scrump`, their license files and the README. `SHA256SUMS` covers all six archives.
+
+Download `install.sh` or `install.ps1` from the release. Unix defaults to `~/.local/bin`; Windows defaults to `%LOCALAPPDATA%\tacit\bin`. Both accept a version and destination, check the downloaded archive and its reported version, and verify scrump's text profile before replacing files. Installers do not change model configuration, stores, credentials or PATH. `tacit --version` prints the installed release; source builds print `tacit dev`.
+
+A `v*` tag runs the release workflow. All six native package/install checks must pass before publication. Manual workflow runs validate the selected git ref with an explicit version label and upload artifacts; they do not publish or create a tag. The primary commit is retained in Go build metadata, and scrump is always checked out at the pinned source revision.
+
+### Runtime pauses
+
+`dream_max_runtime` in YAML or `TACIT_DREAM_MAX_RUNTIME` controls the extraction/persistence phase of a batch. Its existing default is `45m`. `tacit dream --max-runtime 1h` overrides it for a run; `0` disables the batch limit while per-attempt deadlines still apply. Preparation and pending-note recovery retain their separate bounds.
+
+Reaching the batch runtime or call limit is a pause with exit 0. Successful notes are already pushed and cursor/chunk progress is saved. The interrupted window remains pending. A prior genuine failure still makes that run exit 1; a model-attempt timeout on its own remains a failure. Accounting includes `pause_reason` (`runtime` or `call_limit`) and the number of `remaining_windows`.

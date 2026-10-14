@@ -53,7 +53,7 @@ func (s *Store) WithLock(ctx context.Context, fn func() error) error {
 		}
 		select {
 		case <-ctx.Done():
-			return errors.New("the store is busy (another tacit process holds it); try again in a moment")
+			return fmt.Errorf("the store is busy (another tacit process holds it); try again in a moment: %w", ctx.Err())
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
@@ -786,6 +786,9 @@ func gitEnv(ctx context.Context, dir string, env []string, args ...string) (stri
 		}
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			msg = "timeout: " + msg
+		}
+		if ctx.Err() != nil {
+			return out.String(), fmt.Errorf("git %s: %s: %w", args[len(args)-1], msg, ctx.Err())
 		}
 		return out.String(), fmt.Errorf("git %s: %s", args[len(args)-1], msg)
 	}
