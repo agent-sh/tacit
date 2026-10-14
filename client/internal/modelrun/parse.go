@@ -9,6 +9,8 @@ import (
 	"strings"
 )
 
+var ErrInvalidResult = errors.New("invalid model result")
+
 func str(m map[string]any, k string) string         { s, _ := m[k].(string); return s }
 func obj(m map[string]any, k string) map[string]any { v, _ := m[k].(map[string]any); return v }
 func num(m map[string]any, k string) float64        { n, _ := m[k].(float64); return n }
@@ -40,7 +42,7 @@ func parse(name string, data []byte) (Result, error) {
 			break
 		}
 		if err != nil {
-			return result, fmt.Errorf("invalid JSON stream: %w", err)
+			return result, fmt.Errorf("%w: invalid JSON stream: %v", ErrInvalidResult, err)
 		}
 		switch name {
 		case "claude":
@@ -88,7 +90,7 @@ func parse(name string, data []byte) (Result, error) {
 				u := obj(event, "usage")
 				result.InputTokens = int(num(u, "input_tokens"))
 			case "turn.failed", "error":
-				return result, errors.New("model reported a failed turn")
+				return result, fmt.Errorf("model reported a failed turn: %s %s", str(event, "message"), str(obj(event, "error"), "message"))
 			}
 		case "muse":
 			p := obj(event, "payload")
@@ -160,7 +162,7 @@ func parse(name string, data []byte) (Result, error) {
 		return result, pendingErr
 	}
 	if !done || strings.TrimSpace(result.Text) == "" {
-		return result, errors.New("missing completed model result")
+		return result, fmt.Errorf("%w: missing completed model result", ErrInvalidResult)
 	}
 	return result, nil
 }

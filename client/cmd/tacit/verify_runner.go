@@ -15,11 +15,11 @@ import (
 )
 
 func configuredVerifier(ctx context.Context, model, prompt, cwd string, budget float64) ([]verifyVerdict, string, float64, error) {
-	name, err := modelrun.Name("verify")
+	route, err := modelrun.FromContext(ctx, "verify", model)
 	if err != nil {
 		return nil, "", 0, err
 	}
-	if name == "claude" && claudeNativeVerifierAuth() {
+	if route.Runner == "claude" && claudeNativeVerifierAuth() {
 		return claudeVerifier(ctx, model, prompt, cwd, budget)
 	}
 	for _, root := range append([]string{cwd}, verifyRoots()...) {

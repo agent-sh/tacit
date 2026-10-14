@@ -1,0 +1,30 @@
+# Tacit's shipped model plan. Credentials stay in the selected CLI.
+runners:
+  curate: claude
+  verify: codex
+  dream: grok
+  judge: claude
+models:
+  curate: claude-opus-5-5
+  verify: openai.gpt-6-astra
+  dream: grok-4.7
+  judge: haiku
+efforts:
+  curate: medium
+  verify: high
+  dream: xhigh
+profiles:
+  verify: astra
+fallbacks:
+  curate:
+    runner: codex
+    model: openai.gpt-6-astra
+    effort: high
+    profile: astra
+  verify:
+    runner: claude
+    model: claude-opus-5-5
+    effort: medium
+  dream:
+    runner: claude
+    model: haiku

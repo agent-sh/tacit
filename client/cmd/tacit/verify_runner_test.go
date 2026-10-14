@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,5 +49,27 @@ func TestPortableVerifierRejectsMissingVerdicts(t *testing.T) {
 	_, _, _, err := portableVerifier(context.Background(), "model", "p", 4, func(context.Context, string) (modelrun.Result, error) { return modelrun.Result{Text: `{}`}, nil })
 	if err == nil {
 		t.Fatal("unstructured success accepted")
+	}
+}
+
+func TestVerifierFallsBackAcrossRunnersAndRecordsRoute(t *testing.T) {
+	primary := modelrun.Default("verify")
+	fallback := modelrun.Default("curate")
+	r := verifyRun{model: primary.Model, fallback: fallback.Model, route: &primary, fallbackRoute: &fallback, cwd: t.TempDir(), stateDir: t.TempDir()}
+	var routes []modelrun.Route
+	call := func(ctx context.Context, model, prompt, cwd string, budget float64) ([]verifyVerdict, string, float64, error) {
+		route, err := modelrun.FromContext(ctx, "verify", model)
+		if err != nil {
+			t.Fatal(err)
+		}
+		routes = append(routes, route)
+		if len(routes) == 1 {
+			return nil, "primary failed", 0.1, &capacityError{model, fmt.Errorf("HTTP 503")}
+		}
+		return []verifyVerdict{{ID: "one", Mark: "both", Evidence: "checked"}}, "fallback verdict", 0.2, nil
+	}
+	verdicts, label, cost, _, err := r.callBatch(context.Background(), call, "prompt")
+	if err != nil || len(verdicts) != 1 || len(routes) != 2 || routes[0] != primary || routes[1] != fallback || label != fallback.Label() || cost < 0.299 {
+		t.Fatalf("%+v %q %f %v routes=%+v", verdicts, label, cost, err, routes)
 	}
 }

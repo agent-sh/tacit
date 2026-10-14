@@ -83,7 +83,7 @@ These steps compute evidence. They do not choose what the owner wants or invent 
 
 `tacit verify` takes open findings and gives a model read-only access to the store, repo checkouts and configured source directories. File access is restricted; shell-like probes run through tacit's validated MCP probe. Secret paths are excluded, and model output is redacted before it is stored.
 
-A verdict records evidence and the model used. Clear observation changes can be applied; changes to protected rulings and unresolved intent go to the owner. The configured fallback runs for capacity failures such as throttling, not for lost model access or arbitrary errors. Explicitly configured missing source directories stop the model call. Claude auto-memory is included when it exists.
+A verdict records evidence and the model used. Clear observation changes can be applied; changes to protected rulings and unresolved intent go to the owner. The configured fallback runs once for capacity, startup, connection or attempt-deadline failures. Refusals, access denial and invalid output stop the job. Explicitly configured missing source directories stop the model call. Claude auto-memory is included when it exists.
 
 The owner can inspect the competing facts, sources, dates and git timeline, then keep, edit, retire or mark a conflict. The decision is recorded. That human decision is the backstop: the held-out verifier sample missed most of the retirements the owner made. The verifier's purpose is to settle evidenced cases before the owner sees the remainder.
 
@@ -104,4 +104,4 @@ For a real evaluation:
 
 ## Choosing the model runner
 
-Dreaming, splitting, judging and verification use independently configurable agent CLIs. Claude and its measured role models remain the defaults. Muse and agy also expose memory through MCP, alongside the existing integrations. Changing a runner does not change the prompts, owner-proof rules, redaction or review requirements. Quality on another model needs its own evaluation; the published measurements do not transfer automatically. See [configuration and validation limits](portable.md#model-runners).
+Dreaming, splitting, judging and verification use independently configurable agent CLIs. The shipped plan selects Opus 5.5 medium for curation, Astra high on Bedrock through Codex for verification, Grok 4.7 xhigh for dreaming, and Haiku for judging. Opus and Astra fall back to each other; the dreamer falls back to Haiku. Muse and agy also expose memory through MCP, alongside the existing integrations. Changing a runner does not change the prompts, owner-proof rules, redaction or review requirements. Quality on another model needs its own evaluation; the published measurements do not transfer automatically. See [configuration and validation limits](portable.md#model-runners).
