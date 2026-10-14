@@ -13,6 +13,7 @@ import (
 )
 
 func TestPortableVerifierUsesGuardedEvidence(t *testing.T) {
+	stubScrump(t)
 	root := t.TempDir()
 	project := filepath.Join(root, "projects", "demo")
 	if err := os.MkdirAll(project, 0700); err != nil {
@@ -71,5 +72,32 @@ func TestVerifierFallsBackAcrossRunnersAndRecordsRoute(t *testing.T) {
 	verdicts, label, cost, _, err := r.callBatch(context.Background(), call, "prompt")
 	if err != nil || len(verdicts) != 1 || len(routes) != 2 || routes[0] != primary || routes[1] != fallback || label != fallback.Label() || cost < 0.299 {
 		t.Fatalf("%+v %q %f %v routes=%+v", verdicts, label, cost, err, routes)
+	}
+}
+
+func TestNativeVerifierKeepsEligibleFailureTypes(t *testing.T) {
+	for _, status := range []string{"401", "502", "504"} {
+		t.Run(status, func(t *testing.T) {
+			dir := t.TempDir()
+			models := fakeClaudeFor(t, dir, status, "ok")
+			primary := modelrun.Route{Runner: "claude", Model: verifyModel}
+			fallback := modelrun.Route{Runner: "claude", Model: verifyFallbackModel}
+			r := verifyRun{model: verifyModel, fallback: verifyFallbackModel, route: &primary, fallbackRoute: &fallback, cwd: dir, stateDir: t.TempDir(), budget: 4}
+			trace := &modelrun.Trace{}
+			_, label, cost, _, err := r.callBatch(modelrun.WithTrace(context.Background(), trace), claudeVerifier, "check")
+			if err != nil || label != fallback.Label() || len(models()) != 2 || cost < .349 || len(trace.Calls) != 2 || !trace.Calls[1].Fallback || trace.Calls[0].CostUSD == nil {
+				t.Fatalf("native status %s failed fallback: %s %f %v %+v", status, label, cost, err, trace)
+			}
+		})
+	}
+}
+
+func TestNativeVerifierUnknownCostIsNotZero(t *testing.T) {
+	dir := t.TempDir()
+	fakeClaudeFor(t, dir, "unknowncost", "ok")
+	trace := &modelrun.Trace{}
+	_, _, cost, err := claudeVerifier(modelrun.WithTrace(context.Background(), trace), verifyModel, "check", dir, 4)
+	if err != nil || cost != 0 || len(trace.Calls) != 1 || trace.Calls[0].CostUSD != nil || trace.UnknownCostCalls != 1 {
+		t.Fatal(trace, cost, err)
 	}
 }

@@ -70,7 +70,7 @@ fallbacks:
   verify: null
 ```
 
-Fallbacks run for capacity errors, unavailable executables, expired login and connection failures, or an attempt deadline. Invalid model output, provider refusals, bad model IDs and access-denied responses stop the job. Model attempts reuse the verifier's existing 20-minute bound; `timeouts: {dream: 10m}` changes a role's bound. The caller's overall deadline still applies. Explicit empty `efforts` or `profiles` values clear the role default.
+Fallbacks run for provider capacity, temporary service failures, expired authentication, missing runners or an attempt deadline. Invalid model output, provider refusals, bad model IDs and access-denied responses stop the job. Model attempts reuse the verifier's existing 20-minute bound; `timeouts: {dream: 10m}` changes a role's bound. The caller's overall deadline still applies. Explicit empty `efforts` or `profiles` values clear the role default.
 
 `commands` overrides executable paths, including Windows paths with spaces. `runner_args` adds an argument array without a shell, for provider or profile options. These are trusted operator settings: avoid options that replace Tacit's tool restrictions, output format or prompt source. Command flags take precedence over the job env file too.
 
@@ -205,4 +205,4 @@ Model jobs use a private temporary directory and stdin or a private prompt file.
 
 Claude verification with API or third-party provider authentication retains its restricted Read/MCP verifier. Claude OAuth and other runners request evidence as JSON; Tacit executes each request through its guarded, redacted probes. No native tool access is needed for this path. Provider context windows still bound the amount of evidence a model can use.
 
-Dollar totals contain only costs the CLI reports. Tacit prints a notice when cost is unavailable. The verifier's dollar threshold cannot enforce unreported spend; its deadline and turn bound still apply. Use provider-side spending controls when a hard monetary limit is required. CLI flags can change between releases; unsupported flags or incomplete output fail the job without advancing its transcript cursor.
+Dollar totals contain only costs the CLI reports. Tacit prints a notice when cost is unavailable. Local accounting logs retain the actual primary and fallback routes, usage from failed calls, and `null` for unreported cost. Summaries show reported dollars and count calls with unknown cost. The verifier's dollar threshold cannot enforce unreported spend; its deadline and turn bound still apply. Use provider-side spending controls when a hard monetary limit is required. CLI flags can change between releases; unsupported flags or incomplete output fail the job without advancing its transcript cursor.

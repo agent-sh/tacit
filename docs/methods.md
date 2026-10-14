@@ -83,7 +83,7 @@ These steps compute evidence. They do not choose what the owner wants or invent 
 
 `tacit verify` takes open findings and gives a model read-only access to the store, repo checkouts and configured source directories. File access is restricted; shell-like probes run through tacit's validated MCP probe. Secret paths are excluded, and model output is redacted before it is stored.
 
-A verdict records evidence and the model used. Clear observation changes can be applied; changes to protected rulings and unresolved intent go to the owner. The configured fallback runs once for capacity, startup, connection or attempt-deadline failures. Refusals, access denial and invalid output stop the job. Explicitly configured missing source directories stop the model call. Claude auto-memory is included when it exists.
+A verdict records evidence and the model used. Clear observation changes can be applied; changes to protected rulings and unresolved intent go to the owner. The configured fallback runs once for provider capacity, temporary service failures, expired authentication, missing runners or an attempt deadline. Refusals, access denial and invalid output stop the job. Explicitly configured missing source directories stop the model call. Claude auto-memory is included when it exists.
 
 The owner can inspect the competing facts, sources, dates and git timeline, then keep, edit, retire or mark a conflict. The decision is recorded. That human decision is the backstop: the held-out verifier sample missed most of the retirements the owner made. The verifier's purpose is to settle evidenced cases before the owner sees the remainder.
 

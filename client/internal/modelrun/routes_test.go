@@ -50,7 +50,7 @@ func TestCrossRunnerFallbackIsBoundedAndReportsCost(t *testing.T) {
 		}
 		calls = append(calls, r)
 		if len(calls) == 1 {
-			return Result{CostUSD: 0.1, CostReported: true}, errors.New("HTTP 503 provider unavailable")
+			return Result{CostUSD: 0.1, CostReported: true}, ProviderFailure(503, "", "provider unavailable")
 		}
 		return Result{Text: "[]", CostUSD: 0.2, CostReported: true}, nil
 	}

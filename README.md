@@ -130,7 +130,7 @@ A fallback route has these fields:
 | `effort` | Optional reasoning effort |
 | `profile` | Optional Codex profile name |
 
-The generic verifier fallback is Claude `sonnet`; other roles have none. An explicit runner or model selection disables that generic fallback unless one is configured. An explicit `TACIT_<ROLE>_FALLBACK` route wins over the legacy `TACIT_<ROLE>_FALLBACK_MODEL` override. Fallbacks run once for capacity, startup, connection or attempt-deadline failures. They never start another fallback. Refusals, access denial and malformed output stop the job.
+The generic verifier fallback is Claude `sonnet`; other roles have none. An explicit runner or model selection disables that generic fallback unless one is configured. An explicit `TACIT_<ROLE>_FALLBACK` route wins over the legacy `TACIT_<ROLE>_FALLBACK_MODEL` override. Fallbacks run once for provider capacity, temporary service failures, expired authentication, a missing runner or an attempt deadline. Provider status and error codes decide whether to retry. They never start another fallback. Refusals, access denial and malformed output stop the job.
 
 For example, users can choose different runners without publishing their settings:
 
@@ -147,6 +147,20 @@ fallbacks:
     runner: claude
     model: haiku
 ```
+
+Check a setup without sending model requests:
+
+```sh
+tacit doctor
+tacit doctor --models
+tacit doctor --role dream --json
+```
+
+`doctor` checks Git 2.29+, scrump's text masking canary, effective role arguments, attempt timeouts and Codex profiles. It checks primary and fallback executables with `--version`. Missing runners are warnings for a memory-only installation. `--models` requires every configured runner; `--role` requires only that role and its fallback. `--json` prints check records. Exit 0 means the requested offline checks passed, 1 means a check failed, and 2 means invalid command options or settings. Provider credentials, model availability and live completions need a separate live test.
+
+Malformed extraction or incomplete judge answers leave the batch pending. Every conflict verdict is validated before any fact is retired. A fresh installation can curate observations without Claude or Codex owner history. Unbacked owner notes stay pending; owner rulings still require proof.
+
+Local job logs record each model attempt's role, route, fallback status, input tokens and reported cost. A `null` cost means the runner did not report it; zero means a reported zero. Summaries label incomplete totals as reported cost. Logs contain no prompts or model answers in these accounting records.
 
 `~` expands to the current home directory. Windows paths can use forward slashes or single-quoted YAML strings. Command paths containing a directory separator resolve against the config file; bare command names use `PATH`. A CLI `--model` option overrides the configured model. `tacit --runner TOOL` overrides all role runners for that invocation.
 
