@@ -68,10 +68,16 @@ func Path() string {
 // Load applies file values only where the environment has no override. Relative
 // paths are resolved against the configuration file, not a hook's working dir.
 func Load(path string, required bool) error {
-	b, err := os.ReadFile(path)
-	if os.IsNotExist(err) && !required {
-		return nil
+	source, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		if os.IsNotExist(err) && !required {
+			if _, linkErr := os.Lstat(path); os.IsNotExist(linkErr) {
+				return nil
+			}
+		}
+		return fmt.Errorf("read config %s: %w", path, err)
 	}
+	b, err := os.ReadFile(source)
 	if err != nil {
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
@@ -87,7 +93,7 @@ func Load(path string, required bool) error {
 	if err := d.Decode(&extra); err != io.EOF {
 		return fmt.Errorf("config must contain one YAML document")
 	}
-	base, err := filepath.Abs(filepath.Dir(path))
+	base, err := filepath.Abs(filepath.Dir(source))
 	if err != nil {
 		return err
 	}

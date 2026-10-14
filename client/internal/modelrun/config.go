@@ -19,18 +19,17 @@ type Route struct {
 	Profile string `json:"profile,omitempty" yaml:"profile"`
 }
 
+// Generic defaults keep new installs usable with one CLI. Operator-specific
+// runners, model versions, effort, profiles and fallbacks belong in settings.
 func Default(role string) Route {
+	model := ""
 	switch role {
-	case "curate":
-		return Route{Runner: "claude", Model: "claude-opus-5-5", Effort: "medium"}
-	case "verify":
-		return Route{Runner: "codex", Model: "openai.gpt-6-astra", Effort: "high", Profile: "astra"}
-	case "dream":
-		return Route{Runner: "grok", Model: "grok-4.7", Effort: "xhigh"}
-	case "judge":
-		return Route{Runner: "grok", Model: "grok-4.7", Effort: "xhigh"}
+	case "curate", "verify":
+		model = "opus"
+	case "dream", "judge":
+		model = "haiku"
 	}
-	return Route{Runner: "claude"}
+	return Route{Runner: "claude", Model: model}
 }
 
 func known(name string) bool {
@@ -68,7 +67,7 @@ func Command(name string) string {
 }
 
 // Explicit runner selection keeps the CLI's own default model, except for the
-// legacy Claude aliases. The shipped mixed-runner plan applies when omitted.
+// legacy Claude aliases. User configuration supplies a custom role plan.
 func Model(role, claudeDefault string) string {
 	if v := strings.TrimSpace(os.Getenv(roleEnv(role, "MODEL"))); v != "" {
 		return v
@@ -76,7 +75,7 @@ func Model(role, claudeDefault string) string {
 	if strings.HasSuffix(role, "_fallback") {
 		primary := strings.TrimSuffix(role, "_fallback")
 		if !runnerOverridden(primary) && primary == "verify" {
-			return Default("curate").Model
+			return claudeDefault
 		}
 		if name, _ := Name(primary); name == "claude" {
 			return claudeDefault
@@ -159,18 +158,10 @@ func Fallback(role string, primary Route) (*Route, error) {
 	if runnerOverridden(role) || primary.Model != Default(role).Model {
 		return nil, nil
 	}
-	var r Route
-	switch role {
-	case "curate":
-		r = Default("verify")
-	case "verify":
-		r = Default("curate")
-	case "dream":
-		r = Route{Runner: "claude", Model: "haiku"}
-	default:
-		return nil, nil
+	if role == "verify" {
+		return &Route{Runner: "claude", Model: "sonnet"}, nil
 	}
-	return &r, nil
+	return nil, nil
 }
 
 // Reuse the verifier's existing per-attempt bound for all model jobs. A separate
