@@ -21,6 +21,7 @@ type Result struct {
 	CostUSD      float64
 	CostReported bool
 	InputTokens  int
+	Route        Route
 	SessionID    string
 }
 
@@ -30,10 +31,11 @@ var costWarnings sync.Map
 // Prompts travel through stdin or a mode-0600 file, avoiding command-line
 // length limits and keeping fact text out of process listings.
 func Run(ctx context.Context, role, model, prompt, sessionID string) (Result, error) {
-	name, err := Name(role)
+	route, err := FromContext(ctx, role, model)
 	if err != nil {
 		return Result{}, err
 	}
+	name := route.Runner
 	executable, err := exec.LookPath(Command(name))
 	if err != nil {
 		return Result{}, fmt.Errorf("%s runner %s is unavailable: %w", role, name, err)
@@ -59,7 +61,11 @@ func Run(ctx context.Context, role, model, prompt, sessionID string) (Result, er
 	if err = os.WriteFile(promptFile, []byte(prompt), 0600); err != nil {
 		return Result{}, err
 	}
-	args, input, err := invocation(name, model, prompt, promptFile, sessionID, dir)
+	args, input, err := invocation(name, route.Model, prompt, promptFile, sessionID, dir)
+	if err != nil {
+		return Result{}, err
+	}
+	args, err = appendRouteArgs(args, route)
 	if err != nil {
 		return Result{}, err
 	}
@@ -70,6 +76,10 @@ func Run(ctx context.Context, role, model, prompt, sessionID string) (Result, er
 			return Result{}, err
 		}
 		defer cleanup()
+		args, err = appendRouteArgs(args, Route{Runner: name, Effort: route.Effort})
+		if err != nil {
+			return Result{}, err
+		}
 	}
 	cmd := exec.CommandContext(ctx, executable, args...)
 	cmd.Dir = dir
@@ -93,6 +103,7 @@ func Run(ctx context.Context, role, model, prompt, sessionID string) (Result, er
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	runErr := cmd.Run()
 	result, parseErr := parse(name, stdout.Bytes())
+	result.Route = route
 	if runErr != nil {
 		detailText := stderr.String()
 		if parseErr != nil {
@@ -101,6 +112,9 @@ func Run(ctx context.Context, role, model, prompt, sessionID string) (Result, er
 		detail := strings.TrimSpace(digest.Redact(detailText))
 		if len(detail) > 1200 {
 			detail = detail[:1200]
+		}
+		if ctx.Err() != nil {
+			runErr = ctx.Err()
 		}
 		return result, fmt.Errorf("%s runner: %w: %s", name, runErr, detail)
 	}
@@ -123,7 +137,7 @@ func invocation(name, model, prompt, promptFile, sid, dir string) ([]string, str
 		args = []string{"-p", "--safe-mode", "--no-session-persistence", "--output-format", "json", "--tools", "", "--max-turns", "1", "--session-id", sid}
 		input = prompt
 	case "codex":
-		args = []string{"exec", "--ignore-user-config", "--ignore-rules", "--disable", "shell_tool", "-c", "project_doc_max_bytes=0", "-c", `web_search="disabled"`, "-c", `approval_policy="never"`, "--sandbox", "read-only", "--skip-git-repo-check", "--ephemeral", "--json"}
+		args = []string{"--no-daemon", "exec", "--ignore-user-config", "--ignore-rules", "--disable", "shell_tool", "-c", "project_doc_max_bytes=0", "-c", `web_search="disabled"`, "-c", `approval_policy="never"`, "--sandbox", "read-only", "--skip-git-repo-check", "--ephemeral", "--json"}
 		input = prompt
 	case "grok":
 		// Grok treats an empty allowlist as its default toolset, and rejects

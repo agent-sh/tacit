@@ -16,7 +16,7 @@ Run a local store on your laptop, or share one across machines. Works with **Cla
 
 ## Quick start
 
-Install git 2.29+, Go 1.27 and [scrump with its text profile](docs/portable.md#redaction). Scrump is required for agent writes. Model jobs need one supported agent CLI and its provider configuration. Claude is the default, and can be replaced globally or per job; search, owner edits and review work without a model account.
+Install git 2.29+, Go 1.27 and [scrump with its text profile](docs/portable.md#redaction). Scrump is required for agent writes. Model jobs need one supported agent CLI and its provider configuration. The default plan uses Claude, Codex on Bedrock and Grok; select another plan globally or per job. Search, owner edits and review work without a model account.
 
 ```sh
 git clone https://github.com/agent-sh/tacit.git
@@ -86,13 +86,21 @@ Put optional settings in `~/.config/tacit/config.yaml` on Linux/macOS or `%APPDA
 store: ~/my-facts
 projects: ~/projects
 owner_names: [dana]
-runner: claude
 runners:
   dream: muse
   judge: agy
 ```
 
-Omit `runner` and `runners` to keep the original Claude setup: Haiku for dreaming and judging, Opus for curation and verification, Sonnet as the capacity fallback. A different runner uses its own configured model unless you set one in `models`.
+The shipped plan is [config/default.yaml](config/default.yaml):
+
+| Job | Runner and model | Effort | Fallback |
+|---|---|---|---|
+| Curator | Claude Opus 5.5 | medium | Astra on Bedrock through Codex, high |
+| Verifier | Astra on Bedrock through Codex | high | Claude Opus 5.5, medium |
+| Dreamer | Grok 4.7 through Grok CLI | xhigh | Claude Haiku |
+| Conflict judge | Claude Haiku | CLI default | none |
+
+The Astra route uses your Codex `astra` profile. [Set up that profile](docs/portable.md#model-runners), or select your own runners, models and fallbacks. An explicit runner selection uses that CLI's model default unless you supply one.
 
 Use your own paths and names. Relative paths resolve against the settings file. `tacit --config FILE` selects another file; environment variables override file values, and command flags take precedence.
 

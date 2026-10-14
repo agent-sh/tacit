@@ -3,7 +3,10 @@ package settings
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/agent-sh/tacit/client/internal/modelrun"
 )
 
 func clear(t *testing.T, key string) {
@@ -102,5 +105,103 @@ func TestRunnerConfiguration(t *testing.T) {
 	}
 	if err := Load(path, true); err == nil {
 		t.Fatal("unknown runner accepted")
+	}
+}
+
+func TestRoleOptionsAndCrossRunnerFallbackConfig(t *testing.T) {
+	for _, key := range []string{"TACIT_CURATE_EFFORT", "TACIT_VERIFY_PROFILE", "TACIT_DREAM_TIMEOUT", "TACIT_VERIFY_FALLBACK", "TACIT_DREAM_FALLBACK"} {
+		clear(t, key)
+	}
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	body := `efforts:
+  curate: medium
+profiles:
+  verify: astra
+timeouts:
+  dream: 10m
+fallbacks:
+  verify:
+    runner: claude
+    model: claude-opus-5-5
+    effort: medium
+  dream: null
+`
+	if err := os.WriteFile(p, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Load(p, true); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{"TACIT_CURATE_EFFORT": "medium", "TACIT_VERIFY_PROFILE": "astra", "TACIT_DREAM_TIMEOUT": "10m", "TACIT_DREAM_FALLBACK": "null"} {
+		if got := os.Getenv(key); got != want {
+			t.Fatalf("%s=%q", key, got)
+		}
+	}
+	if got := os.Getenv("TACIT_VERIFY_FALLBACK"); got != `{"runner":"claude","model":"claude-opus-5-5","effort":"medium"}` {
+		t.Fatal(got)
+	}
+	t.Setenv("TACIT_CURATE_EFFORT", "high")
+	if err := Load(p, true); err != nil || os.Getenv("TACIT_CURATE_EFFORT") != "high" {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"fallbacks: {dream: {runner: unknown}}", "timeouts: {dream: bad}", "efforts: {typo: high}"} {
+		if err := os.WriteFile(p, []byte(bad), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := Load(p, true); err == nil {
+			t.Fatalf("accepted %q", bad)
+		}
+	}
+}
+
+func TestRoleOptionsCanClearDefaults(t *testing.T) {
+	for _, key := range []string{"TACIT_VERIFY_PROFILE", "TACIT_CURATE_EFFORT"} {
+		clear(t, key)
+	}
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte("profiles: {verify: ''}\nefforts: {curate: ''}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Load(p, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"TACIT_VERIFY_PROFILE", "TACIT_CURATE_EFFORT"} {
+		if value, set := os.LookupEnv(key); !set || value != "" {
+			t.Fatalf("%s not explicitly cleared", key)
+		}
+	}
+}
+
+func TestLegacyFallbackEnvOverridesFileRoute(t *testing.T) {
+	clear(t, "TACIT_VERIFY_FALLBACK")
+	t.Setenv("TACIT_VERIFY_FALLBACK_MODEL", "operator-model")
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte("fallbacks: {verify: {runner: claude, model: file-model}}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Load(p, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, set := os.LookupEnv("TACIT_VERIFY_FALLBACK"); set {
+		t.Fatal("file overrides legacy environment")
+	}
+}
+
+func TestPublishedDefaultPlanMatchesBuiltInRoutes(t *testing.T) {
+	roles := []string{"curate", "verify", "dream", "judge"}
+	clear(t, "TACIT_RUNNER")
+	for _, role := range roles {
+		for _, suffix := range []string{"RUNNER", "MODEL", "EFFORT", "PROFILE", "FALLBACK", "FALLBACK_MODEL"} {
+			clear(t, "TACIT_"+strings.ToUpper(role)+"_"+suffix)
+		}
+	}
+	if err := Load("../../../config/default.yaml", true); err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range roles {
+		got, err := modelrun.Resolve(role, os.Getenv("TACIT_"+strings.ToUpper(role)+"_MODEL"))
+		if err != nil || got != modelrun.Default(role) {
+			t.Fatalf("%s: %+v %v", role, got, err)
+		}
 	}
 }

@@ -16,7 +16,7 @@ To use a server later, choose a separate store path and use `tacit clone` with y
 
 ## Configuration
 
-Defaults remain compatible with existing installations. The optional file lives at `~/.config/tacit/config.yaml` on Linux/macOS, or `%APPDATA%\tacit\config.yaml` on Windows:
+Existing explicit environment and file settings take precedence over the shipped model plan. The optional file lives at `~/.config/tacit/config.yaml` on Linux/macOS, or `%APPDATA%\tacit\config.yaml` on Windows:
 
 ```yaml
 store: ~/my-facts
@@ -26,13 +26,7 @@ keys: ~/.config/tacit
 local_overlay: ~/.local/share/tacit/local
 owner_names: [dana]
 verify_roots: []
-runner: claude
-models:
-  curate: opus
-  judge: haiku
-  dream: haiku
-  verify: opus
-  verify_fallback: sonnet
+# Omit model settings to use config/default.yaml's built-in plan.
 ```
 
 Use your own values. `~` is the current user's home. Relative paths resolve against the file's directory, so hook working directories cannot change the store. Windows paths can be single-quoted strings, such as `store: 'C:\Users\Dana\My Facts'`, or use forward slashes.
@@ -45,7 +39,21 @@ Precedence is file defaults, then `TACIT_*` environment overrides, then command 
 
 Claude is optional. Supported runner names are `claude`, `codex`, `hermes`, `grok`, `pi`, `muse` and `agy`. Install and log in to the CLI you select. Tacit uses that CLI's provider configuration; it holds no provider credentials.
 
-The defaults above preserve the original setup. For another runner, omit the Claude model aliases and let the CLI select its model, or set a model ID accepted by that CLI:
+The [shipped plan](../config/default.yaml) selects Opus 5.5 medium for curation, Astra high on Bedrock for verification, Grok 4.7 xhigh for dreaming, and Haiku for judging. Curation falls back to Astra; verification falls back to Opus; dreaming falls back to Haiku. Each fallback is attempted once. A fallback does not start its own fallback.
+
+The Astra route requires `~/.codex/astra.config.toml` (or the equivalent under your `CODEX_HOME`), with your own AWS credentials available to Codex:
+
+```toml
+model = "openai.gpt-6-astra"
+model_provider = "amazon-bedrock"
+model_reasoning_effort = "high"
+[model_providers.amazon-bedrock.aws]
+region = "us-west-2"
+```
+
+Tacit reads provider/model settings from that profile and supplies explicit Codex configuration overrides. `--ignore-user-config` also ignores named profiles, so passing only `--profile` would silently lose the Bedrock route. Auth remains in Codex's own store or provider environment. Embedded provider credentials and literal provider headers are refused; use `env_key` or `env_http_headers` references instead.
+
+For another runner, select it explicitly and let the CLI choose its model, or set a model ID it accepts:
 
 ```yaml
 runner: codex
@@ -58,7 +66,19 @@ runner_args:
   codex: ["--profile", "work"]
 ```
 
-`runners` accepts `dream`, `curate`, `judge` and `verify`. An omitted role inherits `runner`. `tacit --runner muse dream` overrides all role selections for that invocation. `models` accepts the same roles plus `verify_fallback`; those values go to the selected CLI's `--model`. For non-Claude runners an omitted fallback disables the capacity fallback; set a distinct fallback model when needed.
+`runners` accepts `dream`, `curate`, `judge` and `verify`. An omitted role inherits `runner`. `tacit --runner muse dream` overrides all role selections for that invocation. `models` accepts the same roles plus `verify_fallback`; those values go to the selected CLI's `--model`. An explicit runner selection disables the shipped fallback for that role. Configure your desired fallback separately. `models.verify_fallback` remains a legacy same-runner override.
+
+`efforts` sets per-role reasoning effort. `profiles` selects per-role Codex profiles. These override general runner arguments without editing the CLI's shared profile. `fallbacks` accepts a route with `runner`, `model`, `effort` and `profile`; `null` disables it:
+
+```yaml
+fallbacks:
+  dream:
+    runner: claude
+    model: haiku
+  verify: null
+```
+
+Fallbacks run for capacity errors, unavailable executables, expired login and connection failures, or an attempt deadline. Invalid model output, provider refusals, bad model IDs and access-denied responses stop the job. Model attempts reuse the verifier's existing 20-minute bound; `timeouts: {dream: 10m}` changes a role's bound. The caller's overall deadline still applies. Explicit empty `efforts` or `profiles` values clear the role default.
 
 `commands` overrides executable paths, including Windows paths with spaces. `runner_args` adds an argument array without a shell, for provider or profile options. These are trusted operator settings: avoid options that replace Tacit's tool restrictions, output format or prompt source. Command flags take precedence over the job env file too.
 
@@ -80,19 +100,22 @@ Transcript mining and automatic owner-quote lookup currently read Claude Code an
 | `TACIT_DERIVE_CONFIG` | `~/.config/tacit/derive.yaml` | `branches:` the branch to read per repo (`tacit derive --set-branch repo=branch`); `ordinary_names:` repo names that are also plain words, so a bare mention is not evidence a fact is about that repo |
 | `TACIT_WRITER` | | the key a push signs with |
 | `TACIT_OWNER_NAMES` | | names agents use for the owner in facts ("Dana 2026-09-05: ..."), comma separated; each counts like "owner" when the rulings audit reads a clause attributed without quote marks |
-| `TACIT_RUNNER` | `claude` | default model-job CLI |
+| `TACIT_RUNNER` | mixed role plan | select one CLI for all roles |
 | `TACIT_DREAM_RUNNER`, `TACIT_CURATE_RUNNER`, `TACIT_JUDGE_RUNNER`, `TACIT_VERIFY_RUNNER` | global runner | per-job CLI |
 | `TACIT_<TOOL>_COMMAND` | tool name | executable path, e.g. `TACIT_MUSE_COMMAND` |
 | `TACIT_<TOOL>_ARGS` | | JSON argv array, e.g. `["--profile","work"]` |
-| `TACIT_CURATE_MODEL` | `opus` | curator split |
+| `TACIT_CURATE_MODEL` | `claude-opus-5-5` | curator split |
 | `TACIT_JUDGE_MODEL` | `haiku` | contradiction judge |
-| `TACIT_DREAM_MODEL` | `haiku` | dreamer |
+| `TACIT_DREAM_MODEL` | `grok-4.7` | dreamer |
 | `TACIT_VERIFY_ROOTS` | | extra read-only source directories, separated like `PATH`; each must exist. Claude auto-memory is included when present |
-| `TACIT_VERIFY_MODEL` | `opus` | verifier |
-| `TACIT_VERIFY_FALLBACK_MODEL` | `sonnet` | verifier when the first model has no capacity (429, 503, 529) |
+| `TACIT_VERIFY_MODEL` | `openai.gpt-6-astra` | verifier |
+| `TACIT_VERIFY_FALLBACK_MODEL` | | legacy same-runner fallback model; empty disables it |
+| `TACIT_<ROLE>_EFFORT`, `TACIT_<ROLE>_PROFILE` | role plan | reasoning effort and Codex profile |
+| `TACIT_<ROLE>_FALLBACK` | role plan | JSON route or `null`; explicit route wins over the legacy model override |
+| `TACIT_<ROLE>_TIMEOUT` | `20m` | per-attempt deadline |
 | `TACIT_SERVER`, `TACIT_ENROLL_SSH` | | `scripts/mac-setup.sh`: server URL, and the ssh target that runs the enroll command |
 
-The model defaults in this table apply only to Claude. Other runners use their CLI default unless a model is explicitly configured. Model values are anything that runner's `--model` takes. A `--model` flag wins over the variable. Server variables (`TACIT_DATA`, `TACIT_BIND`, `TACIT_PORT`, `TACIT_PUBLIC_PORT`, ...) are listed in `server/lib/tacit_server/config.ex`.
+The defaults in this table apply when no runner override is supplied. An explicit runner uses its own model unless configured, except that Claude retains its legacy aliases. Model values are anything that runner's `--model` takes. A `--model` flag wins over the variable. Server variables (`TACIT_DATA`, `TACIT_BIND`, `TACIT_PORT`, `TACIT_PUBLIC_PORT`, ...) are listed in `server/lib/tacit_server/config.ex`.
 
 
 ## Linux and macOS
@@ -186,7 +209,7 @@ On Windows, `./tools/windows-jobs-smoke.ps1 -Binary ./tacit.exe` also registers 
 
 The adapters have subprocess tests for all seven protocols, large prompts, cancellation, malformed results and role selection. Installed Linux CLIs completed synthetic calls for Claude, Codex, Hermes, Muse and agy. Pi completed against a localhost synthetic provider; the configured local provider was unavailable. Grok's installed CLI reached a prompt with zero model tools, skills and agent instructions, but did not return a model response before the deadline. Its JSON parser is checked against the upstream result contract; successful provider execution remains unverified. These checks establish protocol compatibility, not equal extraction quality. The published quality measurements remain Claude measurements.
 
-Model jobs use a private temporary directory and stdin or a private prompt file. File, shell and MCP tools are disabled for extraction and judging. Muse uses an empty toolset; agy uses a dedicated agent with an empty external-tool list (internal task bookkeeping can remain). Codex retains only provider/model settings in a disposable profile. Hermes safe mode retains provider settings while excluding plugins and MCP. Grok uses a restricted agent profile, removes its remaining file tool and denies MCP calls. It can still start the operator's configured hooks and MCP servers; those startup integrations are trusted local configuration, and may affect job startup.
+Model jobs use a private temporary directory and stdin or a private prompt file. File, shell and MCP tools are disabled for extraction and judging. Muse uses an empty toolset; agy uses a dedicated agent with an empty external-tool list (internal task bookkeeping can remain). Codex reconstructs only provider/model settings as explicit configuration overrides while ignoring hooks and MCP settings. Hermes safe mode retains provider settings while excluding plugins and MCP. Grok uses a restricted agent profile, removes its remaining file tool and denies MCP calls. It can still start the operator's configured hooks and MCP servers; those startup integrations are trusted local configuration, and may affect job startup.
 
 Claude verification with API or third-party provider authentication retains its restricted Read/MCP verifier. Claude OAuth and other runners request evidence as JSON; Tacit executes each request through its guarded, redacted probes. No native tool access is needed for this path. Provider context windows still bound the amount of evidence a model can use.
 

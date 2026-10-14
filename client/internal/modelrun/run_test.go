@@ -109,7 +109,7 @@ func TestDefaultsAndRoleOverrides(t *testing.T) {
 	t.Setenv("TACIT_RUNNER", "")
 	t.Setenv("TACIT_DREAM_RUNNER", "")
 	t.Setenv("TACIT_DREAM_MODEL", "")
-	if name, _ := Name("dream"); name != "claude" || Model("dream", "haiku") != "haiku" {
+	if name, _ := Name("dream"); name != "grok" || Model("dream", "haiku") != "grok-4.7" {
 		t.Fatal("default changed")
 	}
 	t.Setenv("TACIT_RUNNER", "muse")
@@ -177,4 +177,39 @@ func TestInstalledRunner(t *testing.T) {
 		t.Fatalf("unexpected reply: %q", res.Text)
 	}
 	t.Logf("%s: completed; input_tokens=%d", name, res.InputTokens)
+}
+
+// Opt-in check of the shipped route, including profile and effort. Only a
+// synthetic prompt is sent; no store or project data is supplied.
+func TestInstalledDefaultRoute(t *testing.T) {
+	role := os.Getenv("TACIT_SMOKE_ROUTE")
+	if role == "" {
+		t.Skip("set TACIT_SMOKE_ROUTE for a native default-route check")
+	}
+	if role != "curate" && role != "verify" && role != "dream" {
+		t.Fatal("unknown smoke role")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	r := Default(role)
+	var id [16]byte
+	_, _ = rand.Read(id[:])
+	id[6] = (id[6] & 15) | 64
+	id[8] = (id[8] & 63) | 128
+	sid := fmt.Sprintf("%x-%x-%x-%x-%x", id[:4], id[4:6], id[6:8], id[8:10], id[10:])
+	prompt := "Return exactly [] as your final response. Do not call any tools or read any files."
+	var res Result
+	var err error
+	if os.Getenv("TACIT_SMOKE_FALLBACK") == "1" {
+		res, err = RunWithFallback(ctx, role, r.Model, prompt, sid)
+	} else {
+		res, err = Run(WithRoute(ctx, r), role, r.Model, prompt, sid)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(res.Text) != "[]" {
+		t.Fatalf("unexpected reply %q", res.Text)
+	}
+	t.Logf("completed: %s; input_tokens=%d", res.Route.Label(), res.InputTokens)
 }

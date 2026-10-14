@@ -8,7 +8,7 @@ Version 1, 2026-10-07. This file is the contract between the Go client (`client/
 
 Local writes use the same file format, writer names and transaction locks. They commit only named files, leave unrelated staged work alone and run the server's obvious-token/private-key shape check before committing. Agent notes still pass through scrump first. There is no remote, enrollment requirement or server authorization boundary. Sync/fetch/integration and remote-ahead checks do no network work. Follow returns the non-restarting configuration status (78; translated to 0 under launchd) with an explanation. Server clones retain their existing behavior; network failure never selects local mode.
 
-The optional client settings file is `~/.config/tacit/config.yaml` on Unix and the user's config directory plus `tacit/config.yaml` on Windows. `TACIT_SETTINGS` or the global `--config FILE` selects another file. Fields are `store`, `projects`, `index`, `keys`, `local_overlay`, `owner_names`, `verify_roots`, and `models` (`curate`, `judge`, `dream`, `verify`, `verify_fallback`). Relative paths resolve against the file. Environment values override file values; command flags override defaults. Unknown fields or a missing explicitly selected file fail before command work. Hook configuration failures print nothing and exit 0.
+The optional client settings file is `~/.config/tacit/config.yaml` on Unix and the user's config directory plus `tacit/config.yaml` on Windows. `TACIT_SETTINGS` or the global `--config FILE` selects another file. Fields are `store`, `projects`, `index`, `keys`, `local_overlay`, `owner_names`, `verify_roots`, `runner`, `runners`, `commands`, `runner_args`, `efforts`, `profiles`, `timeouts`, `fallbacks`, and `models` (`curate`, `judge`, `dream`, `verify`, `verify_fallback`). Relative paths resolve against the file. Environment values override file values; command flags override defaults. Unknown fields or a missing explicitly selected file fail before command work. Hook configuration failures print nothing and exit 0.
 
 `tacit install curate [--env-file FILE]` installs the daily curation/verification sequence. `tacit maintain [--env-file FILE]` runs it manually. Linux uses a user timer, macOS a launchd agent, Windows a current-user Task Scheduler definition. Windows dreaming/following also use Task Scheduler. Installers write files and print start commands without registering or starting jobs. CLI/browser app builds support Linux, macOS and Windows; native-window builds remain optional on Linux/macOS.
 
@@ -336,15 +336,15 @@ Every commit subject starts `owner: ` (`owner: edit <name> (<fields>)`, `owner: 
 
 ## Models
 
-The client calls models through the configured runner: Claude, Codex, Hermes, Grok, pi, Muse or agy. `runner` selects the default CLI and `runners` overrides each role. Claude remains the default, with the aliases below; other runners use their own configured model when no model override is set. See [runner configuration and boundaries](docs/portable.md#model-runners). Each step has an environment override, which a job takes from its env file (`EnvironmentFile`, `--env-file`):
+The client calls models through the configured runner: Claude, Codex, Hermes, Grok, pi, Muse or agy. `runner` selects the default CLI and `runners` overrides each role. The shipped defaults are Opus 5.5 medium for curation, Astra high on Bedrock through Codex for verification, Grok 4.7 xhigh for dreaming, and Haiku for judging. Explicit runner selections can use the CLI model default. See [runner configuration and boundaries](docs/portable.md#model-runners). Each step has an environment override, which a job takes from its env file (`EnvironmentFile`, `--env-file`):
 
 | Step | Default | Override |
 |---|---|---|
-| curator split and rulings pass (`tacit curate`) | `opus` | `TACIT_CURATE_MODEL` |
+| curator split and rulings pass (`tacit curate`) | Claude `claude-opus-5-5`, medium | `TACIT_CURATE_MODEL` |
 | curator contradiction judge | `haiku` | `TACIT_JUDGE_MODEL` |
-| dreamer (`tacit dream`) | `haiku` | `TACIT_DREAM_MODEL` |
-| verifier (`tacit verify`) | `opus` | `TACIT_VERIFY_MODEL` |
-| verifier fallback on a capacity refusal | `sonnet` | `TACIT_VERIFY_FALLBACK_MODEL` |
+| dreamer (`tacit dream`) | Grok `grok-4.7`, xhigh | `TACIT_DREAM_MODEL` |
+| verifier (`tacit verify`) | Codex/Bedrock `openai.gpt-6-astra`, high | `TACIT_VERIFY_MODEL` |
+| verifier fallback | Claude `claude-opus-5-5`, medium | `TACIT_VERIFY_FALLBACK` |
 
 A `--model` flag, where a command has one, wins over the variable. On a provider that needs full model ids (a Bedrock inference profile, for example), set the variables to those ids.
 
@@ -454,3 +454,5 @@ Import never writes outside `inbox/`.
 ## Situation match (push mode)
 
 A fact matches a situation when any of its `applies_to` lists matches: a path glob matches the file being read or edited (repo-relative), a `symbols` entry equals a symbol in the edit, a `repos` entry equals the current repo, a `hosts` entry equals the current host, or a `commands` entry is a prefix of the command about to run. Facts with an empty `applies_to` are pull-only.
+
+Role options: `efforts`, `profiles`, `timeouts` and `fallbacks` extend client configuration. The shipped routes are in [config/default.yaml](config/default.yaml). Cross-runner fallback is attempted once, without chaining. The curator falls back to the verifier route; the verifier falls back to the curator route; the dreamer falls back to Claude Haiku.

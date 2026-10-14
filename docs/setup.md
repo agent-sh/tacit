@@ -2,7 +2,7 @@
 
 This guide describes a shared server installation. For a local store and native Windows setup, see [Local and portable tacit](portable.md).
 
-Use your own server, tailnet, keys, transcript sources and model account. The defaults are local paths and Claude CLI aliases. No developer server address, owner name or model credential is required.
+Use your own server, tailnet, keys, transcript sources and model account. The defaults are local paths and the [configurable model plan](portable.md#model-runners). No developer server address, owner name or model credential is required.
 
 The [README quick start](../README.md#quick-start) builds and installs tacit. This guide explains what each machine needs and how to check the installation. Commands below run from the source checkout unless noted otherwise.
 
@@ -11,7 +11,7 @@ The [README quick start](../README.md#quick-start) builds and installs tacit. Th
 | Machine | Needs | Does |
 |---|---|---|
 | Server | Linux, Docker, git, Tailscale; SSH access for deployment | Owns the private bare store, validates keys and pushes, serves git and the change feed. No model account. |
-| Writer | Client binary, git, scrump, tailnet membership, one enrolled key per harness | Receives facts and adds notes to that harness's inbox. Claude CLI is needed only if running the dreamer. |
+| Writer | Client binary, git, scrump, tailnet membership, one enrolled key per harness | Receives facts and adds notes to that harness's inbox. Model CLIs are needed only when running model jobs. |
 | Curator | Writer prerequisites, an enrolled curator key, a configured model runner and provider login, repo checkouts and owner sources | Curates notes, computes git facts, verifies findings and hosts the owner's editable app. |
 | Off-tailnet reader | Client binary, git, scrump, enrolled reader key, server's optional Funnel URL | Fetches with the reader key. Agent notes stay in a local overlay. No pushes or dreamer. |
 
@@ -88,7 +88,7 @@ touch ~/.config/tacit/env
 chmod 600 ~/.config/tacit/env
 ```
 
-Put the model variables and any custom path variables there as `KEY=VALUE` lines. The defaults are `opus` for curation and verification, `haiku` for the dreamer and contradiction judge, and `sonnet` for verification's capacity fallback. If your provider needs full model IDs, replace those aliases with IDs that provider supports. Use your own provider login or credentials. Claude is the default runner. Set `TACIT_RUNNER`, or select each role in [the YAML configuration](portable.md#model-runners), to use another supported CLI. Omit Claude model aliases when using another runner unless it accepts those IDs.
+Put any model and path overrides there as `KEY=VALUE` lines. The shipped plan uses Claude Opus 5.5 medium for curation, Astra high through Codex's Bedrock `astra` profile for verification, Grok 4.7 xhigh for dreaming, and Haiku for judging. Opus and Astra fall back to each other; Grok falls back to Haiku. Use your own provider credentials and [configure the roles and fallbacks](portable.md#model-runners).
 
 Systemd user services do not inherit your shell's exports. The curator job also needs a `PATH` that finds the selected runner, `scrump` and `git`. Use absolute directories in the file; `~` and `$HOME` are not shell-expanded by systemd. To append the current shell's already expanded path:
 

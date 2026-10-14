@@ -30,12 +30,7 @@ import (
 // DefaultModel is the extraction model: $TACIT_DREAM_MODEL (a provider's
 // full model id, for example), else the Claude CLI alias haiku. --model on
 // tacit dream wins.
-var DefaultModel = func() string {
-	if v := strings.TrimSpace(os.Getenv("TACIT_DREAM_MODEL")); v != "" {
-		return v
-	}
-	return "haiku"
-}()
+var DefaultModel = modelrun.Model("dream", "haiku")
 
 const (
 	maxWindowChars = 60_000  // one model call per window
@@ -115,7 +110,7 @@ type Runner func(ctx context.Context, model, prompt string) (result string, cost
 func RunCLI(ctx context.Context, model, prompt string) (string, float64, int, error) {
 	sid := newUUID()
 	_ = Exclude(sid)
-	res, err := modelrun.Run(ctx, "dream", model, prompt, sid)
+	res, err := modelrun.RunWithFallback(ctx, "dream", model, prompt, sid)
 	if res.SessionID != "" {
 		_ = Exclude(res.SessionID)
 	}
