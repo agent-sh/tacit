@@ -36,10 +36,18 @@ def main():
     if a.repeats < 1:
         ap.error('--repeats must be positive')
     a.out.mkdir(parents=True, exist_ok=True)
+    overlay = a.out.resolve()/'empty-overlay'
+    if overlay.exists() and (not overlay.is_dir() or any(overlay.iterdir())):
+        ap.error('evaluation overlay must be absent or empty')
+    dirty = subprocess.check_output(
+        ['git', '-C', str(a.store), 'status', '--porcelain', '--untracked-files=all'], text=True)
+    if dirty.strip():
+        ap.error('evaluation store must be a clean pinned checkout')
     cases = json.loads(a.cases.read_text())
     env = dict(os.environ, TACIT_STORE=str(a.store.resolve()),
                TACIT_INDEX=str(a.out.resolve()/'index'),
-               TACIT_LOCAL=str(a.out.resolve()/'empty-overlay'))
+               TACIT_LOCAL=str(overlay))
+    env.pop('TACIT_MODEL_JOB', None)
     head = subprocess.check_output(['git', '-C', str(a.store), 'rev-parse', 'HEAD'], text=True).strip()
     # Prebuild the index outside the timed cells. Explicit search is not scored.
     run(a.binary, ['search', '--json', 'index-warmup'], env)
