@@ -69,6 +69,26 @@ Harness-injected turns do not trigger prompt delivery. A single searchable term 
 
 The score floors and caps came from the measured store and prompt samples, not a universal relevance guarantee. Larger blocks cost more without helping in those runs. Dense retrieval and fusion did not beat lexical retrieval there, so the client has no embeddings. The Python offline rankers in `eval/delivery/` explore lexical IDF, dense ranking and fusion; they are not the shipped Go hook implementation.
 
+## Weighted relationships and locations
+
+Prompt retrieval also has a corpus-weighted evidence route. Each term receives
+a smoothed inverse-document-frequency score. Observed adjacent summary pairs
+are corrected for both marginal frequencies and discounted by one supporting
+document. A fact needs majority known-query information, supported pair
+evidence, and a binding to its ID or recorded applicability. This can recover a
+fact below the BM25 floor; it is not a new authority level.
+
+When neither cwd nor the prompt identifies a repository, evidence can route
+directly to a relevant curated project or current-host fact despite historical
+capture-repo metadata. It cannot override a known or explicitly named project.
+Diagnostics via `tacit search --prompt --json` show per-word scores, relations,
+fact paths, recorded applicability and uniquely resolved one-hop fact links.
+Locations are stored references, not proof that a filesystem path still exists.
+No recursive graph expansion or model call is used.
+
+[Relationship measurements](../eval/RELATIONSHIPS.md) document the independent
+evaluation, ablations, precision limits and cold-index cost.
+
 ## Facts from git
 
 `tacit derive` computes hot spots and module maps from a repo's configured branch or remote default branch. Hot spots count file changes and co-change partners over a window of code commits. Module maps summarize the tree. Each output records the commit it read. The same input commit produces the same bytes.
