@@ -197,6 +197,40 @@ class AliasTests(unittest.TestCase):
                 else: alias(source,dest,kind)
                 self.run_guard(command(CPU/'qwen/jev_devcal.py','--input',source,'--output',out,'--allow-egress'),r)
 
+    def test_retrieve_preserves_readonly_tree_directories(self):
+        from common import preflight_files
+        for linked in (False, True):
+            with self.subTest(linked=linked), tempfile.TemporaryDirectory(dir=Path.home()/'.cache') as tmp:
+                r = Path(tmp)
+                store = r/'store'; store.mkdir()
+                if linked:
+                    out = r/'external'; out.mkdir()
+                    (store/'linked-subtree').symlink_to(out, target_is_directory=True)
+                    with self.assertRaisesRegex(ValueError, 'must be different files'):
+                        preflight_files([store], [out/'new-file'])
+                else:
+                    out = store/'new-output'
+                cases = r/'cases.jsonl'; cases.write_text('[]')
+                noop = r/'noop'; noop.write_text('#!/bin/sh\nexit 0\n'); noop.chmod(0o700)
+                subprocess.run(['git', 'init', '-q', str(store)], check=True)
+                subprocess.run(['git', '-C', str(store), 'add', '.'], check=True)
+                subprocess.run(['git', '-C', str(store), '-c', 'user.name=Synthetic', '-c',
+                                'user.email=synthetic@example.invalid', 'commit', '-qm',
+                                'synthetic fixture', '--allow-empty'], check=True)
+                head = subprocess.check_output(['git', '-C', str(store), 'rev-parse', 'HEAD'], text=True).strip()
+                def snapshot():
+                    return {str(p.relative_to(r)): ('link', os.readlink(p)) if p.is_symlink()
+                            else ('dir',) if p.is_dir() else ('file', p.read_bytes())
+                            for p in r.rglob('*')}
+                before = snapshot()
+                result = subprocess.run(command(SELECTION/'harness.py', 'retrieve', '--cases', cases,
+                                        '--store', store, '--store-head', head, '--baseline', noop,
+                                        '--exporter', noop, '--out', out, '--audit-dir', r),
+                                        capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn('must be different files', result.stderr)
+                self.assertEqual(before, snapshot())
+
     def test_valid_empty_selection_and_verification(self):
         with tempfile.TemporaryDirectory(dir=Path.home()/'.cache') as tmp:
             r=Path(tmp);source=r/'pools';source.write_text('[]')

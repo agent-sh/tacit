@@ -186,7 +186,7 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def private_output(path, audit_dir=None):
+def private_output(path, audit_dir=None, *, create=True):
     """Resolve symlinks and keep raw artifacts inside an external audit root."""
     path = Path(path).expanduser().resolve()
     root = Path(audit_dir or os.environ.get('TACIT_SELECTION_AUDIT_DIR') or
@@ -196,7 +196,8 @@ def private_output(path, audit_dir=None):
         raise ValueError('audit outputs must stay outside the repository')
     if not path.is_relative_to(root):
         raise ValueError('raw artifacts must stay under '+str(root))
-    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if create:
+        path.mkdir(parents=True, exist_ok=True, mode=0o700)
     return path
 
 
@@ -219,11 +220,12 @@ def retrieval_env(out, store):
 
 
 def retrieve(args):
-    out = private_output(args.out, getattr(args, 'audit_dir', None))
+    out = private_output(args.out, getattr(args, 'audit_dir', None), create=False)
     preflight_files([args.cases, Path(args.store).expanduser(), args.baseline, args.exporter, __file__],
                     [out/name for name in ('offline-settings.yaml', 'manifest.json', 'pools.jsonl',
                      'scorer-input.jsonl', 'request.json', 'response.json', 'index',
                      'isolated-home', 'empty-overlay')])
+    out.mkdir(parents=True, exist_ok=True, mode=0o700)
     env = retrieval_env(out, args.store)
     overlay = out/'empty-overlay'
     if overlay.exists() and any(overlay.iterdir()):
