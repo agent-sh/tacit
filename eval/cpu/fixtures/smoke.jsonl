@@ -1,0 +1,2 @@
+{"id":"synthetic-action","query":"What must I do before editing the Atlas repository?","candidates":[{"id":"useful","text":"Read the repository instructions before changing files."},{"id":"topical","text":"Atlas contains software source code."},{"id":"redundant","text":"The task is to edit Atlas."}]}
+{"id":"empty","query":"No candidates","candidates":[]}

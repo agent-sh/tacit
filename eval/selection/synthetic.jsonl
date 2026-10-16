@@ -1,0 +1,5 @@
+{"id":"syn-follow","episode_id":"syn-a","split":"dev","prompt":"Fix that","cwd":"/","history":[{"role":"user","content":"Inspect quartz7 socket timeout"}]}
+{"id":"syn-switch","episode_id":"syn-b","split":"dev","prompt":"Inspect amber8 cache invalidation","cwd":"/","history":[{"role":"user","content":"Inspect quartz7 socket timeout"}]}
+{"id":"syn-null","episode_id":"syn-c","split":"dev","prompt":"thanks","cwd":"/","history":[{"role":"user","content":"Inspect quartz7 socket timeout"}]}
+{"id":"syn-id","episode_id":"syn-d","split":"dev","prompt":"CACHE_KEY_7","cwd":"/","history":[{"role":"assistant","content":"SECRET FUTURE"}]}
+{"id":"syn-leak","episode_id":"syn-e","split":"dev","prompt":"Fix that","cwd":"/","history":[{"role":"user","content":"Inspect quartz7 socket timeout"}],"expected":["SECRET_LABEL"],"rejected":["SECRET_REJECTED"],"provenance":{"answer":"SECRET_FUTURE"}}
