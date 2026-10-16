@@ -199,12 +199,14 @@ class AliasTests(unittest.TestCase):
 
     def test_retrieve_preserves_readonly_tree_directories(self):
         from common import preflight_files
-        for linked in (False, True):
+        for linked in (False, True, 'dangling'):
             with self.subTest(linked=linked), tempfile.TemporaryDirectory(dir=Path.home()/'.cache') as tmp:
                 r = Path(tmp)
                 store = r/'store'; store.mkdir()
                 if linked:
-                    out = r/'external'; out.mkdir()
+                    out = r/'external'
+                    if linked != 'dangling':
+                        out.mkdir()
                     (store/'linked-subtree').symlink_to(out, target_is_directory=True)
                     with self.assertRaisesRegex(ValueError, 'must be different files'):
                         preflight_files([store], [out/'new-file'])
@@ -230,6 +232,16 @@ class AliasTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertIn('must be different files', result.stderr)
                 self.assertEqual(before, snapshot())
+
+    def test_output_tree_directory_links_are_checked(self):
+        from common import preflight_files
+        with tempfile.TemporaryDirectory(dir=Path.home()/'.cache') as tmp:
+            r = Path(tmp)
+            source = r/'input'; source.mkdir()
+            out = r/'output'; out.mkdir()
+            (out/'link').symlink_to(source, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'must be different files'):
+                preflight_files([source], [out])
 
     def test_valid_empty_selection_and_verification(self):
         with tempfile.TemporaryDirectory(dir=Path.home()/'.cache') as tmp:

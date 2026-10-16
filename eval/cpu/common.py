@@ -45,6 +45,11 @@ def preflight_files(inputs, outputs):
             seen.add(identity)
             if protected is not None:
                 protected.add(Path(directory).resolve())
+                # A dangling symlink may become a directory on the first write.
+                # Its type is unknowable until then, so reserve its subtree.
+                protected.update((Path(directory) / name).resolve() for name in files
+                                 if (Path(directory) / name).is_symlink()
+                                 and not (Path(directory) / name).exists())
             yield from ((Path(directory) / name).resolve() for name in files)
     protected = set(trees)
     for tree in trees:
@@ -54,9 +59,11 @@ def preflight_files(inputs, outputs):
     # A generated cache/index directory may already contain aliased files.
     for tree in list(destinations):
         if tree.is_dir():
-            if any(source.is_relative_to(tree) for source in sources):
+            output_trees = set()
+            destinations.extend(tree_files(tree, output_trees))
+            if any(source.is_relative_to(directory) for directory in output_trees for source in sources):
                 raise ValueError('input and output must be different files: ' + str(tree))
-            destinations.extend(tree_files(tree))
+            destinations.extend(output_trees - {tree})
     def same(left, right):
         return left == right or (left.exists() and right.exists() and os.path.samefile(left, right))
     for i, dest in enumerate(destinations):
