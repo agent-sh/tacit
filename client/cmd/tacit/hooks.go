@@ -252,14 +252,14 @@ func promptHits(ctx context.Context, ix *search.Index, sit search.Situation, p s
 	return promptSelection(hits, dhits, seen, floor), nil
 }
 
-// promptSelection takes the few best curated matches above the floor, drops
-// what this session already saw, and then adds the best derived fact if it
-// clears its own floor and was not seen. No backfill: a repeated request
-// must not pull weaker facts into the context.
+// promptSelection takes curated matches above the BM25 floor or with supported
+// weighted relationship evidence. It drops what this session already saw, then
+// adds the best derived fact if it clears its separate floor. No backfill:
+// repeated requests must not pull weaker facts into the context.
 func promptSelection(hits, derived []search.Hit, seen map[string]bool, floor float64) []search.Hit {
 	var strong []search.Hit
 	for _, h := range hits {
-		if h.Score >= floor && len(strong) < promptLimit && !isDerived(h) {
+		if (h.Score >= floor || (h.Evidence != nil && h.Evidence.Supported)) && len(strong) < promptLimit && !isDerived(h) {
 			strong = append(strong, h)
 		}
 	}
@@ -376,6 +376,7 @@ func runSearch(args []string) int {
 	limit := fs.Int("limit", 10, "max facts")
 	inbox := fs.Bool("inbox", false, "include unreviewed inbox facts")
 	asJSON := fs.Bool("json", false, "JSON output")
+	explainPrompt := fs.Bool("prompt", false, "diagnose prompt-hook selection with evidence; no session state, ignores --limit and --inbox")
 	fs.Parse(args)
 	s, err := store.Default()
 	if err != nil || !s.Exists() {
@@ -384,9 +385,13 @@ func runSearch(args []string) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	var repoAliases []string
 	if *repo == "" {
 		cwd, _ := os.Getwd()
 		*repo = store.RepoName(ctx, cwd)
+		if *explainPrompt {
+			repoAliases = hookRepoAliases(ctx, cwd)
+		}
 	}
 	ix, err := openIndex(ctx, s)
 	if err != nil {
@@ -395,7 +400,15 @@ func runSearch(args []string) int {
 	}
 	defer ix.Close()
 	// A person or script asking for facts gets the derived ones too.
-	hits, err := ix.Query(ctx, search.Situation{Repo: *repo, Host: *host, Query: strings.Join(fs.Args(), " "), Derived: true}, *limit, *inbox)
+	var hits []search.Hit
+	sit := search.Situation{Repo: *repo, RepoAliases: repoAliases, Host: *host, Query: strings.Join(fs.Args(), " "), Derived: true}
+	if *explainPrompt {
+		if promptWorthy(sit.Query) {
+			hits, err = promptHits(ctx, ix, sit, sit.Query, nil)
+		}
+	} else {
+		hits, err = ix.Query(ctx, sit, *limit, *inbox)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "search:", err)
 		return 2

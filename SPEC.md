@@ -394,6 +394,28 @@ Two hook points, both reading the local index of the local clone, both failing o
 
 This machine's local notes (Local overlay) are delivered with the curated facts and marked `(this machine)`; SessionStart takes at most 3 of them (the prompt hook's count). Inbox facts are not delivered by hooks (unreviewed); `tacit search --inbox` and the MCP tool can include them. `tacit search` and the MCP `tacit_search` also search the repo's `derived/<repo>` scope. A derived line in a hook block is marked `(computed from git)`. Measured basis: eval/VALUE.md.
 
+### Weighted relationship evidence
+
+The curated prompt query also admits directly supported relationships, before
+candidate limits. Index schema 6 records active curated summary terms and
+ordered adjacent pairs, excluding inbox, local overlays, retired/superseded
+facts, derived scopes and result references. Term weight is
+`log((N+1)/(df+1))`; unknown terms have zero weight. A qualifying fact covers a
+strict majority of known-query weight, shares a summary pair with
+`(pair_df-1)*N/(df(a)*df(b)) > 1`, and binds at least one supported pair term
+to its fact ID or stored path, command or symbol. Such a fact may clear prompt
+selection without clearing its ordinary BM25 floor; BM25 still orders results.
+
+Only when cwd and the prompt both lack a repository can this evidence route
+into a curated project scope or bypass capture-repo applicability. Known or
+explicitly named repos and machine scope restrictions remain enforced.
+SessionStart, derived isolation, explicit search and no-backfill behavior are
+unchanged. `tacit search --prompt --json` exposes the hook selection without
+session-state writes, with word/relationship evidence and stored location
+pointers. Unique active curated `[[links]]` add one-hop pointers, not recursive
+retrieval. Evidence and location metadata never grant action permissions.
+See eval/RELATIONSHIPS.md for measurements and known limits.
+
 ## Change feed
 
 `GET /events` streams the journal as server-sent events. Over the tailnet reading needs no key; over the public path it needs a key token (Public path). The stream is "notify, don't carry": an event says the head moved; the content is fetched with git.
