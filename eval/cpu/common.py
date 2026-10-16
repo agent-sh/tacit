@@ -32,7 +32,7 @@ def preflight_files(inputs, outputs):
     sources = [Path(p).resolve() for p in inputs if p is not None]
     destinations = [Path(p).resolve() for p in outputs if p is not None]
     trees = [p for p in sources if p.is_dir()]
-    def tree_files(tree):
+    def tree_files(tree, protected=None):
         seen = set()
         def fail(error):
             raise error
@@ -43,9 +43,14 @@ def preflight_files(inputs, outputs):
                 dirs[:] = []
                 continue
             seen.add(identity)
+            if protected is not None:
+                protected.add(Path(directory).resolve())
             yield from ((Path(directory) / name).resolve() for name in files)
+    protected = set(trees)
     for tree in trees:
-        sources.extend(tree_files(tree))
+        sources.extend(tree_files(tree, protected))
+    trees = protected
+    sources.extend(trees)
     # A generated cache/index directory may already contain aliased files.
     for tree in list(destinations):
         if tree.is_dir():
