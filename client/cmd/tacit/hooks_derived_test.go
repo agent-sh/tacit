@@ -212,26 +212,26 @@ func TestPromptSelectionRules(t *testing.T) {
 	// curated: top three above the floor; a derived hit that leaked into the
 	// curated list is never counted as one of them
 	hits := []search.Hit{der("d0", 40), cur("a", 30), cur("b", 20), cur("c", 16), cur("d", 15.5), cur("below", promptFloor-0.1)}
-	got := promptSelection(hits, nil, map[string]bool{})
+	got := promptSelection(hits, nil, map[string]bool{}, promptFloor)
 	if names(got) != "a,b,c" {
 		t.Fatalf("curated selection %s", names(got))
 	}
 	// one derived, after them, only above its floor
-	got = promptSelection(hits[1:], []search.Hit{der("hot", derivedPromptFloor+1), der("map", 99)}, map[string]bool{})
+	got = promptSelection(hits[1:], []search.Hit{der("hot", derivedPromptFloor+1), der("map", 99)}, map[string]bool{}, promptFloor)
 	if names(got) != "a,b,c,hot" {
 		t.Fatalf("with derived %s", names(got))
 	}
-	got = promptSelection(hits[1:], []search.Hit{der("hot", derivedPromptFloor-0.1)}, map[string]bool{})
+	got = promptSelection(hits[1:], []search.Hit{der("hot", derivedPromptFloor-0.1)}, map[string]bool{}, promptFloor)
 	if names(got) != "a,b,c" {
 		t.Fatalf("derived under its floor %s", names(got))
 	}
 	// no backfill: a seen curated fact is not replaced by the fourth
-	got = promptSelection(hits[1:], []search.Hit{der("hot", 30)}, map[string]bool{"a": true, "hot": true})
+	got = promptSelection(hits[1:], []search.Hit{der("hot", 30)}, map[string]bool{"a": true, "hot": true}, promptFloor)
 	if names(got) != "b,c" {
 		t.Fatalf("seen handling %s", names(got))
 	}
 	// derived alone
-	got = promptSelection(nil, []search.Hit{der("hot", 30)}, map[string]bool{})
+	got = promptSelection(nil, []search.Hit{der("hot", 30)}, map[string]bool{}, promptFloor)
 	if names(got) != "hot" {
 		t.Fatalf("derived alone %s", names(got))
 	}
