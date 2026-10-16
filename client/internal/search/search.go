@@ -557,12 +557,24 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 		}
 		hits = append(hits, h)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Release the single database connection before resolving selected links.
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
 	hits = dropConflictPartners(hits)
 	if len(hits) > limit {
 		hits = hits[:limit]
 	}
-	return hits, rows.Err()
+	if evidence != nil {
+		if err := ix.hydrateLocations(ctx, hits, sit, deliveryRepos, allowRelationRouting, evidence); err != nil {
+			return nil, err
+		}
+	}
+	return hits, nil
 }
 
 // dropConflictPartners never delivers both sides of a known contradiction:

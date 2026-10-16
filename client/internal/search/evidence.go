@@ -49,11 +49,11 @@ type RetrievalEvidence struct {
 }
 
 type evidenceDocument struct {
-	id                                   int
-	name, path, scope, description, body string
-	applies                              fact.AppliesTo
-	terms                                map[string]bool
-	pairs                                map[string]bool
+	id                int
+	name, path, scope string
+	applies           fact.AppliesTo
+	terms             map[string]bool
+	pairs             map[string]bool
 }
 
 // evidenceTokens preserves order and repetitions; unlike Terms it does not cap
@@ -117,7 +117,7 @@ func (ix *Index) promptEvidence(ctx context.Context, terms []string, query strin
 		return nil, nil, err
 	}
 	queryJSON, _ := json.Marshal(terms)
-	rows, err := ix.db.QueryContext(ctx, `SELECT f.id,f.name,f.path,f.scope,f.description,f.body,f.applies,e.terms,e.pairs FROM facts f JOIN evidence e ON f.id=e.id WHERE f.id IN (SELECT id FROM evidence_postings WHERE kind=0 AND token IN (SELECT value FROM json_each(?)))`, string(queryJSON))
+	rows, err := ix.db.QueryContext(ctx, `SELECT f.id,f.name,f.path,f.scope,f.applies,e.terms,e.pairs FROM facts f JOIN evidence e ON f.id=e.id WHERE f.id IN (SELECT id FROM evidence_postings WHERE kind=0 AND token IN (SELECT value FROM json_each(?)))`, string(queryJSON))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -125,7 +125,7 @@ func (ix *Index) promptEvidence(ctx context.Context, terms []string, query strin
 	for rows.Next() {
 		var d evidenceDocument
 		var applies, ts, ps string
-		if err := rows.Scan(&d.id, &d.name, &d.path, &d.scope, &d.description, &d.body, &applies, &ts, &ps); err != nil {
+		if err := rows.Scan(&d.id, &d.name, &d.path, &d.scope, &applies, &ts, &ps); err != nil {
 			rows.Close()
 			return nil, nil, err
 		}
@@ -145,35 +145,6 @@ func (ix *Index) promptEvidence(ctx context.Context, terms []string, query strin
 	if err != nil {
 		return nil, nil, err
 	}
-	byName := map[string][]LocationEvidence{}
-	var links []string
-	for _, d := range docs {
-		links = append(links, (&fact.Fact{Body: d.body}).Links()...)
-	}
-	linksJSON, _ := json.Marshal(links)
-	rows, err = ix.db.QueryContext(ctx, `SELECT f.name,f.path,f.scope,f.applies FROM facts f JOIN evidence e ON e.id=f.id WHERE f.name IN (SELECT value FROM json_each(?))`, string(linksJSON))
-	if err != nil {
-		return nil, nil, err
-	}
-	for rows.Next() {
-		var l LocationEvidence
-		var applies string
-		if err := rows.Scan(&l.Fact, &l.Path, &l.Scope, &applies); err != nil {
-			rows.Close()
-			return nil, nil, err
-		}
-		if err := json.Unmarshal([]byte(applies), &l.AppliesTo); err != nil {
-			rows.Close()
-			return nil, nil, err
-		}
-		l.Via = "[[" + l.Fact + "]]"
-		byName[l.Fact] = append(byName[l.Fact], l)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return nil, nil, err
-	}
 	weights := map[string]float64{}
 	var total float64
 	for _, t := range terms {
@@ -185,6 +156,9 @@ func (ix *Index) promptEvidence(ctx context.Context, terms []string, query strin
 	result := map[string]*RetrievalEvidence{}
 	var approved []int
 	for _, d := range docs {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		e := &RetrievalEvidence{CorpusDocuments: n}
 		var matched float64
 		for _, t := range terms {
@@ -233,14 +207,6 @@ func (ix *Index) promptEvidence(ctx context.Context, terms []string, query strin
 		}
 		e.Supported = e.Coverage > 0.5 && len(e.Relations) > 0 && e.LocationBound
 		e.Locations = append(e.Locations, LocationEvidence{d.name, d.path, d.scope, "summary", d.applies})
-		f := &fact.Fact{Body: d.body}
-		for _, name := range f.Links() {
-			// Ambiguous/dangling links are not locations. This is one hop only and
-			// never promotes a linked fact into the delivery set.
-			if targets := byName[name]; len(targets) == 1 {
-				e.Locations = append(e.Locations, targets[0])
-			}
-		}
 		result[d.path] = e
 		if e.Supported {
 			approved = append(approved, d.id)

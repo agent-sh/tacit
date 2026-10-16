@@ -45,8 +45,8 @@ func TestEvidenceStatisticsLocationsAndGuards(t *testing.T) {
 			t.Fatalf("wrong IDF: %+v", term)
 		}
 	}
-	if len(e.Locations) != 2 || e.Locations[0].AppliesTo.Paths[0] != "/verified/relay.conf" || e.Locations[1].Fact != "manual" || e.Locations[1].Path != "system/manual.md" {
-		t.Fatalf("unverified or lost location: %+v", e.Locations)
+	if len(e.Locations) != 1 || e.Locations[0].AppliesTo.Paths[0] != "/verified/relay.conf" {
+		t.Fatalf("unverified or lost direct location: %+v", e.Locations)
 	}
 	if ev["system/body-only.md"] != nil {
 		t.Fatal("body-only terms became summary evidence")
@@ -60,6 +60,9 @@ func TestEvidenceStatisticsLocationsAndGuards(t *testing.T) {
 		for _, h := range hits {
 			if h.Name == "relay-unit" {
 				found = true
+				if h.Evidence == nil || len(h.Evidence.Locations) != 2 || h.Evidence.Locations[1].Fact != "manual" {
+					t.Fatalf("selected link not hydrated: %+v", h.Evidence)
+				}
 			}
 			if h.Name == "retired" || h.Name == "map" || h.Name == "inbox" || h.Name == "foreign" {
 				t.Fatalf("guard bypass: %s", h.Name)

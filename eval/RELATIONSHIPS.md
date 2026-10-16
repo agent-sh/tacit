@@ -65,9 +65,13 @@ Each curated hit's `Evidence` reports corpus size, per-term df/IDF/match status,
 weighted coverage, supported pairs and discounted lifts, location binding and
 whether this route qualified. `Locations` contains the indexed fact ID, actual
 store-relative fact path, scope and recorded applicability. A body `[[link]]`
-adds a one-hop pointer only if it resolves uniquely to an active curated fact.
-Dangling, ambiguous, retired and derived links are not resolved. Links do not
-promote their targets into the delivery set or trigger recursive expansion.
+adds a one-hop pointer only if it resolves uniquely to an active curated fact
+and passes the effective host, project and repo-applicability restrictions.
+Uniqueness is checked globally before filtering: an inaccessible duplicate
+still makes the link ambiguous. Dangling, ambiguous, retired and derived links
+are not resolved. Bodies and links are loaded only for the bounded selected
+candidates, not every summary match. Links do not promote their targets into
+the delivery set or trigger recursive expansion.
 Recorded applicability is not a claim that a filesystem path exists now.
 
 ## Development replay
@@ -152,5 +156,11 @@ median latency was about 115-119 ms on development cases and 129 ms on the
 independent cases. Three isolated cold-index hook runs measured a median of
 2.63 seconds versus 1.05 seconds for main. Both returned real fact blocks on
 this shared machine; cold-build growth and the harness timeout remain risks
-for larger stores. Full Go client tests pass after the scope correction.
+for larger stores. Review additionally found that linked pointers could escape
+scope constraints. Foreign-host, foreign-project, restricted-applicability and
+global-ambiguity regressions now pass. Link hydration was moved after ranked
+candidate selection. Final three-repeat replays retained all published counts;
+warm medians were about 106-107 ms in that run. These shared-machine timings
+are observations, not an isolated speedup claim. Full Go client tests and vet
+pass after both scope corrections.
 
