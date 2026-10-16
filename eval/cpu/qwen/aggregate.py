@@ -2,12 +2,14 @@ import sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import argparse,json,statistics
-from common import load_rows,validate,percentile
+from common import load_rows,validate,percentile,preflight_files
 
 def main():
  p=argparse.ArgumentParser(description='Aggregate Qwen benchmark events and validate complete output coverage')
  p.add_argument('--input',required=True);p.add_argument('--run',required=True);p.add_argument('--output',required=True);a=p.parse_args()
- rows=load_rows(a.input);base=Path(a.run);events=load_rows(base/'measurements.jsonl')
+ base=Path(a.run)
+ preflight_files([a.input]+[base/name for name in ('measurements.jsonl','default-scores.jsonl','utility-scores.jsonl')],[a.output])
+ rows=load_rows(a.input);events=load_rows(base/'measurements.jsonl')
  result={'completed':any(x['event']=='complete' for x in events),'init':events[0],'modes':{}}
  for mode in ['default','utility']:
   mm=[x for x in events if x['event']=='warm-request' and x['mode']==mode];nonempty=[x for x in mm if x['lengths']];groups={}

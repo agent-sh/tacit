@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from common import add_workspace, load_rows, workspace
+from common import add_workspace, load_rows, workspace, preflight_files
 
 
 def main():
@@ -21,6 +21,7 @@ def main():
     p.add_argument('--runs', type=int, default=3)
     p.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
     a = p.parse_args()
+    preflight_files([a.input, workspace('controls', a.workspace)/a.model], [a.output])
     if a.runs < 1:
         p.error('--runs must be positive')
     if a.worker:

@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from harness import private_output, family_ids
+from harness import private_output, family_ids, preflight_files
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--audit-dir', default=os.environ.get('TACIT_SELECTION_AUDIT_DIR') or
@@ -14,6 +14,7 @@ parser.add_argument('--audit-dir', default=os.environ.get('TACIT_SELECTION_AUDIT
 args = parser.parse_args()
 audit = Path(args.audit_dir).expanduser().resolve()
 out = private_output(audit/'selection-fit-synthetic', audit)
+preflight_files([], [out/name for name in ('train-pools.jsonl','test-input-pools.jsonl','labels.jsonl','model.json','selected.jsonl')])
 pools, labels = [], []
 for split in ('dev', 'calibration', 'test'):
     for i in range(4):

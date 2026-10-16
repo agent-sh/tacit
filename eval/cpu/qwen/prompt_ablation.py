@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from common import workspace, add_workspace, nice, priority, proc_status, cpu_name, quant_engine, verify_artifacts
+from common import workspace, add_workspace, nice, priority, proc_status, cpu_name, quant_engine, verify_artifacts, preflight_files
 ROOT=workspace('qwen'); LAYA=workspace('laya')
 for k in ['OMP_NUM_THREADS','MKL_NUM_THREADS','OPENBLAS_NUM_THREADS','NUMEXPR_NUM_THREADS']: os.environ[k]='1'
 os.environ.update(CUDA_VISIBLE_DEVICES='',USE_TF='0',HF_HUB_OFFLINE='1',TRANSFORMERS_OFFLINE='1',HF_HUB_DISABLE_TELEMETRY='1',TOKENIZERS_PARALLELISM='false',LAYA_CPU_AMP='0')
@@ -15,13 +15,16 @@ PROMPTS={
 p=argparse.ArgumentParser(description=__doc__);add_workspace(p);p.add_argument('--input',required=True);p.add_argument('--output',required=True);p.add_argument('--laya-source');p.add_argument('--model',choices=['base','typed'],required=True);a=p.parse_args(); LAYA=workspace('laya',a.workspace)
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'laya'))
+preflight_files([a.input, LAYA/(a.model+'-artifacts.json'), LAYA/a.model, Path(a.laya_source).expanduser() if a.laya_source else LAYA/'package'], [a.output])
 from setup_source import check_source
 check_source(a.laya_source or LAYA/'package')
 import torch,laya
 from laya.common import build_head,build_sequence
 torch.set_num_threads(1);torch.set_num_interop_threads(1)
 nice()
-receipt=json.loads((LAYA/(a.model+'-artifacts.json')).read_text());agent=laya.load(receipt['path'],device='cpu',backend='eager',expected_sha256=receipt['sha256'])
+receipt=json.loads((LAYA/(a.model+'-artifacts.json')).read_text())
+preflight_files([receipt['path']],[a.output])
+agent=laya.load(receipt['path'],device='cpu',backend='eager',expected_sha256=receipt['sha256'])
 rows=[json.loads(x) for x in Path(a.input).read_text().splitlines()]
 out=Path(a.output)
 with out.open('w') as f:

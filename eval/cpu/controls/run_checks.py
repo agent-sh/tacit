@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from common import add_workspace, digest, load_rows, validate, workspace
+from common import add_workspace, digest, load_rows, validate, workspace, preflight_files
 
 
 def main():
@@ -17,6 +17,9 @@ def main():
     p.add_argument('--output', required=True, help='external receipt directory')
     p.add_argument('--benchmark', action='store_true', help='also run three fresh worker processes')
     a = p.parse_args()
+    preflight_files([a.input, workspace('controls', a.workspace)/a.model],
+                    [Path(a.output)/name for name in ['scores.jsonl', 'execution.json'] +
+                     (['benchmark.json'] if a.benchmark else [])])
     import score
     import numpy
     import onnxruntime

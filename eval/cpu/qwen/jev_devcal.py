@@ -13,7 +13,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from common import percentile, validate
+from common import percentile, validate, preflight_files
 from jev_smoke import MODEL, URL, payload, object_hash, get_key, request, validate_response
 
 
@@ -41,7 +41,14 @@ def load_input(path):
     return rows
 
 
+def output_paths(out):
+    return [out/name for name in ['identity.json', 'requests.jsonl', 'summary.json'] +
+            [arm+'-scores.jsonl'+suffix for arm in ('baseline', 'rubric', 'choice')
+             for suffix in ('', '.partial')]]
+
+
 def write_outputs(out, rows, cache, repeats):
+    preflight_files([], output_paths(out))
     for arm in ('baseline', 'rubric', 'choice'):
         records = []
         for row in rows:
@@ -65,8 +72,9 @@ def run(args):
         raise ValueError('Hosted requests require --allow-egress; authorizes sending input text to TypeSafe')
     if args.repeats < 1 or not math.isfinite(args.timeout) or args.timeout <= 0:
         raise ValueError('Repeats and timeout must be positive')
-    rows = load_input(args.input)
     out = external_output(args.output)
+    preflight_files([args.input, Path(args.key_file).expanduser() if args.key_file else None], output_paths(out))
+    rows = load_input(args.input)
     unique = {object_hash(payload(r)): r for r in rows}
     identity = {'model': MODEL, 'endpoint': URL, 'repeats': args.repeats,
         'input_sha256': hashlib.sha256(Path(args.input).read_bytes()).hexdigest(),

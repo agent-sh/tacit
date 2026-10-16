@@ -2,11 +2,13 @@ import sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import argparse,json,subprocess,time,os
-from common import workspace,add_workspace
+from common import workspace,add_workspace,preflight_files
 
 def main():
  p=argparse.ArgumentParser(description='Resident Qwen JSONL RPC and overlength rejection smoke')
  add_workspace(p);p.add_argument('--model',choices=['0.6B','4B'],default='0.6B');p.add_argument('--output',required=True);a=p.parse_args()
+ r=workspace('qwen',a.workspace)
+ preflight_files([r/('manifest-'+a.model+'.json'),r/('model-'+a.model)],[a.output])
  import score
  from transformers import AutoTokenizer
  r=workspace('qwen',a.workspace);s=score.Scorer.__new__(score.Scorer);s.tok=AutoTokenizer.from_pretrained(r/('model-'+a.model),local_files_only=True,padding_side='left');s.prefix=s.tok.encode(score.PREFIX,add_special_tokens=False);s.suffix=s.tok.encode(score.SUFFIX,add_special_tokens=False);s.max_tokens=8192

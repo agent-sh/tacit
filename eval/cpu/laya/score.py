@@ -8,7 +8,7 @@ START=time.perf_counter()
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from common import workspace, add_workspace, nice, priority, proc_status, cpu_name, quant_engine, verify_artifacts, peak_rss_kib, distinct_files
+from common import workspace, add_workspace, nice, priority, proc_status, cpu_name, quant_engine, verify_artifacts, peak_rss_kib, preflight_files
 ROOT=workspace('laya')
 for k in ('OMP_NUM_THREADS','MKL_NUM_THREADS','OPENBLAS_NUM_THREADS','NUMEXPR_NUM_THREADS'): os.environ[k]='1'
 os.environ.update(CUDA_VISIBLE_DEVICES='',TOKENIZERS_PARALLELISM='false',USE_TF='0',HF_HUB_OFFLINE='1',TRANSFORMERS_OFFLINE='1',HF_HUB_DISABLE_TELEMETRY='1',LAYA_CPU_AMP='0',HF_HOME=str(ROOT/'hf'))
@@ -21,7 +21,9 @@ def main():
  global ROOT
  ap=argparse.ArgumentParser(); ap.add_argument('--input',required=True); ap.add_argument('--output',required=True); ap.add_argument('--model',choices=['base','typed','convaiinnovations/laya','convaiinnovations/laya-typed-decisions'],required=True); ap.add_argument('--warm-repeats',type=int,default=0)
  add_workspace(ap); ap.add_argument('--laya-source', help='external git checkout at documented pinned commit'); a=ap.parse_args(); ROOT=workspace('laya',a.workspace)
- distinct_files(a.input,a.output,a.output+'.timings.jsonl',a.output+'.metrics.json')
+ preflight_files([a.input],[a.output,a.output+'.timings.jsonl',a.output+'.metrics.json'])
+ key={'convaiinnovations/laya':'base','convaiinnovations/laya-typed-decisions':'typed'}.get(a.model,a.model)
+ preflight_files([ROOT/(key+'-artifacts.json'),ROOT/key,Path(a.laya_source).expanduser() if a.laya_source else ROOT/'package'],[a.output,a.output+'.timings.jsonl',a.output+'.metrics.json'])
  nice()
  os.environ['HF_HOME']=str(ROOT/'hf')
  from setup_source import check_source
@@ -33,6 +35,7 @@ def main():
  receipt=json.loads((ROOT/(key+'-artifacts.json')).read_text()); init=time.perf_counter()
  from artifacts import PINS
  if (receipt['repo'],receipt['revision'])!=PINS['laya'][key]: raise ValueError('Laya artifact revision mismatch')
+ preflight_files([receipt['path']],[a.output,a.output+'.timings.jsonl',a.output+'.metrics.json'])
  agent=laya.load(receipt['path'],device='cpu',backend='eager',expected_sha256=receipt['sha256'])
  load_ms=(time.perf_counter()-init)*1000
  assert agent.device.type=='cpu'

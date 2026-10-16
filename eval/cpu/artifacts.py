@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import urllib.request
-from common import add_workspace, digest, workspace
+from common import add_workspace, digest, workspace, preflight_files
 
 PINS = {
     'qwen': {
@@ -37,7 +37,7 @@ def patterns(group):
     return result
 
 
-def download(group, key, root):
+def download(group, key, root, extra_outputs=()):
     repo, revision = PINS[group][key]
     if group == 'controls':
         root = root / key
@@ -48,7 +48,9 @@ def download(group, key, root):
         metadata = json.load(response)
     if metadata['sha'] != revision or metadata['id'] != repo:
         raise ValueError('upstream repository/revision mismatch')
-    records = {}
+    target = root / ('manifest-' + key + '.json' if group == 'qwen' else
+                     key + '-artifacts.json' if group == 'laya' else 'manifest.json')
+    planned = []
     for blob in metadata['siblings']:
         name = blob['rfilename']
         if not any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns(group)):
@@ -56,9 +58,14 @@ def download(group, key, root):
         path = (model / name).resolve()
         if model.resolve() not in path.parents:
             raise ValueError('unsafe artifact path')
+        planned.append((blob, path, path.with_name(path.name + '.partial')))
+    # Validate the whole batch before downloading/truncating even the first file.
+    preflight_files([], [target, *extra_outputs] + [p for _, path, pending in planned for p in (path, pending)])
+    records = {}
+    for blob, path, pending in planned:
+        name = blob['rfilename']
         path.parent.mkdir(parents=True, exist_ok=True)
         artifact_url = f'https://huggingface.co/{repo}/resolve/{revision}/{name}'
-        pending = path.with_name(path.name + '.partial')
         with urllib.request.urlopen(artifact_url, timeout=90) as response, pending.open('wb') as stream:
             while chunk := response.read(1024 * 1024):
                 stream.write(chunk)
@@ -110,6 +117,10 @@ def main(group):
 
 def download_laya(key, root):
     isolated = root / key
-    download('laya', key, isolated)
+    target = root / (key + '-artifacts.json')
+    source = isolated / (key + '-artifacts.json')
+    preflight_files([source], [target])
+    download('laya', key, isolated, extra_outputs=[target])
     root.mkdir(parents=True, exist_ok=True)
-    (root / (key + '-artifacts.json')).write_text((isolated / (key + '-artifacts.json')).read_text())
+    preflight_files([source], [target])
+    target.write_text(source.read_text())
