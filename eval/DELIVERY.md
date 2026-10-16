@@ -1,5 +1,9 @@
 # Prompt-delivery precision check
 
+This records the summary/coherence policy at `0732543`. The subsequent
+[weighted-relationship experiment](RELATIONSHIPS.md) retains those floors and
+adds an evidence-backed route, with separate replay results and limitations.
+
 ## Scope and method
 
 This is a diagnostic on one private operator store, not a general benchmark.

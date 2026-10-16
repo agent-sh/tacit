@@ -43,7 +43,8 @@ type Hit struct {
 	Local bool
 	Score float64
 	// MatchedTerms records distinct name/description FTS matches for prompt evaluation.
-	MatchedTerms []string `json:",omitempty"`
+	MatchedTerms []string           `json:",omitempty"`
+	Evidence     *RetrievalEvidence `json:",omitempty"`
 }
 
 // Index is an open FTS index for one store commit.
@@ -63,7 +64,7 @@ func IndexDir() string {
 
 // schemaVersion is part of the index file name, so a schema change rebuilds
 // instead of failing on a column that an older build does not have.
-const schemaVersion = 5
+const schemaVersion = 6
 
 // Open returns the index for the store at head, building it when missing.
 // Index files are index-v<schema>-<sha>.db under IndexDir, or
@@ -199,6 +200,9 @@ func build(ctx context.Context, storeDir, localDir, path string) error {
 			return err
 		}
 	}
+	if err := buildEvidence(ctx, tx, facts, nStore); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO fts(fts) VALUES('rebuild')`); err != nil {
 		return err
 	}
@@ -273,10 +277,11 @@ type Situation struct {
 	// RestrictRepos enforces nonempty applies_to.repos for hook delivery,
 	// including when Repo is unknown. Explicit search leaves this off.
 	RestrictRepos bool
-	// PromptRelevance requires two distinct name/description terms plus
-	// coherence: the least-frequent known query term, two name terms, or a
-	// query-term phrase in the summary. A syntactic identifier in at most five
-	// indexed documents is the single-term exception. Hook prompts only.
+	// PromptRelevance uses summary coverage/coherence, with an additional
+	// corpus-weighted, supported-phrase route (see RetrievalEvidence). The
+	// route can resolve a fact despite capture-repo metadata when cwd has no
+	// repo. Known repos, machine scopes, and derived isolation remain strict.
+	// A rare syntactic identifier remains the single-term exception.
 	PromptRelevance bool
 }
 
@@ -340,6 +345,23 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	if len(terms) == 0 || (sit.OnlyDerived && sit.Repo == "") {
 		return nil, nil
 	}
+	var evidence map[string]*RetrievalEvidence
+	route := "0"
+	if sit.PromptRelevance && !sit.OnlyDerived {
+		var ids []int
+		var err error
+		evidence, ids, err = ix.promptEvidence(ctx, terms, strings.Join(append([]string{sit.Query, sit.Command}, sit.Paths...), " "))
+		if err != nil {
+			return nil, err
+		}
+		if len(ids) > 0 {
+			parts := make([]string, len(ids))
+			for i, id := range ids {
+				parts[i] = strconv.Itoa(id)
+			}
+			route = "f.id IN (" + strings.Join(parts, ",") + ")"
+		}
+	}
 	deliveryRepos := []string{sit.Repo}
 	if sit.RestrictRepos {
 		deliveryRepos = append(deliveryRepos, sit.RepoAliases...)
@@ -366,6 +388,14 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 			if err != nil {
 				return nil, err
 			}
+		}
+	}
+	// A named project is task context even when the harness cwd is home.
+	// Relationship discovery may fill missing context, never override it.
+	allowRelationRouting := sit.Repo == ""
+	for _, repo := range deliveryRepos {
+		if repo != "" {
+			allowRelationRouting = false
 		}
 	}
 	scopes := []string{"system", "user"}
@@ -413,7 +443,11 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	if sit.RestrictRepos {
 		reposJSON, _ := json.Marshal(deliveryRepos)
 		inboxClause += ` AND (coalesce(json_array_length(f.applies, '$.Repos'), 0) = 0 OR
-			EXISTS (SELECT 1 FROM json_each(f.applies, '$.Repos') r JOIN json_each(:deliveryRepos) d ON lower(r.value) = lower(d.value) WHERE d.value != ''))`
+			EXISTS (SELECT 1 FROM json_each(f.applies, '$.Repos') r JOIN json_each(:deliveryRepos) d ON lower(r.value) = lower(d.value) WHERE d.value != '')`
+		if allowRelationRouting {
+			inboxClause += " OR " + route
+		}
+		inboxClause += ")"
 		args = append(args, sql.Named("deliveryRepos", string(reposJSON)))
 	}
 	var coverage []string
@@ -473,13 +507,17 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 		if len(rare) > 0 {
 			gate += " OR (" + strings.Join(rare, " + ") + ") >= 1"
 		}
-		inboxClause += " AND (" + gate + ")"
+		inboxClause += " AND ((" + gate + ") OR (" + route + "))"
 		selectCoverage = ", " + strings.Join(coverage, ", ")
+	}
+	scopeClause := "f.scope IN (" + placeholders + ")"
+	if allowRelationRouting && sit.PromptRelevance && !sit.OnlyDerived {
+		scopeClause = "(" + scopeClause + " OR (f.scope LIKE 'projects/%' AND (" + route + ")))"
 	}
 	q := fmt.Sprintf(`SELECT f.path, f.name, f.scope, f.type, f.description, f.body, f.inbox, f.kind, f.conflicts, f.ruling, f.words, f.local, -bm25(fts, 6.0, 6.0, 1.0) AS score %s
 		FROM fts JOIN facts f ON f.id = fts.rowid
-		WHERE fts MATCH :query AND f.superseded = 0 AND f.scope IN (%s) %s
-		ORDER BY score DESC LIMIT :candidateLimit`, selectCoverage, placeholders, inboxClause)
+		WHERE fts MATCH :query AND f.superseded = 0 AND %s %s
+		ORDER BY score DESC LIMIT :candidateLimit`, selectCoverage, scopeClause, inboxClause)
 	args = append(args, sql.Named("candidateLimit", limit*3))
 	rows, err := ix.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -504,6 +542,7 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 				h.MatchedTerms = append(h.MatchedTerms, terms[i])
 			}
 		}
+		h.Evidence = evidence[h.Path]
 		h.Inbox, h.Ruling, h.Words, h.Local = inbox == 1, ruling == 1, words == 1, local == 1
 		if conflicts != "" {
 			h.Conflicts = strings.Split(conflicts, ",")
@@ -518,12 +557,24 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 		}
 		hits = append(hits, h)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Release the single database connection before resolving selected links.
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
 	hits = dropConflictPartners(hits)
 	if len(hits) > limit {
 		hits = hits[:limit]
 	}
-	return hits, rows.Err()
+	if evidence != nil {
+		if err := ix.hydrateLocations(ctx, hits, sit, deliveryRepos, allowRelationRouting, evidence); err != nil {
+			return nil, err
+		}
+	}
+	return hits, nil
 }
 
 // dropConflictPartners never delivers both sides of a known contradiction:
