@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -32,8 +33,11 @@ const (
 	// session starts with no more of them than one prompt can add.
 	startLocalLimit = promptLimit
 	// bm25 floors: below these a match is one or two common words.
-	promptFloor = 15.0 // measured: junk prompts peak near 13.6, real requests 18 to 21
-	startFloor  = 1.0
+	promptFloor = 15.0 // project-scoped prompts retain the existing floor
+	// The repo-less pool needs a stricter floor: the current-corpus replay
+	// selected 20 for precision, at a documented recall cost (eval/DELIVERY.md).
+	repoLessPromptFloor = 20.0
+	startFloor          = 1.0
 	// derivedPromptFloor is the floor for the one derived fact (hot spots,
 	// module map) a prompt may add. Lower than promptFloor because the field
 	// is different: derived facts rank alone in their own scope, and a hit is
@@ -106,6 +110,9 @@ func runHook(args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), queryBudget+syncBudget)
 	defer cancel()
 	sit := search.Situation{Repo: store.RepoName(ctx, in.Cwd), Host: store.ShortHost()}
+	if sit.Repo != "" {
+		sit.RepoAliases = hookRepoAliases(ctx, in.Cwd)
+	}
 
 	switch args[0] {
 	case "session-start":
@@ -157,6 +164,37 @@ func runHook(args []string) int {
 	return 0
 }
 
+// hookRepoAliases keeps the lexical checkout name as well as its symlink
+// target and origin name. Only a verified checkout contributes aliases; a
+// non-repository cwd named like a project is not evidence of that project.
+func hookRepoAliases(ctx context.Context, cwd string) []string {
+	var aliases []string
+	for dir := filepath.Clean(cwd); filepath.IsAbs(dir); dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			aliases = append(aliases, filepath.Base(dir))
+			if real, err := filepath.EvalSymlinks(dir); err == nil {
+				aliases = append(aliases, filepath.Base(real))
+			}
+			break
+		}
+		if filepath.Dir(dir) == dir {
+			break
+		}
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", cwd, "remote", "get-url", "origin")
+	cmd.WaitDelay = 100 * time.Millisecond
+	if out, err := cmd.Output(); err == nil {
+		remote := strings.TrimSuffix(strings.TrimRight(strings.TrimSpace(string(out)), "/"), ".git")
+		if i := strings.LastIndexAny(remote, "/:"); i >= 0 {
+			remote = remote[i+1:]
+		}
+		if remote != "" {
+			aliases = append(aliases, remote)
+		}
+	}
+	return aliases
+}
+
 // isDerived reports a generated fact (derived/<repo>): hot spots, module map.
 func isDerived(h search.Hit) bool { return strings.HasPrefix(h.Scope, "derived/") }
 
@@ -166,6 +204,8 @@ func isDerived(h search.Hit) bool { return strings.HasPrefix(h.Scope, "derived/"
 // scopes at all, so they cannot take one of the ten lines.
 func sessionStartHits(ctx context.Context, ix *search.Index, sit search.Situation) ([]search.Hit, error) {
 	sit.Query = sit.Repo
+	sit.RestrictRepos = true
+	sit.PromptRelevance = false
 	sit.Derived = false
 	hits, err := ix.Query(ctx, sit, startLimit*2, false)
 	if err != nil {
@@ -175,10 +215,14 @@ func sessionStartHits(ctx context.Context, ix *search.Index, sit search.Situatio
 }
 
 // promptWorthy: harness-injected turns (notifications, command echoes,
-// subagent reports) are not requests, and a prompt needs at least two
-// searchable terms before a match means anything.
+// subagent reports) are not requests. A lone syntactic identifier may reach
+// retrieval, which still enforces document frequency and score thresholds.
 func promptWorthy(p string) bool {
-	return p != "" && !strings.HasPrefix(p, "<") && len(search.Terms(p)) >= 2
+	if p == "" || strings.HasPrefix(p, "<") {
+		return false
+	}
+	terms := search.Terms(p)
+	return len(terms) >= 2 || (len(terms) == 1 && search.SpecificIdentifier(terms[0]))
 }
 
 // promptHits is the UserPromptSubmit block for prompt p. The curated facts
@@ -190,6 +234,7 @@ func promptWorthy(p string) bool {
 // the curated facts, and only if the prompt matches it above its floor.
 func promptHits(ctx context.Context, ix *search.Index, sit search.Situation, p string, seen map[string]bool) ([]search.Hit, error) {
 	sit.Query = p
+	sit.RestrictRepos, sit.PromptRelevance = true, true
 	sit.Derived, sit.OnlyDerived = false, false
 	hits, err := ix.Query(ctx, sit, promptLimit*2, false)
 	if err != nil {
@@ -200,17 +245,21 @@ func promptHits(ctx context.Context, ix *search.Index, sit search.Situation, p s
 	if err != nil {
 		dhits = nil // the curated block stands without them
 	}
-	return promptSelection(hits, dhits, seen), nil
+	floor := promptFloor
+	if sit.Repo == "" {
+		floor = repoLessPromptFloor
+	}
+	return promptSelection(hits, dhits, seen, floor), nil
 }
 
 // promptSelection takes the few best curated matches above the floor, drops
 // what this session already saw, and then adds the best derived fact if it
 // clears its own floor and was not seen. No backfill: a repeated request
 // must not pull weaker facts into the context.
-func promptSelection(hits, derived []search.Hit, seen map[string]bool) []search.Hit {
+func promptSelection(hits, derived []search.Hit, seen map[string]bool, floor float64) []search.Hit {
 	var strong []search.Hit
 	for _, h := range hits {
-		if h.Score >= promptFloor && len(strong) < promptLimit && !isDerived(h) {
+		if h.Score >= floor && len(strong) < promptLimit && !isDerived(h) {
 			strong = append(strong, h)
 		}
 	}

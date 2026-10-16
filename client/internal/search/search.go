@@ -42,6 +42,8 @@ type Hit struct {
 	// by a harness here on a read-only clone, never pushed, never reviewed.
 	Local bool
 	Score float64
+	// MatchedTerms records distinct name/description FTS matches for prompt evaluation.
+	MatchedTerms []string `json:",omitempty"`
 }
 
 // Index is an open FTS index for one store commit.
@@ -247,11 +249,14 @@ var indexName = regexp.MustCompile(`^index-v(\d+)-[^.]+\.db(?:\.(\d+)\.tmp)?(?:-
 // Situation is what a hook knows: the repo, the host, and optionally the
 // user's prompt or the paths and command in play.
 type Situation struct {
-	Repo    string
-	Host    string
-	Query   string
-	Paths   []string
-	Command string
+	Repo string
+	// RepoAliases are verified names for the current repository (e.g. a
+	// symlink checkout name). Hooks supply these; explicit search ignores them.
+	RepoAliases []string
+	Host        string
+	Query       string
+	Paths       []string
+	Command     string
 	// Derived adds the repo's derived/<repo> scope (hot spots, module map).
 	// Off by default: derived facts are generated reference material, large
 	// next to a ruling, and must reach an agent only when something asks for
@@ -265,6 +270,35 @@ type Situation struct {
 	// type result_ref (numbers nobody has quoted) stay findable by search and
 	// the MCP tool, which do not set this.
 	Printable bool
+	// RestrictRepos enforces nonempty applies_to.repos for hook delivery,
+	// including when Repo is unknown. Explicit search leaves this off.
+	RestrictRepos bool
+	// PromptRelevance requires two distinct name/description terms plus
+	// coherence: the least-frequent known query term, two name terms, or a
+	// query-term phrase in the summary. A syntactic identifier in at most five
+	// indexed documents is the single-term exception. Hook prompts only.
+	PromptRelevance bool
+}
+
+func mentionsRepo(prompt, repo string) bool {
+	return regexp.MustCompile(`(?i)(^|[^\p{L}\p{N}_.-])` + regexp.QuoteMeta(repo) + `($|[^\p{L}\p{N}_.-]|\.(?:\s|$))`).MatchString(prompt)
+}
+
+// SpecificIdentifier deliberately excludes plain words (even rare ones) and
+// acronyms. Underscored symbols and mixed letter/digit identifiers are the
+// conservative single-term exception; punctuation-separated paths still need
+// two content terms. Rarity alone is not evidence of specificity.
+func SpecificIdentifier(term string) bool {
+	letters, digits := 0, 0
+	for _, r := range term {
+		if r >= 'a' && r <= 'z' {
+			letters++
+		}
+		if r >= '0' && r <= '9' {
+			digits++
+		}
+	}
+	return letters >= 3 && (digits > 0 || strings.Contains(strings.Trim(term, "_"), "_"))
 }
 
 var tokenRe = regexp.MustCompile(`[\p{L}\p{N}_][\p{L}\p{N}_.-]{1,}`)
@@ -303,12 +337,42 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	// The repo is a scope filter, not a query term: a fact that merely names
 	// the repo is not more relevant to the situation.
 	terms := Terms(strings.Join(append([]string{sit.Query, sit.Command}, sit.Paths...), " "))
-	if len(terms) == 0 {
+	if len(terms) == 0 || (sit.OnlyDerived && sit.Repo == "") {
 		return nil, nil
 	}
+	deliveryRepos := []string{sit.Repo}
+	if sit.RestrictRepos {
+		deliveryRepos = append(deliveryRepos, sit.RepoAliases...)
+		if sit.PromptRelevance {
+			// A prompt can name a repo while the harness cwd remains home.
+			// Only complete names present in metadata count, never substrings
+			// or a guessed project inferred from a generic action.
+			rows, err := ix.db.QueryContext(ctx, `SELECT substr(scope, 10) FROM facts WHERE scope LIKE 'projects/%' UNION SELECT value FROM facts, json_each(facts.applies, '$.Repos') WHERE json_each.type = 'text'`)
+			if err != nil {
+				return nil, err
+			}
+			for rows.Next() {
+				var repo string
+				if err := rows.Scan(&repo); err != nil {
+					rows.Close()
+					return nil, err
+				}
+				if repo != "" && mentionsRepo(sit.Query, repo) {
+					deliveryRepos = append(deliveryRepos, strings.ToLower(repo))
+				}
+			}
+			err = rows.Err()
+			rows.Close()
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 	scopes := []string{"system", "user"}
-	if sit.Repo != "" {
-		scopes = append(scopes, "projects/"+strings.ToLower(sit.Repo))
+	for _, repo := range deliveryRepos {
+		if repo != "" {
+			scopes = append(scopes, "projects/"+strings.ToLower(repo))
+		}
 	}
 	if sit.Host != "" {
 		scopes = append(scopes, "machines/"+strings.ToLower(sit.Host))
@@ -329,11 +393,14 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 		quoted[i] = `"` + strings.ReplaceAll(t, `"`, "") + `"`
 	}
 	match := strings.Join(quoted, " OR ")
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(scopes)), ",")
-	args := []any{match}
-	for _, s := range scopes {
-		args = append(args, s)
+	scopeParams := make([]string, len(scopes))
+	args := []any{sql.Named("query", match)}
+	for i, s := range scopes {
+		name := fmt.Sprintf("scope%d", i)
+		scopeParams[i] = ":" + name
+		args = append(args, sql.Named(name, s))
 	}
+	placeholders := strings.Join(scopeParams, ",")
 	inboxClause := "AND f.inbox = 0"
 	if includeInbox {
 		inboxClause = ""
@@ -341,11 +408,79 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	if sit.Printable {
 		inboxClause += " AND f.type != 'result_ref'"
 	}
-	q := fmt.Sprintf(`SELECT f.path, f.name, f.scope, f.type, f.description, f.body, f.inbox, f.kind, f.conflicts, f.ruling, f.words, f.local, -bm25(fts, 6.0, 6.0, 1.0) AS score
+	// Eligibility is part of WHERE, before the candidate LIMIT. Filtering a
+	// truncated OR ranking afterward would let unrelated facts starve hits.
+	if sit.RestrictRepos {
+		reposJSON, _ := json.Marshal(deliveryRepos)
+		inboxClause += ` AND (coalesce(json_array_length(f.applies, '$.Repos'), 0) = 0 OR
+			EXISTS (SELECT 1 FROM json_each(f.applies, '$.Repos') r JOIN json_each(:deliveryRepos) d ON lower(r.value) = lower(d.value) WHERE d.value != ''))`
+		args = append(args, sql.Named("deliveryRepos", string(reposJSON)))
+	}
+	var coverage []string
+	selectCoverage := ""
+	if sit.PromptRelevance {
+		var rare, titleCoverage, phrases []string
+		// Anchor on the most discriminating query term that the summary index
+		// actually knows. Unknown words (including typos) cannot veto a request.
+		// This is corpus-relative, not a list of domain-specific stop words.
+		anchorDF := int(^uint(0) >> 1)
+		var anchors []string
+		for i, term := range terms {
+			param := fmt.Sprintf("coverage%d", i)
+			expr := fmt.Sprintf(`CASE WHEN f.id IN (SELECT rowid FROM fts WHERE fts MATCH :%s) THEN 1 ELSE 0 END`, param)
+			coverage = append(coverage, expr)
+			titleParam := fmt.Sprintf("title%d", i)
+			titleCoverage = append(titleCoverage, fmt.Sprintf(`CASE WHEN f.id IN (SELECT rowid FROM fts WHERE fts MATCH :%s) THEN 1 ELSE 0 END`, titleParam))
+			args = append(args, sql.Named(titleParam, "name : "+quoted[i]))
+			if i > 0 {
+				phraseParam := fmt.Sprintf("phrase%d", i)
+				phrases = append(phrases, fmt.Sprintf(`f.id IN (SELECT rowid FROM fts WHERE fts MATCH :%s)`, phraseParam))
+				args = append(args, sql.Named(phraseParam, `{name description} : "`+terms[i-1]+" "+term+`"`))
+			}
+			summaryTerm := "{name description} : " + quoted[i]
+			args = append(args, sql.Named(param, summaryTerm))
+			var summaryDF int
+			if err := ix.db.QueryRowContext(ctx, `SELECT count(*) FROM fts WHERE fts MATCH ?`, summaryTerm).Scan(&summaryDF); err != nil {
+				return nil, err
+			}
+			if summaryDF > 0 && summaryDF <= anchorDF {
+				if summaryDF < anchorDF {
+					anchors = nil
+					anchorDF = summaryDF
+				}
+				anchors = append(anchors, expr)
+			}
+			if SpecificIdentifier(term) {
+				var df int
+				// Global document frequency, including inaccessible/retired rows:
+				// changing repo scope must not turn a common identifier rare.
+				if err := ix.db.QueryRowContext(ctx, `SELECT count(*) FROM fts WHERE fts MATCH ?`, quoted[i]).Scan(&df); err != nil {
+					return nil, err
+				}
+				if df <= 5 {
+					rare = append(rare, expr)
+				}
+			}
+		}
+		gate := "(" + strings.Join(coverage, " + ") + ") >= 2"
+		if len(anchors) > 0 {
+			coherent := "(" + strings.Join(anchors, " + ") + ") >= 1 OR (" + strings.Join(titleCoverage, " + ") + ") >= 2"
+			if len(phrases) > 0 {
+				coherent += " OR " + strings.Join(phrases, " OR ")
+			}
+			gate += " AND (" + coherent + ")"
+		}
+		if len(rare) > 0 {
+			gate += " OR (" + strings.Join(rare, " + ") + ") >= 1"
+		}
+		inboxClause += " AND (" + gate + ")"
+		selectCoverage = ", " + strings.Join(coverage, ", ")
+	}
+	q := fmt.Sprintf(`SELECT f.path, f.name, f.scope, f.type, f.description, f.body, f.inbox, f.kind, f.conflicts, f.ruling, f.words, f.local, -bm25(fts, 6.0, 6.0, 1.0) AS score %s
 		FROM fts JOIN facts f ON f.id = fts.rowid
-		WHERE fts MATCH ? AND f.superseded = 0 AND f.scope IN (%s) %s
-		ORDER BY score DESC LIMIT ?`, placeholders, inboxClause)
-	args = append(args, limit*3)
+		WHERE fts MATCH :query AND f.superseded = 0 AND f.scope IN (%s) %s
+		ORDER BY score DESC LIMIT :candidateLimit`, selectCoverage, placeholders, inboxClause)
+	args = append(args, sql.Named("candidateLimit", limit*3))
 	rows, err := ix.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -356,8 +491,18 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 		var h Hit
 		var inbox, ruling, words, local int
 		var conflicts string
-		if err := rows.Scan(&h.Path, &h.Name, &h.Scope, &h.Type, &h.Description, &h.Body, &inbox, &h.Kind, &conflicts, &ruling, &words, &local, &h.Score); err != nil {
+		matched := make([]int, len(coverage))
+		dest := []any{&h.Path, &h.Name, &h.Scope, &h.Type, &h.Description, &h.Body, &inbox, &h.Kind, &conflicts, &ruling, &words, &local, &h.Score}
+		for i := range matched {
+			dest = append(dest, &matched[i])
+		}
+		if err := rows.Scan(dest...); err != nil {
 			return nil, err
+		}
+		for i, yes := range matched {
+			if yes != 0 {
+				h.MatchedTerms = append(h.MatchedTerms, terms[i])
+			}
 		}
 		h.Inbox, h.Ruling, h.Words, h.Local = inbox == 1, ruling == 1, words == 1, local == 1
 		if conflicts != "" {
