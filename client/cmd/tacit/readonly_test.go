@@ -40,7 +40,12 @@ func roFixture(t *testing.T, withScrump bool) (*store.Store, string) {
 		t.Fatal(err)
 	}
 	if withScrump {
-		if err := os.WriteFile(filepath.Join(bin, "scrump"), []byte("#!/bin/sh\nexec /bin/sed 's/Zq7Vx9/******/g'\n"), 0o755); err != nil {
+		// sed is /bin/sed on Linux and /usr/bin/sed on macOS; resolve it before PATH is replaced.
+		sed, err := exec.LookPath("sed")
+		if err != nil {
+			t.Skip("sed not installed")
+		}
+		if err := os.WriteFile(filepath.Join(bin, "scrump"), []byte("#!/bin/sh\nexec "+sed+" 's/Zq7Vx9/******/g'\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
