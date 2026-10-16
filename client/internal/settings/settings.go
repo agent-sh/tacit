@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,7 +34,16 @@ type Runners struct {
 	Verify string `yaml:"verify"`
 }
 
+type Utility struct {
+	Provider  string   `yaml:"provider"`
+	Threshold *float64 `yaml:"threshold"`
+	Timeout   string   `yaml:"timeout"`
+	KeyFile   string   `yaml:"key_file"`
+	AuditDir  string   `yaml:"audit_dir"`
+}
+
 type Config struct {
+	Utility         Utility                    `yaml:"utility"`
 	DreamMaxRuntime string                     `yaml:"dream_max_runtime"`
 	Efforts         map[string]string          `yaml:"efforts"`
 	Profiles        map[string]string          `yaml:"profiles"`
@@ -126,6 +137,26 @@ func Load(path string, required bool) error {
 		}
 	}
 	values := map[string]string{"TACIT_STORE": resolve(c.Store), "TACIT_PROJECTS": resolve(c.Projects), "TACIT_INDEX": resolve(c.Index), "TACIT_CONFIG": resolve(c.Keys), "TACIT_LOCAL": resolve(c.Local), "TACIT_OWNER_NAMES": strings.Join(c.OwnerNames, ","), "TACIT_CURATE_MODEL": c.Models.Curate, "TACIT_JUDGE_MODEL": c.Models.Judge, "TACIT_DREAM_MODEL": c.Models.Dream, "TACIT_VERIFY_MODEL": c.Models.Verify, "TACIT_VERIFY_FALLBACK_MODEL": c.Models.Fallback}
+	if c.Utility.Provider != "" && c.Utility.Provider != "jev" {
+		return fmt.Errorf("utility provider must be jev or empty")
+	}
+	if c.Utility.Threshold != nil {
+		v := *c.Utility.Threshold
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1 {
+			return fmt.Errorf("utility threshold must be in [0,1]")
+		}
+		values["TACIT_UTILITY_THRESHOLD"] = strconv.FormatFloat(v, 'g', -1, 64)
+	}
+	if c.Utility.Timeout != "" {
+		v, err := time.ParseDuration(c.Utility.Timeout)
+		if err != nil || v <= 0 || v > 2*time.Second {
+			return fmt.Errorf("utility timeout must be positive and no more than 2s")
+		}
+	}
+	values["TACIT_UTILITY_PROVIDER"] = c.Utility.Provider
+	values["TACIT_UTILITY_TIMEOUT"] = c.Utility.Timeout
+	values["TACIT_UTILITY_KEY_FILE"] = resolve(c.Utility.KeyFile)
+	values["TACIT_UTILITY_AUDIT_DIR"] = resolve(c.Utility.AuditDir)
 	values["TACIT_RUNNER"] = c.Runner
 	values["TACIT_DREAM_MAX_RUNTIME"] = c.DreamMaxRuntime
 	for role, name := range map[string]string{"DREAM": c.Runners.Dream, "CURATE": c.Runners.Curate, "JUDGE": c.Runners.Judge, "VERIFY": c.Runners.Verify} {

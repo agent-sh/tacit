@@ -18,6 +18,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/agent-sh/tacit/client/internal/platform"
 )
 
 const (
@@ -152,10 +154,17 @@ func redactWithScrumpCtx(ctx context.Context, s string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "scrump", "--profile", "text", "scrub", "-", "-o", "-")
+	platform.Prepare(cmd)
+	cmd.WaitDelay = 100 * time.Millisecond
 	cmd.Stdin = strings.NewReader(s)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
+		// A wrapper may exit while its children still hold stdout. WaitDelay
+		// releases the pipes; cancel the group as well so those children stop.
+		if cmd.Process != nil && cmd.Cancel != nil {
+			_ = cmd.Cancel()
+		}
 		if ctx.Err() != nil {
 			return "", fmt.Errorf("scrump: %w", ctx.Err())
 		}

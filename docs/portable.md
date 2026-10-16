@@ -78,10 +78,33 @@ The integrations and model runners are separate. You can use Muse for memory and
 
 Transcript mining and automatic owner-quote lookup currently read Claude Code and Codex histories. Muse, agy, Grok, pi and Hermes can read and write memory through their integrations; their transcripts are not yet mined. Owner contributions and decisions in the app remain available without Claude. Curation refuses an empty owner-evidence corpus rather than guessing whether an agent paraphrase is an owner ruling.
 
+### Optional Jev utility selector
+
+This opt-in sends redacted prompts and candidate summaries to the official TypeSafe API. It uses paid hosted inference. No fact bodies are sent. Keep the key in the environment or a private dotenv file, not in YAML:
+
+```yaml
+utility:
+  provider: jev
+  threshold: 0.70
+  timeout: 2s
+  key_file: ./typesafe.env
+  audit_dir: ~/.local/state/tacit/utility
+```
+
+The key file contains `TYPESAFE_API_KEY=...`. Only that variable is read from a regular file; the file is not executed. An inherited `TYPESAFE_API_KEY` wins. The model is pinned to `jev-1.13.0`. The timeout covers key reading, redaction and the request, defaults to 2s, and cannot exceed 2s. Cancellation allows up to 250 ms of subprocess cleanup; optional audit adds at most 100 ms of wait. Missing credentials, unavailable redaction, timeout or invalid API responses use the original local selector. Clear `provider` to return to local-only selection.
+
+The audit directory is optional. It contains private daily JSONL files with redacted task and summary text, scores, selected flags and fallback reasons. Keep it out of the store and source control. On Unix, the directory must be owned by the caller and private (0700); files use mode 0600, a best-effort 10 MiB daily cap, and eight-day retention. Symlinks, hard links and special files are refused. Private audit is currently disabled on non-Unix systems rather than claiming Unix permissions enforce Windows ACLs; scoring still works. Audit failure or a stalled filesystem does not block a prompt. See [the measured comparison](../eval/JEV.md) for limits and the threshold tradeoff.
+
 ### Environment variables
 
 | variable | default | what |
 |---|---|---|
+| `TACIT_UTILITY_PROVIDER` | empty (local only) | `jev` enables hosted utility selection |
+| `TACIT_UTILITY_THRESHOLD` | `0.70` | Noul cutoff in [0,1] |
+| `TACIT_UTILITY_TIMEOUT` | `2s` | redaction + request deadline, positive and at most `2s` |
+| `TACIT_UTILITY_KEY_FILE` | empty | dotenv file containing only the needed `TYPESAFE_API_KEY` entry |
+| `TACIT_UTILITY_AUDIT_DIR` | empty (no audit) | private daily selection receipts |
+| `TYPESAFE_API_KEY` | empty | credential sent only to the official TypeSafe origin |
 | `TACIT_SETTINGS` | platform config file above | optional client YAML settings |
 | `TACIT_STORE` | `~/.local/share/tacit/store` | the store clone |
 | `TACIT_CONFIG` | `~/.config/tacit` | keys |
