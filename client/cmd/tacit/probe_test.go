@@ -116,9 +116,9 @@ func TestProbeAcceptsReadOnlyFormsAndHidesSecrets(t *testing.T) {
 		{"find", repo, "*.md"},
 		{"ls", repo},
 		{"ls", "~/projects"},
-		{"gh", "pr", "view", "5", "-R", "avifenesh/tacit"},
-		{"gh", "issue", "list", "-R", "avifenesh/tacit", "--state", "closed", "--limit", "5000"},
-		{"gh", "repo", "view", "avifenesh/tacit"},
+		{"gh", "pr", "view", "5", "-R", "agent-sh/tacit"},
+		{"gh", "issue", "list", "-R", "agent-sh/tacit", "--state", "closed", "--limit", "5000"},
+		{"gh", "repo", "view", "agent-sh/tacit"},
 	}
 	for _, args := range good {
 		cmds, _, err := buildCmds(args)
