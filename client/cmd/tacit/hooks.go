@@ -249,7 +249,7 @@ func promptHits(ctx context.Context, ix *search.Index, sit search.Situation, p s
 	if sit.Repo == "" {
 		floor = repoLessPromptFloor
 	}
-	return promptSelection(hits, dhits, seen, floor), nil
+	return utilityPromptSelection(ctx, p, hits, dhits, seen, floor), nil
 }
 
 // promptSelection takes curated matches above the BM25 floor or with supported
