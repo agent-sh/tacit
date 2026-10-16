@@ -359,7 +359,12 @@ func TestCurateRunsTheResultsPass(t *testing.T) {
 	if !hot {
 		t.Fatal("curate wrote no derived facts either")
 	}
-	if _, err := os.Stat(filepath.Join(r.root, "cache", "tacit", "results")); err != nil {
+	// os.UserCacheDir honours XDG_CACHE_HOME on Linux and uses $HOME/Library/Caches on macOS.
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(cache, "tacit", "results")); err != nil {
 		t.Fatalf("the series cache was not written: %v", err)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -43,6 +44,12 @@ func TestUtilityRejectsFIFOKeyAndAuditWithoutBlocking(t *testing.T) {
 func TestUtilitySelectorDeadlineCoversUnresponsiveWorker(t *testing.T) {
 	bin := t.TempDir()
 	if err := os.WriteFile(filepath.Join(bin, "scrump"), []byte("#!/bin/sh\n/bin/cat\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	// macOS scans a freshly written script on its first exec (0.4-1.5 s measured),
+	// which would expire the deadline during redaction, before the blocking
+	// request. Run it once so the deadline below covers the request.
+	if err := exec.Command(filepath.Join(bin, "scrump")).Run(); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin)
