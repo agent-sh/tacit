@@ -14,6 +14,9 @@ import statistics
 import subprocess
 from typing import Any
 import time
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'cpu'))
+from common import preflight_files
 
 VERSION = 'selection-v1'
 ARMS = ('original', 'unconditional', 'gated')
@@ -217,6 +220,10 @@ def retrieval_env(out, store):
 
 def retrieve(args):
     out = private_output(args.out, getattr(args, 'audit_dir', None))
+    preflight_files([args.cases, Path(args.store).expanduser(), args.baseline, args.exporter, __file__],
+                    [out/name for name in ('offline-settings.yaml', 'manifest.json', 'pools.jsonl',
+                     'scorer-input.jsonl', 'request.json', 'response.json', 'index',
+                     'isolated-home', 'empty-overlay')])
     env = retrieval_env(out, args.store)
     overlay = out/'empty-overlay'
     if overlay.exists() and any(overlay.iterdir()):
@@ -371,6 +378,8 @@ def labelled_rows(pools, labels, scores):
 
 
 def train(args):
+    preflight_files([args.pools, args.labels, args.scores,
+                     str(args.scores)+'.manifest.json' if args.scores else None], [Path(args.model).expanduser()])
     pools = load(args.pools)
     # Deliberately refuse mixed files containing test, not merely filter test out.
     if any(p['split'] not in ('dev','calibration') for p in pools):
@@ -416,6 +425,8 @@ def train(args):
 
 
 def select(args):
+    preflight_files([args.pools, args.model, args.scores,
+                     str(args.scores)+'.manifest.json' if args.scores else None], [Path(args.out).expanduser()])
     pools=load(args.pools)
     validate_episode_splits(pools)
     score_manifest=verify_score_manifest(args.scores,args.pools) if args.scores else None

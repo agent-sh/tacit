@@ -19,17 +19,52 @@ def add_workspace(parser):
     parser.add_argument('--workspace', help='external cache root (or TACIT_CPU_WORKSPACE; default ~/.cache/tacit-cpu)')
 
 
+def preflight_files(inputs, outputs):
+    """Check the complete write set before the first write (including appends).
+
+    Inputs may be files or read-only trees (models, source, retrieval store).
+    Repeated input aliases are legal; outputs must not alias any input or each
+    other. Resolve missing paths too, so dangling symlinks are covered. This is
+    an accidental-clobber guard, not protection against concurrent path swaps.
+    Pass the paths actually opened (expand '~' at the caller if it does so).
+    '-' is a literal filename here; only streaming callers may exclude it.
+    """
+    sources = [Path(p).resolve() for p in inputs if p is not None]
+    destinations = [Path(p).resolve() for p in outputs if p is not None]
+    trees = [p for p in sources if p.is_dir()]
+    def tree_files(tree):
+        seen = set()
+        def fail(error):
+            raise error
+        for directory, dirs, files in os.walk(tree, followlinks=True, onerror=fail):
+            stat = Path(directory).stat()
+            identity = (stat.st_dev, stat.st_ino)
+            if identity in seen:
+                dirs[:] = []
+                continue
+            seen.add(identity)
+            yield from ((Path(directory) / name).resolve() for name in files)
+    for tree in trees:
+        sources.extend(tree_files(tree))
+    # A generated cache/index directory may already contain aliased files.
+    for tree in list(destinations):
+        if tree.is_dir():
+            if any(source.is_relative_to(tree) for source in sources):
+                raise ValueError('input and output must be different files: ' + str(tree))
+            destinations.extend(tree_files(tree))
+    def same(left, right):
+        return left == right or (left.exists() and right.exists() and os.path.samefile(left, right))
+    for i, dest in enumerate(destinations):
+        if (any(dest.is_relative_to(tree) for tree in trees) or
+                any(same(dest, source) for source in sources) or
+                any(same(dest, other) for other in destinations[:i])):
+            raise ValueError('input and output must be different files; outputs must also be distinct: ' + str(dest))
+
+
 def distinct_files(source, *destinations):
-    """Reject lexical, symlink and hardlink aliases before any destructive open."""
-    if str(source) == '-':
-        return
-    source = Path(source).expanduser().resolve()
-    for destination in destinations:
-        if str(destination) == '-':
-            continue
-        destination = Path(destination).expanduser().resolve()
-        if source == destination or (source.exists() and destination.exists() and os.path.samefile(source, destination)):
-            raise ValueError('input and output must be different files')
+    """Streaming scorer convenience wrapper; '-' denotes stdin/stdout only."""
+    preflight_files([] if str(source) == '-' else [source],
+                    [p for p in destinations if str(p) != '-'])
 
 
 def digest(path):
@@ -137,6 +172,7 @@ def verify_main(probability=False):
     p.add_argument('--runtime', help='optional Jina runtime event JSONL')
     p.add_argument('--report', required=True)
     a = p.parse_args()
+    preflight_files([a.input, a.output, a.reversed, a.timings, a.measurements, a.runtime], [a.report])
     rows, outputs = load_rows(a.input), load_rows(a.output)
     result = validate(rows, outputs, probability)
     result['output_sha256'] = digest(a.output)

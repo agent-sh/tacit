@@ -14,10 +14,13 @@ START=time.perf_counter()
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from common import workspace, add_workspace, nice, priority, proc_status, cpu_name, quant_engine, verify_artifacts, peak_rss_kib, distinct_files
+from common import workspace, add_workspace, nice, priority, proc_status, cpu_name, quant_engine, verify_artifacts, peak_rss_kib, preflight_files
 p=argparse.ArgumentParser(description=__doc__);add_workspace(p);p.add_argument('--input',required=True);p.add_argument('--output',required=True);p.add_argument('--order',choices=['natural','reversed','both'],default='natural');p.add_argument('--dtype',choices=['auto','float32'],default='auto');p.add_argument('--budget-seconds',type=float,default=280);p.add_argument('--parity',action='store_true');a=p.parse_args()
-distinct_files(a.input,a.output,a.output+'.natural.jsonl',a.output+'.reversed.jsonl',a.output+'.measurements.jsonl',a.output+'.runtime.jsonl')
+outputs = [a.output+'.'+order+'.jsonl' for order in ('natural','reversed')] if a.order=='both' else [a.output]
+outputs += [a.output+'.measurements.jsonl',a.output+'.runtime.jsonl']
+preflight_files([a.input], outputs)
 ROOT=workspace('jina',a.workspace); ROOT.mkdir(parents=True,exist_ok=True); MODEL=ROOT/'model'; REV='e8a93f33f0b22108f8c2364f8484ce3422552fbc'
+preflight_files([ROOT/'manifest.json',MODEL], outputs)
 import torch,numpy as np,transformers
 from transformers import AutoTokenizer
 manifest=json.loads((ROOT/'manifest.json').read_text())

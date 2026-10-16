@@ -2,11 +2,13 @@ import sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import argparse,json
-from common import add_workspace,workspace,load_rows,nice,quant_engine
+from common import add_workspace,workspace,load_rows,nice,quant_engine,preflight_files
 
 def main():
  p=argparse.ArgumentParser(description='Experimental per-channel INT8 parity against fresh FP32; no labels')
  add_workspace(p);p.add_argument('--model',choices=['0.6B','4B'],required=True);p.add_argument('--input',required=True);p.add_argument('--output',required=True);a=p.parse_args()
+ r=workspace('qwen',a.workspace)
+ preflight_files([a.input,r/('manifest-'+a.model+'.json'),r/('model-'+a.model)],[a.output])
  import score,torch
  score.ROOT=workspace('qwen',a.workspace);nice();s=score.Scorer(a.model)
  rows=[score.SMOKE]+load_rows(a.input)[:1]

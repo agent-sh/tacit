@@ -24,7 +24,7 @@ import time
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from common import workspace, add_workspace, nice, priority, proc_status, cpu_name, quant_engine, verify_artifacts, distinct_files
+from common import workspace, add_workspace, nice, priority, proc_status, cpu_name, quant_engine, verify_artifacts, distinct_files, preflight_files
 ROOT = workspace('controls') / 'minilm'
 
 class Scorer:
@@ -94,6 +94,7 @@ def main():
     args = parser.parse_args()
     ROOT = workspace('controls',args.workspace) / args.model
     distinct_files(args.input,args.output)
+    preflight_files([ROOT], [] if args.output == '-' else [args.output])
     scorer = Scorer(args.batch_size)
     source = sys.stdin if args.input == '-' else open(args.input, encoding='utf-8')
     dest = sys.stdout if args.output == '-' else open(args.output, 'w', encoding='utf-8')

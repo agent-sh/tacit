@@ -87,7 +87,11 @@ def load_labels(path):
 
 def evaluate(args):
     from jev_devcal import external_output
+    from common import preflight_files
     out = external_output(args.output)
+    preflight_files([args.pools, args.primary, args.reviewed, HARNESS] +
+                    [value.partition('=')[2] for value in args.scores],
+                    [out/name for name in ('quality-evaluation.json', 'calibration-curves.json', 'quality-errors.json')])
     pools = read_jsonl(args.pools)
     labels, primary = load_labels(args.reviewed), load_labels(args.primary)
     if set(labels) != set(primary):

@@ -13,7 +13,7 @@ START=time.perf_counter()
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from common import workspace, add_workspace, nice, priority, proc_status, cpu_name, quant_engine, verify_artifacts, peak_rss_kib, distinct_files
+from common import workspace, add_workspace, nice, priority, proc_status, cpu_name, quant_engine, verify_artifacts, peak_rss_kib, distinct_files, preflight_files
 ROOT=workspace('qwen')
 PINS={'0.6B':'e61197ed45024b0ed8a2d74b80b4d909f1255473','4B':'22e683669bc0f0bd69640a1354a6d0aebcfeede5'}
 DEFAULT='Given a web search query, retrieve relevant passages that answer the query'
@@ -97,7 +97,11 @@ def checked_control_cache(path,scorer,rows,modes):
 def main():
  global ROOT, torch, AutoModelForCausalLM, AutoTokenizer
  p=argparse.ArgumentParser(); p.add_argument('--input',required=True); p.add_argument('--output',required=True); p.add_argument('--model',choices=PINS,default='0.6B'); p.add_argument('--instruction-mode',choices=['default','utility','both'],default='default'); p.add_argument('--quant',choices=['fp32','int8'],default='fp32'); p.add_argument('--benchmark',action='store_true'); p.add_argument('--control-cache'); add_workspace(p); a=p.parse_args(); ROOT=workspace('qwen',a.workspace)
- distinct_files(a.input,a.output)
+ if a.benchmark:
+  benchmark_preflight(a)
+ else:
+  distinct_files(a.input,a.output)
+  preflight_files([ROOT/('model-'+a.model), ROOT/('manifest-'+a.model+'.json'), ROOT/(a.model+'-validation.json')], [] if a.output=='-' else [a.output])
  import torch
  from transformers import AutoModelForCausalLM,AutoTokenizer
  nice()
@@ -118,16 +122,20 @@ def main():
  finally:
   if fin is not sys.stdin: fin.close()
   if fout is not sys.stdout: fout.close()
+def benchmark_preflight(a, size=None):
+ size = size or a.model
+ modes=['default','utility'] if a.instruction_mode=='both' else [a.instruction_mode]
+ destinations=[Path(a.output)/name for name in ['measurements.jsonl','validation.json','runtime.json']+[mode+suffix for mode in modes for suffix in ['-scores.jsonl','-unique.jsonl']]]
+ if a.quant=='int8': destinations.append(ROOT/(size+'-validation.json'))
+ preflight_files([a.input,a.control_cache,ROOT/('model-'+size),ROOT/('manifest-'+size+'.json')],destinations)
+
 def benchmark(s,a):
+ benchmark_preflight(a, s.size)
  rows=[json.loads(x) for x in Path(a.input).read_text().splitlines() if x.strip()]; unique={}
  for r in rows: unique.setdefault(key(r),r)
  modes=['default','utility'] if a.instruction_mode=='both' else [a.instruction_mode]
  validation_rows=[SMOKE]+list(unique.values())[:6]
  cached=checked_control_cache(a.control_cache,s,validation_rows,modes)
- destinations=[Path(a.output)/name for name in ['measurements.jsonl','validation.json','runtime.json']+[mode+suffix for mode in modes for suffix in ['-scores.jsonl','-unique.jsonl']]]
- if a.quant=='int8': destinations.append(ROOT/(s.size+'-validation.json'))
- distinct_files(a.input,*destinations)
- if a.control_cache: distinct_files(a.control_cache,*destinations)
  base=Path(a.output); base.mkdir(exist_ok=True,parents=True)
  evidence=open(base/'measurements.jsonl','w'); cpu0=time.process_time()
  meta={'model':s.size,'revision':PINS[s.size],'load_ms':s.load_ms,'startup_ms':(time.perf_counter()-START)*1000,'torch':torch.__version__,'transformers':__import__('transformers').__version__,'cuda':torch.version.cuda,'device':'cpu','threads':torch.get_num_threads(),'interop_threads':torch.get_num_interop_threads(),'env':{k:os.environ.get(k) for k in ['OMP_NUM_THREADS','MKL_NUM_THREADS','OPENBLAS_NUM_THREADS','CUDA_VISIBLE_DEVICES']},'nice':priority(),'loadavg_start':os.getloadavg(),'platform':platform.platform(),'rows':len(rows),'candidate_pairs':sum(len(r['candidates']) for r in rows),'unique_requests':len(unique),'dedup':'identical query plus ordered printed candidate texts only; IDs restored','pid':os.getpid()}
