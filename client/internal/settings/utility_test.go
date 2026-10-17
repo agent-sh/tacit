@@ -36,3 +36,35 @@ func TestUtilityConfigurationPathsOverridesAndValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestUtilityProvidersNeedTheirFieldsAndAThreshold(t *testing.T) {
+	for _, key := range []string{"TACIT_UTILITY_PROVIDER", "TACIT_UTILITY_MODEL", "TACIT_UTILITY_ENDPOINT", "TACIT_UTILITY_REGION", "TACIT_UTILITY_THRESHOLD"} {
+		clear(t, key)
+	}
+	file := filepath.Join(t.TempDir(), "config.yaml")
+	good := "utility:\n  provider: bedrock\n  model: us.amazon.nova-micro-v1:0\n  region: us-west-2\n  threshold: 0.95\n"
+	if err := os.WriteFile(file, []byte(good), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Load(file, true); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("TACIT_UTILITY_PROVIDER") != "bedrock" || os.Getenv("TACIT_UTILITY_MODEL") != "us.amazon.nova-micro-v1:0" || os.Getenv("TACIT_UTILITY_REGION") != "us-west-2" {
+		t.Fatal("bedrock settings not exported")
+	}
+	for _, bad := range []string{
+		"utility: {provider: bedrock, threshold: 0.9}",                                  // no model
+		"utility: {provider: bedrock, model: m}",                                        // no threshold
+		"utility: {provider: systemone, threshold: 0.8}",                                // no endpoint
+		"utility: {provider: openai, endpoint: 'https://x.example/v1', threshold: 0.8}", // no model
+		"utility: {provider: jev, model: other}",                                        // jev is pinned
+		"utility: {provider: jev, endpoint: 'https://x.example'}",                       // jev is pinned
+	} {
+		if err := os.WriteFile(file, []byte(bad), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := Load(file, true); err == nil {
+			t.Fatalf("invalid settings accepted: %s", bad)
+		}
+	}
+}

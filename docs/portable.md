@@ -78,20 +78,21 @@ The integrations and model runners are separate. You can use Muse for memory and
 
 Transcript mining and automatic owner-quote lookup currently read Claude Code and Codex histories. Muse, agy, Grok, pi and Hermes can read and write memory through their integrations; their transcripts are not yet mined. Owner contributions and decisions in the app remain available without Claude. Curation refuses an empty owner-evidence corpus rather than guessing whether an agent paraphrase is an owner ruling.
 
-### Optional Jev utility selector
+### Optional utility selector
 
-This opt-in sends redacted prompts and candidate summaries to the official TypeSafe API. It uses paid hosted inference. No fact bodies are sent. Keep the key in the environment or a private dotenv file, not in YAML:
+A model judges which candidate facts help each prompt. It sends redacted prompts and candidate summaries to the provider you choose; no fact bodies are sent. Recommendations, every provider's setup and the benchmark are in [Choosing what each prompt sees](selectors.md). Keep keys in the environment or a private dotenv file, not in YAML:
 
 ```yaml
 utility:
-  provider: jev
-  threshold: 0.70
+  provider: jev          # jev | systemone | bedrock | openai
+  threshold: 0.70        # required for every provider except jev
   timeout: 2s
   key_file: ./typesafe.env
   audit_dir: ~/.local/state/tacit/utility
+  # model, endpoint, region: for systemone, bedrock and openai
 ```
 
-The key file contains `TYPESAFE_API_KEY=...`. Only that variable is read from a regular file; the file is not executed. An inherited `TYPESAFE_API_KEY` wins. The model is pinned to `jev-1.13.0`. The timeout covers key reading, redaction and the request, defaults to 2s, and cannot exceed 2s. Cancellation allows up to 250 ms of subprocess cleanup; optional audit adds at most 100 ms of wait. Missing credentials, unavailable redaction, timeout or invalid API responses use the original local selector. Clear `provider` to return to local-only selection.
+`jev` is pinned to `jev-1.13.0` at the official TypeSafe origin and reads `TYPESAFE_API_KEY`. `systemone` posts the same request to `endpoint` (any System One-compatible server). `bedrock` calls Converse for `model` in `region` (default `us-east-1`) and reads `AWS_BEARER_TOKEN_BEDROCK` (a Bedrock API key). `openai` posts to `endpoint` + `/chat/completions` with `model`. `systemone` and `openai` read `TACIT_UTILITY_API_KEY`, which is optional for a local server. Only the provider's own variable is read from a regular `key_file`; the file is not executed, and an inherited variable wins. A key is sent only as a bearer token to its provider's endpoint, so a TypeSafe or AWS key never reaches a custom endpoint. Endpoints must use HTTPS unless they are on `localhost`, `127.0.0.1` or `::1`. The timeout covers key reading, redaction and the request, defaults to 2s, and cannot exceed 2s. Cancellation allows up to 250 ms of subprocess cleanup; optional audit adds at most 100 ms of wait. Missing credentials, invalid settings, unavailable redaction, timeout or invalid responses use the original local selector. Clear `provider` to return to local-only selection.
 
 The audit directory is optional. It contains private daily JSONL files with redacted task and summary text, scores, selected flags and fallback reasons. Keep it out of the store and source control. On Unix, the directory must be owned by the caller and private (0700); files use mode 0600, a best-effort 10 MiB daily cap, and eight-day retention. Symlinks, hard links and special files are refused. Private audit is currently disabled on non-Unix systems rather than claiming Unix permissions enforce Windows ACLs; scoring still works. Audit failure or a stalled filesystem does not block a prompt. See [the measured comparison](../eval/JEV.md) for limits and the threshold tradeoff.
 
@@ -99,12 +100,17 @@ The audit directory is optional. It contains private daily JSONL files with reda
 
 | variable | default | what |
 |---|---|---|
-| `TACIT_UTILITY_PROVIDER` | empty (local only) | `jev` enables hosted utility selection |
-| `TACIT_UTILITY_THRESHOLD` | `0.70` | Noul cutoff in [0,1] |
+| `TACIT_UTILITY_PROVIDER` | empty (local only) | `jev`, `systemone`, `bedrock` or `openai` enables utility selection |
+| `TACIT_UTILITY_MODEL` | empty | model for `systemone` (optional), `bedrock` and `openai` |
+| `TACIT_UTILITY_ENDPOINT` | empty | `systemone` POST URL or `openai` base URL; HTTPS unless loopback |
+| `TACIT_UTILITY_REGION` | `us-east-1` | Bedrock region for `bedrock` |
+| `TACIT_UTILITY_THRESHOLD` | `0.70` for `jev`; required otherwise | score cutoff in [0,1] |
 | `TACIT_UTILITY_TIMEOUT` | `2s` | redaction + request deadline, positive and at most `2s` |
-| `TACIT_UTILITY_KEY_FILE` | empty | dotenv file containing only the needed `TYPESAFE_API_KEY` entry |
+| `TACIT_UTILITY_KEY_FILE` | empty | dotenv file; only the provider's key variable is read |
 | `TACIT_UTILITY_AUDIT_DIR` | empty (no audit) | private daily selection receipts |
-| `TYPESAFE_API_KEY` | empty | credential sent only to the official TypeSafe origin |
+| `TYPESAFE_API_KEY` | empty | `jev` credential, sent only to the official TypeSafe origin |
+| `AWS_BEARER_TOKEN_BEDROCK` | empty | `bedrock` credential, sent only to `bedrock-runtime.<region>.amazonaws.com` |
+| `TACIT_UTILITY_API_KEY` | empty | `systemone`/`openai` credential, sent only to the configured endpoint |
 | `TACIT_SETTINGS` | platform config file above | optional client YAML settings |
 | `TACIT_STORE` | `~/.local/share/tacit/store` | the store clone |
 | `TACIT_CONFIG` | `~/.config/tacit` | keys |
