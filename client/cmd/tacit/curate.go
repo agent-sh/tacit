@@ -32,7 +32,16 @@ type curatorState struct {
 	// Restated holds the notes that only restate a curated fact or an earlier
 	// note (curate.Restated, no model): note -> the fact it restates.
 	Restated map[string]string `json:"restated,omitempty"`
+	// Failed counts, per note, the runs in which the note failed on its own:
+	// the curator's answer for a batch of just that note was malformed or
+	// invalid. A note held here maxNoteFailures times is set aside.
+	Failed map[string]int `json:"failed,omitempty"`
 }
+
+// maxNoteFailures is how often a note may fail alone before it is set aside.
+// Without it, one note the model cannot split fails again in every run and
+// costs a bisection each time.
+const maxNoteFailures = 3
 
 // runCurate implements `tacit curate [--model M] [--max-batches N] [--dry-run]`.
 //
@@ -109,6 +118,7 @@ func runCurate(args []string) int {
 		}
 	}
 	var pending []*fact.Fact
+	heldBack := 0 // notes that failed alone maxNoteFailures times
 	noteByName := map[string]*fact.Fact{}
 	for _, f := range facts {
 		if f.InInbox() {
@@ -117,6 +127,10 @@ func runCurate(args []string) int {
 		// An owner note saying facts are not their words is not split into
 		// facts: the disowned step acts on it (curateDisowned).
 		if f.InInbox() && !curatedOrigins[f.Meta.Name] && cst.Empty[f.Meta.Name] == "" && cst.Restated[f.Meta.Name] == "" && !disowningNote(f) {
+			if cst.Failed[f.Meta.Name] >= maxNoteFailures {
+				heldBack++
+				continue
+			}
 			pending = append(pending, f)
 		}
 	}
@@ -200,13 +214,42 @@ func runCurate(args []string) int {
 		}
 	}
 
-	for bi, batch := range batches {
+	if heldBack > 0 {
+		fmt.Fprintf(os.Stderr, "curate: %d note(s) set aside after failing alone %d times (curator.json \"failed\")\n", heldBack, maxNoteFailures)
+	}
+	if cst.Failed == nil {
+		cst.Failed = map[string]int{}
+	}
+	// A batch the model answers with invalid output is split in two and both
+	// halves go to the front of the queue, so one note it cannot split no
+	// longer keeps the rest of its batch pending in every run. A note that
+	// fails alone stays pending and is counted in cst.Failed.
+	queue := batches
+	bi := -1
+	retry := func(batch []*fact.Fact, err error) bool {
+		if !errors.Is(err, modelrun.ErrInvalidResult) {
+			return false
+		}
+		if len(batch) == 1 {
+			cst.Failed[batch[0].Meta.Name]++
+			return false
+		}
+		h := len(batch) / 2
+		queue = append([][]*fact.Fact{batch[:h], batch[h:]}, queue...)
+		rep.Splits++
+		fmt.Fprintf(os.Stderr, "curate: %v; splitting the batch of %d note(s) in two\n", err, len(batch))
+		return true
+	}
+	for len(queue) > 0 {
+		batch := queue[0]
+		queue = queue[1:]
+		bi++
 		if err := ctx.Err(); err != nil {
-			fmt.Fprintf(os.Stderr, "curate: %v, %d batch(es) wait for the next run\n", err, len(batches)-bi)
+			fmt.Fprintf(os.Stderr, "curate: %v, %d batch(es) wait for the next run\n", err, len(queue)+1)
 			break
 		}
 		if time.Now().After(batchesUntil) {
-			fmt.Fprintf(os.Stderr, "curate: budget %s spent, %d batch(es) wait for the next run\n", *budget, len(batches)-bi)
+			fmt.Fprintf(os.Stderr, "curate: budget %s spent, %d batch(es) wait for the next run\n", *budget, len(queue)+1)
 			break
 		}
 		res, cost, err := curate.RunCLI(ctx, *model, fmt.Sprintf(curate.SplitPrompt, host, host, curate.Render(batch)))
@@ -219,6 +262,9 @@ func runCurate(args []string) int {
 		}
 		entries, err := curate.ParseChecked(res)
 		if err != nil {
+			if retry(batch, err) {
+				continue
+			}
 			rep.Errors++
 			rep.FailedBatches++
 			fmt.Fprintln(os.Stderr, "curate:", err)
@@ -249,6 +295,9 @@ func runCurate(args []string) int {
 				recoveredEntries, rerr = curate.ParseChecked(res2)
 			}
 			if rerr != nil {
+				if retry(batch, rerr) {
+					continue
+				}
 				rep.Errors++
 				rep.FailedBatches++
 				fmt.Fprintln(os.Stderr, "curate: rulings:", rerr)
@@ -293,6 +342,9 @@ func runCurate(args []string) int {
 		}
 
 		if invalidBatch {
+			if retry(batch, fmt.Errorf("%w: invalid origin or unbacked owner ruling", modelrun.ErrInvalidResult)) {
+				continue
+			}
 			rep.Errors++
 			rep.FailedBatches++
 			fmt.Fprintln(os.Stderr, "curate: invalid origin or unbacked owner ruling; batch stays pending")

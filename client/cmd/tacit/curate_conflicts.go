@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -130,25 +131,66 @@ func conflictPairs(ctx context.Context, s *store.Store, facts []*fact.Fact, host
 // existing fact when supersedeRoute allows it (written lists the files it
 // changed; nothing is changed with dry). Returns the review lines.
 func judgePairs(ctx context.Context, s *store.Store, pairs []curate.Pair, refs []judgedPair, facts []*fact.Fact, dry bool, rep *curate.Report) (review, written []string, err error) {
-	var verdicts []curate.Verdict
-	for start := 0; start < len(pairs); start += 25 {
-		end := min(start+25, len(pairs))
-		ans, c2, err := judgeRun(ctx, curate.JudgeModel, fmt.Sprintf(curate.ConflictPrompt, curate.RenderPairs(pairs[start:end])))
+	// judge returns one verdict per pair. An invalid answer (the wrong number
+	// of verdicts, an unknown label) splits the chunk in two and asks again,
+	// so one pair the judge stumbles on no longer fails every pair of the
+	// run. A pair that gets no valid verdict alone is left unjudged and goes
+	// to review. A model or transport error still stops the check.
+	var judge func(ps []curate.Pair) ([]curate.Verdict, []bool, error)
+	judge = func(ps []curate.Pair) ([]curate.Verdict, []bool, error) {
+		ans, c2, err := judgeRun(ctx, curate.JudgeModel, fmt.Sprintf(curate.ConflictPrompt, curate.RenderPairs(ps)))
 		rep.JudgeCalls++
 		rep.CostUSD += c2
 		if err != nil {
 			return nil, nil, fmt.Errorf("judge: %w", err)
 		}
-		checked, err := curate.ParseVerdictsChecked(ans, end-start)
+		checked, err := curate.ParseVerdictsChecked(ans, len(ps))
+		if err == nil {
+			return checked, make([]bool, len(ps)), nil
+		}
+		if !errors.Is(err, modelrun.ErrInvalidResult) {
+			return nil, nil, err
+		}
+		if len(ps) == 1 {
+			return []curate.Verdict{curate.NoConflict}, []bool{true}, nil
+		}
+		h := len(ps) / 2
+		v1, u1, err := judge(ps[:h])
 		if err != nil {
 			return nil, nil, err
 		}
-		verdicts = append(verdicts, checked...)
+		v2, u2, err := judge(ps[h:])
+		if err != nil {
+			return nil, nil, err
+		}
+		return append(v1, v2...), append(u1, u2...), nil
+	}
+	var verdicts []curate.Verdict
+	var unjudged []bool
+	for start := 0; start < len(pairs); start += 25 {
+		end := min(start+25, len(pairs))
+		v, u, err := judge(pairs[start:end])
+		if err != nil {
+			return nil, nil, err
+		}
+		verdicts = append(verdicts, v...)
+		unjudged = append(unjudged, u...)
 	}
 	// Every call is checked before the first mutation, including later chunks.
 	for k, v := range verdicts {
 		pm := refs[k]
 		nf := facts[pm.newIdx]
+		if unjudged[k] {
+			rep.JudgeUnchecked++
+			other := ""
+			if pm.existing != nil {
+				other = pm.existing.Name
+			} else {
+				other = facts[pm.otherIdx].Meta.Name
+			}
+			review = append(review, fmt.Sprintf("- CONFLICT CHECK FAILED: [[%s]] vs [[%s]]: the judge gave no valid verdict for this pair; compare them by hand", nf.Meta.Name, other))
+			continue
+		}
 		switch v {
 		case curate.Contradicts:
 			rep.Contradicts++
