@@ -111,26 +111,45 @@ func (r *verifyRun) runStale(ctx context.Context, s *store.Store, rs *reviewServ
 	memDir := memoryDir(home)
 	total, cost := 0, 0.0
 	var lastErr error
-	for i := 0; i < len(open); i += r.per {
-		end := min(i+r.per, len(open))
-		batch := open[i:end]
+	prefix := fmt.Sprintf(verifyStalePrompt, s.Dir, r.cwd, memDir, "")
+	// Cache timeline construction when a size boundary defers a finding.
+	cache := make(map[int]string)
+	batchNumber := 0
+	for i := 0; i < len(open); {
+		start := i
+		end, lines, err := nextVerifyBatch(i, len(open), r.per, len(prefix), func(j int) string {
+			if line, ok := cache[j]; ok {
+				return line
+			}
+			line := r.staleLine(ctx, rs, open[j])
+			cache[j] = line
+			return line
+		})
+		i = end
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "verify: stale %s: %v\n", open[start].ID, err)
+			lastErr = err
+			continue
+		}
+		batchNumber++
+		batch := open[start:end]
 		inBatch := map[string]staleItem{}
-		var lines []string
 		for _, it := range batch {
 			inBatch[it.ID] = it
 			if !r.dry {
 				tries[it.ID]++
 			}
-			lines = append(lines, r.staleLine(ctx, rs, it))
+
 		}
 		if !r.dry {
 			r.saveAttempts(tries)
 		}
-		prompt := fmt.Sprintf(verifyStalePrompt, s.Dir, r.cwd, memDir, strings.Join(lines, "\n"))
+		prompt := prefix + strings.Join(lines, "\n")
+		fmt.Fprintf(os.Stderr, "verify: stale batch %d: findings %d-%d, %d payload bytes (limit %d)\n", batchNumber, start+1, end, len(prompt), verifyBatchBytes)
 		vs, model, c, timedOut, err := r.callBatch(ctx, call, prompt)
 		cost += c
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "verify: stale batch %d: %v\n", i/r.per+1, err)
+			fmt.Fprintf(os.Stderr, "verify: stale batch %d: %v\n", batchNumber, err)
 			lastErr = err
 			if c == 0 && !timedOut && !r.dry {
 				for _, it := range batch {
@@ -142,7 +161,7 @@ func (r *verifyRun) runStale(ctx context.Context, s *store.Store, rs *reviewServ
 		}
 		ops, err := r.opsFromStale(vs, inBatch)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "verify: stale batch %d: %v\n", i/r.per+1, err)
+			fmt.Fprintf(os.Stderr, "verify: stale batch %d: %v\n", batchNumber, err)
 			lastErr = err
 			if !r.dry {
 				for _, it := range batch {
@@ -171,7 +190,7 @@ func (r *verifyRun) runStale(ctx context.Context, s *store.Store, rs *reviewServ
 		if err != nil {
 			var rej *store.Rejected
 			if errors.As(err, &rej) {
-				fmt.Fprintf(os.Stderr, "verify: stale batch %d refused by the server: %s\n", i/r.per+1, rej.Reason)
+				fmt.Fprintf(os.Stderr, "verify: stale batch %d refused by the server: %s\n", batchNumber, rej.Reason)
 				lastErr = err
 				continue
 			}

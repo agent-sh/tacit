@@ -287,6 +287,37 @@ func shortText(s string) string {
 	return s
 }
 
+// Count UTF-8 bytes as a conservative upper bound on serialized characters.
+// Leave room below Codex's 1,048,576-character limit for its runner envelope
+// and, separately, for evidence gathered after the initial batch.
+const verifyBatchBytes = 900_000
+const verifyRequestBytes = 1_000_000
+
+// nextVerifyBatch preserves order and the count limit without splitting a
+// finding. An oversized singleton is skipped with an error, not sent or charged
+// an attempt; the caller can still process subsequent findings.
+func nextVerifyBatch(start, total, per, prefixBytes int, line func(int) string) (int, []string, error) {
+	end, size := start, prefixBytes
+	var lines []string
+	for end < total && end-start < per {
+		text := line(end)
+		extra := len(text)
+		if len(lines) > 0 {
+			extra++
+		} // strings.Join separator
+		if size+extra > verifyBatchBytes {
+			if end == start {
+				return start + 1, nil, fmt.Errorf("finding %d needs %d payload bytes, over the %d-byte batch limit", start+1, size+extra, verifyBatchBytes)
+			}
+			break
+		}
+		lines = append(lines, text)
+		size += extra
+		end++
+	}
+	return end, lines, nil
+}
+
 // runVerify implements `tacit verify [--model M] [--max N] [--batch N] [--budget USD] [--dry-run]`.
 func runVerify(args []string) int {
 	fsf := flag.NewFlagSet("verify", flag.ExitOnError)
@@ -475,30 +506,40 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 	}
 	total, cost := 0, 0.0
 	var lastErr error
-	for i := 0; i < len(open); i += r.per {
-		end := i + r.per
-		if end > len(open) {
-			end = len(open)
+	prefix := fmt.Sprintf(verifyPrompt, s.Dir, r.cwd, memDir, "")
+	batchNumber := 0
+	for i := 0; i < len(open); {
+		start := i
+		end, lines, err := nextVerifyBatch(i, len(open), r.per, len(prefix), func(j int) string {
+			it := open[j]
+			b, _ := json.Marshal(slim{it.ID, it.Kind, it.State, it.A, it.B, ownerNoteLines(it.Notes)})
+			return string(b)
+		})
+		i = end
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "verify: %s: %v\n", open[start].ID, err)
+			lastErr = err
+			continue
 		}
-		batch := open[i:end]
+		batchNumber++
+		batch := open[start:end]
 		inBatch := map[string]reviewItem{}
-		var lines []string
 		for _, it := range batch {
 			inBatch[it.ID] = it
 			if !r.dry {
 				tries[it.ID]++
 			}
-			b, _ := json.Marshal(slim{it.ID, it.Kind, it.State, it.A, it.B, ownerNoteLines(it.Notes)})
-			lines = append(lines, string(b))
+
 		}
 		if !r.dry {
 			r.saveAttempts(tries)
 		}
-		prompt := fmt.Sprintf(verifyPrompt, s.Dir, r.cwd, memDir, strings.Join(lines, "\n"))
+		prompt := prefix + strings.Join(lines, "\n")
+		fmt.Fprintf(os.Stderr, "verify: batch %d: findings %d-%d, %d payload bytes (limit %d)\n", batchNumber, start+1, end, len(prompt), verifyBatchBytes)
 		vs, model, c, timedOut, err := r.callBatch(ctx, call, prompt)
 		cost += c
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "verify: batch %d: %v\n", i/r.per+1, err)
+			fmt.Fprintf(os.Stderr, "verify: batch %d: %v\n", batchNumber, err)
 			lastErr = err
 			if c == 0 && !timedOut && !r.dry {
 				// The model never ran: this attempt does not count. A timeout
@@ -514,7 +555,7 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 		if err != nil {
 			// Nothing from this batch may land unredacted; it does not count
 			// against the findings either.
-			fmt.Fprintf(os.Stderr, "verify: batch %d: %v\n", i/r.per+1, err)
+			fmt.Fprintf(os.Stderr, "verify: batch %d: %v\n", batchNumber, err)
 			lastErr = err
 			if !r.dry {
 				for _, it := range batch {
@@ -543,7 +584,7 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 		if err != nil {
 			var rej *store.Rejected
 			if errors.As(err, &rej) {
-				fmt.Fprintf(os.Stderr, "verify: batch %d refused by the server: %s\n", i/r.per+1, rej.Reason)
+				fmt.Fprintf(os.Stderr, "verify: batch %d refused by the server: %s\n", batchNumber, rej.Reason)
 				lastErr = err
 				continue
 			}
