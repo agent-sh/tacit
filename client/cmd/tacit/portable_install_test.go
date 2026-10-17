@@ -77,6 +77,7 @@ func TestWindowsTasksUseUserRegistrationAndPortableArguments(t *testing.T) {
 
 func TestCuratorInstallOnMacUsesItsOwnAgentAndLogs(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("TACIT_STORE", filepath.Join(home, "facts")) // not this machine's own store
 	if code := installCurator("darwin", home, "/opt/tacit", nil); code != 0 {
 		t.Fatalf("install: %d", code)
 	}
@@ -151,6 +152,7 @@ func TestConfiguredEntrypointsKeepTheSelectedConfigAndStore(t *testing.T) {
 
 func TestCuratorInstallHonorsXDGConfigHome(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("TACIT_STORE", filepath.Join(home, "facts")) // not this machine's own store
 	xdg := filepath.Join(t.TempDir(), "xdg")
 	t.Setenv("XDG_CONFIG_HOME", xdg)
 	if code := installCurator("linux", home, "/opt/tacit", nil); code != 0 {
