@@ -8,6 +8,7 @@
 package dream
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -66,6 +67,7 @@ DIGEST:
 // State is the per-file read cursor, persisted between runs.
 type State struct {
 	Offsets   map[string]int64    `json:"offsets"`
+	Skipped   int                 `json:"skipped_long_lines,omitempty"` // lines longer than maxReadBytes passed over
 	LastRun   string              `json:"last_run"`
 	Completed map[string][]string `json:"completed_windows,omitempty"`
 }
@@ -218,6 +220,17 @@ func Windows(sources []Source, st *State, fresh bool) ([]Window, error) {
 			// Only complete lines: cut at the last newline.
 			last := strings.LastIndexByte(string(buf), '\n')
 			if last < 0 {
+				// A full read with no newline is one line longer than
+				// maxReadBytes (a pasted blob or a huge tool result). Waiting
+				// would wait forever: every run would read the same bytes.
+				// Skip past that line once it is complete; a line still being
+				// written keeps the cursor.
+				if int64(n) == maxReadBytes {
+					if next, ok := nextLineStart(f, off+int64(n)); ok {
+						st.Offsets[f] = next
+						st.Skipped++
+					}
+				}
 				continue
 			}
 			buf = buf[:last+1]
@@ -233,6 +246,31 @@ func Windows(sources []Source, st *State, fresh bool) ([]Window, error) {
 		}
 	}
 	return ws, nil
+}
+
+// nextLineStart is the offset just after the first newline at or after from,
+// and false when the file ends first (the line is not complete yet).
+func nextLineStart(path string, from int64) (int64, bool) {
+	fh, err := os.Open(path)
+	if err != nil {
+		return 0, false
+	}
+	defer fh.Close()
+	if _, err := fh.Seek(from, 0); err != nil {
+		return 0, false
+	}
+	buf := make([]byte, 1<<20)
+	pos := from
+	for {
+		n, err := fh.Read(buf)
+		if i := bytes.IndexByte(buf[:n], '\n'); i >= 0 {
+			return pos + int64(i) + 1, true
+		}
+		pos += int64(n)
+		if err != nil {
+			return 0, false
+		}
+	}
 }
 
 // loadExclude reads session ids the dreamer must never read: eval harness
