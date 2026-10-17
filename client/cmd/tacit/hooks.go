@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -218,11 +219,25 @@ func sessionStartHits(ctx context.Context, ix *search.Index, sit search.Situatio
 // subagent reports) are not requests. A lone syntactic identifier may reach
 // retrieval, which still enforces document frequency and score thresholds.
 func promptWorthy(p string) bool {
-	if p == "" || strings.HasPrefix(p, "<") {
+	if p == "" || strings.HasPrefix(p, "<") || selfContained(p) {
 		return false
 	}
 	terms := search.Terms(p)
 	return len(terms) >= 2 || (len(terms) == 1 && search.SpecificIdentifier(terms[0]))
+}
+
+var (
+	literalWord = regexp.MustCompile(`(?i)\bliteral\b`)
+	textOp      = regexp.MustCompile(`(?i)\b(upper-?case|lower-?case|title-?case|revers(e|ed|ing)|spell(ed|ing)?|length of|count(ing)? (the )?(characters|chars|letters|words))\b`)
+)
+
+// selfContained: a pure text operation on a literal the prompt itself supplies
+// ("the uppercase form of this literal", "count the characters in the literal
+// string X") needs no memory, so no fact is retrieved and no scorer is asked.
+// Both the word "literal" and the operation must appear, so code tasks that
+// mention either one alone still get facts. Measured basis: eval/DELIVERY.md.
+func selfContained(p string) bool {
+	return literalWord.MatchString(p) && textOp.MatchString(p)
 }
 
 // promptHits is the UserPromptSubmit block for prompt p. The curated facts
