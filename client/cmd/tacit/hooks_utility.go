@@ -14,7 +14,9 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
+	"regexp"
 
 	"sort"
 	"strconv"
@@ -32,16 +34,43 @@ const utilityQuestion = "Does this memory add concrete information or a constrai
 const utilityTrue = "The memory provides an additional actionable fact, constraint, preference, or procedure that is relevant to fulfilling the task. It is not already stated in the task."
 const utilityFalse = "The memory only repeats or paraphrases the task, shares its topic without helping, or suggests an inappropriate or contradictory action."
 
+// Utility providers. jev is the measured default; the others let the owner
+// plug in any model that answers the same rubric.
+const (
+	providerJev       = "jev"       // TypeSafe Jev, pinned model and origin
+	providerSystemOne = "systemone" // any /v1/systemone-compatible endpoint
+	providerBedrock   = "bedrock"   // any Amazon Bedrock model via Converse
+	providerOpenAI    = "openai"    // any OpenAI-compatible /chat/completions
+)
+
 type utilityConfig struct {
+	Provider  string
+	Model     string
+	Endpoint  string // systemone: the POST URL; openai: the base URL; bedrock: derived from Region
+	Region    string
+	KeyVar    string // the only variable read from the environment or key_file
+	KeyNeeded bool
 	Threshold float64
 	Timeout   time.Duration
 	KeyFile   string
 	AuditDir  string
 }
 
+var bedrockRegion = regexp.MustCompile(`^[a-z]{2}(-gov)?-[a-z]+-[0-9]$`)
+
+func utilityProvider() string {
+	switch p := os.Getenv("TACIT_UTILITY_PROVIDER"); p {
+	case providerJev, providerSystemOne, providerBedrock, providerOpenAI:
+		return p
+	}
+	return ""
+}
+
 func utilityConfiguration() (utilityConfig, error) {
-	c := utilityConfig{Threshold: 0.70, Timeout: 2 * time.Second, KeyFile: os.Getenv("TACIT_UTILITY_KEY_FILE"), AuditDir: os.Getenv("TACIT_UTILITY_AUDIT_DIR")}
-	if raw := os.Getenv("TACIT_UTILITY_THRESHOLD"); raw != "" {
+	c := utilityConfig{Provider: utilityProvider(), Threshold: 0.70, Timeout: 2 * time.Second, KeyFile: os.Getenv("TACIT_UTILITY_KEY_FILE"), AuditDir: os.Getenv("TACIT_UTILITY_AUDIT_DIR"),
+		Model: os.Getenv("TACIT_UTILITY_MODEL"), Endpoint: os.Getenv("TACIT_UTILITY_ENDPOINT"), Region: os.Getenv("TACIT_UTILITY_REGION")}
+	raw := os.Getenv("TACIT_UTILITY_THRESHOLD")
+	if raw != "" {
 		v, err := strconv.ParseFloat(raw, 64)
 		if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1 {
 			return c, errors.New("invalid_threshold")
@@ -55,30 +84,91 @@ func utilityConfiguration() (utilityConfig, error) {
 		}
 		c.Timeout = v
 	}
+	switch c.Provider {
+	case providerJev:
+		// Pinned: the TypeSafe key is only ever sent to the official origin.
+		c.Model, c.Endpoint, c.KeyVar, c.KeyNeeded = utilityModel, utilityEndpoint, "TYPESAFE_API_KEY", true
+		return c, nil
+	case providerSystemOne:
+		c.KeyVar = "TACIT_UTILITY_API_KEY"
+		if !allowedEndpoint(c.Endpoint) {
+			return c, errors.New("invalid_endpoint")
+		}
+	case providerOpenAI:
+		c.KeyVar = "TACIT_UTILITY_API_KEY"
+		c.Endpoint = strings.TrimRight(c.Endpoint, "/")
+		if !allowedEndpoint(c.Endpoint) || c.Model == "" {
+			return c, errors.New("invalid_endpoint_or_model")
+		}
+	case providerBedrock:
+		c.KeyVar, c.KeyNeeded = "AWS_BEARER_TOKEN_BEDROCK", true
+		if c.Region == "" {
+			c.Region = "us-east-1"
+		}
+		if !bedrockRegion.MatchString(c.Region) || c.Model == "" {
+			return c, errors.New("invalid_region_or_model")
+		}
+		c.Endpoint = "https://bedrock-runtime." + c.Region + ".amazonaws.com/model/" + url.PathEscape(c.Model) + "/converse"
+	default:
+		return c, errors.New("utility_disabled")
+	}
+	// Scores from different models are not on one scale: a threshold must be chosen per model.
+	if raw == "" {
+		return c, errors.New("threshold_required")
+	}
 	return c, nil
 }
 
-// Read only the required key, without executing a shell or importing unrelated
-// variables from an env file into the hook's process.
-func utilityKey(path string) (string, error) {
-	if k := strings.TrimSpace(os.Getenv("TYPESAFE_API_KEY")); k != "" {
+// allowedEndpoint: HTTPS anywhere, plain HTTP only on loopback (a local model server).
+func allowedEndpoint(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil {
+		return false
+	}
+	if u.Scheme == "https" {
+		return true
+	}
+	host := u.Hostname()
+	return u.Scheme == "http" && (host == "localhost" || host == "127.0.0.1" || host == "::1")
+}
+
+// Read only the provider's key variable, without executing a shell or importing
+// unrelated variables from an env file into the hook's process.
+func providerKey(c utilityConfig) (string, error) {
+	key, err := readUtilityKey(c.KeyVar, c.KeyFile)
+	if errors.Is(err, errKeyUnavailable) && !c.KeyNeeded {
+		return "", nil // a local endpoint may need no key
+	}
+	return key, err
+}
+
+var errKeyUnavailable = errors.New("key_unavailable")
+
+// utilityKey reads the Jev key (TYPESAFE_API_KEY) from the environment or a key file.
+func utilityKey(path string) (string, error) { return readUtilityKey("TYPESAFE_API_KEY", path) }
+
+func readUtilityKey(name, path string) (string, error) {
+	if k := strings.TrimSpace(os.Getenv(name)); k != "" {
 		return k, nil
+	}
+	if path == "" {
+		return "", errKeyUnavailable
 	}
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() {
-		return "", errors.New("key_unavailable")
+		return "", errKeyUnavailable
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return "", errors.New("key_unavailable")
+		return "", errKeyUnavailable
 	}
 	defer f.Close()
 	scan := bufio.NewScanner(io.LimitReader(f, 1<<20))
 	for scan.Scan() {
 		line := strings.TrimSpace(strings.TrimPrefix(scan.Text(), "\ufeff"))
 		line = strings.TrimPrefix(line, "export ")
-		name, value, ok := strings.Cut(line, "=")
-		if !ok || strings.TrimSpace(name) != "TYPESAFE_API_KEY" {
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || strings.TrimSpace(key) != name {
 			continue
 		}
 		value = strings.TrimSpace(value)
@@ -101,7 +191,7 @@ func utilityKey(path string) (string, error) {
 		}
 		return value, nil
 	}
-	return "", errors.New("key_unavailable")
+	return "", errKeyUnavailable
 }
 
 type utilityAnswer struct {
@@ -114,7 +204,7 @@ type utilityQuestionBody struct {
 	Criteria     map[string]string `json:"criteria"`
 }
 type utilityRequest struct {
-	Model     string                         `json:"model"`
+	Model     string                         `json:"model,omitempty"`
 	State     map[string]string              `json:"state"`
 	Questions map[string]utilityQuestionBody `json:"questions"`
 }
@@ -145,7 +235,7 @@ type utilityAudit struct {
 
 func utilityPromptSelection(ctx context.Context, p string, hits, derived []search.Hit, seen map[string]bool, floor float64) []search.Hit {
 	fallback := promptSelection(hits, derived, seen, floor)
-	if os.Getenv("TACIT_UTILITY_PROVIDER") != "jev" || len(hits)+len(derived) == 0 {
+	if utilityProvider() == "" || len(hits)+len(derived) == 0 {
 		return fallback
 	}
 	cfg, _ := utilityConfiguration()
@@ -184,7 +274,7 @@ func utilityPromptSelection(ctx context.Context, p string, hits, derived []searc
 	}
 	if out.audit.Model == "" {
 		hash := sha256.Sum256([]byte(p))
-		out.audit.Model = utilityModel
+		out.audit.Model = cfg.Model
 		out.audit.Time = time.Now().UTC()
 		out.audit.Threshold = cfg.Threshold
 		out.audit.QueryHash = hex.EncodeToString(hash[:])
@@ -219,7 +309,7 @@ func finishUtilitySelection(selected []search.Hit, audit utilityAudit, dir strin
 
 func utilityPromptSelectionWork(ctx context.Context, p string, hits, derived []search.Hit, seen map[string]bool, floor float64, capture func(utilityAudit)) []search.Hit {
 	fallback := promptSelection(hits, derived, seen, floor)
-	if os.Getenv("TACIT_UTILITY_PROVIDER") != "jev" {
+	if utilityProvider() == "" {
 		return fallback
 	}
 	all := append(append([]search.Hit{}, hits...), derived...)
@@ -228,7 +318,7 @@ func utilityPromptSelectionWork(ctx context.Context, p string, hits, derived []s
 	}
 	c, configErr := utilityConfiguration()
 	hash := sha256.Sum256([]byte(p))
-	audit := utilityAudit{Time: time.Now().UTC(), Model: utilityModel, Threshold: c.Threshold, Status: "ok", QueryHash: hex.EncodeToString(hash[:])}
+	audit := utilityAudit{Time: time.Now().UTC(), Model: c.Model, Threshold: c.Threshold, Status: "ok", QueryHash: hex.EncodeToString(hash[:])}
 	for _, h := range all {
 		audit.Candidates = append(audit.Candidates, utilityAuditHit{ID: h.Path})
 	}
@@ -242,7 +332,7 @@ func utilityPromptSelectionWork(ctx context.Context, p string, hits, derived []s
 		audit.Status = configErr.Error()
 		return selected
 	}
-	key, err := utilityKey(c.KeyFile)
+	key, err := providerKey(c)
 	if err != nil {
 		audit.Status = err.Error()
 		return selected
@@ -258,19 +348,11 @@ func utilityPromptSelectionWork(ctx context.Context, p string, hits, derived []s
 		audit.Status = "redaction_failed"
 		return selected
 	}
-	request := utilityRequest{Model: utilityModel, State: map[string]string{"task": clean[0]}, Questions: map[string]utilityQuestionBody{}}
 	audit.Task = clean[0]
 	for i, memory := range clean[1:] {
-		request.Questions[fmt.Sprintf("candidate_%d", i)] = utilityQuestionBody{Type: "noul", Instructions: map[string]string{"memory": memory, "question": utilityQuestion}, Criteria: map[string]string{"true": utilityTrue, "false": utilityFalse}}
 		audit.Candidates[i].Summary = memory
 	}
-	body, _ := json.Marshal(request)
-	// UTF-8 byte length is a conservative bound on text tokens. Never truncate.
-	if len(body) > 32000 {
-		audit.Status = "input_too_long"
-		return selected
-	}
-	response, err := requestUtility(callCtx, key, body, len(all))
+	scores, tokens, err := scoreUtility(callCtx, c, key, clean[0], clean[1:])
 	if callCtx.Err() != nil {
 		audit.Status = "request_failed"
 		return selected
@@ -279,10 +361,10 @@ func utilityPromptSelectionWork(ctx context.Context, p string, hits, derived []s
 		audit.Status = err.Error()
 		return selected
 	}
-	audit.InputTokens = response.Usage.InputTokens
+	audit.InputTokens = tokens
 	values := make(map[string]float64, len(all))
 	for i, h := range all {
-		score := *response.Answers[fmt.Sprintf("candidate_%d", i)].Score
+		score := scores[i]
 		values[h.Path] = score
 		audit.Candidates[i].Score = &score
 	}
@@ -291,27 +373,21 @@ func utilityPromptSelectionWork(ctx context.Context, p string, hits, derived []s
 }
 
 func requestUtility(ctx context.Context, key string, body []byte, count int) (utilityResponse, error) {
+	return requestSystemOne(ctx, utilityConfig{Provider: providerJev, Model: utilityModel, Endpoint: utilityEndpoint}, key, body, count)
+}
+
+// requestSystemOne posts a /v1/systemone request. Jev's model is pinned and
+// checked; another System One server may report its own model name.
+func requestSystemOne(ctx context.Context, c utilityConfig, key string, body []byte, count int) (utilityResponse, error) {
 	var result utilityResponse
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, utilityEndpoint, bytes.NewReader(body))
+	raw, err := postJSON(ctx, c.Endpoint, key, body)
 	if err != nil {
-		return result, errors.New("request_invalid")
+		return result, err
 	}
-	req.Header.Set("Authorization", "Bearer "+key)
-	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Do(req)
-	if err != nil {
-		return result, errors.New("request_failed")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return result, fmt.Errorf("http_%d", resp.StatusCode)
-	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
-	if err != nil || len(raw) > 1<<20 || json.Unmarshal(raw, &result) != nil {
+	if json.Unmarshal(raw, &result) != nil {
 		return result, errors.New("response_invalid")
 	}
-	if result.Model != utilityModel || len(result.Answers) != count {
+	if (c.Provider == providerJev && result.Model != utilityModel) || len(result.Answers) != count {
 		return result, errors.New("response_mismatch")
 	}
 	for i := 0; i < count; i++ {
@@ -321,6 +397,33 @@ func requestUtility(ctx context.Context, key string, body []byte, count int) (ut
 		}
 	}
 	return result, nil
+}
+
+// postJSON: one POST, no redirects or retries, a 1 MiB response cap. The key,
+// when there is one, goes only to the configured endpoint as a bearer token.
+func postJSON(ctx context.Context, endpoint, key string, body []byte) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, errors.New("request_invalid")
+	}
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, errors.New("request_failed")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("http_%d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
+	if err != nil || len(raw) > 1<<20 {
+		return nil, errors.New("response_invalid")
+	}
+	return raw, nil
 }
 
 func utilityRank(hits, derived []search.Hit, seen map[string]bool, values map[string]float64, threshold float64) []search.Hit {

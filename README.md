@@ -113,6 +113,18 @@ Without an override, Tacit reads `~/.config/tacit/config.yaml` on Linux/macOS or
 
 Precedence: command flags, then environment values (including a job's `--env-file`), then YAML, then generic defaults. Unknown fields and missing explicitly selected files fail before model work. Hooks with bad settings fail open without output. Store provider credentials in the selected CLI or the job env file.
 
+### Which facts reach each prompt (optional)
+
+By default a lexical score decides which matching facts a prompt sees. Optionally a model judges each candidate: does it add something useful for this request, beyond topic overlap? We recommend **Jev** (TypeSafe, hosted): the most accurate and fastest option we measured. To keep data in your AWS account, use **Amazon Nova Micro on Bedrock**: it never picked a wrong fact in our runs, but it kept fewer useful ones. Any System One-compatible server, Bedrock model or OpenAI-compatible endpoint can be plugged in:
+
+```yaml
+utility:
+  provider: jev            # or: bedrock, systemone, openai
+  key_file: ~/.config/tacit/typesafe.env
+```
+
+Code still decides scope and limits first, and a failed or slow model falls back to the lexical selection. Setup for every provider, the thresholds and the full benchmark: [Choosing what each prompt sees](docs/selectors.md).
+
 ### Client settings
 
 Every YAML option is listed here:
@@ -247,6 +259,7 @@ Model jobs send redacted digests and fact excerpts to the provider configured in
 | [Shared-store setup](docs/setup.md) | Server deployment, keys, machine roles and job configuration |
 | [Client reference](docs/client.md) | Commands, flags, hooks and the app |
 | [Methods](docs/methods.md) | How facts are collected, delivered and checked |
+| [Choosing what each prompt sees](docs/selectors.md) | The optional model selector: Jev, Bedrock, any System One or OpenAI-compatible model, and the benchmark |
 | [Evaluation](eval/README.md) | Scripts, samples and how to measure another store |
 | [Contributing](CONTRIBUTING.md) | Development, tests and pull requests |
 

@@ -36,6 +36,9 @@ type Runners struct {
 
 type Utility struct {
 	Provider  string   `yaml:"provider"`
+	Model     string   `yaml:"model"`
+	Endpoint  string   `yaml:"endpoint"`
+	Region    string   `yaml:"region"`
 	Threshold *float64 `yaml:"threshold"`
 	Timeout   string   `yaml:"timeout"`
 	KeyFile   string   `yaml:"key_file"`
@@ -137,8 +140,28 @@ func Load(path string, required bool) error {
 		}
 	}
 	values := map[string]string{"TACIT_STORE": resolve(c.Store), "TACIT_PROJECTS": resolve(c.Projects), "TACIT_INDEX": resolve(c.Index), "TACIT_CONFIG": resolve(c.Keys), "TACIT_LOCAL": resolve(c.Local), "TACIT_OWNER_NAMES": strings.Join(c.OwnerNames, ","), "TACIT_CURATE_MODEL": c.Models.Curate, "TACIT_JUDGE_MODEL": c.Models.Judge, "TACIT_DREAM_MODEL": c.Models.Dream, "TACIT_VERIFY_MODEL": c.Models.Verify, "TACIT_VERIFY_FALLBACK_MODEL": c.Models.Fallback}
-	if c.Utility.Provider != "" && c.Utility.Provider != "jev" {
-		return fmt.Errorf("utility provider must be jev or empty")
+	switch c.Utility.Provider {
+	case "", "jev":
+		if c.Utility.Model != "" || c.Utility.Endpoint != "" || c.Utility.Region != "" {
+			return fmt.Errorf("utility provider jev is pinned: model, endpoint and region are not settable")
+		}
+	case "systemone":
+		if c.Utility.Endpoint == "" {
+			return fmt.Errorf("utility provider systemone needs endpoint")
+		}
+	case "openai":
+		if c.Utility.Endpoint == "" || c.Utility.Model == "" {
+			return fmt.Errorf("utility provider openai needs endpoint and model")
+		}
+	case "bedrock":
+		if c.Utility.Model == "" {
+			return fmt.Errorf("utility provider bedrock needs model")
+		}
+	default:
+		return fmt.Errorf("utility provider must be jev, systemone, bedrock, openai or empty")
+	}
+	if c.Utility.Provider != "" && c.Utility.Provider != "jev" && c.Utility.Threshold == nil {
+		return fmt.Errorf("utility provider %s needs a threshold: scores from different models are not on one scale", c.Utility.Provider)
 	}
 	if c.Utility.Threshold != nil {
 		v := *c.Utility.Threshold
@@ -154,6 +177,9 @@ func Load(path string, required bool) error {
 		}
 	}
 	values["TACIT_UTILITY_PROVIDER"] = c.Utility.Provider
+	values["TACIT_UTILITY_MODEL"] = c.Utility.Model
+	values["TACIT_UTILITY_ENDPOINT"] = c.Utility.Endpoint
+	values["TACIT_UTILITY_REGION"] = c.Utility.Region
 	values["TACIT_UTILITY_TIMEOUT"] = c.Utility.Timeout
 	values["TACIT_UTILITY_KEY_FILE"] = resolve(c.Utility.KeyFile)
 	values["TACIT_UTILITY_AUDIT_DIR"] = resolve(c.Utility.AuditDir)
