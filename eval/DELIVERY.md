@@ -75,3 +75,16 @@ The regression suite covers body-only matches, incidental summary words,
 rare identifiers, cross-project restrictions, unknown-repo delivery, explicit
 repo mentions, aliases, candidate starvation, floor boundaries and session
 no-backfill behavior. Existing package tests remain part of validation.
+
+## Code before the scorer (2026-10-17)
+
+Rule: when code can decide, code decides, and a scorer (the opt-in Jev selector or any model) judges only the rest. Four deterministic rules were tried as a pre-filter on the same frozen candidate pools as [JEV.md](JEV.md) (one frozen store snapshot, 6 curated + 1 derived candidates, original prompt). They read only the prompt and candidate metadata, never labels. Labels: authored primary labels plus the blinded review on dev (19 queries) and calibration (12). The rules were written after looking at dev/calibration errors, so the sealed test set (20 queries) was opened once, with every threshold frozen beforehand.
+
+| Rule | Dev + calibration drops | Sealed test drops | Shipped |
+|---|---|---|---|
+| R1: a pure text operation on a literal the prompt supplies needs no memory | 9 wrong, 0 useful (2 prompts) | none (it did not fire) | yes |
+| R2: drop a fact whose only link is a topic the user excluded ("not X", "do not Y") | none (never fired) | none | no: no measured gain |
+| R3: derived hot-spot facts only when the prompt names a file or asks to change code | 6 wrong, 0 useful | 1 wrong, **1 useful** | no |
+| R4: a repo-anchored prompt keeps only that repo's facts plus user/system standards | 11 wrong or unlabelled, 0 useful | 14 wrong or unlabelled, **2 useful** | no |
+
+Sealed test, primary labels, frozen calibration thresholds (useful / wrong / unlabelled picks, of 6 findable useful): today's selection 5 / 2 / 12; Jev 5 / 0 / 1; Jev behind R1-R4 3 / 0 / 3; Amazon Nova Micro on Bedrock 4 / 0 / 1, behind R1-R4 3 / 0 / 5. R3 and R4 removed useful facts on unseen prompts, so they are not shipped. R1 ships as part of the harness-turn check: a prompt with the word "literal" and an operation (upper/lowercase form, reverse, spell, length, count characters/letters/words) gets no facts and no scorer call. Either word alone does not trigger it (`TestPromptHookSkipsSelfContainedTextOperations`).
