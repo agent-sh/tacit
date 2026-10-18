@@ -117,7 +117,7 @@ func TestDreamedRulingKeepsTheOwnerOnlyWithTheirWords(t *testing.T) {
 		if got != c.user || (f.Meta.Source.Kind == "user") != c.user {
 			t.Errorf("%s: ruling %v, kind %s", c.name, got, f.Meta.Source.Kind)
 		}
-		if strings.Contains(f.Body, "owner said") || strings.Contains(f.Body, "owner's words") && !c.user {
+		if strings.Contains(f.Body, "owner said") || (strings.Contains(f.Body, "owner's words") && !c.user) {
 			t.Errorf("%s: an attribution the evidence does not back: %q", c.name, f.Body)
 		}
 	}
