@@ -840,3 +840,25 @@ Intake after v4 and the restated drop: 1,327 x 0.76 x 0.99, about 1,000 notes a 
 | Notes curated per day | 508 | up to 1,360 |
 | Backlog | grows about 800 a day | 2,085 clears in about 6 days (3.4 to 7.6) |
 | Curator cost per day | $4.96 | $13.30 while clearing, then about $9.70 ($7.30 to $10.60) |
+
+## The repo of a session that starts outside one (2026-10-18)
+
+Measured on a second owner's machine, where agents start in the home directory or a folder of checkouts and reach their repos by path: 116 frozen transcripts (Claude Code and Codex), 283 dream windows. The repo of every window was read with tacit's own `dream.Windows` on main and on this change, with the machine's real home directory; no model is called for it. A Sonnet 5.5 judge then read each window and the repository it was filed under: "is most of this window's work about this repository?" (yes, mixed, no).
+
+| window filed under | main | this change |
+|---|---|---|
+| a repository | 121 | 96 |
+| no project (`user`, `machines/<host>`) | 125 | 187 |
+| a folder of checkouts that is no repository (`projects/<folder>`) | 33 | 0 |
+| the home directory's name (a cwd recorded as `file:///home/u`) | 4 | 0 |
+
+Main names a repository by the cwd's base name when the cwd is in no repository: 37 windows went to pseudo-projects, and 39 more to names such as `on`, `re` or a URL slug (Codex project folders, file URLs). This change gives 57 windows a repository their cwd did not give, from their paths, and leaves the rest to no project.
+
+| repository of a window | right | mixed | wrong |
+|---|---|---|---|
+| main, the cwd's repository (39 windows sampled) | 12 | 6 | 21 |
+| this change, inferred from paths (all 57) | 34 | 11 | 12 |
+
+Long sessions move between repositories, so a 60k-character window often is not about the repository the session started in; the judge is strict, but it is the same judge for both rows. Rules tried on the same windows before this one: every path once with a simple majority, per delta (23 right, 7 mixed, 10 wrong of 40 sampled) and per window (18, 9, 13 of 40); the shipped rule counts a path the agent works in (`cd`, `git -C`, an edit's target) three times and asks for three quarters of the window's count.
+
+Why it matters: the same store with its pseudo-project scopes moved to `user` (no other change, same ranker and floors) delivered the truth fact offline for 79 of 254 situations against 60 with the local selector, and 92 against 66 with Jev. Measured on a store whose pseudo-project scopes came partly from the harness: the evaluation dreamed with a substitute home directory, under which the real home was no home, so these numbers bound what fixing folder-named scopes is worth rather than measure this change's own delivery. The prompt-time inference is not measured offline (the check carries no transcript). Not measured either: whether any of the 62 more windows that now get no project held facts that belong to one; they reach every session through `user` instead of being hidden in a wrong project.
