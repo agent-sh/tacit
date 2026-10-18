@@ -34,8 +34,9 @@ const utilityQuestion = "Does this memory add concrete information or a constrai
 const utilityTrue = "The memory provides an additional actionable fact, constraint, preference, or procedure that is relevant to fulfilling the task. It is not already stated in the task."
 const utilityFalse = "The memory only repeats or paraphrases the task, shares its topic without helping, or suggests an inappropriate or contradictory action."
 
-// Utility providers. jev is the measured default; the others let the owner
-// plug in any model that answers the same rubric.
+// Utility providers. None is the default: the local selection matched Jev in
+// live sessions (eval/VALUE.md). jev is the most accurate model measured; the
+// others let the owner plug in any model that answers the same rubric.
 const (
 	providerJev       = "jev"       // TypeSafe Jev, pinned model and origin
 	providerSystemOne = "systemone" // any /v1/systemone-compatible endpoint

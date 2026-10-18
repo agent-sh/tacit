@@ -6,7 +6,9 @@ Code decides first. Scope, repository, lifecycle and the per-session limits stay
 
 ## Recommendation
 
-- **Jev** (TypeSafe, hosted). The most accurate and fastest option we measured. It is the default provider.
+Leave it off. No provider is the default, and the local selection is what we recommend: in 144 live agent sessions on one owner's history, the same store with Jev scored 0.80 and without a selector 0.82, with no task where either was consistently better (eval/VALUE.md, "The prompt selector in live sessions"). A model selector adds a network call of up to 2 s and a cost per prompt. If you want one anyway:
+
+- **Jev** (TypeSafe, hosted). The most accurate and fastest model we measured for this.
 - **Amazon Nova Micro on Bedrock**, when the data should stay in your AWS account. It never selected a wrong fact in our runs, but it kept fewer useful ones than Jev (2 of 9 on the development prompts, 4 of 6 on the sealed test; Jev 8 and 5), and it was about 0.3 s slower. If 1.5-2 s per prompt is acceptable, Claude Sonnet 5.5 or Haiku 5.5 on Bedrock matched Jev on the development prompts (they were not run on the sealed test).
 
 Any other model can be plugged in: a System One-compatible server, any Bedrock model, or any OpenAI-compatible chat endpoint. Pick its threshold on your own labelled prompts (see [Measure your own](#measure-your-own)).

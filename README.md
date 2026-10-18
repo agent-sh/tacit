@@ -115,7 +115,7 @@ Precedence: command flags, then environment values (including a job's `--env-fil
 
 ### Which facts reach each prompt (optional)
 
-By default a lexical score decides which matching facts a prompt sees. Optionally a model judges each candidate: does it add something useful for this request, beyond topic overlap? We recommend **Jev** (TypeSafe, hosted): the most accurate and fastest option we measured. To keep data in your AWS account, use **Amazon Nova Micro on Bedrock**: it never picked a wrong fact in our runs, but it kept fewer useful ones. Any System One-compatible server, Bedrock model or OpenAI-compatible endpoint can be plugged in:
+By default a lexical score decides which matching facts a prompt sees, with no model call, and that is what we recommend: in live agent sessions a model selector did no better (eval/VALUE.md, "The prompt selector in live sessions"). Optionally a model judges each candidate: does it add something useful for this request, beyond topic overlap? Of the models we measured for that, **Jev** (TypeSafe, hosted) was the most accurate and fastest. To keep data in your AWS account, **Amazon Nova Micro on Bedrock** never picked a wrong fact in our runs, but it kept fewer useful ones. Any System One-compatible server, Bedrock model or OpenAI-compatible endpoint can be plugged in:
 
 ```yaml
 utility:
