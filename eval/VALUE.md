@@ -840,3 +840,20 @@ Intake after v4 and the restated drop: 1,327 x 0.76 x 0.99, about 1,000 notes a 
 | Notes curated per day | 508 | up to 1,360 |
 | Backlog | grows about 800 a day | 2,085 clears in about 6 days (3.4 to 7.6) |
 | Curator cost per day | $4.96 | $13.30 while clearing, then about $9.70 ($7.30 to $10.60) |
+
+## The repo of a session that starts outside one (2026-10-18)
+
+Measured on a second owner's machine, where agents start in the home directory or a folder of checkouts and reach their repos by path: 116 frozen transcripts (Claude Code and Codex), dreamed and curated end to end, 254 truth situations mined from them (eval/SCHEMA.md), the same offline delivery check as section 1 (a Sonnet 5.5 judge on "does the context give the agent this fact").
+
+**What the cwd rule did there.** Of 5,279 curated facts, 2,736 sat in two scopes named after where sessions started, not after a repo: the home directory's name (2,081) and the folder of checkouts (655). Of 572 owner standards, 470 were project-scoped and 26 `user`. A rule said in a session started at home ("check before asking, ask once") reached only sessions started at home, so a task in a repo never got it. Searching the store for each truth fact by its own words with the situation's repo found it for 119 of 254; for the owner standards, 17 of 59.
+
+**What-if.** The same store with those two pseudo-project scopes moved to `user`, nothing else changed, same ranker and floors:
+
+| selector | fact delivered before | after |
+|---|---|---|
+| local | 60 of 254 | 79 |
+| Jev, 0.70 | 66 | 92 |
+
+For comparison on the same 254: plain BM25 over the transcripts 76, a hosted graph memory (vector search over the same history) 77.
+
+**The change.** A path counts for the repository that holds it (the nearest `.git` up the path, a worktree's repository, or the `<workspace>/src/<Package>/` shape of a deleted Brazil workspace; never the home directory's dot directories). The dreamer gives a window whose cwd names no repository the repository most of its paths are in (at least 2 mentions and half of all), else no project; `RepoOfCwd` no longer names a non-repository folder in home, and the transcript folder's name is no longer a fallback. The prompt hook does the same from the prompt's paths (counted three times) and the last 512 KiB of the transcript. The prompt-time half is not measured offline (the check has no transcript); live numbers follow when the live A/B on this store is rerun.
