@@ -261,3 +261,23 @@ func TestCuratorCountsOnlyTheNoteThatFails(t *testing.T) {
 		t.Fatalf("failed counts %v", state.Failed)
 	}
 }
+
+func TestJudgeAdjacentBadPairsGoToReviewNotFail(t *testing.T) {
+	// One bad fact's pairs sit next to each other; split down, they can fill
+	// a sub-chunk alone. That is two unchecked pairs, not a broken judge.
+	names := []string{"g1", "g2", "g3", "g4", "g5", "g6", "bad1", "bad2"}
+	pairs, refs, facts := judgedPairsFor(t, names...)
+	previous := judgeRun
+	defer func() { judgeRun = previous }()
+	judgeRun = func(_ context.Context, _, prompt string) (string, float64, error) {
+		if strings.Contains(prompt, "pair bad") {
+			return `["maybe"]`, .1, nil
+		}
+		return verdictsFor(strings.Count(prompt, "pair g")), .1, nil
+	}
+	rep := curate.Report{}
+	review, _, err := judgePairs(context.Background(), &store.Store{Dir: t.TempDir()}, pairs, refs, facts, false, &rep)
+	if err != nil || rep.JudgeUnchecked != 2 || len(review) != 2 {
+		t.Fatalf("adjacent bad pairs: %v unchecked %d review %d", err, rep.JudgeUnchecked, len(review))
+	}
+}

@@ -254,7 +254,9 @@ func runCurate(args []string) int {
 			}
 			return false
 		}
-		if valid == 0 && rep.BatchSplits >= systemicSplits {
+		// A model that fails every half fails the run, not a note; and a
+		// partly failing one may not bisect every batch either.
+		if valid == 0 && rep.BatchSplits >= systemicSplits || rep.BatchSplits >= systemicSplits*max(1, *maxBatches) {
 			return false
 		}
 		h := len(batch) / 2

@@ -137,8 +137,8 @@ func judgePairs(ctx context.Context, s *store.Store, pairs []curate.Pair, refs [
 	// so one pair the judge stumbles on no longer fails every pair of the
 	// run. A pair that gets no valid verdict alone is left unjudged and goes
 	// to review. A model or transport error still stops the check.
-	var judge func(ps []curate.Pair) ([]curate.Verdict, []bool, error)
-	judge = func(ps []curate.Pair) ([]curate.Verdict, []bool, error) {
+	var judge func(ps []curate.Pair, top bool) ([]curate.Verdict, []bool, error)
+	judge = func(ps []curate.Pair, top bool) ([]curate.Verdict, []bool, error) {
 		ans, c2, err := judgeRun(ctx, curate.JudgeModel, fmt.Sprintf(curate.ConflictPrompt, curate.RenderPairs(ps)))
 		rep.JudgeCalls++
 		rep.CostUSD += c2
@@ -157,19 +157,20 @@ func judgePairs(ctx context.Context, s *store.Store, pairs []curate.Pair, refs [
 		}
 		rep.JudgeSplits++
 		h := len(ps) / 2
-		v1, u1, err := judge(ps[:h])
+		v1, u1, err := judge(ps[:h], false)
 		if err != nil {
 			return nil, nil, err
 		}
-		v2, u2, err := judge(ps[h:])
+		v2, u2, err := judge(ps[h:], false)
 		if err != nil {
 			return nil, nil, err
 		}
 		u := append(u1, u2...)
-		// No valid verdict for any pair of the chunk is a judge that is not
-		// working, not one pair it stumbles on: stop, as before splitting
-		// existed, instead of asking pair by pair.
-		if !slices.Contains(u, false) {
+		// No valid verdict for any pair of a whole chunk is a judge that is
+		// not working, not a few pairs it stumbles on: stop, as before
+		// splitting existed. Only the top chunk: one bad fact's adjacent pairs
+		// (its closest fact, its siblings) can fill a small sub-chunk alone.
+		if top && !slices.Contains(u, false) {
 			return nil, nil, fmt.Errorf("%w: the judge gave no valid verdict for any of %d pairs", modelrun.ErrInvalidResult, len(ps))
 		}
 		return append(v1, v2...), u, nil
@@ -178,7 +179,7 @@ func judgePairs(ctx context.Context, s *store.Store, pairs []curate.Pair, refs [
 	var unjudged []bool
 	for start := 0; start < len(pairs); start += 25 {
 		end := min(start+25, len(pairs))
-		v, u, err := judge(pairs[start:end])
+		v, u, err := judge(pairs[start:end], true)
 		if err != nil {
 			return nil, nil, err
 		}
