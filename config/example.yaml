@@ -10,9 +10,9 @@ verify_roots: []
 runner: claude
 runners: {}
 models:
-  curate: opus
+  curate: sonnet
   judge: haiku
-  dream: haiku
+  dream: opus
   verify: opus
   # verify_fallback: sonnet # Legacy same-runner option; prefer fallbacks below.
 efforts: {}

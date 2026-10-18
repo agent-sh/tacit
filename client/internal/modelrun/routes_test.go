@@ -11,9 +11,9 @@ import (
 func TestGenericRouteDefaults(t *testing.T) {
 	t.Setenv("TACIT_RUNNER", "")
 	for role, want := range map[string]Route{
-		"curate": {Runner: "claude", Model: "opus"},
+		"curate": {Runner: "claude", Model: "sonnet"},
 		"verify": {Runner: "claude", Model: "opus"},
-		"dream":  {Runner: "claude", Model: "haiku"},
+		"dream":  {Runner: "claude", Model: "opus"},
 		"judge":  {Runner: "claude", Model: "haiku"},
 	} {
 		t.Setenv(roleEnv(role, "RUNNER"), "")
