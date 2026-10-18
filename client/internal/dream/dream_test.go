@@ -132,3 +132,47 @@ func TestParseCheckedDistinguishesEmptyFromFailure(t *testing.T) {
 		}
 	}
 }
+
+func TestWindowsPassOverALineLongerThanTheReadCap(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "s1.jsonl")
+	src := []Source{{Glob: filepath.Join(dir, "*.jsonl"), Format: digest.Claude}}
+	// One record longer than maxReadBytes, then an ordinary turn after it.
+	long := `{"type":"user","message":{"content":"` + strings.Repeat("x", maxReadBytes+1000) + `"}}` + "\n"
+	after := `{"type":"user","cwd":"/home/u/projects/api","message":{"content":"commit it"}}` + "\n" +
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"Committing."},{"type":"tool_use","name":"Bash","input":{"command":"git commit"}}]}}` + "\n" +
+		`{"type":"user","message":{"content":[{"type":"tool_result","is_error":true,"content":"tools/hooks/pre-push: eslint: not found"}]}}` + "\n" +
+		strings.Repeat(" ", minNewBytes) + "\n"
+	os.WriteFile(f, []byte(long+after), 0o644)
+	st := &State{Offsets: map[string]int64{f: 0}}
+	ws, _ := Windows(src, st, false)
+	if len(ws) != 0 || st.Offsets[f] != int64(len(long)) || st.Skipped != 1 {
+		t.Fatalf("the long line should be passed over: %d windows, cursor %d (want %d), skipped %d", len(ws), st.Offsets[f], len(long), st.Skipped)
+	}
+	ws, _ = Windows(src, st, false)
+	if len(ws) != 1 || !strings.Contains(strings.Join(ws[0].Lines, "\n"), "U: commit it") {
+		t.Fatalf("the turn after the long line was not read: %v", ws)
+	}
+	// A long line still being written (no newline yet) keeps the cursor.
+	g := filepath.Join(dir, "s2.jsonl")
+	os.WriteFile(g, []byte(`{"type":"user","message":{"content":"`+strings.Repeat("y", maxReadBytes+10)), 0o644)
+	st.Offsets[g] = 0
+	Windows(src, st, false)
+	if st.Offsets[g] != 0 {
+		t.Fatalf("an unfinished long line moved the cursor to %d", st.Offsets[g])
+	}
+}
+
+func TestWindowsPassOverALineEndingRightAtTheReadCap(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "s1.jsonl")
+	src := []Source{{Glob: filepath.Join(dir, "*.jsonl"), Format: digest.Claude}}
+	// maxReadBytes bytes with no newline, the newline right after them.
+	long := strings.Repeat("z", maxReadBytes) + "\n"
+	os.WriteFile(f, []byte(long+strings.Repeat(" ", minNewBytes)+"\n"), 0o644)
+	st := &State{Offsets: map[string]int64{f: 0}}
+	Windows(src, st, false)
+	if st.Offsets[f] != int64(len(long)) || st.Skipped != 1 {
+		t.Fatalf("cursor %d (want %d), skipped %d", st.Offsets[f], len(long), st.Skipped)
+	}
+}

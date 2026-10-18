@@ -12,7 +12,6 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/curate"
 	"github.com/agent-sh/tacit/client/internal/fact"
-	"github.com/agent-sh/tacit/client/internal/modelrun"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
@@ -34,7 +33,9 @@ func TestJudgeFailureDoesNotApplyEarlierChunks(t *testing.T) {
 	judgeRun = func(context.Context, string, string) (string, float64, error) {
 		calls++
 		if calls == 2 {
-			return `["maybe"]`, .1, nil
+			// A model or transport error stops the check. (An invalid answer is
+			// split and asked again: TestJudgeInvalidChunkIsSplitAndAskedAgain.)
+			return "", .1, errors.New("judge unavailable")
 		}
 		verdicts := make([]string, 25)
 		for i := range verdicts {
@@ -46,7 +47,7 @@ func TestJudgeFailureDoesNotApplyEarlierChunks(t *testing.T) {
 	report := curate.Report{}
 	review, written, err := judgePairs(context.Background(), &store.Store{Dir: dir}, pairs, refs, []*fact.Fact{replacement}, false, &report)
 	after, _ := os.ReadFile(filepath.Join(dir, oldFact.Path))
-	if !errors.Is(err, modelrun.ErrInvalidResult) || len(review) != 0 || len(written) != 0 || string(after) != string(before) || report.Supersedes != 0 || report.CostUSD != .2 {
+	if err == nil || len(review) != 0 || len(written) != 0 || string(after) != string(before) || report.Supersedes != 0 || report.CostUSD != .2 {
 		t.Fatalf("partial judgment applied: %v %v %v %+v", review, written, err, report)
 	}
 }
