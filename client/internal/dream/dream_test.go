@@ -90,7 +90,7 @@ func must(b []byte, err error) []byte {
 }
 
 func TestRepoOfCwd(t *testing.T) {
-	repos := map[string]bool{"/h/projects/tacit": true, "/h/projects/agent-sh/agnix": true, "/h/projects/atlas": true, "/h/projects/atlas-worktrees/KV-1": true}
+	repos := map[string]bool{"/h/workplace/widget": true, "/h/projects/tacit": true, "/h/projects/agent-sh/agnix": true, "/h/projects/atlas": true, "/h/projects/atlas-worktrees/KV-1": true}
 	isRepo := func(d string) bool { return repos[d] }
 	for cwd, want := range map[string]string{
 		"/h/projects/tacit":                                              "tacit",
@@ -104,6 +104,9 @@ func TestRepoOfCwd(t *testing.T) {
 		"/h/projects":                                                    "",
 		"/h/.cache/run42/head":                                           "",
 		"/srv/memra":                                                     "memra",
+		"/h/workplace":                                                   "", // a folder of checkouts
+		"/h/workplace/widget/pkg":                                        "widget",
+		"/h/workplace/notes":                                             "",
 	} {
 		if got := RepoOfCwd(cwd, "/h", isRepo); got != want {
 			t.Errorf("%s: %q, want %q", cwd, got, want)
@@ -174,5 +177,36 @@ func TestWindowsPassOverALineEndingRightAtTheReadCap(t *testing.T) {
 	Windows(src, st, false)
 	if st.Offsets[f] != int64(len(long)) || st.Skipped != 1 {
 		t.Fatalf("cursor %d (want %d), skipped %d", st.Offsets[f], len(long), st.Skipped)
+	}
+}
+
+func TestWindowsFromHomeTakeTheRepoTheSessionWorksIn(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := filepath.Join(home, "workplace", "widget")
+	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
+	dir := filepath.Join(home, "transcripts")
+	os.MkdirAll(dir, 0o755)
+	src := []Source{{Glob: filepath.Join(dir, "*.jsonl"), Format: digest.Claude}}
+	write := func(name, cmd string) string {
+		f := filepath.Join(dir, name)
+		body := `{"type":"user","cwd":"` + home + `","message":{"content":"run the tests"}}` + "\n" +
+			`{"type":"assistant","message":{"content":[{"type":"text","text":"Running."},{"type":"tool_use","name":"Bash","input":{"command":"` + cmd + `"}}]}}` + "\n" +
+			`{"type":"user","message":{"content":[{"type":"tool_result","is_error":true,"content":"tools/hooks/pre-push: eslint: not found"}]}}` + "\n" +
+			`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"` + cmd + ` -v"}}]}}` + "\n" +
+			strings.Repeat(" ", minNewBytes) + "\n"
+		os.WriteFile(f, []byte(body), 0o644)
+		return f
+	}
+	in := write("a.jsonl", "cd "+repo+" && npm test")
+	none := write("b.jsonl", "ls "+filepath.Join(home, "Downloads", "x"))
+	st := &State{Offsets: map[string]int64{in: 0, none: 0}}
+	ws, _ := Windows(src, st, false)
+	got := map[string]string{}
+	for _, w := range ws {
+		got[w.File] = w.Repo
+	}
+	if got[in] != "widget" || got[none] != "" {
+		t.Fatalf("window repos %v, want widget for the session in the repo and none for the other", got)
 	}
 }

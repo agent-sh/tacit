@@ -67,10 +67,11 @@ const (
 
 // hookInput is the subset of Claude Code's hook JSON the client uses.
 type hookInput struct {
-	SessionID string `json:"session_id"`
-	Cwd       string `json:"cwd"`
-	Prompt    string `json:"prompt"`
-	Source    string `json:"source"`
+	SessionID      string `json:"session_id"`
+	Cwd            string `json:"cwd"`
+	Prompt         string `json:"prompt"`
+	Source         string `json:"source"`
+	TranscriptPath string `json:"transcript_path"`
 }
 
 func openIndex(ctx context.Context, s *store.Store) (*search.Index, error) {
@@ -113,6 +114,11 @@ func runHook(args []string) int {
 	sit := search.Situation{Repo: store.RepoName(ctx, in.Cwd), Host: store.ShortHost()}
 	if sit.Repo != "" {
 		sit.RepoAliases = hookRepoAliases(ctx, in.Cwd)
+	} else if args[0] == "prompt" {
+		// Started outside a repo (home, a folder of checkouts): the repo the
+		// prompt and the session's recent tool calls point at.
+		home, _ := os.UserHomeDir()
+		sit.Repo = activityRepo(in, home)
 	}
 
 	switch args[0] {

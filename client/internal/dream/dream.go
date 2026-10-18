@@ -26,6 +26,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/importer"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
+	"github.com/agent-sh/tacit/client/internal/repoinfer"
 )
 
 // DefaultModel is the extraction model: $TACIT_DREAM_MODEL (a provider's
@@ -248,8 +249,14 @@ func Windows(sources []Source, st *State, fresh bool) ([]Window, error) {
 				st.Offsets[f] = end
 				continue
 			}
+			cwdRepo := repoOf(f, src.Format, buf)
+			home, _ := os.UserHomeDir()
 			for part, c := range chunk(lines, maxWindowChars) {
-				ws = append(ws, Window{File: f, Repo: repoOf(f, src.Format, buf), Lines: c, Start: off, End: end, Part: part})
+				repo := cwdRepo
+				if repo == "" {
+					repo = windowRepo(c, home)
+				}
+				ws = append(ws, Window{File: f, Repo: repo, Lines: c, Start: off, End: end, Part: part})
 			}
 		}
 	}
@@ -322,12 +329,17 @@ func repoOf(file string, f digest.Format, raw []byte) string {
 		home, _ := os.UserHomeDir()
 		return RepoOfCwd(string(m[1]), home, isRepo)
 	}
-	if f == digest.Claude {
-		// -home-u-projects-memra -> memra (best effort; the model sees the digest anyway)
-		parts := strings.Split(filepath.Base(filepath.Dir(file)), "-")
-		return parts[len(parts)-1]
-	}
+	// No cwd: the window's own paths decide (windowRepo). The transcript
+	// folder's name (-home-u-workplace) is where the session started, not
+	// a repo, and made pseudo-projects (projects/u, projects/workplace).
 	return ""
+}
+
+// windowRepo is the repo a window is about when the session's cwd names
+// none: the repo most of its paths are in (cd, git -C, file paths in tool
+// calls), and "" when its paths are spread over repos or in none.
+func windowRepo(lines []string, home string) string {
+	return repoinfer.Dominant(repoinfer.Counts(lines, home, 1, nil), 2)
 }
 
 // RepoOfCwd is the repo a session's working directory belongs to. A
@@ -366,6 +378,18 @@ func RepoOfCwd(cwd, home string, isRepo func(dir string) bool) string {
 			return parts[0]
 		}
 		if p == home || strings.HasPrefix(p, home+string(filepath.Separator)+".") {
+			return ""
+		}
+		// Elsewhere in home: the repo that holds the directory, else none. A
+		// folder of checkouts (~/workplace) or of documents is not a project,
+		// and its name made pseudo-projects of where sessions started
+		// (projects/workplace).
+		if strings.HasPrefix(p, home+string(filepath.Separator)) {
+			for d := p; d != home && d != filepath.Dir(d); d = filepath.Dir(d) {
+				if isRepo(d) {
+					return filepath.Base(d)
+				}
+			}
 			return ""
 		}
 	}
