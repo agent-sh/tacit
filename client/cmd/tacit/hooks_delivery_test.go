@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
@@ -28,5 +29,76 @@ func TestPromptStems(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("one word in two forms passed the two-match gate: %s", names(got))
+	}
+}
+
+// ruleSpecs: three observed facts that match "widget cache eviction" well
+// and an owner ruling that matches it less, so it ranks fourth.
+func ruleSpecs() []fact.Meta {
+	return []fact.Meta{
+		{Name: "widget-cache-eviction-lru", Description: "widget cache eviction is lru with a widget cache size cap"},
+		{Name: "widget-cache-eviction-ttl", Description: "widget cache eviction ttl defaults to one hour for the widget cache"},
+		{Name: "widget-cache-eviction-metrics", Description: "widget cache eviction metrics are on the widget cache dashboard"},
+		{Name: "keep-eviction-off-weekends", Description: "Never change eviction settings on a weekend", Source: fact.Source{Kind: "user"}},
+		{Name: "faint-ruling", Description: "Ask before touching a widget", Source: fact.Source{Kind: "user"}},
+	}
+}
+
+func TestPromptRuleSlot(t *testing.T) {
+	ix := relevanceIndex(t, ruleSpecs())
+	sit := search.Situation{Repo: "demo"}
+	ctx := context.Background()
+	p := "widget cache eviction settings"
+	got, err := promptHits(ctx, ix, sit, p, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != promptLimit+1 || got[promptLimit].Name != "keep-eviction-off-weekends" {
+		t.Fatalf("the ruling must be one line after the three facts: %s", names(got))
+	}
+	for _, h := range got[:promptLimit] {
+		if h.Ruling {
+			t.Fatalf("setup: a ruling is already in the top three: %s", names(got))
+		}
+	}
+
+	// Once per session, and no other ruling takes the slot it held.
+	seen := map[string]bool{"keep-eviction-off-weekends": true}
+	got, err = promptHits(ctx, ix, sit, p, seen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != promptLimit {
+		t.Fatalf("a seen ruling came back or was backfilled: %s", names(got))
+	}
+
+	// A block that already has a ruling gets no extra line.
+	got, err = promptHits(ctx, ix, sit, "eviction settings weekend widget", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) > promptLimit || !strings.Contains(names(got), "keep-eviction-off-weekends") {
+		t.Fatalf("ruling in the top three: %s", names(got))
+	}
+}
+
+func TestPromptRuleSlotFloor(t *testing.T) {
+	// The only ruling that matches scores under ruleSlotFloor: no slot line.
+	hits := []search.Hit{
+		{Name: "a", Score: 30}, {Name: "b", Score: 25}, {Name: "c", Score: 20},
+		{Name: "weak-rule", Score: ruleSlotFloor - 0.1, Ruling: true},
+	}
+	if got := names(promptSelection(hits, nil, nil, promptFloor)); got != "a,b,c" {
+		t.Fatalf("weak ruling added: %s", got)
+	}
+	hits[3].Score = ruleSlotFloor
+	if got := names(promptSelection(hits, nil, nil, promptFloor)); got != "a,b,c,weak-rule" {
+		t.Fatalf("ruling at the slot floor: %s", got)
+	}
+	// Derived facts are never in the slot; a ruling under the floor that the
+	// selection already holds through relationship evidence is not doubled.
+	hits = []search.Hit{{Name: "a", Score: 30}, {Name: "r", Score: 11, Ruling: true, Evidence: &search.RetrievalEvidence{Supported: true}}}
+	if got := names(promptSelection(hits, nil, nil, promptFloor)); got != "a,r" {
+		t.Fatalf("supported ruling: %s", got)
 	}
 }

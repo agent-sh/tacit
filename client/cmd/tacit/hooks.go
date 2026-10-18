@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -38,7 +39,13 @@ const (
 	// The repo-less pool needs a stricter floor: the current-corpus replay
 	// selected 20 for precision, at a documented recall cost (eval/DELIVERY.md).
 	repoLessPromptFloor = 20.0
-	startFloor          = 1.0
+	// ruleSlotFloor is the floor for the one owner ruling a prompt block may
+	// add when none of its facts is a ruling. Rulings are stated in general
+	// words ("one approval", "no rotation") and the request in task words, so
+	// they score below the floors above (eval/VALUE.md, "Prompt delivery:
+	// stems, a rule slot, rare anchors, thicker lines").
+	ruleSlotFloor = 10.0
+	startFloor    = 1.0
 	// derivedPromptFloor is the floor for the one derived fact (hot spots,
 	// module map) a prompt may add. Lower than promptFloor because the field
 	// is different: derived facts rank alone in their own scope, and a hit is
@@ -275,20 +282,36 @@ func promptHits(ctx context.Context, ix *search.Index, sit search.Situation, p s
 }
 
 // promptSelection takes curated matches above the BM25 floor or with supported
-// weighted relationship evidence. It drops what this session already saw, then
-// adds the best derived fact if it clears its separate floor. No backfill:
-// repeated requests must not pull weaker facts into the context.
+// weighted relationship evidence. When none of them is an owner ruling, the
+// best ruling among the gated candidates at ruleSlotFloor or above is one more
+// line. It drops what this session already saw, then adds the best derived
+// fact if it clears its separate floor. No backfill: repeated requests must
+// not pull weaker facts into the context.
 func promptSelection(hits, derived []search.Hit, seen map[string]bool, floor float64) []search.Hit {
 	var strong []search.Hit
+	ruling := false
 	for _, h := range hits {
 		if (h.Score >= floor || (h.Evidence != nil && h.Evidence.Supported)) && len(strong) < promptLimit && !isDerived(h) {
 			strong = append(strong, h)
+			ruling = ruling || h.Ruling
 		}
 	}
 	var out []search.Hit
 	for _, h := range strong {
 		if !seen[h.Name] {
 			out = append(out, h)
+		}
+	}
+	// A ruling the session already saw counts too: it is in the context. So
+	// does the best ruling here when it was seen: the slot is not backfilled.
+	if !ruling {
+		for _, h := range hits {
+			if h.Ruling && h.Score >= ruleSlotFloor && !isDerived(h) && !slices.ContainsFunc(strong, func(s search.Hit) bool { return s.Name == h.Name }) {
+				if !seen[h.Name] {
+					out = append(out, h)
+				}
+				break
+			}
 		}
 	}
 	for _, h := range derived {
