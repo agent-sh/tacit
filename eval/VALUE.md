@@ -889,12 +889,12 @@ The owner chose Opus for both. For this history: a full rebuild about $119, abou
 
 ## The prompt selector in live sessions (2026-10-18)
 
-Measured on the second owner's machine with the rebuilt store of the section above (Opus dreamer, prompt v5, repo inference). There are 24 live tasks from the owner's history, each run 3 times (72 cells per arm). Every cell is a fresh `claude -p` session on Opus 5.5 with the hooks of one arm, and a Sonnet 5.5 judge scores the answer against the truth fact (yes 1, partial 0.5). The two arms use the same build and store; only `utility.provider` differs.
+Measured on the second owner's machine with the rebuilt store of the section above (Opus 5.5 dreamer with prompt v5, Sonnet 5.5 curator, repo inference). There are 24 live tasks from the owner's history, each run 3 times (72 cells per arm). Every cell is a fresh `claude -p` session on Opus 5.5 with the hooks of one arm, and a Sonnet 5.5 judge scores the answer against the truth fact (yes 1, partial 0.5). The two arms use the same build and store; only `utility.provider` differs.
 
 | arm | judged | decision tasks | read tasks | tool calls | input tokens | seconds |
 |---|---|---|---|---|---|---|
 | local selection | 0.82 | 0.77 | 0.88 | 1.6 | 61k | 26 |
 | Jev, threshold 0.70 | 0.80 | 0.73 | 0.88 | 1.7 | 66k | 30 |
 
-Per task, local scored higher on 2 tasks, Jev on 2, and 20 tied. The median per-task difference in tool calls and input tokens is 0. Jev answered 304 calls and missed the 2 s deadline once. Offline, on the 254 truth situations, Jev delivered the truth fact for 77 and the local selection for 72. That does not carry over to the sessions. Jev's own cost is not in these numbers. So no provider is the default and the docs recommend leaving it off; the selector benchmark in docs/selectors.md still ranks the models for anyone who wants one.
+Per task, local scored higher on 2 tasks, Jev on 2, and 20 tied. The median per-task difference in tool calls and input tokens is 0. Across the offline and live runs, Jev answered 304 calls and missed the 2 s deadline once. Offline, on the 254 truth situations, Jev delivered the truth fact for 77 and the local selection for 72. That does not carry over to the sessions. Jev's own cost is not in these numbers. So no provider is the default and the docs recommend leaving it off; the selector benchmark in docs/selectors.md still ranks the models for anyone who wants one.
 
