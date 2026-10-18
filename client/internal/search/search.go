@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -61,6 +62,16 @@ func IndexDir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".local", "state", "tacit", "index")
 }
+
+// anchorRareDF: a query term in at most this many indexed names and
+// descriptions, and in at most anchorRarePct percent of the indexed facts,
+// anchors the coherence gate by itself (eval/VALUE.md, "Prompt delivery:
+// stems, a rule slot, rare anchors, thicker lines"). The share keeps a small
+// store, where every word is in fewer than 50 facts, on the rarest term alone.
+const (
+	anchorRareDF  = 50
+	anchorRarePct = 2
+)
 
 // schemaVersion is part of the index file name, so a schema change rebuilds
 // instead of failing on a column that an older build does not have. 7: the
@@ -467,10 +478,17 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	if sit.PromptRelevance {
 		var rare, titleCoverage, phrases []string
 		// Anchor on the most discriminating query term that the summary index
-		// actually knows. Unknown words (including typos) cannot veto a request.
-		// This is corpus-relative, not a list of domain-specific stop words.
+		// actually knows, and on every known term that is rare outright
+		// (anchorRareDF): the rarest term of a request is often an incidental
+		// word ("newly", "parity") that the fact it asks for does not use.
+		// Unknown words (including typos) cannot veto a request. This is
+		// corpus-relative, not a list of domain-specific stop words.
 		anchorDF := int(^uint(0) >> 1)
-		var anchors []string
+		var anchors, rareAnchors []string
+		var corpus int
+		if err := ix.db.QueryRowContext(ctx, `SELECT count(*) FROM facts`).Scan(&corpus); err != nil {
+			return nil, err
+		}
 		for i, term := range terms {
 			param := fmt.Sprintf("coverage%d", i)
 			expr := fmt.Sprintf(`CASE WHEN f.id IN (SELECT rowid FROM fts WHERE fts MATCH :%s) THEN 1 ELSE 0 END`, param)
@@ -496,6 +514,9 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 				}
 				anchors = append(anchors, expr)
 			}
+			if summaryDF > 0 && summaryDF <= anchorRareDF && summaryDF*100 <= corpus*anchorRarePct {
+				rareAnchors = append(rareAnchors, expr)
+			}
 			if SpecificIdentifier(term) {
 				var df int
 				// Global document frequency, including inaccessible/retired rows:
@@ -506,6 +527,11 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 				if df <= 5 {
 					rare = append(rare, expr)
 				}
+			}
+		}
+		for _, e := range rareAnchors {
+			if !slices.Contains(anchors, e) {
+				anchors = append(anchors, e)
 			}
 		}
 		gate := "(" + strings.Join(coverage, " + ") + ") >= 2"
