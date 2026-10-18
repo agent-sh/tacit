@@ -55,6 +55,13 @@ func parse(name string, data []byte) (Result, error) {
 				result.Text = text
 				done = true
 			}
+			if value, ok := event["structured_output"]; ok && value != nil {
+				encoded, err := json.Marshal(value)
+				if err != nil {
+					return result, fmt.Errorf("%w: structured output: %v", ErrInvalidResult, err)
+				}
+				result.Text, result.Structured, done = string(encoded), true, true
+			}
 			result.CostUSD, result.CostReported = costValue(event, "total_cost_usd")
 			result.SessionID = str(event, "session_id")
 			u := obj(event, "usage")

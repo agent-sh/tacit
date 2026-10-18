@@ -24,6 +24,7 @@ type Result struct {
 	InputTokens  int
 	Route        Route
 	SessionID    string
+	Structured   bool
 }
 
 var costWarnings sync.Map
@@ -47,6 +48,10 @@ func Run(ctx context.Context, role, model, prompt, sessionID string) (answer Res
 	}
 	selected = route
 	name := route.Runner
+	schema, _ := ctx.Value(jsonSchemaKey{}).(string)
+	if schema != "" && !json.Valid([]byte(schema)) {
+		return Result{}, fmt.Errorf("invalid output JSON schema")
+	}
 	executable, err := exec.LookPath(Command(name))
 	if err != nil {
 		return Result{}, fmt.Errorf("%s runner %s is unavailable: %w", role, name, err)
@@ -75,6 +80,17 @@ func Run(ctx context.Context, role, model, prompt, sessionID string) (answer Res
 	args, input, err := invocation(name, route.Model, prompt, promptFile, sessionID, dir)
 	if err != nil {
 		return Result{}, err
+	}
+	structured := name == "claude" && schema != ""
+	if structured {
+		args = append(args, "--json-schema", schema)
+		// Structured output can use a terminal tool call and its completion.
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] == "--max-turns" {
+				args[i+1] = "2"
+			}
+		}
+		input += "\nUse the supplied JSON schema for your final answer."
 	}
 	args, err = appendRouteArgs(args, route)
 	if err != nil {
@@ -122,6 +138,9 @@ func Run(ctx context.Context, role, model, prompt, sessionID string) (answer Res
 	started = true
 	runErr := cmd.Run()
 	result, parseErr := parse(name, stdout.Bytes())
+	if runErr == nil && parseErr == nil && structured && !result.Structured {
+		parseErr = fmt.Errorf("%w: Claude did not return structured output", ErrInvalidResult)
+	}
 	result.Route = route
 	if runErr != nil {
 		detailText := stderr.String()

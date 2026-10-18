@@ -144,7 +144,7 @@ type Runner func(ctx context.Context, model, prompt string) (result string, cost
 func RunCLI(ctx context.Context, model, prompt string) (string, float64, int, error) {
 	sid := newUUID()
 	_ = Exclude(sid)
-	res, err := modelrun.RunWithFallback(ctx, "dream", model, prompt, sid)
+	res, err := modelrun.RunWithFallback(modelrun.WithJSONSchema(ctx, outputSchema), "dream", model, prompt, sid)
 	if res.SessionID != "" {
 		_ = Exclude(res.SessionID)
 	}
@@ -498,6 +498,16 @@ func ParseChecked(result string) ([]Extracted, error) {
 	} else if strings.HasPrefix(text, "```") {
 		text = strings.TrimSpace(strings.TrimPrefix(text, "```"))
 		text = strings.TrimSpace(strings.TrimSuffix(text, "```"))
+	}
+	if strings.HasPrefix(text, "{") {
+		var envelope map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(text), &envelope); err != nil {
+			return nil, fmt.Errorf("invalid dreamer JSON: %w", err)
+		}
+		if len(envelope) != 1 || envelope["facts"] == nil {
+			return nil, fmt.Errorf("dreamer did not return a facts array")
+		}
+		text = strings.TrimSpace(string(envelope["facts"]))
 	}
 	if !strings.HasPrefix(text, "[") {
 		return nil, fmt.Errorf("dreamer did not return a JSON array")
