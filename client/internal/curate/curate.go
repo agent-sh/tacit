@@ -25,13 +25,12 @@ import (
 )
 
 // The split model and conflict judge use independently configured routes.
-// The split defaults to sonnet, the owner's cost choice against a measured
-// better Opus (eval/VALUE.md, "Dreamer and curator models"); TACIT_CURATE_MODEL
-// or --model selects opus.
+// The split defaults to opus: it curated better than Sonnet, mostly by not
+// dropping facts (eval/VALUE.md, "Dreamer and curator models").
 // Operator configuration selects model versions, effort and provider profiles.
 // Model overrides accept the selected CLI's IDs; --model on curate wins.
 var (
-	DefaultModel = modelrun.Model("curate", "sonnet")
+	DefaultModel = modelrun.Model("curate", "opus")
 	JudgeModel   = modelrun.Model("judge", "haiku")
 )
 

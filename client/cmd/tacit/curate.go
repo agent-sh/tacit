@@ -61,7 +61,7 @@ const systemicSplits = 8
 func runCurate(args []string) int {
 	fs := flag.NewFlagSet("curate", flag.ExitOnError)
 	model := fs.String("model", curate.DefaultModel, "split model")
-	maxBatches := fs.Int("max-batches", 16, "cap on split batches per run (about 85 dreamer notes and $0.34 each with Sonnet, 2026-10-18); the halves of a batch split after an invalid answer do not count")
+	maxBatches := fs.Int("max-batches", 16, "cap on split batches per run (about 85 dreamer notes and $0.91 each with Opus 5.5, 2026-10-18); the halves of a batch split after an invalid answer do not count")
 	budget := fs.Duration("budget", 150*time.Minute, "no split batch starts after this long; the derive, links and staleness steps run after")
 	dry := fs.Bool("dry-run", false, "split and check, write nothing")
 	recheck := fs.Bool("recheck-conflicts", false, "run only the conflict check again, for the curated facts made from --since on (a run whose check failed)")

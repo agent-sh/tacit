@@ -877,7 +877,12 @@ Measured on a second owner's machine (116 frozen transcripts, 254 truth situatio
 | Haiku 5.5 | 64% | 39 / 53 | 23.9 | 0.010 |
 | Sonnet 5.5 | 72% | 42 / 53 | 14.6 | 0.118 |
 | Opus 5.5 | 78% | 43 / 53 | 20.2 | 0.270 |
+| Opus 5.5, prompt v5 | 74% | 42 / 53 | 21.0 | 0.279 |
 
-**Curator model.** The same 287 pending notes on two identical store copies, `tacit curate --model` each; a blind pairwise judge (Sonnet 5.5, A/B in random order) on the 170 sampled notes: Opus better on 138, Sonnet on 22, tie 10 (owner notes 66 / 14 / 5). Cost per note: Sonnet $0.0040, Opus $0.0107.
+One run per row. v5 against v4 on Opus: 3 fewer windows with the fact stated and 2 more partly (22 against 20), inside what one run can tell apart; v5 is not chosen for recall but for the quote. An Opus window took 51 s at the median, so a run at the 40-call cap is about 34 minutes of calls, inside the 45-minute batch bound.
 
-The owner chose an Opus dreamer and a Sonnet curator. For this history: a full rebuild about $93, about $62 a month at its pace (an Opus curator: $119 and $79). The re-dream with Opus cost $36.56 for 3,106 notes.
+**What curation keeps of v5 rulings.** The full re-dream (Opus 5.5, v5, 3,106 notes) curated with Sonnet 5.5 in 8 partitions, merged and finished: 254 of the 374 owner notes became 283 facts kept as the owner's (`owner_quote` backed by their turns), 151 more facts from them filed as observed. On v4 notes the same check kept 4 of 85. Are the kept ones their rulings? A Sonnet 5.5 judge on a seeded sample of 60 kept facts, shown the fact and its quote: 56 the quote states the rule, 4 the quote is theirs but the rule is an agent's reading or a stretch of it (a project's description from a request to build it, a standing rule from a one-time complaint), 0 unrelated. The agent read the 4 and agreed; the 56 were not hand-labelled. So `ownerwords.ProvesRuling`, calibrated on 31 facts, now carries almost every dreamed ruling and lets about 1 in 15 agent readings through as the owner's.
+
+**Curator model.** The same 287 pending notes (v4 notes, mostly without quotes) on two identical store copies, `tacit curate --model` each; a blind pairwise judge (Sonnet 5.5, A/B in random order) on the 170 sampled notes: Opus better on 138, Sonnet on 22, tie 10 (owner notes 66 / 14 / 5). Cost per note: Sonnet $0.0040, Opus $0.0107. Why Sonnet lost: on a seeded 40 of the 138, the same judge shown both curations named what makes Opus's better: Sonnet's leaves out a fact or a rule the note has on 28, misstates one or gives it the wrong kind or scope on 7, wording only on 5 (owner notes 13, 3, 0). The losses are lost facts, not style. Not measured: the curator models on v5 notes; the kept-rulings numbers above are Sonnet's.
+
+The owner chose Opus for both. For this history: a full rebuild about $119, about $79 a month at its pace (a Sonnet curator: $93 and $62). The re-dream with Opus cost $36.56 for 3,106 notes.

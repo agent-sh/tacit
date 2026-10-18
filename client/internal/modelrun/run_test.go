@@ -126,7 +126,7 @@ func TestDefaultsAndRoleOverrides(t *testing.T) {
 	t.Setenv("TACIT_RUNNER", "")
 	t.Setenv("TACIT_DREAM_RUNNER", "")
 	t.Setenv("TACIT_DREAM_MODEL", "")
-	if name, _ := Name("dream"); name != "claude" || Model("dream", "opus") != "opus" || Model("curate", "sonnet") != "sonnet" {
+	if name, _ := Name("dream"); name != "claude" || Model("dream", "opus") != "opus" || Model("curate", "opus") != "opus" {
 		t.Fatal("default changed")
 	}
 	t.Setenv("TACIT_RUNNER", "muse")
