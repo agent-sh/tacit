@@ -44,7 +44,9 @@ const (
 	maxReadBytes   = 4 << 20 // per file per run; the rest waits (cursor stays)
 )
 
-// Prompt is v4 of eval/dream/dream_recall.py (2026-10-11): the measured v2
+// Prompt is v5 (2026-10-18): v4 plus the owner's exact words in "quote" for a
+// ruling (eval/VALUE.md, "Dreamed rulings keep the owner's words"). v4 is
+// eval/dream/dream_recall.py (2026-10-11): the measured v2
 // plus one rule, skip what holds only inside the task in progress, never a
 // failure and its fix or a rule of the owner. On two samples of 30 transcript
 // windows (Haiku 5.5, labels by Sonnet 5.5) it cut the facts 25 and 23
