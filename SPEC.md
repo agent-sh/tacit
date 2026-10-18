@@ -340,11 +340,11 @@ Every commit subject starts `owner: ` (`owner: edit <name> (<fields>)`, `owner: 
 
 ## Models
 
-The client calls models through the configured runner: Claude, Codex, Hermes, Grok, pi, Muse or agy. `runner` selects the default CLI and `runners` overrides each role. Generic defaults use Claude aliases (`opus` for dreaming and verification, `sonnet` for curation, `haiku` for judging; the measurements behind the dreamer and curator choice are in eval/VALUE.md). Operator-specific model versions, effort, profiles and cross-runner fallbacks are loaded from private configuration. Explicit runner selections can use the CLI model default. See [runner configuration and boundaries](docs/portable.md#model-runners). Each step has an environment override, which a job takes from its env file (`EnvironmentFile`, `--env-file`):
+The client calls models through the configured runner: Claude, Codex, Hermes, Grok, pi, Muse or agy. `runner` selects the default CLI and `runners` overrides each role. Generic defaults use Claude aliases (`opus` for dreaming, curation and verification, `haiku` for judging; the measurements behind the dreamer and curator choice are in eval/VALUE.md). Operator-specific model versions, effort, profiles and cross-runner fallbacks are loaded from private configuration. Explicit runner selections can use the CLI model default. See [runner configuration and boundaries](docs/portable.md#model-runners). Each step has an environment override, which a job takes from its env file (`EnvironmentFile`, `--env-file`):
 
 | Step | Default | Override |
 |---|---|---|
-| curator split and rulings pass (`tacit curate`) | Claude `sonnet` | `TACIT_CURATE_MODEL` |
+| curator split and rulings pass (`tacit curate`) | Claude `opus` | `TACIT_CURATE_MODEL` |
 | curator contradiction judge | Claude `haiku` | `TACIT_JUDGE_MODEL` |
 | dreamer (`tacit dream`) | Claude `opus` | `TACIT_DREAM_MODEL` |
 | verifier (`tacit verify`) | Claude `opus` | `TACIT_VERIFY_MODEL` |

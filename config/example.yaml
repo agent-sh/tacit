@@ -10,7 +10,7 @@ verify_roots: []
 runner: claude
 runners: {}
 models:
-  curate: sonnet
+  curate: opus
   judge: haiku
   dream: opus
   verify: opus

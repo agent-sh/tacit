@@ -11,7 +11,7 @@ import (
 )
 
 func refreshModels() {
-	curate.DefaultModel = modelrun.Model("curate", "sonnet")
+	curate.DefaultModel = modelrun.Model("curate", "opus")
 	curate.JudgeModel = modelrun.Model("judge", "haiku")
 	dream.DefaultModel = modelrun.Model("dream", "opus")
 	verifyModel = modelrun.Model("verify", "opus")
