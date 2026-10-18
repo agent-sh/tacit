@@ -862,3 +862,22 @@ Main names a repository by the cwd's base name when the cwd is in no repository:
 Long sessions move between repositories, so a 60k-character window often is not about the repository the session started in; the judge is strict, but it is the same judge for both rows. Rules tried on the same windows before this one: every path once with a simple majority, per delta (23 right, 7 mixed, 10 wrong of 40 sampled) and per window (18, 9, 13 of 40); the shipped rule counts a path the agent works in (`cd`, `git -C`, an edit's target) three times and asks for three quarters of the window's count.
 
 Why it matters: the same store with its pseudo-project scopes moved to `user` (no other change, same ranker and floors) delivered the truth fact offline for 79 of 254 situations against 60 with the local selector, and 92 against 66 with Jev. Measured on a store whose pseudo-project scopes came partly from the harness: the evaluation dreamed with a substitute home directory, under which the real home was no home, so these numbers bound what fixing folder-named scopes is worth rather than measure this change's own delivery. The prompt-time inference is not measured offline (the check carries no transcript). Not measured either: whether any of the 62 more windows that now get no project held facts that belong to one; they reach every session through `user` instead of being hidden in a wrong project.
+
+
+## Dreamed rulings keep the owner's words; dreamer and curator models (2026-10-18)
+
+Measured on a second owner's machine (116 frozen transcripts, 254 truth situations, eval/SCHEMA.md).
+
+**Rulings lost their owner.** Curation keeps a ruling as `kind: user` only when a quoted phrase in the note is found in the owner's turns (Rulings, The curator). Prompt v4 asked for rulings "quoted or closely paraphrased", and the dreamer paraphrased: of 85 dreamed owner notes, 69 held no quoted phrase, 5 a phrase too short to prove the rule, 3 one not found in the owner's turns, 8 would verify. Curating the same 287 notes with either model kept 4 rulings as the owner's of 85. Prompt v5 asks for the owner's exact words in `quote`, and the note body ends with `The owner said: "..."`: on a full re-dream of the history, 373 of 374 owner notes carry their words (2 of 513 before).
+
+**Dreamer model.** 89 digest windows of 60k characters around a truth situation's evidence (53 owner rulings, 12 machine facts, 10 past mistakes, 8 design decisions, 6 history items), prompt v4, a Sonnet 5.5 judge on "do the extracted facts state the truth fact":
+
+| dreamer | truth fact written down | rulings | facts per window | dollars per window |
+|---|---|---|---|---|
+| Haiku 5.5 | 64% | 39 / 53 | 23.9 | 0.010 |
+| Sonnet 5.5 | 72% | 42 / 53 | 14.6 | 0.118 |
+| Opus 5.5 | 78% | 43 / 53 | 20.2 | 0.270 |
+
+**Curator model.** The same 287 pending notes on two identical store copies, `tacit curate --model` each; a blind pairwise judge (Sonnet 5.5, A/B in random order) on the 170 sampled notes: Opus better on 138, Sonnet on 22, tie 10 (owner notes 66 / 14 / 5). Cost per note: Sonnet $0.0040, Opus $0.0107.
+
+The owner chose an Opus dreamer and a Sonnet curator. For this history: a full rebuild about $93, about $62 a month at its pace (an Opus curator: $119 and $79). The re-dream with Opus cost $36.56 for 3,106 notes.
