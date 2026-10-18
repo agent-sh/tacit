@@ -24,9 +24,11 @@ type Route struct {
 func Default(role string) Route {
 	model := ""
 	switch role {
-	case "curate", "verify":
+	case "dream", "verify":
 		model = "opus"
-	case "dream", "judge":
+	case "curate":
+		model = "sonnet"
+	case "judge":
 		model = "haiku"
 	}
 	return Route{Runner: "claude", Model: model}
