@@ -25,10 +25,9 @@ import (
 )
 
 // The split model and conflict judge use independently configured routes.
-// The split defaults to sonnet: on the same 287 notes (2026-10-18) Opus 5.5
-// curated better by a blind judge on 138 of 170 sampled notes, at 2.7 times
-// the cost per note ($0.0107 against $0.0040); the owner chose Sonnet with
-// an Opus dreamer. TACIT_CURATE_MODEL or --model selects opus.
+// The split defaults to sonnet, the owner's cost choice against a measured
+// better Opus (eval/VALUE.md, "Dreamer and curator models"); TACIT_CURATE_MODEL
+// or --model selects opus.
 // Operator configuration selects model versions, effort and provider profiles.
 // Model overrides accept the selected CLI's IDs; --model on curate wins.
 var (

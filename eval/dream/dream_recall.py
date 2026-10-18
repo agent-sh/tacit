@@ -12,11 +12,11 @@ and write the fact nobody wrote. This measures whether it would have:
     -> judge: does any extracted fact state the truth fact? (yes/partial/no)
 
 Reports recall, facts per window, tokens and cost per item. Model defaults
-to haiku (the dreamer tier); the judge is the same model.
+to opus (the dreamer's default); the judge to haiku.
 
-  python3 eval/dream/dream_recall.py [--truth F] [--limit N] [--model haiku] [--window 120]
+  python3 eval/dream/dream_recall.py [--truth F] [--limit N] [--model opus] [--window 120]
 
-Models: --model (default $TACIT_DREAM_MODEL, else the CLI alias haiku) and
+Models: --model (default $TACIT_DREAM_MODEL, else the CLI alias opus) and
 --judge-model (default $TACIT_JUDGE_MODEL, else haiku). Output goes to
 $TACIT_DREAM_OUT, else ~/.cache/tacit-dream.
 """
@@ -82,7 +82,7 @@ DIGEST:
 {digest}
 """
 
-# v4 (2026-10-11): v3 that keeps failures and owner rules; the dreamer's prompt since then.
+# v4 (2026-10-11): v3 that keeps failures and owner rules; the dreamer's prompt until v5.
 EXTRACT_V4 = """You are the dreamer of tacit, a fact store shared by coding agents on one owner's machines.
 Below is a digest of part of an agent session (U: owner, H: harness-injected text, A: agent, T: tool call, E: tool error).
 Your job is to write down what nobody wrote down. Extract EVERY durable fact another agent would need next time, in these classes:
@@ -95,6 +95,25 @@ Skip anything derivable from the code or from git log, and plain narrative of wh
 Skip facts that hold only inside the task in progress: the status of one PR, review round, rebase or run; where one task's worktree, scratch files, contract, receipts or logs are; an instruction addressed to one task id, round or worktree. A failure and what fixed it, and a rule or preference of the owner, are never task-only, even when they came up inside one task. Keep what the next task, in another session, would act on.
 Each fact: one or two sentences another agent can act on, with the concrete path, command, host or number. Mark the source kind: user (the owner said it), observed (the agent found it out).
 Output ONLY a JSON array: [{{"description": "...", "type": "user_standard|machine_fact|past_mistake|design_decision|structure|history", "kind": "user|observed", "applies_to": {{"paths": [], "repos": [], "hosts": [], "commands": []}}}}]
+
+Repo: {repo}  Host: {host}
+DIGEST:
+{digest}
+"""
+
+# v5 (2026-10-18): v4 plus the owner's exact words in "quote" for a ruling; the dreamer's prompt since then.
+EXTRACT_V5 = """You are the dreamer of tacit, a fact store shared by coding agents on one owner's machines.
+Below is a digest of part of an agent session (U: owner, H: harness-injected text, A: agent, T: tool call, E: tool error).
+Your job is to write down what nobody wrote down. Extract EVERY durable fact another agent would need next time, in these classes:
+1. Every failed command or tool call (E: lines, and A: lines that report an error) together with what fixed it or what to do instead. Each distinct failure is one fact: name the command, the exact error text, the host, and the working alternative. These are the most valuable facts; do not drop them as noise.
+2. Owner rulings and standards, from U: lines only, with the date if visible. For each one, copy the owner's exact words from the U: line into "quote": verbatim, typos included, at least the words that state the rule. Without the owner's own words a ruling cannot be told from an agent's guess.
+3. Machine facts: paths that exist or are gone, tools and their quirks, services, ports, hosts, aliases, what is dead on this box.
+4. Past mistakes: a wrong assumption and its correction.
+5. Design decisions with their reason.
+Skip anything derivable from the code or from git log, and plain narrative of what the agent did.
+Skip facts that hold only inside the task in progress: the status of one PR, review round, rebase or run; where one task's worktree, scratch files, contract, receipts or logs are; an instruction addressed to one task id, round or worktree. A failure and what fixed it, and a rule or preference of the owner, are never task-only, even when they came up inside one task. Keep what the next task, in another session, would act on.
+Each fact: one or two sentences another agent can act on, with the concrete path, command, host or number. Mark the source kind: user (the owner said it), observed (the agent found it out).
+Output ONLY a JSON array: [{{"description": "...", "type": "user_standard|machine_fact|past_mistake|design_decision|structure|history", "kind": "user|observed", "quote": "<kind user only: the owner's exact words>", "applies_to": {{"paths": [], "repos": [], "hosts": [], "commands": []}}}}]
 
 Repo: {repo}  Host: {host}
 DIGEST:
@@ -160,9 +179,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--truth", help="truth set (default as in delivery.py)")
-    ap.add_argument("--model", default=os.environ.get("TACIT_DREAM_MODEL", "haiku"))
+    ap.add_argument("--model", default=os.environ.get("TACIT_DREAM_MODEL", "opus"))
     ap.add_argument("--window", type=int, default=120)
-    ap.add_argument("--prompt", choices=["v1", "v2", "v3", "v4"], default="v1")
+    ap.add_argument("--prompt", choices=["v1", "v2", "v3", "v4", "v5"], default="v1")
     ap.add_argument("--ids", help="file with truth ids, one per line, to restrict the run")
     ap.add_argument("--judge-model", default=os.environ.get("TACIT_JUDGE_MODEL", "haiku"))
     ap.add_argument("--bare", action="store_true", help="no CLAUDE.md, hooks or saved session (what the dreamer runs)")
@@ -177,7 +196,7 @@ def main():
         items = [t for t in items if t["id"] in want]
     if args.limit:
         items = items[: args.limit]
-    tmpl = {"v1": EXTRACT, "v2": EXTRACT_V2, "v3": EXTRACT_V3, "v4": EXTRACT_V4}[args.prompt]
+    tmpl = {"v1": EXTRACT, "v2": EXTRACT_V2, "v3": EXTRACT_V3, "v4": EXTRACT_V4, "v5": EXTRACT_V5}[args.prompt]
     tag = f"{args.prompt}-{args.model.split('.')[-1]}"
     out = open(OUT / f"recall-{tag}-{time.strftime('%Y%m%dT%H%M%S')}.jsonl", "w")
     tally = {"yes": 0, "partial": 0, "no": 0, "skipped": 0}

@@ -4,7 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agent-sh/tacit/client/internal/dream"
 	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/ownerwords"
 )
 
 func note(name, harness, body string) *fact.Fact {
@@ -83,5 +85,40 @@ func TestPromptsAskForTheOwnersWords(t *testing.T) {
 	es := Parse(`[{"origin":"n1","name":"x","description":"d","kind":"user","owner_quote":"never rename public endpoints","body":"b"}]`)
 	if len(es) != 1 || es[0].OwnerQuote != "never rename public endpoints" {
 		t.Fatalf("parse: %+v", es)
+	}
+}
+
+// A dreamed ruling carries the words the dreamer copied from the owner's turn
+// (dream.ToFact). The curator keeps it as theirs when those words are in their
+// turns and say the rule; a quote the dreamer made up is in none, and the fact
+// is filed as observed with no claim that the owner said it.
+func TestDreamedRulingKeepsTheOwnerOnlyWithTheirWords(t *testing.T) {
+	turn := "ok so going forward: release notes say what shipped, past tense, never what will ship"
+	where := func(q, session string) (string, string) {
+		if session == "s1" && ownerwords.In(turn, q) {
+			return "claude:s1", "h1"
+		}
+		return "", ""
+	}
+	for _, c := range []struct {
+		name, quote string
+		user        bool
+	}{
+		{"their words", "release notes say what shipped, past tense, never what will ship", true},
+		{"made up", "release notes are always written in the past tense only", false},
+	} {
+		x := dream.Extracted{Description: "Release notes are written in the past tense.", Type: "user_standard", Kind: "user", Quote: dream.Quote(c.quote)}
+		n := dream.ToFact(x, "", "host-a", "s1")
+		n.Meta.Name = "dreamed"
+		// The split keeps the note's text as the fact's body, as it is asked to.
+		e := Entry{Name: "f", Origin: "dreamed", Description: n.Meta.Description, Type: "user_standard", Scope: "user", Kind: "user", Body: n.Body}
+		f := ToFact(e, "host-a", map[string]bool{})
+		_, got := ApplyEvidence(f, e, n, where)
+		if got != c.user || (f.Meta.Source.Kind == "user") != c.user {
+			t.Errorf("%s: ruling %v, kind %s", c.name, got, f.Meta.Source.Kind)
+		}
+		if strings.Contains(f.Body, "owner said") || strings.Contains(f.Body, "owner's words") && !c.user {
+			t.Errorf("%s: an attribution the evidence does not back: %q", c.name, f.Body)
+		}
 	}
 }

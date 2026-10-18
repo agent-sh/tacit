@@ -34,7 +34,7 @@ Each script takes flags; the environment fills the defaults:
 - `TACIT_AB_TASKS`: A/B tasks. Default `eval/ab/tasks.json` if it exists, else `examples/tasks.sample.json`.
 - `TACIT_PROJECTS`: where the checkouts live, for `backtest.py`. Default `~/projects`.
 - `TACIT_MINE_OUT`, `TACIT_MINE_CLAUDE`, `TACIT_MINE_CODEX`: digest output (default `~/.cache/tacit-mine`) and the transcript roots (default `~/.claude/projects`, `~/.codex/sessions`).
-- Models: `TACIT_AB_MODEL` (default `opus`), `TACIT_JUDGE_MODEL` and `TACIT_DREAM_MODEL` (default `haiku`), `TACIT_CURATE_MODEL` (default `opus`). The defaults are Claude Code CLI aliases; set full model ids if your provider needs them.
+- Models: `TACIT_AB_MODEL` (default `opus`), `TACIT_JUDGE_MODEL` (default `haiku`), `TACIT_DREAM_MODEL` (default `opus`), `TACIT_CURATE_MODEL` (default `sonnet`). The defaults are Claude Code CLI aliases; set full model ids if your provider needs them.
 
 ## Run the sample
 
