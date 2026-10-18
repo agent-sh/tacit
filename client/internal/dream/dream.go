@@ -172,7 +172,8 @@ func SaveState(path string, st *State) error {
 // once every window of that file has been processed, so a capped or failed
 // run leaves the delta for the next run instead of losing it. At most
 // maxReadBytes per file per run are read; a file that shrank (rotated,
-// truncated) restarts from its current end.
+// truncated) restarts from its current end. A complete line longer than
+// maxReadBytes is passed over: its cursor moves past it with no window.
 func Windows(sources []Source, st *State, fresh bool) ([]Window, error) {
 	var ws []Window
 	exclude := loadExclude()
@@ -227,10 +228,17 @@ func Windows(sources []Source, st *State, fresh bool) ([]Window, error) {
 				// written keeps the cursor.
 				if int64(n) == maxReadBytes {
 					if next, ok := nextLineStart(f, off+int64(n)); ok {
-						st.Offsets[f] = next
-						st.Skipped++
+						// Not when the file was replaced or cut meanwhile: the
+						// offset would land inside other content.
+						if fi, err := os.Stat(f); err == nil && fi.Size() >= next {
+							fmt.Fprintf(os.Stderr, "dream: %s: a line of %d bytes at %d is longer than the read cap; passed over\n", f, next-off, off)
+							st.Offsets[f] = next
+							st.Skipped++
+						}
 					}
 				}
+				// The rest of the file waits for the next run, like any delta
+				// beyond maxReadBytes.
 				continue
 			}
 			buf = buf[:last+1]

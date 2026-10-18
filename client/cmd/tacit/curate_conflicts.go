@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -154,6 +155,7 @@ func judgePairs(ctx context.Context, s *store.Store, pairs []curate.Pair, refs [
 		if len(ps) == 1 {
 			return []curate.Verdict{curate.NoConflict}, []bool{true}, nil
 		}
+		rep.JudgeSplits++
 		h := len(ps) / 2
 		v1, u1, err := judge(ps[:h])
 		if err != nil {
@@ -163,7 +165,14 @@ func judgePairs(ctx context.Context, s *store.Store, pairs []curate.Pair, refs [
 		if err != nil {
 			return nil, nil, err
 		}
-		return append(v1, v2...), append(u1, u2...), nil
+		u := append(u1, u2...)
+		// No valid verdict for any pair of the chunk is a judge that is not
+		// working, not one pair it stumbles on: stop, as before splitting
+		// existed, instead of asking pair by pair.
+		if !slices.Contains(u, false) {
+			return nil, nil, fmt.Errorf("%w: the judge gave no valid verdict for any of %d pairs", modelrun.ErrInvalidResult, len(ps))
+		}
+		return append(v1, v2...), u, nil
 	}
 	var verdicts []curate.Verdict
 	var unjudged []bool
@@ -188,7 +197,9 @@ func judgePairs(ctx context.Context, s *store.Store, pairs []curate.Pair, refs [
 			} else {
 				other = facts[pm.otherIdx].Meta.Name
 			}
-			review = append(review, fmt.Sprintf("- CONFLICT CHECK FAILED: [[%s]] vs [[%s]]: the judge gave no valid verdict for this pair; compare them by hand", nf.Meta.Name, other))
+			// The contradiction-question format, so the review page and the app
+			// show the pair as the owner's call (parseReviewFiles).
+			review = append(review, fmt.Sprintf("- CONTRADICTION?: [[%s]] (%s) vs [[%s]]\n  unchecked: the conflict judge gave no valid verdict for this pair; compare them", nf.Meta.Name, nf.Meta.Scope, other))
 			continue
 		}
 		switch v {
@@ -326,7 +337,10 @@ func recheckConflicts(ctx context.Context, s *store.Store, host, since, until st
 			f.Close()
 		}
 	}
-	fmt.Printf("curate: recheck: %d fact(s) created %s..%s, %d pairs in %d judge calls, %d contradictions, %d supersedes, %s, %d error(s)\n", len(set), since, orToday(until), rep.Checked, rep.JudgeCalls, rep.Contradicts, rep.Supersedes, rep.ModelCalls.CostSummary(rep.CostUSD), rep.Errors)
+	if rep.JudgeUnchecked > 0 {
+		rep.Errors++ // their facts stand, but the check is not complete
+	}
+	fmt.Printf("curate: recheck: %d fact(s) created %s..%s, %d pairs in %d judge calls, %d contradictions, %d supersedes, %d unchecked, %s, %d error(s)\n", len(set), since, orToday(until), rep.Checked, rep.JudgeCalls, rep.Contradicts, rep.Supersedes, rep.JudgeUnchecked, rep.ModelCalls.CostSummary(rep.CostUSD), rep.Errors)
 	if rep.Errors > 0 {
 		return 1
 	}

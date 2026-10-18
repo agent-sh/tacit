@@ -74,8 +74,30 @@ func TestJudgePairWithNoValidVerdictGoesToReview(t *testing.T) {
 	}
 	rep := curate.Report{}
 	review, _, err := judgePairs(context.Background(), &store.Store{Dir: t.TempDir()}, pairs, refs, facts, false, &rep)
-	if err != nil || rep.JudgeUnchecked != 1 || len(review) != 1 || !strings.Contains(review[0], "CONFLICT CHECK FAILED") {
+	if err != nil || rep.JudgeUnchecked != 1 || len(review) != 1 || !strings.Contains(review[0], "unchecked") {
 		t.Fatalf("unjudged pair: %v %v %+v", review, err, rep)
+	}
+	// The line reaches the owner: the review page reads it as a pair to decide.
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "review"), 0o755)
+	os.WriteFile(filepath.Join(dir, "review", "2026-10-18.md"), []byte("## curator run x, batch 1\n\n"+review[0]+"\n"), 0o644)
+	refs2 := parseReviewFiles(dir)
+	if len(refs2) != 1 || refs2[0].kind != kindContradiction {
+		t.Fatalf("review page does not show the unchecked pair: %+v", refs2)
+	}
+}
+
+func TestJudgeThatAnswersNothingValidFailsTheCheck(t *testing.T) {
+	pairs, refs, facts := judgedPairsFor(t, "p1", "p2", "p3", "p4")
+	previous := judgeRun
+	defer func() { judgeRun = previous }()
+	judgeRun = func(context.Context, string, string) (string, float64, error) {
+		return "I cannot judge these.", .1, nil
+	}
+	rep := curate.Report{}
+	_, _, err := judgePairs(context.Background(), &store.Store{Dir: t.TempDir()}, pairs, refs, facts, false, &rep)
+	if err == nil || rep.JudgeUnchecked != 0 {
+		t.Fatalf("a judge with no valid verdict at all must fail the check: %v %+v", err, rep)
 	}
 }
 
@@ -161,10 +183,23 @@ func TestCuratorSplitsABatchWithAnInvalidAnswer(t *testing.T) {
 }
 
 func TestCuratorSetsAsideANoteThatFailsAloneRepeatedly(t *testing.T) {
-	home, _ := curateFixture(t,
-		map[string]string{"gamma-note": "The quokka socket driver uses port 7781"},
-		map[string]string{"gamma_note": "malformed"})
+	// Each run also gets a good note, as the daily dreamer brings new ones:
+	// a failure counts only in a run where the model answered something.
+	goods := []string{"delta-note", "omega-note", "sigma-note", "kappa-note"}
+	notes := map[string]string{"gamma-note": "The quokka socket driver uses port 7781"}
+	answers := map[string]string{"gamma_note": "malformed", "both": "malformed"}
+	for _, g := range goods {
+		answers[strings.ReplaceAll(g, "-", "_")] = entryJSON(g, g+"-fact", "The "+g+" marmot cache runs weekly")
+	}
+	home, s := curateFixture(t, notes, answers)
+	addNote := func(name string) {
+		if _, err := addFact(context.Background(), s, "muse", fact.Meta{Name: name, Description: "The " + name + " marmot cache runs weekly", Type: "machine_fact", Scope: "system", Source: fact.Source{Kind: "observed"}}, "x."); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendCase(t, home, goods)
 	for i := 0; i < maxNoteFailures; i++ {
+		addNote(goods[i])
 		if code := runCurate(nil); code != 1 {
 			t.Fatalf("run %d exit %d", i+1, code)
 		}
@@ -173,8 +208,56 @@ func TestCuratorSetsAsideANoteThatFailsAloneRepeatedly(t *testing.T) {
 	if state.Failed["gamma-note"] != maxNoteFailures {
 		t.Fatalf("failed count %d", state.Failed["gamma-note"])
 	}
+	before := callCount(t, home)
+	if code := runCurate(nil); code != 0 {
+		t.Fatalf("a run with only a set-aside note exits %d", code)
+	}
+	if callCount(t, home) != before {
+		t.Fatalf("set-aside note was sent again: %d calls", callCount(t, home)-before)
+	}
+	runCurate([]string{"--retry-set-aside"})
+	if callCount(t, home) == before {
+		t.Fatal("--retry-set-aside did not try the note again")
+	}
+}
+
+// appendCase adds fixture branches for notes created after curateFixture.
+func appendCase(t *testing.T, home string, names []string) {
+	t.Helper()
+	fake := filepath.Join(home, "fake-cli")
+	b, _ := os.ReadFile(fake)
+	script := string(b)
+	i := strings.Index(script, "[ $n -gt 1 ]")
+	var add string
+	for _, n := range names {
+		add += "case \"$in\" in *" + n + "*) key=" + n + "; n=$((n+1));; esac\n"
+	}
+	os.WriteFile(fake, []byte(script[:i]+add+script[i:]), 0o700)
+}
+
+func TestCuratorBrokenModelCountsNothingAgainstTheNotes(t *testing.T) {
+	home, _ := curateFixture(t,
+		map[string]string{"alpha-note": "The quokka socket driver uses port 7781", "beta-note": "Weekly backups of the marmot cache run on Sundays"},
+		map[string]string{"both": "not json", "alpha_note": "not json", "beta_note": "not json"})
+	if code := runCurate(nil); code != 1 {
+		t.Fatalf("exit %d", code)
+	}
+	state := loadCuratorState(filepath.Join(home, ".local/state/tacit/curator.json"))
+	if len(state.Failed) != 0 {
+		t.Fatalf("a model that fails every batch counted against the notes: %v", state.Failed)
+	}
+	if callCount(t, home) > systemicSplits*2+1 {
+		t.Fatalf("splitting did not stop: %d calls", callCount(t, home))
+	}
+}
+
+func TestCuratorCountsOnlyTheNoteThatFails(t *testing.T) {
+	home, _ := curateFixture(t,
+		map[string]string{"alpha-note": "The quokka socket driver uses port 7781", "beta-note": "Weekly backups of the marmot cache run on Sundays"},
+		map[string]string{"both": "malformed", "alpha_note": entryJSON("alpha-note", "quokka-socket-port", "The quokka socket driver uses port 7781"), "beta_note": "malformed"})
 	runCurate(nil)
-	if callCount(t, home) != maxNoteFailures {
-		t.Fatalf("set-aside note was sent again: %d calls", callCount(t, home))
+	state := loadCuratorState(filepath.Join(home, ".local/state/tacit/curator.json"))
+	if state.Failed["beta-note"] != 1 || state.Failed["alpha-note"] != 0 {
+		t.Fatalf("failed counts %v", state.Failed)
 	}
 }

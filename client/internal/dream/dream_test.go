@@ -162,3 +162,17 @@ func TestWindowsPassOverALineLongerThanTheReadCap(t *testing.T) {
 		t.Fatalf("an unfinished long line moved the cursor to %d", st.Offsets[g])
 	}
 }
+
+func TestWindowsPassOverALineEndingRightAtTheReadCap(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "s1.jsonl")
+	src := []Source{{Glob: filepath.Join(dir, "*.jsonl"), Format: digest.Claude}}
+	// maxReadBytes bytes with no newline, the newline right after them.
+	long := strings.Repeat("z", maxReadBytes) + "\n"
+	os.WriteFile(f, []byte(long+strings.Repeat(" ", minNewBytes)+"\n"), 0o644)
+	st := &State{Offsets: map[string]int64{f: 0}}
+	Windows(src, st, false)
+	if st.Offsets[f] != int64(len(long)) || st.Skipped != 1 {
+		t.Fatalf("cursor %d (want %d), skipped %d", st.Offsets[f], len(long), st.Skipped)
+	}
+}
