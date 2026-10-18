@@ -160,6 +160,7 @@ func TestRankSearchesEverythingWithPrefixes(t *testing.T) {
 	write(t, root, "projects/other/noise.md", "noise", "projects/other", "pidwait alone", "nothing else", "")
 	write(t, root, "machines/host-a/outdated.md", "outdated", "machines/host-a", "pgrep advice retired", "pgrep", "retired: 2026-10-09\n")
 	write(t, root, "inbox/claude@host-a/raw.md", "raw", "machines/host-a", "pgrep raw note", "pkill", "")
+	write(t, root, "projects/other/freeze-note.md", "freeze-note", "projects/other", "the deployment waits for review", "x", "")
 	t.Setenv("TACIT_INDEX", filepath.Join(filepath.Dir(root), "index"))
 	t.Setenv("TACIT_LOCAL", filepath.Join(filepath.Dir(root), "local"))
 	ctx := context.Background()
@@ -183,6 +184,11 @@ func TestRankSearchesEverythingWithPrefixes(t *testing.T) {
 		if !strings.Contains(paths(rs), want) {
 			t.Fatalf("prefix search lacks %s: %s", want, paths(rs))
 		}
+	}
+	// The prompt index stems; a half-typed word still finds its fact here
+	// ("deploy" stems to "deploi", "deployment" to "deploy").
+	if rs, _ = ix.Rank(ctx, "deploy", 10, nil); paths(rs) != "freeze-note.md" {
+		t.Fatalf("prefix of a stemmed word: %s", paths(rs))
 	}
 	rs, _ = ix.Rank(ctx, "pgrep pidwait", 10, nil)
 	if got := paths(rs); got != "pgrep-self-match.md" {

@@ -63,8 +63,9 @@ func IndexDir() string {
 }
 
 // schemaVersion is part of the index file name, so a schema change rebuilds
-// instead of failing on a column that an older build does not have.
-const schemaVersion = 6
+// instead of failing on a column that an older build does not have. 7: the
+// FTS tokenizer stems (porter).
+const schemaVersion = 7
 
 // Open returns the index for the store at head, building it when missing.
 // Index files are index-v<schema>-<sha>.db under IndexDir, or
@@ -172,7 +173,11 @@ func build(ctx context.Context, storeDir, localDir, path string) error {
 	defer db.Close()
 	stmts := []string{
 		`CREATE TABLE facts(id INTEGER PRIMARY KEY, path TEXT, name TEXT, scope TEXT, type TEXT, description TEXT, body TEXT, inbox INT, superseded INT, applies TEXT, kind TEXT, conflicts TEXT, ruling INT, words INT, local INT)`,
-		`CREATE VIRTUAL TABLE fts USING fts5(name, description, body, content='facts', content_rowid='id', tokenize='unicode61 remove_diacritics 2')`,
+		`CREATE VIRTUAL TABLE fts USING fts5(name, description, body, content='facts', content_rowid='id', tokenize='porter unicode61 remove_diacritics 2')`,
+		// Rank's prefix search needs the words as written: porter stems a
+		// half-typed prefix too ("deploy"* becomes "deploi"*, which no stem
+		// starts with), so search-as-you-type reads an unstemmed copy.
+		`CREATE VIRTUAL TABLE fts_words USING fts5(name, description, body, content='facts', content_rowid='id', tokenize='unicode61 remove_diacritics 2')`,
 	}
 	for _, s := range stmts {
 		if _, err := db.ExecContext(ctx, s); err != nil {
@@ -203,8 +208,10 @@ func build(ctx context.Context, storeDir, localDir, path string) error {
 	if err := buildEvidence(ctx, tx, facts, nStore); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO fts(fts) VALUES('rebuild')`); err != nil {
-		return err
+	for _, q := range []string{`INSERT INTO fts(fts) VALUES('rebuild')`, `INSERT INTO fts_words(fts_words) VALUES('rebuild')`} {
+		if _, err := tx.ExecContext(ctx, q); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return err
@@ -341,7 +348,9 @@ func Terms(text string) []string {
 func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInbox bool) ([]Hit, error) {
 	// The repo is a scope filter, not a query term: a fact that merely names
 	// the repo is not more relevant to the situation.
-	terms := Terms(strings.Join(append([]string{sit.Query, sit.Command}, sit.Paths...), " "))
+	// One term per stem: the index stems, so "amend" and "amended" are one
+	// match, and counted twice they would pass the two-match gate alone.
+	terms := distinctStems(Terms(strings.Join(append([]string{sit.Query, sit.Command}, sit.Paths...), " ")))
 	if len(terms) == 0 || (sit.OnlyDerived && sit.Repo == "") {
 		return nil, nil
 	}
@@ -720,7 +729,7 @@ func (ix *Index) Rank(ctx context.Context, text string, limit int, keep func(pat
 	// Pages past the first page until limit rows the caller keeps are found
 	// or the matches run out, so a filter that drops most of the top hits
 	// (inbox notes, retired facts) never leaves the view under-filled.
-	q := `SELECT f.path, -bm25(fts, 6.0, 6.0, 1.0) AS score FROM fts JOIN facts f ON f.id = fts.rowid WHERE fts MATCH ? ORDER BY score DESC, f.id LIMIT ? OFFSET ?`
+	q := `SELECT f.path, -bm25(fts_words, 6.0, 6.0, 1.0) AS score FROM fts_words JOIN facts f ON f.id = fts_words.rowid WHERE fts_words MATCH ? ORDER BY score DESC, f.id LIMIT ? OFFSET ?`
 	page := max(limit, 500)
 	for _, sep := range []string{" AND ", " OR "} {
 		match := strings.Join(quoted, sep)
