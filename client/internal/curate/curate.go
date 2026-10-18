@@ -317,6 +317,10 @@ type Report struct {
 	CostUSD          float64         `json:"cost_usd"`
 	Errors           int             `json:"errors"`
 	FailedBatches    int             `json:"failed_batches"`
-	DerivedFiles     int             `json:"derived_files,omitempty"` // derived/ files written or retired by the git pass
-	Recheck          bool            `json:"recheck,omitempty"`       // a --recheck-conflicts run: Facts are the facts checked again
+	BatchSplits      int             `json:"batch_splits,omitempty"`    // batches split in two after an invalid answer
+	SetAside         int             `json:"set_aside,omitempty"`       // pending notes set aside after failing alone in maxNoteFailures runs
+	JudgeSplits      int             `json:"judge_splits,omitempty"`    // judge chunks split in two after an invalid answer
+	JudgeUnchecked   int             `json:"judge_unchecked,omitempty"` // pairs the judge gave no valid verdict for alone; written, sent to review, counted as errors
+	DerivedFiles     int             `json:"derived_files,omitempty"`   // derived/ files written or retired by the git pass
+	Recheck          bool            `json:"recheck,omitempty"`         // a --recheck-conflicts run: Facts are the facts checked again
 }

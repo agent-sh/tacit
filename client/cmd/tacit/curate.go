@@ -32,7 +32,22 @@ type curatorState struct {
 	// Restated holds the notes that only restate a curated fact or an earlier
 	// note (curate.Restated, no model): note -> the fact it restates.
 	Restated map[string]string `json:"restated,omitempty"`
+	// Failed counts, per note, the runs in which the note failed on its own:
+	// the curator's answer for a batch of just that note was malformed or
+	// invalid. A note held here maxNoteFailures times is set aside.
+	Failed map[string]int `json:"failed,omitempty"`
 }
+
+// maxNoteFailures is how often a note may fail alone before it is set aside.
+// Without it, one note the model cannot split fails again in every run and
+// costs a bisection each time.
+const maxNoteFailures = 3
+
+// systemicSplits is how many splits a run makes before any batch has a valid
+// answer: enough to bisect one batch of about 85 notes down to a single
+// note (7 levels), and then the run stops splitting, because a model that
+// fails every half is failing the run, not a note.
+const systemicSplits = 8
 
 // runCurate implements `tacit curate [--model M] [--max-batches N] [--dry-run]`.
 //
@@ -46,13 +61,14 @@ type curatorState struct {
 func runCurate(args []string) int {
 	fs := flag.NewFlagSet("curate", flag.ExitOnError)
 	model := fs.String("model", curate.DefaultModel, "split model")
-	maxBatches := fs.Int("max-batches", 16, "cap on split batches per run (about 85 dreamer notes and $0.83 each, 2026-10-11)")
+	maxBatches := fs.Int("max-batches", 16, "cap on split batches per run (about 85 dreamer notes and $0.83 each, 2026-10-11); the halves of a batch split after an invalid answer do not count")
 	budget := fs.Duration("budget", 150*time.Minute, "no split batch starts after this long; the derive, links and staleness steps run after")
 	dry := fs.Bool("dry-run", false, "split and check, write nothing")
 	recheck := fs.Bool("recheck-conflicts", false, "run only the conflict check again, for the curated facts made from --since on (a run whose check failed)")
 	since := fs.String("since", "", "with --recheck-conflicts: first creation day, YYYY-MM-DD")
 	until := fs.String("until", "", "with --recheck-conflicts: last creation day, YYYY-MM-DD (default: no end)")
 	limit := fs.Int("limit", 0, "with --recheck-conflicts: check only the first N facts (trial runs)")
+	retrySetAside := fs.Bool("retry-set-aside", false, "try again the notes set aside after failing alone (curator.json \"failed\")")
 	fs.Parse(args)
 	if *recheck && *since == "" {
 		fmt.Fprintln(os.Stderr, "curate: --recheck-conflicts needs --since YYYY-MM-DD")
@@ -84,6 +100,9 @@ func runCurate(args []string) int {
 	home, _ := os.UserHomeDir()
 	stateDir := filepath.Join(home, ".local", "state", "tacit")
 	cst := loadCuratorState(filepath.Join(stateDir, "curator.json"))
+	if *retrySetAside {
+		cst.Failed = map[string]int{}
+	}
 
 	facts, perrs, err := fact.Walk(s.Dir)
 	if err != nil {
@@ -109,6 +128,7 @@ func runCurate(args []string) int {
 		}
 	}
 	var pending []*fact.Fact
+	heldBack := 0 // notes that failed alone maxNoteFailures times
 	noteByName := map[string]*fact.Fact{}
 	for _, f := range facts {
 		if f.InInbox() {
@@ -117,6 +137,10 @@ func runCurate(args []string) int {
 		// An owner note saying facts are not their words is not split into
 		// facts: the disowned step acts on it (curateDisowned).
 		if f.InInbox() && !curatedOrigins[f.Meta.Name] && cst.Empty[f.Meta.Name] == "" && cst.Restated[f.Meta.Name] == "" && !disowningNote(f) {
+			if cst.Failed[f.Meta.Name] >= maxNoteFailures {
+				heldBack++
+				continue
+			}
 			pending = append(pending, f)
 		}
 	}
@@ -200,13 +224,57 @@ func runCurate(args []string) int {
 		}
 	}
 
-	for bi, batch := range batches {
+	rep.SetAside = heldBack
+	if heldBack > 0 {
+		fmt.Fprintf(os.Stderr, "curate: %d note(s) set aside after failing alone in %d runs (curator.json \"failed\"; --retry-set-aside tries them again)\n", heldBack, maxNoteFailures)
+	}
+	if cst.Failed == nil {
+		cst.Failed = map[string]int{}
+	}
+	// A batch the model answers with invalid output is split in two and both
+	// halves go to the front of the queue, so one note it cannot split no
+	// longer keeps the rest of its batch pending in every run. A note that
+	// fails alone stays pending; it counts against the note (cst.Failed) only
+	// when another batch of the run got a valid answer, since a model or
+	// runner that fails every batch is not the notes' fault. For the same
+	// reason splitting stops after systemicSplits splits with no valid answer
+	// yet: a broken model would otherwise cost a full bisection of every
+	// batch.
+	queue := batches
+	bi := -1
+	valid := 0               // batches whose answer was valid this run
+	var failedAlone []string // notes that failed alone this run, counted at the end
+	retry := func(batch []*fact.Fact, err error, counts bool) bool {
+		if !errors.Is(err, modelrun.ErrInvalidResult) {
+			return false
+		}
+		if len(batch) == 1 {
+			if counts {
+				failedAlone = append(failedAlone, batch[0].Meta.Name)
+			}
+			return false
+		}
+		// A model that fails every half fails the run, not a note; and a
+		// partly failing one may not bisect every batch either.
+		if valid == 0 && rep.BatchSplits >= systemicSplits || rep.BatchSplits >= systemicSplits*max(1, *maxBatches) {
+			return false
+		}
+		h := len(batch) / 2
+		queue = append([][]*fact.Fact{batch[:h], batch[h:]}, queue...)
+		rep.BatchSplits++
+		fmt.Fprintf(os.Stderr, "curate: %v; splitting the batch of %d note(s) in two\n", err, len(batch))
+		return true
+	}
+	for len(queue) > 0 {
+		batch := queue[0]
+		queue = queue[1:]
+		bi++
 		if err := ctx.Err(); err != nil {
-			fmt.Fprintf(os.Stderr, "curate: %v, %d batch(es) wait for the next run\n", err, len(batches)-bi)
+			fmt.Fprintf(os.Stderr, "curate: %v, %d batch(es) wait for the next run\n", err, len(queue)+1)
 			break
 		}
 		if time.Now().After(batchesUntil) {
-			fmt.Fprintf(os.Stderr, "curate: budget %s spent, %d batch(es) wait for the next run\n", *budget, len(batches)-bi)
+			fmt.Fprintf(os.Stderr, "curate: budget %s spent, %d batch(es) wait for the next run\n", *budget, len(queue)+1)
 			break
 		}
 		res, cost, err := curate.RunCLI(ctx, *model, fmt.Sprintf(curate.SplitPrompt, host, host, curate.Render(batch)))
@@ -219,6 +287,9 @@ func runCurate(args []string) int {
 		}
 		entries, err := curate.ParseChecked(res)
 		if err != nil {
+			if retry(batch, err, true) {
+				continue
+			}
 			rep.Errors++
 			rep.FailedBatches++
 			fmt.Fprintln(os.Stderr, "curate:", err)
@@ -246,7 +317,11 @@ func runCurate(args []string) int {
 			rep.CostUSD += c3
 			var recoveredEntries []curate.Entry
 			if rerr == nil {
-				recoveredEntries, rerr = curate.ParseChecked(res2)
+				// Only a malformed answer is split: a runner error says nothing
+				// about the notes.
+				if recoveredEntries, rerr = curate.ParseChecked(res2); rerr != nil && retry(batch, rerr, true) {
+					continue
+				}
 			}
 			if rerr != nil {
 				rep.Errors++
@@ -266,6 +341,7 @@ func runCurate(args []string) int {
 		produced := map[string]bool{}
 		nRulings, notWords := 0, 0
 		invalidBatch := false
+		unbackedRuling := false // a kind user entry with no owner history on this machine
 		batchOrigins := map[string]bool{}
 		for _, n := range batch {
 			batchOrigins[n.Meta.Name] = true
@@ -283,7 +359,7 @@ func runCurate(args []string) int {
 				ledgerLines = append(ledgerLines, q.Line()...)
 			} else if e.Kind == "user" {
 				if noOwnerCorpus {
-					invalidBatch = true
+					invalidBatch, unbackedRuling = true, true
 					break
 				}
 				notWords++
@@ -293,10 +369,21 @@ func runCurate(args []string) int {
 		}
 
 		if invalidBatch {
+			// An unbacked ruling is invalid only because this machine has no
+			// owner history: split to isolate it, but never count it against the
+			// note, which curates once the history is here.
+			if retry(batch, fmt.Errorf("%w: invalid origin or unbacked owner ruling", modelrun.ErrInvalidResult), !unbackedRuling) {
+				continue
+			}
 			rep.Errors++
 			rep.FailedBatches++
 			fmt.Fprintln(os.Stderr, "curate: invalid origin or unbacked owner ruling; batch stays pending")
 			continue
+		}
+
+		valid++
+		for _, n := range batch {
+			delete(cst.Failed, n.Meta.Name) // a note the model answered is no longer failing
 		}
 
 		// Conflict pairs: closest existing fact per new fact, and new facts of
@@ -313,7 +400,12 @@ func runCurate(args []string) int {
 			break
 		}
 		rep.Checked += len(pairs)
+		unchecked := rep.JudgeUnchecked
 		review, written, err := judgePairs(ctx, s, pairs, refs, newFacts, *dry, &rep)
+		if rep.JudgeUnchecked > unchecked {
+			// Written with a review line each, but the run must not look clean.
+			rep.Errors++
+		}
 		if err != nil {
 			rep.Errors++
 			rep.FailedBatches++
@@ -403,6 +495,14 @@ func runCurate(args []string) int {
 		fmt.Printf("curate: batch %d pushed: %d fact(s) from %d note(s)\n", bi+1, len(newFacts), len(batch))
 	}
 
+	if valid > 0 {
+		for _, n := range failedAlone {
+			cst.Failed[n]++
+		}
+	} else if len(failedAlone) > 0 || rep.BatchSplits >= systemicSplits {
+		fmt.Fprintf(os.Stderr, "curate: no batch got a valid answer; nothing counted against the notes (check the model and runner)\n")
+	}
+
 	// The derived-facts step needs no inbox notes and no model: hot spots,
 	// co-change and module maps from git, as curator. It runs even when
 	// nothing was pending.
@@ -452,7 +552,7 @@ func runCurate(args []string) int {
 	// it can take most of an hour and must not be what a kill loses. It flags
 	// curated facts git has overtaken; it never retires.
 	rep.Errors += curateStale(ctx, s, *dry)
-	fmt.Printf("curate: %d notes in %d batches -> %d facts (%d rulings), %d pairs in %d judge calls, %d contradictions, %d supersedes, %s, %d error(s)\n", rep.Notes, rep.Batches, rep.Facts, rep.Rulings, rep.Checked, rep.JudgeCalls, rep.Contradicts, rep.Supersedes, rep.ModelCalls.CostSummary(rep.CostUSD), rep.Errors)
+	fmt.Printf("curate: %d notes in %d batches (%d split) -> %d facts (%d rulings), %d pairs in %d judge calls, %d contradictions, %d supersedes, %d unchecked, %d set aside, %s, %d error(s)\n", rep.Notes, rep.Batches, rep.BatchSplits, rep.Facts, rep.Rulings, rep.Checked, rep.JudgeCalls, rep.Contradicts, rep.Supersedes, rep.JudgeUnchecked, rep.SetAside, rep.ModelCalls.CostSummary(rep.CostUSD), rep.Errors)
 	if rep.Errors > 0 || rep.DeferredOwner > 0 {
 		return 1
 	}
