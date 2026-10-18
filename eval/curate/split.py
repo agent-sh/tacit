@@ -136,7 +136,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=str(Path.home() / ".cache/tacit-curated"))
     ap.add_argument("--limit", type=int, default=0)
-    ap.add_argument("--model", default=os.environ.get("TACIT_CURATE_MODEL", "opus"))
+    ap.add_argument("--model", default=os.environ.get("TACIT_CURATE_MODEL", "sonnet"))
     ap.add_argument("--resume", action="store_true", help="skip origins already present in --out")
     ap.add_argument("--store", default=str(delivery.STORE), help="store to split (default $TACIT_STORE or ~/.local/share/tacit/store)")
     ap.add_argument("--host", default=delivery.HOST, help="the curator's host (default $TACIT_HOST or the hostname)")

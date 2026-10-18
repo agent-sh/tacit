@@ -246,19 +246,54 @@ func TestCwdPathReadsAFileURL(t *testing.T) {
 
 
 func TestToFactKeepsTheOwnersWordsForARuling(t *testing.T) {
-	rows, err := ParseChecked(`[{"description":"Design docs are written in first person, never 'we'.","type":"user_standard","kind":"user","quote":"you used we. Its I. Plus, where its a code, code word, etc. make it mark as code","applies_to":{}},
-	{"description":"npm ci needs node 24 on this host.","type":"machine_fact","kind":"observed","quote":"ignored for an observation","applies_to":{}}]`)
-	if err != nil || len(rows) != 2 {
+	rows, err := ParseChecked(`[{"description":"Release notes are written in the past tense.","type":"user_standard","kind":"user","quote":"release notes say what shipped, past tense, never what will ship","applies_to":{}},
+	{"description":"npm ci needs node 24 on this host.","type":"machine_fact","kind":"observed","quote":"ignored for an observation","applies_to":{}},
+	{"description":"Two turns make one rule.","type":"user_standard","kind":"user","quote":["keep the changelog short","one line per change"],"applies_to":{}},
+	{"description":"A quote of the wrong shape is no quote.","type":"user_standard","kind":"user","quote":{"text":"x"},"applies_to":{}}]`)
+	if err != nil || len(rows) != 4 {
 		t.Fatalf("parse: %v %d", err, len(rows))
 	}
 	ruling := ToFact(rows[0], "", "box", "s1")
-	if !strings.Contains(ruling.Body, `The owner said: "you used we. Its I. Plus, where its a code, code word, etc. make it mark as code"`) {
+	if !strings.Contains(ruling.Body, `Quoted from the session: "release notes say what shipped, past tense, never what will ship"`) {
 		t.Fatalf("ruling body lost the owner's words: %q", ruling.Body)
 	}
-	if q := ownerwords.Quotes(ruling.Body); len(q) == 0 || !strings.Contains(q[0], "you used we") {
+	if q := ownerwords.Quotes(ruling.Body); len(q) == 0 || !strings.Contains(q[0], "release notes say") {
 		t.Fatalf("curation cannot find the quote: %q", q)
 	}
-	if obs := ToFact(rows[1], "", "box", "s1"); strings.Contains(obs.Body, "owner said") {
+	if obs := ToFact(rows[1], "", "box", "s1"); strings.Contains(obs.Body, "Quoted") {
 		t.Fatalf("an observation got an owner quote: %q", obs.Body)
+	}
+	if b := ToFact(rows[2], "", "box", "s1").Body; !strings.Contains(b, `"keep the changelog short ... one line per change"`) {
+		t.Fatalf("a list quote: %q", b)
+	}
+	if b := ToFact(rows[3], "", "box", "s1").Body; strings.Contains(b, "Quoted") {
+		t.Fatalf("an object quote: %q", b)
+	}
+}
+
+func TestBodyQuote(t *testing.T) {
+	long := strings.Repeat("never merge on a red build ", 40)
+	for _, c := range []struct {
+		name, kind, quote, want string
+	}{
+		{"plain", "user", "always run the linter first", `x. Quoted from the session: "always run the linter first"` + "\n"},
+		{"lines joined", "user", "always run\n  the linter\tfirst", `x. Quoted from the session: "always run the linter first"` + "\n"},
+		{"inner double quotes", "user", `the"main"branch stays protected forever`, `x. Quoted from the session: "the”main”branch stays protected forever"` + "\n"},
+		{"empty", "user", "  \n ", "x.\n"},
+		{"observed", "observed", "always run the linter first", "x.\n"},
+	} {
+		if got := body(Extracted{Description: "x.", Quote: Quote(c.quote)}, c.kind); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+	// The inner quotes stay the owner's words for the match.
+	b := body(Extracted{Description: "x.", Quote: `the"main"branch stays protected forever`}, "user")
+	if q := ownerwords.Quotes(b); len(q) != 1 || !ownerwords.In(`well: the"main"branch stays protected forever, ok`, q[0]) {
+		t.Errorf("inner quotes broke the match: %q", q)
+	}
+	b = body(Extracted{Description: "x.", Quote: Quote(long)}, "user")
+	q := b[strings.Index(b, `"`)+1 : strings.LastIndex(b, `"`)]
+	if len(q) > maxQuote+4 || !strings.HasSuffix(q, " ...") || !strings.HasPrefix(q, "never merge") {
+		t.Errorf("long quote: %d bytes, %q", len(q), q[len(q)-20:])
 	}
 }

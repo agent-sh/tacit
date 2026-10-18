@@ -1,10 +1,9 @@
 // Package dream is the dreamer: it reads what changed in the agent
-// transcripts since its last run, digests it, asks a small model for the
-// durable facts nobody wrote down, and files them in inbox/dreamer@<host>/.
+// transcripts since its last run, digests it, asks a model for the durable
+// facts nobody wrote down, and files them in inbox/dreamer@<host>/.
 //
-// Measured in eval/VALUE.md: Haiku 5.5 with the failed-command prompt
-// recovers 75 percent of never-written facts at least partially for about
-// two cents per session window; Opus adds little at 26x the cost.
+// Measured in eval/VALUE.md: Opus 5.5 states 78 percent of the truth facts
+// in their windows against Sonnet's 72, for 2.3 times the cost.
 package dream
 
 import (
@@ -44,15 +43,14 @@ const (
 	maxReadBytes   = 4 << 20 // per file per run; the rest waits (cursor stays)
 )
 
-// Prompt is v5 (2026-10-18): v4 plus the owner's exact words in "quote" for a
-// ruling (eval/VALUE.md, "Dreamed rulings keep the owner's words"). v4 is
-// eval/dream/dream_recall.py (2026-10-11): the measured v2
-// plus one rule, skip what holds only inside the task in progress, never a
-// failure and its fix or a rule of the owner. On two samples of 30 transcript
-// windows (Haiku 5.5, labels by Sonnet 5.5) it cut the facts 25 and 23
-// percent and the task-only ones 90 and 81 percent, durable facts 77 to 71
-// and 151 to 165. Recall on the 80 truth gaps, two runs each: v2 60 and 61
-// at least partial, v4 58 and 58 (eval/VALUE.md).
+// Prompt is v5. Versions (measurements in eval/VALUE.md):
+//   - v4 (2026-10-11, eval/dream/dream_recall.py): v2 plus one rule, skip what
+//     holds only inside the task in progress, never a failure and its fix or a
+//     rule of the owner. On two samples of 30 windows it cut the facts 25 and
+//     23 percent and the task-only ones 90 and 81 percent; recall on the 80
+//     truth gaps 58 and 58 at least partial against v2's 60 and 61.
+//   - v5 (2026-10-18): v4 plus the owner's exact words in "quote" for a ruling
+//     ("Dreamed rulings keep the owner's words").
 const Prompt = `You are the dreamer of tacit, a fact store shared by coding agents on one owner's machines.
 Below is a digest of part of an agent session (U: owner, H: harness-injected text, A: agent, T: tool call, E: tool error).
 Your job is to write down what nobody wrote down. Extract EVERY durable fact another agent would need next time, in these classes:
@@ -99,11 +97,35 @@ type Extracted struct {
 	Description string           `json:"description"`
 	Type        string           `json:"type"`
 	Kind        string           `json:"kind"`
-	Quote       string           `json:"quote,omitempty"` // kind user: the owner's exact words
+	Quote       Quote            `json:"quote,omitempty"` // kind user: the owner's exact words
 	AppliesTo   map[string][]any `json:"applies_to"`
 	Extra       map[string]any   `json:"-"`
 	Session     string           `json:"-"`
 }
+
+// Quote is the model's "quote": a string, or a list of strings (parts of the
+// owner's turn, kept in order with an ellipsis between them). Any other value
+// is no quote, not a failed fact.
+type Quote string
+
+func (q *Quote) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		*q = Quote(s)
+		return nil
+	}
+	var parts []string
+	if json.Unmarshal(b, &parts) == nil {
+		*q = Quote(strings.Join(parts, " ... "))
+		return nil
+	}
+	*q = ""
+	return nil
+}
+
+// maxQuote bounds the quote a note carries, in bytes: the words that state a
+// rule, not the owner's whole turn.
+const maxQuote = 700
 
 // Window is one digest ready for the model.
 type Window struct {
@@ -512,13 +534,24 @@ func Parse(result string) []Extracted {
 	return out
 }
 
-// body is the note text: the description, and for an owner ruling the
-// owner's own words as a quote, which is what curation checks against their
-// turns before it keeps the ruling as theirs (curate.ApplyEvidence).
+// body is the note text: the description, and for an owner ruling the words
+// the model copied from the owner's turn, which curation checks against their
+// turns before it keeps the ruling as theirs (curate.ApplyEvidence). Until
+// then they are the model's claim, so the note says where they are from, not
+// whose they are. A double quote inside them becomes ” so the quote stays one
+// quote; a long one is cut at a word, with an ellipsis.
 func body(x Extracted, kind string) string {
 	b := strings.Join(strings.Fields(x.Description), " ")
-	if q := strings.Join(strings.Fields(strings.ReplaceAll(x.Quote, `"`, "'")), " "); kind == "user" && q != "" {
-		b += ` The owner said: "` + q + `"`
+	q := strings.Join(strings.Fields(strings.ReplaceAll(string(x.Quote), `"`, "”")), " ")
+	if len(q) > maxQuote {
+		cut := strings.LastIndexByte(q[:maxQuote], ' ')
+		if cut <= 0 {
+			cut = maxQuote
+		}
+		q = strings.ToValidUTF8(q[:cut], "") + " ..."
+	}
+	if kind == "user" && q != "" {
+		b += ` Quoted from the session: "` + q + `"`
 	}
 	return b + "\n"
 }
