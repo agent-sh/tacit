@@ -244,7 +244,6 @@ func TestCwdPathReadsAFileURL(t *testing.T) {
 	}
 }
 
-
 func TestToFactKeepsTheOwnersWordsForARuling(t *testing.T) {
 	rows, err := ParseChecked(`[{"description":"Release notes are written in the past tense.","type":"user_standard","kind":"user","quote":"release notes say what shipped, past tense, never what will ship","applies_to":{}},
 	{"description":"npm ci needs node 24 on this host.","type":"machine_fact","kind":"observed","quote":"ignored for an observation","applies_to":{}},
