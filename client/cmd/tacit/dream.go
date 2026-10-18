@@ -61,7 +61,7 @@ func runDream(args []string) int {
 		fs.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "model" })
 		*model = dreamModel(*model, explicit)
 		if !explicit {
-			*model = modelrun.Model("dream", "haiku")
+			*model = modelrun.Model("dream", "opus")
 		}
 	}
 	explicitRuntime := false

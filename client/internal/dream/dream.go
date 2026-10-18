@@ -31,9 +31,12 @@ import (
 )
 
 // DefaultModel is the extraction model: $TACIT_DREAM_MODEL (a provider's
-// full model id, for example), else the Claude CLI alias haiku. --model on
-// tacit dream wins.
-var DefaultModel = modelrun.Model("dream", "haiku")
+// full model id, for example), else the Claude CLI alias opus. --model on
+// tacit dream wins. Measured 2026-10-18 on 89 transcript windows (53 owner
+// rulings), prompt v4, Sonnet 5.5 judging: the truth fact was written down
+// in 64% of windows by Haiku 5.5, 72% by Sonnet 5.5 and 78% by Opus 5.5, at
+// about 0.01, 0.12 and 0.27 dollars a 60k-character window.
+var DefaultModel = modelrun.Model("dream", "opus")
 
 const (
 	maxWindowChars = 60_000  // one model call per window
@@ -52,14 +55,14 @@ const Prompt = `You are the dreamer of tacit, a fact store shared by coding agen
 Below is a digest of part of an agent session (U: owner, H: harness-injected text, A: agent, T: tool call, E: tool error).
 Your job is to write down what nobody wrote down. Extract EVERY durable fact another agent would need next time, in these classes:
 1. Every failed command or tool call (E: lines, and A: lines that report an error) together with what fixed it or what to do instead. Each distinct failure is one fact: name the command, the exact error text, the host, and the working alternative. These are the most valuable facts; do not drop them as noise.
-2. Owner rulings and standards, from U: lines only, quoted or closely paraphrased, with the date if visible.
+2. Owner rulings and standards, from U: lines only, with the date if visible. For each one, copy the owner's exact words from the U: line into "quote": verbatim, typos included, at least the words that state the rule. Without the owner's own words a ruling cannot be told from an agent's guess.
 3. Machine facts: paths that exist or are gone, tools and their quirks, services, ports, hosts, aliases, what is dead on this box.
 4. Past mistakes: a wrong assumption and its correction.
 5. Design decisions with their reason.
 Skip anything derivable from the code or from git log, and plain narrative of what the agent did.
 Skip facts that hold only inside the task in progress: the status of one PR, review round, rebase or run; where one task's worktree, scratch files, contract, receipts or logs are; an instruction addressed to one task id, round or worktree. A failure and what fixed it, and a rule or preference of the owner, are never task-only, even when they came up inside one task. Keep what the next task, in another session, would act on.
 Each fact: one or two sentences another agent can act on, with the concrete path, command, host or number. Mark the source kind: user (the owner said it), observed (the agent found it out).
-Output ONLY a JSON array: [{"description": "...", "type": "user_standard|machine_fact|past_mistake|design_decision|structure|history", "kind": "user|observed", "applies_to": {"paths": [], "repos": [], "hosts": [], "commands": []}}]
+Output ONLY a JSON array: [{"description": "...", "type": "user_standard|machine_fact|past_mistake|design_decision|structure|history", "kind": "user|observed", "quote": "<kind user only: the owner's exact words>", "applies_to": {"paths": [], "repos": [], "hosts": [], "commands": []}}]
 
 Repo: %s  Host: %s
 DIGEST:
@@ -94,6 +97,7 @@ type Extracted struct {
 	Description string           `json:"description"`
 	Type        string           `json:"type"`
 	Kind        string           `json:"kind"`
+	Quote       string           `json:"quote,omitempty"` // kind user: the owner's exact words
 	AppliesTo   map[string][]any `json:"applies_to"`
 	Extra       map[string]any   `json:"-"`
 	Session     string           `json:"-"`
@@ -506,6 +510,17 @@ func Parse(result string) []Extracted {
 	return out
 }
 
+// body is the note text: the description, and for an owner ruling the
+// owner's own words as a quote, which is what curation checks against their
+// turns before it keeps the ruling as theirs (curate.ApplyEvidence).
+func body(x Extracted, kind string) string {
+	b := strings.Join(strings.Fields(x.Description), " ")
+	if q := strings.Join(strings.Fields(strings.ReplaceAll(x.Quote, `"`, "'")), " "); kind == "user" && q != "" {
+		b += ` The owner said: "` + q + `"`
+	}
+	return b + "\n"
+}
+
 // ToFact converts an extraction into an inbox fact for writer dreamer@host.
 func ToFact(x Extracted, repo, host, session string) *fact.Fact {
 	typ := x.Type
@@ -540,7 +555,7 @@ func ToFact(x Extracted, repo, host, session string) *fact.Fact {
 			Source:  fact.Source{Harness: "dreamer", Host: host, Kind: kind, Session: session},
 			Created: time.Now().Format("2006-01-02"),
 		},
-		Body: strings.Join(strings.Fields(x.Description), " ") + "\n",
+		Body: body(x, kind),
 	}
 }
 

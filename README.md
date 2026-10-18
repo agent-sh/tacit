@@ -140,7 +140,7 @@ Every YAML option is listed here:
 | `verify_roots` | `TACIT_VERIFY_ROOTS` | Extra permitted source directories; YAML list, `PATH` separator in environment; every directory must exist |
 | `runner` | `TACIT_RUNNER` | Default CLI for all model jobs; `claude` |
 | `runners` | `TACIT_<ROLE>_RUNNER` | Per-role CLI overrides |
-| `models` | `TACIT_<ROLE>_MODEL` | Per-role model IDs accepted by the CLI; Claude aliases `opus` for curate/verify, `haiku` for dream/judge |
+| `models` | `TACIT_<ROLE>_MODEL` | Per-role model IDs accepted by the CLI; Claude aliases `sonnet` for curate, `opus` for dream and verify, `haiku` for judge |
 | `models.verify_fallback` | `TACIT_VERIFY_FALLBACK_MODEL` | Legacy same-runner verifier fallback; an empty environment value disables it |
 | `efforts` | `TACIT_<ROLE>_EFFORT` | Per-role reasoning effort; omitted uses the CLI default, empty clears an override |
 | `profiles` | `TACIT_<ROLE>_PROFILE` | Per-role Codex profile name; empty clears it |

@@ -8,6 +8,7 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/ownerwords"
 )
 
 func TestWindowsCursorAndFreshStart(t *testing.T) {
@@ -240,5 +241,24 @@ func TestCwdPathReadsAFileURL(t *testing.T) {
 	}
 	if got := RepoOfCwd(cwdPath("file:///h"), "/h", func(string) bool { return false }); got != "" {
 		t.Errorf("a file URL of home named %q", got)
+	}
+}
+
+
+func TestToFactKeepsTheOwnersWordsForARuling(t *testing.T) {
+	rows, err := ParseChecked(`[{"description":"Design docs are written in first person, never 'we'.","type":"user_standard","kind":"user","quote":"you used we. Its I. Plus, where its a code, code word, etc. make it mark as code","applies_to":{}},
+	{"description":"npm ci needs node 24 on this host.","type":"machine_fact","kind":"observed","quote":"ignored for an observation","applies_to":{}}]`)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("parse: %v %d", err, len(rows))
+	}
+	ruling := ToFact(rows[0], "", "box", "s1")
+	if !strings.Contains(ruling.Body, `The owner said: "you used we. Its I. Plus, where its a code, code word, etc. make it mark as code"`) {
+		t.Fatalf("ruling body lost the owner's words: %q", ruling.Body)
+	}
+	if q := ownerwords.Quotes(ruling.Body); len(q) == 0 || !strings.Contains(q[0], "you used we") {
+		t.Fatalf("curation cannot find the quote: %q", q)
+	}
+	if obs := ToFact(rows[1], "", "box", "s1"); strings.Contains(obs.Body, "owner said") {
+		t.Fatalf("an observation got an owner quote: %q", obs.Body)
 	}
 }
