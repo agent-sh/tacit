@@ -210,3 +210,18 @@ func TestWindowsFromHomeTakeTheRepoTheSessionWorksIn(t *testing.T) {
 		t.Fatalf("window repos %v, want widget for the session in the repo and none for the other", got)
 	}
 }
+
+func TestCwdPathReadsAFileURL(t *testing.T) {
+	for in, want := range map[string]string{
+		"file:///home/u":              "/home/u",
+		"file:///home/u/my%20project": "/home/u/my project",
+		"/home/u/w":                   "/home/u/w",
+	} {
+		if got := cwdPath(in); got != want {
+			t.Errorf("cwdPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := RepoOfCwd(cwdPath("file:///h"), "/h", func(string) bool { return false }); got != "" {
+		t.Errorf("a file URL of home named %q", got)
+	}
+}

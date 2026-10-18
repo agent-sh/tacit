@@ -843,17 +843,22 @@ Intake after v4 and the restated drop: 1,327 x 0.76 x 0.99, about 1,000 notes a 
 
 ## The repo of a session that starts outside one (2026-10-18)
 
-Measured on a second owner's machine, where agents start in the home directory or a folder of checkouts and reach their repos by path: 116 frozen transcripts (Claude Code and Codex), dreamed and curated end to end, 254 truth situations mined from them (eval/SCHEMA.md), the same offline delivery check as section 1 (a Sonnet 5.5 judge on "does the context give the agent this fact").
+Measured on a second owner's machine, where agents start in the home directory or a folder of checkouts and reach their repos by path: 116 frozen transcripts (Claude Code and Codex), 283 dream windows. The repo of every window was read with tacit's own `dream.Windows` on main and on this change, with the machine's real home directory; no model is called for it. A Sonnet 5.5 judge then read each window and the repository it was filed under: "is most of this window's work about this repository?" (yes, mixed, no).
 
-**What the cwd rule did there.** Of 5,279 curated facts, 2,736 sat in two scopes named after where sessions started, not after a repo: the home directory's name (2,081) and the folder of checkouts (655). Of 572 owner standards, 470 were project-scoped and 26 `user`. A rule said in a session started at home ("check before asking, ask once") reached only sessions started at home, so a task in a repo never got it. Searching the store for each truth fact by its own words with the situation's repo found it for 119 of 254; for the owner standards, 17 of 59.
-
-**What-if.** The same store with those two pseudo-project scopes moved to `user`, nothing else changed, same ranker and floors:
-
-| selector | fact delivered before | after |
+| window filed under | main | this change |
 |---|---|---|
-| local | 60 of 254 | 79 |
-| Jev, 0.70 | 66 | 92 |
+| a repository | 121 | 96 |
+| no project (`user`, `machines/<host>`) | 125 | 187 |
+| a folder of checkouts that is no repository (`projects/<folder>`) | 33 | 0 |
+| the home directory's name (a cwd recorded as `file:///home/u`) | 4 | 0 |
 
-For comparison on the same 254: plain BM25 over the transcripts 76, a hosted graph memory (vector search over the same history) 77.
+Main names a repository by the cwd's base name when the cwd is in no repository: 37 windows went to pseudo-projects, and 39 more to names such as `on`, `re` or a URL slug (Codex project folders, file URLs). This change gives 57 windows a repository their cwd did not give, from their paths, and leaves the rest to no project.
 
-**The change.** A path counts for the repository that holds it (the nearest `.git` up the path, a worktree's repository, or the `<workspace>/src/<Package>/` shape of a deleted Brazil workspace; never the home directory's dot directories). The dreamer gives a window whose cwd names no repository the repository most of its paths are in (at least 2 mentions and half of all), else no project; `RepoOfCwd` no longer names a non-repository folder in home, and the transcript folder's name is no longer a fallback. The prompt hook does the same from the prompt's paths (counted three times) and the last 512 KiB of the transcript. The prompt-time half is not measured offline (the check has no transcript); live numbers follow when the live A/B on this store is rerun.
+| repository of a window | right | mixed | wrong |
+|---|---|---|---|
+| main, the cwd's repository (39 windows sampled) | 12 | 6 | 21 |
+| this change, inferred from paths (all 57) | 34 | 11 | 12 |
+
+Long sessions move between repositories, so a 60k-character window often is not about the repository the session started in; the judge is strict, but it is the same judge for both rows. Rules tried on the same windows before this one: every path once with a simple majority, per delta (23 right, 7 mixed, 10 wrong of 40 sampled) and per window (18, 9, 13 of 40); the shipped rule counts a path the agent works in (`cd`, `git -C`, an edit's target) three times and asks for three quarters of the window's count.
+
+Why it matters: the same store with its pseudo-project scopes moved to `user` (no other change, same ranker and floors) delivered the truth fact offline for 79 of 254 situations against 60 with the local selector, and 92 against 66 with Jev. Measured on a store whose pseudo-project scopes came partly from the harness: the evaluation dreamed with a substitute home directory, under which the real home was no home, so these numbers bound what fixing folder-named scopes is worth rather than measure this change's own delivery. The prompt-time inference is not measured offline (the check carries no transcript).

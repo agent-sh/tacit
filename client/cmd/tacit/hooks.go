@@ -114,11 +114,6 @@ func runHook(args []string) int {
 	sit := search.Situation{Repo: store.RepoName(ctx, in.Cwd), Host: store.ShortHost()}
 	if sit.Repo != "" {
 		sit.RepoAliases = hookRepoAliases(ctx, in.Cwd)
-	} else if args[0] == "prompt" {
-		// Started outside a repo (home, a folder of checkouts): the repo the
-		// prompt and the session's recent tool calls point at.
-		home, _ := os.UserHomeDir()
-		sit.Repo = activityRepo(in, home)
 	}
 
 	switch args[0] {
@@ -153,6 +148,12 @@ func runHook(args []string) int {
 		p := strings.TrimSpace(in.Prompt)
 		if !promptWorthy(p) {
 			return 0
+		}
+		if sit.Repo == "" {
+			// Started outside a repo (home, a folder of checkouts): the repo
+			// the prompt and the session's recent tool calls point at.
+			home, _ := os.UserHomeDir()
+			sit.Repo = activityRepo(ctx, in, home)
 		}
 		ix, err := openIndex(ctx, s)
 		if err != nil {
