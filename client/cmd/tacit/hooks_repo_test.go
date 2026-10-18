@@ -45,6 +45,10 @@ func TestActivityRepoFromPromptAndTranscript(t *testing.T) {
 	if got := repo("compare with " + api + "/server.go"); got != "" {
 		t.Errorf("one typed path alone decided: %q", got)
 	}
+	// ... unless the owner says to work there.
+	if got := repo("cd " + api + " and compare"); got != "api" {
+		t.Errorf("a typed cd did not move the session: %q", got)
+	}
 	// ... a typed path with a recent tool call there does.
 	write("cat " + api + "/go.mod")
 	if got := repo("look at " + api + "/server.go"); got != "api" {

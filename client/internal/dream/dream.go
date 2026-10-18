@@ -338,7 +338,9 @@ func repoOf(file string, f digest.Format, raw []byte) string {
 	// (-home-u-projects-memra). It names a repo only when that is a
 	// checkout under the projects directory; any other folder (home, a
 	// folder of checkouts) is not a project, and the window's paths decide
-	// (windowRepo).
+	// (windowRepo). The folder name's last dash-separated part is the guess,
+	// so a repo with a dash in its name (my-repo) or one level down
+	// (projects/agent-sh/agnix) is not found here and gets no repo.
 	if f == digest.Claude {
 		parts := strings.Split(filepath.Base(filepath.Dir(file)), "-")
 		name := parts[len(parts)-1]
@@ -415,11 +417,11 @@ func RepoOfCwd(cwd, home string, isRepo func(dir string) bool) string {
 		// Elsewhere in home: the repo that holds the directory, else none. A
 		// folder of checkouts (~/workplace) or of documents is not a project,
 		// and its name made pseudo-projects of where sessions started
-		// (projects/workplace).
+		// (projects/workplace). A worktree is its repository's.
 		if strings.HasPrefix(p, home+string(filepath.Separator)) {
 			for d := p; d != home && d != filepath.Dir(d); d = filepath.Dir(d) {
 				if isRepo(d) {
-					return filepath.Base(d)
+					return filepath.Base(repoinfer.WorktreeRepo(d))
 				}
 			}
 			return ""

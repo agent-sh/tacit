@@ -37,10 +37,10 @@ var srcRx = regexp.MustCompile(`^(.+)/src/([A-Za-z][A-Za-z0-9._-]+)/[^/]`)
 var workRx = regexp.MustCompile(`(?:\bcd\s+|\bgit\s+-C\s+|T: (?:Edit|Write|MultiEdit|NotebookEdit)\s+|"file_path"\s*:\s*"|\bfile:\s+)$`)
 
 // Strong is how much more a path the agent works in (workRx) counts than one
-// it only mentions. Measured on 283 dream windows (eval/VALUE.md): with work
-// paths at 3 and a three-quarter majority, 23 of 29 inferred repos were
-// right and none wrong; counting every path once, 23 of 40 right and 10
-// wrong.
+// it only mentions. Measured in eval/VALUE.md ("The repo of a session that
+// starts outside one"): with work paths at 3 and a three-quarter majority, 34
+// of 57 sampled windows right, 11 partly and 12 wrong, against main's cwd
+// rule at 12, 6 and 21 of 39.
 const Strong = 3
 
 type mention struct {
@@ -75,9 +75,10 @@ type Resolver struct {
 	home  string            // symlinks resolved
 	alias string            // home as given, when that differs (a symlinked home)
 	roots map[string]string // directory -> repo root ("" for none)
-	// MaxDirs caps the directories one Resolver looks at (0 is no cap); a
-	// lookup past it names no repo. The prompt hook sets it to bound its
-	// time on a slow file system.
+	stats map[string]bool   // path (with a trailing / for "is a directory") -> exists
+	// MaxDirs caps the directories and paths one Resolver stats (0 is no
+	// cap); a lookup past it names no repo. The prompt hook sets it to bound
+	// its time on a slow file system.
 	MaxDirs int
 	// Stop, when set, is asked before each new directory; true stops the
 	// lookups (a hook past its deadline).
@@ -87,7 +88,7 @@ type Resolver struct {
 // NewResolver resolves paths under home, which is cleaned and has its
 // symlinks resolved the way the paths' are.
 func NewResolver(home string) *Resolver {
-	r := &Resolver{home: real(home), roots: map[string]string{}}
+	r := &Resolver{home: real(home), roots: map[string]string{}, stats: map[string]bool{}}
 	if h := filepath.Clean(home); home != "" && h != r.home {
 		r.alias = h
 	}
@@ -105,6 +106,31 @@ func real(p string) string {
 	return p
 }
 
+// cut reports that the lookups must stop: the stat cap is reached or Stop
+// says so.
+func (r *Resolver) cut() bool {
+	return (r.MaxDirs > 0 && len(r.roots)+len(r.stats) >= r.MaxDirs) || (r.Stop != nil && r.Stop())
+}
+
+// exists reports whether p exists, as a directory when dir is set; each path
+// is statted once, and none past the bounds (cut).
+func (r *Resolver) exists(p string, dir bool) bool {
+	k := p
+	if dir {
+		k += "/"
+	}
+	if v, ok := r.stats[k]; ok {
+		return v
+	}
+	if r.cut() {
+		return false
+	}
+	fi, err := os.Stat(p)
+	v := err == nil && (!dir || fi.IsDir())
+	r.stats[k] = v
+	return v
+}
+
 // root is the root of the repository that holds dir: the nearest directory
 // up to home with a .git entry; "" when there is none or the lookup was cut.
 func (r *Resolver) root(dir string) string {
@@ -118,14 +144,14 @@ func (r *Resolver) root(dir string) string {
 		if d == r.home || !strings.HasPrefix(d, r.home+string(filepath.Separator)) {
 			break
 		}
-		if (r.MaxDirs > 0 && len(r.roots) >= r.MaxDirs) || (r.Stop != nil && r.Stop()) {
+		if r.cut() {
 			return ""
 		}
 		walked = append(walked, d)
 		if fi, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
 			root = d
 			if fi.Mode().IsRegular() {
-				root = worktreeRepo(d)
+				root = WorktreeRepo(d)
 			}
 			break
 		}
@@ -136,10 +162,10 @@ func (r *Resolver) root(dir string) string {
 	return root
 }
 
-// worktreeRepo is the repository a worktree at dir belongs to: its .git file
-// says "gitdir: <repo>/.git/worktrees/<name>". A file that says something
-// else (a submodule) leaves dir its own root.
-func worktreeRepo(dir string) string {
+// WorktreeRepo is the repository a worktree at dir belongs to: its .git file
+// says "gitdir: <repo>/.git/worktrees/<name>". A .git directory, or a file
+// that says something else (a submodule), leaves dir its own root.
+func WorktreeRepo(dir string) string {
 	fh, err := os.Open(filepath.Join(dir, ".git"))
 	if err != nil {
 		return dir
@@ -163,7 +189,7 @@ func worktreeRepo(dir string) string {
 // Name is the repo name for path, or "" when the path is outside home, in
 // home's dot directories, or in no repository.
 func (r *Resolver) Name(path string) string {
-	if r.home == "" {
+	if r.home == "" || r.cut() {
 		return ""
 	}
 	p := path
@@ -184,7 +210,7 @@ func (r *Resolver) Name(path string) string {
 		}
 	}
 	dir := p
-	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+	if !r.exists(dir, true) {
 		dir = filepath.Dir(dir)
 	}
 	if root := r.root(dir); root != "" {
@@ -197,7 +223,7 @@ func (r *Resolver) Name(path string) string {
 	}
 	// A package removed from a Brazil workspace that still exists.
 	if m := srcRx.FindStringSubmatch(p); m != nil {
-		if _, err := os.Stat(filepath.Join(m[1], "packageInfo")); err == nil {
+		if r.exists(filepath.Join(m[1], "packageInfo"), false) {
 			return m[2]
 		}
 	}

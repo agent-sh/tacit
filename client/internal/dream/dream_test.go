@@ -123,6 +123,23 @@ func TestRepoOfCwd(t *testing.T) {
 	}
 }
 
+func TestRepoOfCwdNamesAWorktreeAfterItsRepository(t *testing.T) {
+	home := t.TempDir()
+	widget := filepath.Join(home, "w", "widget")
+	fix := filepath.Join(home, "w", "widget-fix")
+	for _, d := range []string{filepath.Join(widget, ".git", "worktrees", "widget-fix"), filepath.Join(fix, "pkg")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(fix, ".git"), []byte("gitdir: "+widget+"/.git/worktrees/widget-fix\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := RepoOfCwd(filepath.Join(fix, "pkg"), home, isRepo); got != "widget" {
+		t.Errorf("worktree cwd: %q, want widget", got)
+	}
+}
+
 func TestParseCheckedDistinguishesEmptyFromFailure(t *testing.T) {
 	for _, body := range []string{"[]", "```json\n[]\n```"} {
 		if rows, err := ParseChecked(body); err != nil || len(rows) != 0 {

@@ -1,6 +1,7 @@
 package repoinfer
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -141,5 +142,14 @@ func TestResolverStopsWhenAskedOrFull(t *testing.T) {
 	r.Name(filepath.Join(home, "b", "c", "d"))
 	if got := r.Name(filepath.Join(home, "a", "repo", "x")); got != "" {
 		t.Fatalf("a full resolver named %q", got)
+	}
+	// Every stat counts against the cap, the per-mention ones too.
+	r = NewResolver(home)
+	r.MaxDirs = 10
+	for i := range 100 {
+		r.Name(filepath.Join(home, "a", "repo", fmt.Sprintf("f%d.go", i)))
+	}
+	if n := len(r.roots) + len(r.stats); n > r.MaxDirs {
+		t.Fatalf("%d stats past a cap of %d", n, r.MaxDirs)
 	}
 }
