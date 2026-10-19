@@ -956,9 +956,9 @@ The rule has no model. Its word lists were derived on the dev half of the labels
 | half | one-off marked | standing marked |
 |---|---|---|
 | dev | 54 of 101 | 1 of 40 |
-| test | 25 of 89 | 3 of 51 |
+| test | 25 of 89 | 2 of 51 |
 
-The prototype the lists started from marked 22 of 89 and 3 of 51 on the test half; five task verbs (clean, empty, review, scan, solve), "you can", "i approve" and a skipped leading "so"/"and"/"plus" each caught dev one-offs and no dev standing rule. The three standing rules it marks on the test half open like a task (a "lets not ..." that sets a research focus, a "do not ..." and a "we need ..." with numbered steps). On the bench store it marks 83 of 280 rulings.
+The prototype the lists started from marked 22 of 89 and 3 of 51 on the test half; five task verbs (clean, empty, review, scan, solve), "you can", "i approve" and a skipped leading "so"/"and"/"plus" each caught dev one-offs and no dev standing rule. The two standing rules it marks on the test half open like a task (a "lets not ..." that sets a research focus, and a "we need ..." with numbered steps). After review, "do not" counts as "dont", and a number counts as an answer only at the start or as one of two items ("keep the cap at 50. it is the limit" is not an answer); that unmarked one standing rule of the test half and no one-off. On the bench store it marks 83 of 280 rulings.
 
 **Offline**, on the fixed bench (254 situations, SessionStart plus prompt block, Sonnet 5.5 judge), against a fresh run of release v0.3.1: the blocks differ in 26 situations. In 14 only the label changed (a `RULE` line became a plain one). In 2 a standing rule took the slot that an in-task ruling among the three had blocked. In 10 an in-task ruling left the block (a slot line, or a SessionStart line pushed past the limit of 10 once rules no longer went first), and in 4 of those a standing rule or another fact took its place. Verdicts on the 26: 1 rose from no to partial (a standing rule took the slot), 1 from partial to yes and 1 fell from yes to partial where only labels changed, 1 fell from yes to partial because it lost the in-task slot ruling that carried the needed fact, and 22 held. Overall the score is unchanged:
 
