@@ -63,6 +63,7 @@ type Config struct {
 	Keys        string   `yaml:"keys"`
 	Local       string   `yaml:"local_overlay"`
 	OwnerNames  []string `yaml:"owner_names"`
+	HermesDB    string   `yaml:"hermes_db"` // TACIT_HERMES_DB; "off" reads no Hermes store
 	VerifyRoots []string `yaml:"verify_roots"`
 	Models      Models   `yaml:"models"`
 }
@@ -183,6 +184,10 @@ func Load(path string, required bool) error {
 	values["TACIT_UTILITY_TIMEOUT"] = c.Utility.Timeout
 	values["TACIT_UTILITY_KEY_FILE"] = resolve(c.Utility.KeyFile)
 	values["TACIT_UTILITY_AUDIT_DIR"] = resolve(c.Utility.AuditDir)
+	values["TACIT_HERMES_DB"] = resolve(c.HermesDB)
+	if strings.EqualFold(c.HermesDB, "off") {
+		values["TACIT_HERMES_DB"] = "off"
+	}
 	values["TACIT_RUNNER"] = c.Runner
 	values["TACIT_DREAM_MAX_RUNTIME"] = c.DreamMaxRuntime
 	for role, name := range map[string]string{"DREAM": c.Runners.Dream, "CURATE": c.Runners.Curate, "JUDGE": c.Runners.Judge, "VERIFY": c.Runners.Verify} {

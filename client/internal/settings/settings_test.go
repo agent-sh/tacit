@@ -314,3 +314,24 @@ func TestDreamRuntimeSetting(t *testing.T) {
 		t.Fatal("config replaced environment override")
 	}
 }
+
+func TestHermesStoreSetting(t *testing.T) {
+	clear(t, "TACIT_HERMES_DB")
+	dir := t.TempDir()
+	file := filepath.Join(dir, "config.yaml")
+	os.WriteFile(file, []byte("hermes_db: off\n"), 0o600)
+	if err := Load(file, true); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("TACIT_HERMES_DB") != "off" {
+		t.Fatalf("hermes_db off: %q", os.Getenv("TACIT_HERMES_DB"))
+	}
+	os.Unsetenv("TACIT_HERMES_DB")
+	os.WriteFile(file, []byte("hermes_db: ./h/state.db\n"), 0o600)
+	if err := Load(file, true); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("TACIT_HERMES_DB") != filepath.Join(dir, "h", "state.db") {
+		t.Fatalf("hermes_db path: %q", os.Getenv("TACIT_HERMES_DB"))
+	}
+}
