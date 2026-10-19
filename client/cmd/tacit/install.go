@@ -19,7 +19,10 @@ import (
 // runInstall wires tacit into a harness. Idempotent: existing tacit
 // entries are replaced.
 //
-//   - claude: SessionStart and UserPromptSubmit hooks in ~/.claude/settings.json.
+//   - claude: SessionStart and UserPromptSubmit hooks in ~/.claude/settings.json,
+//     and the MCP server (tacit_search, tacit_fact, tacit_add) in the user
+//     scope of ~/.claude.json; --no-mcp installs the hooks only and removes
+//     the server.
 //   - codex: the same two hooks in ~/.codex/hooks.json (Codex takes the same
 //     hook JSON and adds plain stdout as context); Codex asks the owner to
 //     trust new hooks once, in /hooks.
@@ -41,7 +44,7 @@ func runInstall(args []string) int {
 		usage()
 	}
 	target, rest := args[0], args[1:]
-	if target != "dream" && target != "curate" && len(rest) != 0 {
+	if target != "dream" && target != "curate" && target != "claude" && len(rest) != 0 {
 		usage()
 	}
 	exe, err := os.Executable()
@@ -51,20 +54,17 @@ func runInstall(args []string) int {
 	home, _ := os.UserHomeDir()
 	goos := runtime.GOOS
 	switch target {
-	case "claude", "codex":
-		path := filepath.Join(home, ".claude", "settings.json")
-		if target == "codex" {
-			path = filepath.Join(home, ".codex", "hooks.json")
-		}
+	case "claude":
+		return installClaude(home, exe, rest)
+	case "codex":
+		path := filepath.Join(home, ".codex", "hooks.json")
 		if err := installHooks(path, exe); err != nil {
 			fmt.Fprintln(os.Stderr, "install:", err)
 			return 1
 		}
 		fmt.Println("installed SessionStart and UserPromptSubmit hooks in", path)
-		if target == "codex" {
-			fmt.Println("Codex skips new hooks until you trust them: run /hooks in Codex once.")
-			fmt.Printf("MCP (~/.codex/config.toml):\n[mcp_servers.tacit]\ncommand = %q\nargs = %s\n", exe, mcpArguments("codex"))
-		}
+		fmt.Println("Codex skips new hooks until you trust them: run /hooks in Codex once.")
+		fmt.Printf("MCP (~/.codex/config.toml):\n[mcp_servers.tacit]\ncommand = %q\nargs = %s\n", exe, mcpArguments("codex"))
 	case "hermes":
 		hermesHome := os.Getenv("HERMES_HOME")
 		if hermesHome == "" {
@@ -334,12 +334,65 @@ func installFollow(exe string) (string, error) {
 	return path, os.Rename(tmp, path)
 }
 
+// installClaude implements `tacit install claude [--no-mcp]`: the two hooks,
+// and tacit's MCP server in Claude Code's user scope, so a session can search
+// the store and read a fact in full. The start block then names the tool for
+// detail (`hook session-start --mcp`). The tools' definitions ride in every
+// session's prompt; --no-mcp leaves them out (docs/client.md has the cost).
+func installClaude(home, exe string, args []string) int {
+	fs := flag.NewFlagSet("install claude", flag.ContinueOnError)
+	noMCP := fs.Bool("no-mcp", false, "install the hooks only, and remove tacit's MCP server from Claude Code's user config")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		return 2
+	}
+	cfg := claudeUserConfig(home)
+	var entry map[string]any
+	if !*noMCP {
+		entry = claudeMCPEntry(exe)
+	}
+	// The server first: when it cannot be written, the hooks keep pointing
+	// at `tacit fact`.
+	changed, err := setClaudeMCP(cfg, entry)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "install:", err)
+		return 1
+	}
+	path := filepath.Join(home, ".claude", "settings.json")
+	var extra []string
+	if !*noMCP {
+		extra = []string{"--mcp"}
+	}
+	if err := installHooksWith(path, exe, runtime.GOOS, extra); err != nil {
+		fmt.Fprintln(os.Stderr, "install:", err)
+		return 1
+	}
+	fmt.Println("installed SessionStart and UserPromptSubmit hooks in", path)
+	switch {
+	case *noMCP && changed:
+		fmt.Println("removed the tacit MCP server from", cfg, "(the file as it was:", claudeConfigBackup(cfg)+")")
+	case *noMCP:
+		fmt.Println("no tacit MCP server registered (--no-mcp)")
+	case changed:
+		fmt.Println("registered the tacit MCP server (tacit_search, tacit_fact, tacit_add) for Claude Code in", cfg, "(user scope; the file as it was:", claudeConfigBackup(cfg)+")")
+	default:
+		fmt.Println("the tacit MCP server is already registered in", cfg)
+	}
+	if !*noMCP {
+		fmt.Println("new sessions get it; `claude mcp list` shows it. Hooks only: tacit install claude --no-mcp")
+	}
+	return 0
+}
+
 // installHooks merges tacit's two hooks into a Claude-style hooks file
 // (Claude Code's settings.json, Codex's hooks.json), keeping every other
 // entry.
 func installHooks(path, exe string) error { return installHooksFor(path, exe, runtime.GOOS) }
 
-func installHooksFor(path, exe, goos string) error {
+func installHooksFor(path, exe, goos string) error { return installHooksWith(path, exe, goos, nil) }
+
+// installHooksWith is installHooksFor with extra arguments for the
+// SessionStart hook (--mcp: the harness has tacit's MCP server).
+func installHooksWith(path, exe, goos string, startArgs []string) error {
 	settings := map[string]any{}
 	if b, err := os.ReadFile(path); err == nil {
 		if err := json.Unmarshal(b, &settings); err != nil {
@@ -351,13 +404,18 @@ func installHooksFor(path, exe, goos string) error {
 		hooks = map[string]any{}
 	}
 	for event, sub := range map[string]string{"SessionStart": "session-start", "UserPromptSubmit": "prompt"} {
-		handler := map[string]any{"type": "command", "command": hookCommand(exe, sub, goos), "timeout": 15}
+		var extra []string
+		if sub == "session-start" {
+			extra = startArgs
+		}
+		handler := map[string]any{"type": "command", "command": hookCommand(exe, sub, goos, extra...), "timeout": 15}
 		if goos == "windows" && filepath.Base(path) == "settings.json" {
 			args := []string{}
 			if cfg := os.Getenv("TACIT_SETTINGS"); cfg != "" {
 				args = append(args, "--config", cfg)
 			}
 			args = append(args, "hook", sub)
+			args = append(args, extra...)
 			handler["command"] = exe
 			handler["args"] = args
 		}

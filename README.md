@@ -47,7 +47,7 @@ Choose the integration for your agent:
 
 | Agent | Install | Connection |
 |---|---|---|
-| Claude Code | `tacit install claude` | Session-start and prompt hooks |
+| Claude Code | `tacit install claude` | Session-start and prompt hooks, and the MCP tools (`--no-mcp`: hooks only) |
 | Codex | `tacit install codex` | Hooks; trust them once in `/hooks` |
 | Hermes | `tacit install hermes` | Memory provider; follow the printed configuration steps |
 | Grok / pi / Muse | `tacit install grok` / `pi` / `muse` | Prints the MCP configuration |

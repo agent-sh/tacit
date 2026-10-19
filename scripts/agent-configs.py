@@ -61,6 +61,15 @@ def main():
         (root / f"{harness}.mcp.json").write_text(
             json.dumps({"mcpServers": {"tacit": server}}, indent=2), encoding="utf-8"
         )
+    # Claude Code's user-scope MCP server, which `install claude` registers.
+    server = json.loads((root / ".claude.json").read_text(encoding="utf-8"))["mcpServers"]["tacit"]
+    if server["command"] != str(binary) or server["args"] != [
+        "--config", str(config), "mcp", "--harness", "claude"
+    ]:
+        raise RuntimeError("Invalid claude memory server arguments")
+    (root / "claude.mcp.json").write_text(
+        json.dumps({"mcpServers": {"tacit": server}}, indent=2), encoding="utf-8"
+    )
     for path in (root / ".claude" / "settings.json", root / ".codex" / "hooks.json"):
         hooks = json.loads(path.read_text(encoding="utf-8"))["hooks"]
         if not all(hooks.get(event) for event in ("SessionStart", "UserPromptSubmit")):
@@ -71,7 +80,7 @@ def main():
     mirror = root / "codex-hooks" / ".claude" / "settings.json"
     mirror.parent.mkdir(parents=True)
     shutil.copyfile(root / ".codex" / "hooks.json", mirror)
-    print(f"Generated Claude/Codex hooks and Codex/Muse/agy MCP configuration in {root}")
+    print(f"Generated Claude/Codex hooks and Claude/Codex/Muse/agy MCP configuration in {root}")
 
 
 if __name__ == "__main__":
