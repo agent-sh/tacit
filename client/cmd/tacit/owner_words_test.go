@@ -141,7 +141,7 @@ func TestVerifierMayNotRetireAgainstHisWords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(prompt, `"owner_words":"keep the hooks quiet"`) || !strings.Contains(prompt, "never retire it against his words") || !strings.Contains(prompt, "ask only on a real conflict") {
+	if !strings.Contains(prompt, `"owner_words":"keep the hooks quiet"`) || !strings.Contains(prompt, "never retire it against their words") || !strings.Contains(prompt, "ask only on a real conflict") {
 		t.Fatalf("the verifier was not told their words:\n%s", prompt)
 	}
 	if after := pairItem(t, rs, "a", "b"); after.Decision != nil || after.Ask == nil || after.Ask.Proposed != "b" || !strings.Contains(after.Ask.Question, "keep the hooks quiet") || strings.Contains(read(t, rs, "a"), "superseded_by") {
@@ -193,7 +193,7 @@ func TestStaleVerifierMayNotRetireAgainstHisWords(t *testing.T) {
 	if _, _, err := r.run(ctx, fx.rs.s, call); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(prompt, `"owner_words":"keep the retries at three"`) || !strings.Contains(prompt, "never retire it against his words") {
+	if !strings.Contains(prompt, `"owner_words":"keep the retries at three"`) || !strings.Contains(prompt, "never retire it against their words") {
 		t.Fatalf("the stale verifier was not told their words:\n%s", prompt)
 	}
 	fx.rs.loadFacts()
