@@ -978,3 +978,21 @@ Neither result separates from chance: offline is a tie, and live the one task wh
 
 What ships keeps a ruling in its task in the SessionStart block, after the owner rules and ahead of repo and machine facts. The one offline loss above came from taking it out of that block; at the prompt it is an ordinary fact as measured. The SessionStart order was not measured again.
 
+
+## Near-duplicates (2026-10-19)
+
+The gap analysis counted 82 of 515 delivered lines as near-duplicates (half their name and description terms shared with an earlier line of the same context), and dropping them at selection time changed recall by about 0. So the curator now stops them at the source, with the rule of `curate.Restated` extended to curated facts (SPEC.md "Near-duplicates"): an entry of the split that only restates a curated fact of its scope is not written, and `tacit dedupe` retires the copies a store already holds. Measured on a copy of the rebuilt store of the sections above (about 3,200 live curated facts) with the offline bench of "Prompt delivery: a stemmed index".
+
+| | clusters | copies retired | yes | partial | no | lines (prompt block) | duplicate lines, whole context | duplicate lines, prompt block |
+|---|---|---|---|---|---|---|---|---|
+| v0.3.1, store as it was | | | 110 | 77 | 67 | 2,523 (666) | 155 (6.1%) | 58 (8.7%) |
+| after `tacit dedupe`, overlap 0.6 (shipped) | 45 | 50 | 111 | 78 | 65 | 2,519 (662) | 133 (5.3%) | 50 (7.6%) |
+| overlap 0.5 | 78 | 89 | 109 | 81 | 64 | 2,518 (662) | 123 (4.9%) | 48 (7.3%) |
+
+At 0.6, 36 of the 254 contexts change. Two verdicts rise (no to yes, no to partial) and none falls. In one, the freed slot lets in the truth fact that a retired copy of another fact had pushed out. At 0.5, 116 contexts change, and 4 verdicts rise and 5 fall. It is not shipped.
+
+By hand, 29 of 30 sampled clusters at 0.6 are restatements. The one wrong cluster lost a command that only the copy held. Outside the sample, one more lost scope: a general "commit with this email" fact went into a narrower fact about one repo. Before a guard for names joined with `@` or `_`, two facts about two different plugins being disabled read as one fact. With the guard, 3 copies fewer are retired.
+
+Most of the duplicate lines stay, because their facts are not restatements. Each fact in the pair holds a detail the other lacks: two error messages for one expired certificate, or "5 to 7 minutes" against "10 to 15 minutes" for one restart gap. Retiring either fact loses that detail. Folding the two into one fact is a model's job, and it is not done here. With the repo known (bench problem 1 of the gap analysis), duplicates fill 8.7 percent of the prompt block, not 16.
+
+Cost: no model. A dry run reads the store in about 1 s. The judge cost $3.03, because the baseline took the verdicts of an identical earlier run of v0.3.1 on the same store and only changed contexts were judged.

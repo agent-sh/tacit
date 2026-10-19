@@ -48,6 +48,7 @@ func usage() {
   tacit derive --set-branch <repo>=<branch>   read that repo at a branch other than the remote default (empty branch removes it)
   tacit results [--dry-run] [--out DIR] [--repo R] [--take-over] [--projects DIR] [-v]   measured results committed to repos -> derived/<repo>/ result facts with their commit; saved facts quoting a replaced value -> review/<date>-results.md (no model)
   tacit links [--dry-run]   dead [[links]] in curated facts -> rewritten to the one live fact that clearly answers to them, else plain text; an owner ruling gets a LINK? line in review/<date>.md instead (no model; a step of curate, after results)
+  tacit dedupe [--dry-run] [--json FILE]   curated facts that only restate another curated fact of their scope -> superseded_by the fact kept (rulings first; no model; rulings and facts with the owner's words are never retired)
   tacit stale [--dry-run] [--max N] [--fact NAME] [--as-of T] [--json] [-v]   curated facts whose subject changed in git after their date -> stale? findings in review/<date>.md (no model; flags, never retires)
   tacit rulings audit [--dry-run] [--strict] [--recheck] [--digests DIR] [--digests-only] [--sample N] [--seed N] [--json FILE]   keep a ruling only with the owner's own words as evidence (a verified quote, their decision, written by them); the rest -> source.kind observed (no model)
   tacit resolve supersede <old> <new> | conflict <a> <b> | clear <name>   the owner's answer to a review item
@@ -168,6 +169,8 @@ func main() {
 		os.Exit(runResults(os.Args[2:]))
 	case "links":
 		os.Exit(runLinks(os.Args[2:]))
+	case "dedupe":
+		os.Exit(runDedupe(os.Args[2:]))
 	case "stale":
 		os.Exit(runStale(os.Args[2:]))
 	case "resolve":
