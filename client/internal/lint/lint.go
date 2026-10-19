@@ -169,7 +169,7 @@ func check(f *fact.Fact, names map[string]bool) []Finding {
 }
 
 var (
-	// <source>:<id>: claude:<session>, codex:<session> or note:<name> today. Any
+	// <source>:<id>: claude:, codex:, pi:, hermes:<session> or note:<name> today. Any
 	// lower-case source name passes, so a ledger entry from a source this
 	// client no longer reads stays valid.
 	quoteFromRx = regexp.MustCompile(`^[a-z][a-z0-9-]*:[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -215,7 +215,7 @@ func ownerEvidence(f *fact.Fact, ev evidence) []Finding {
 		add("source.owner_quote is not in the fact's text, or is too short to be evidence")
 	}
 	if s.OwnerQuoteFrom != "" && !quoteFromRx.MatchString(s.OwnerQuoteFrom) {
-		add("source.owner_quote_from is not <source>:<id> (claude:<session>, codex:<session>, note:<name>): " + s.OwnerQuoteFrom)
+		add("source.owner_quote_from is not <source>:<id> (claude:<session>, codex:<session>, pi:<session>, hermes:<session>, note:<name>): " + s.OwnerQuoteFrom)
 	}
 	if s.Endorsed != "" && !decisionRx.MatchString(s.Endorsed) {
 		add("source.endorsed is not a decision id: " + s.Endorsed)
@@ -236,7 +236,7 @@ func ownerEvidence(f *fact.Fact, ev evidence) []Finding {
 		add("source.owner_words is not in the fact's text")
 	}
 	if s.OwnerWordsFrom != "" && !quoteFromRx.MatchString(s.OwnerWordsFrom) {
-		add("source.owner_words_from is not <source>:<id> (claude:<session>, codex:<session>, note:<name>): " + s.OwnerWordsFrom)
+		add("source.owner_words_from is not <source>:<id> (claude:<session>, codex:<session>, pi:<session>, hermes:<session>, note:<name>): " + s.OwnerWordsFrom)
 	}
 	if s.OwnerWords != "" && s.OwnerWordsFrom != "" && !f.InInbox() {
 		if _, ok := ev.quotes[ledger.Quote{Name: f.Meta.Name, Quote: s.OwnerWords, From: s.OwnerWordsFrom, Words: true}.Key()]; !ok {
