@@ -935,3 +935,14 @@ Opus stays the dreamer. Both GPT models write more facts and miss more of the on
 
 **Situation-first ruling descriptions.** The truth rulings that are stored but not delivered mostly fail on vocabulary: the ruling is in general words and the situation names the task. One more curator rule ("a ruling's description starts with the situation it was said in, in the note's own words") was tested on two copies of the rebuilt store, both re-curating the 374 dreamed owner notes with Opus 5.5 (244 descriptions start with "When" against 83). Offline delivery on the 59 ruling situations: 18 yes against 16, inside the noise. The curator sees only the note, and the note seldom names the situation; it is not shipped.
 
+## A rule slot and rare anchors in live sessions (2026-10-19)
+
+Offline, both changes were inside the noise ("Prompt delivery: a stemmed index"). The gap analysis behind them had predicted the live tasks they fix: a ruling outranked by three facts, and a coherence gate vetoed by one incidental rare word. Measured live on the second owner's machine: 24 tasks from their history, 3 runs each, Opus 5.5 in a fresh `claude -p` per cell, with only the cell's own settings. The store and judge are the earlier sections'; the scoring is yes 1, partial 0.5. The arms are release v0.3.0, and v0.3.0 plus the two changes.
+
+| arm | judged | decision tasks | read tasks | tool calls | input tokens | seconds |
+|---|---|---|---|---|---|---|
+| v0.3.0 | 0.83 | 0.76 | 0.92 | 1.2 | 46k | 19 |
+| + rule slot, rare anchors | 0.90 | 0.91 | 0.88 | 1.0 | 43k | 16 |
+
+Per task, the changes scored higher on 5, lower on 3, and tied on 16. A sign test on 8 tasks cannot tell that apart from chance (p = 0.7), but the gains are the predicted ones. A secret-scan ruling and a parked-model decision each rose by two of three runs, and the cr-amend case and two more by one. Each of the three losses is one run of three. In the same harness NeptuneMemory with its episodes scores 0.76, after rerunning 18 of its cells that had received the owner's own hooks (with cwd = home, Claude Code read the home settings as project settings). Shipped on the live result, with the offline null recorded above.
+
