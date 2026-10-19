@@ -19,12 +19,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/hermes"
 	"github.com/agent-sh/tacit/client/internal/importer"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
 	"github.com/agent-sh/tacit/client/internal/repoinfer"
@@ -70,27 +72,72 @@ DIGEST:
 %s
 `
 
-// State is the per-file read cursor, persisted between runs.
+// State is the per-file read cursor, persisted between runs. A Hermes
+// session's cursor is in Offsets too, under hermes.Key ("hermes:<db>#<session
+// id>"), and holds the id of the last message read, not a byte offset.
 type State struct {
 	Offsets   map[string]int64    `json:"offsets"`
 	Skipped   int                 `json:"skipped_long_lines,omitempty"` // lines longer than maxReadBytes passed over
 	LastRun   string              `json:"last_run"`
 	Completed map[string][]string `json:"completed_windows,omitempty"`
+	// Sources are the transcript roots (a glob, a Hermes store) whose cursors
+	// were recorded: a root not listed, with no cursor yet, starts at its end,
+	// so a source added to a running dreamer is not replayed from the start.
+	Sources []string `json:"sources,omitempty"`
 }
 
-// Source is one transcript root.
+// Source is one transcript root: a glob of JSONL files, or a Hermes store.
 type Source struct {
 	Glob   string
 	Format digest.Format
+	// DB is a Hermes store (Format digest.Hermes), read in place of Glob.
+	DB string
 }
 
-// DefaultSources on this machine.
+// root names a source in State.Sources.
+func (s Source) root() string {
+	if s.Format == digest.Hermes {
+		return "hermes:" + s.DB
+	}
+	return s.Glob
+}
+
+// started reports whether the state has cursors for a source: it is listed,
+// or a cursor is for one of its files or sessions (a state from before the
+// list).
+func (st *State) started(src Source) bool {
+	if slices.Contains(st.Sources, src.root()) {
+		return true
+	}
+	for k := range st.Offsets {
+		if src.Format == digest.Hermes {
+			if db, _, ok := hermes.ParseKey(k); ok && db == src.DB {
+				return true
+			}
+		} else if ok, _ := filepath.Match(src.Glob, k); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// DefaultSources on this machine: Claude Code projects, Codex sessions, pi
+// sessions (digest.PiSessionGlob) and, when there is one, the Hermes store
+// (hermes.DefaultDB).
 func DefaultSources(home string) []Source {
-	return []Source{
+	srcs := []Source{
 		{Glob: filepath.Join(home, ".claude", "projects", "*", "*.jsonl"), Format: digest.Claude},
 		{Glob: filepath.Join(home, ".codex", "sessions", "*", "*", "*", "*.jsonl"), Format: digest.Codex},
 		{Glob: filepath.Join(home, ".codex", "sessions", "*", "*.jsonl"), Format: digest.Codex},
+		{Glob: digest.PiSessionGlob(home), Format: digest.Pi},
 	}
+	if db := hermes.DefaultDB(home); db != "" {
+		if abs, err := filepath.Abs(db); err == nil {
+			db = abs
+		}
+		srcs = append(srcs, Source{DB: db, Format: digest.Hermes})
+	}
+	return srcs
 }
 
 // Extracted is one fact as the model returned it.
@@ -128,14 +175,17 @@ func (q *Quote) UnmarshalJSON(b []byte) error {
 // rule, not the owner's whole turn.
 const maxQuote = 700
 
-// Window is one digest ready for the model.
+// Window is one digest ready for the model. File is the transcript, or a
+// Hermes session's cursor key; Start and End are byte offsets in the file, or
+// the message ids the window was read after and up to.
 type Window struct {
-	File  string
-	Repo  string
-	Lines []string
-	Start int64
-	End   int64
-	Part  int
+	File    string
+	Session string // the session id the facts name (source.session)
+	Repo    string
+	Lines   []string
+	Start   int64
+	End     int64
+	Part    int
 }
 
 // Runner is the LLM call; tests substitute it.
@@ -194,9 +244,11 @@ func SaveState(path string, st *State) error {
 	return os.Rename(tmp, path)
 }
 
-// Windows finds files with new bytes since the state and digests the delta.
-// Fresh state starts at each file's current end: the dreamer never replays
-// history (the import and the eval already covered it).
+// Windows finds files with new bytes since the state and digests the delta,
+// and Hermes owner sessions with new messages (hermesWindows). Fresh state
+// starts at each file's current end: the dreamer never replays history (the
+// import and the eval already covered it). So does a source the state has no
+// cursor for yet (State.Sources): one added later is not replayed either.
 //
 // Cursors are advanced here only for deltas with nothing to extract. For a
 // file that yields windows the caller advances the cursor to Window.End
@@ -210,9 +262,18 @@ func Windows(sources []Source, st *State, fresh bool) ([]Window, error) {
 	var ws []Window
 	exclude := loadExclude()
 	for _, src := range sources {
+		fresh := fresh || !st.started(src)
+		if !slices.Contains(st.Sources, src.root()) {
+			st.Sources = append(st.Sources, src.root())
+		}
+		if src.Format == digest.Hermes {
+			ws = append(ws, hermesWindows(src.DB, st, fresh, exclude, home)...)
+			continue
+		}
 		files, _ := filepath.Glob(src.Glob)
 		for _, f := range files {
-			if exclude[strings.TrimSuffix(filepath.Base(f), ".jsonl")] {
+			session := sessionOf(f, src.Format)
+			if exclude[strings.TrimSuffix(filepath.Base(f), ".jsonl")] || exclude[session] {
 				continue
 			}
 			info, err := os.Stat(f)
@@ -275,7 +336,16 @@ func Windows(sources []Source, st *State, fresh bool) ([]Window, error) {
 			}
 			buf = buf[:last+1]
 			end := off + int64(len(buf))
-			lines := digest.Lines(strings.NewReader(string(buf)), src.Format)
+			var lines []string
+			head := buf
+			if src.Format == digest.Pi {
+				// pi writes the cwd and the first turns once, at the start: a
+				// program's session is told from them (digest.PiHeadless).
+				head = readHead(f)
+				lines = digest.PiLines(bytes.NewReader(buf), digest.PiHeadless(head))
+			} else {
+				lines = digest.Lines(bytes.NewReader(buf), src.Format)
+			}
 			if !digest.Interesting(lines) {
 				st.Offsets[f] = end
 				continue
@@ -283,18 +353,132 @@ func Windows(sources []Source, st *State, fresh bool) ([]Window, error) {
 			// The cwd's repo, else the repo the window's own paths are in. Per
 			// window, not per delta: a long session moves between repos, and
 			// measured per delta, 10 of 40 inferred repos were wrong.
-			cwdRepo := repoOf(f, src.Format, buf)
+			cwdRepo := repoOf(f, src.Format, head)
 			resolver := repoinfer.NewResolver(home)
 			for part, c := range chunk(lines, maxWindowChars) {
 				repo := cwdRepo
 				if repo == "" {
 					repo = windowRepo(c, resolver)
 				}
-				ws = append(ws, Window{File: f, Repo: repo, Lines: c, Start: off, End: end, Part: part})
+				ws = append(ws, Window{File: f, Session: session, Repo: repo, Lines: c, Start: off, End: end, Part: part})
 			}
 		}
 	}
 	return ws, nil
+}
+
+// sessionOf is the session id of a transcript file: its name, less the time
+// pi puts before the id (<time>_<id>.jsonl).
+func sessionOf(file string, f digest.Format) string {
+	name := strings.TrimSuffix(filepath.Base(file), ".jsonl")
+	if f == digest.Pi {
+		if i := strings.LastIndexByte(name, '_'); i >= 0 {
+			return name[i+1:]
+		}
+	}
+	return name
+}
+
+// readHead is a transcript's first 256 KiB.
+func readHead(path string) []byte {
+	fh, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer fh.Close()
+	b := make([]byte, 256<<10)
+	n, _ := io.ReadFull(fh, b)
+	return b[:n]
+}
+
+// hermesTimeout bounds one run's reads of a Hermes store.
+const hermesTimeout = 2 * time.Minute
+
+// hermesWindows digests what is new in the owner sessions of a Hermes store
+// (hermes.Session.Owner; automation sessions are never read). A session's
+// cursor is the id of its last message read: rows after it are read in id
+// order, up to maxReadBytes a run, and a row Hermes wrote again when it
+// compacted the conversation is passed over (hermes.Message.Copy), so it is
+// not read twice. A seen session waits for minNewBytes of new content, like a
+// file. The repo is the session's git root or cwd when it records one, else
+// the window's paths. A store that cannot be read is reported and left for
+// the next run, its cursors unmoved.
+func hermesWindows(path string, st *State, fresh bool, exclude map[string]bool, home string) []Window {
+	ctx, cancel := context.WithTimeout(context.Background(), hermesTimeout)
+	defer cancel()
+	db, err := hermes.Open(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dream: hermes %s: %v\n", path, err)
+		return nil
+	}
+	defer db.Close()
+	sessions, err := db.Sessions(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dream: hermes %s: %v\n", path, err)
+		return nil
+	}
+	last, err := db.LastIDs(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dream: hermes %s: %v\n", path, err)
+		return nil
+	}
+	resolver := repoinfer.NewResolver(home)
+	var ws []Window
+	for _, s := range sessions {
+		lastID, ok := last[s.ID]
+		if !s.Owner || !ok || exclude[s.ID] {
+			continue
+		}
+		key := hermes.Key(path, s.ID)
+		after, seen := st.Offsets[key]
+		if !seen && fresh {
+			st.Offsets[key] = lastID
+			continue
+		}
+		if lastID <= after {
+			continue
+		}
+		if seen {
+			if n, err := db.NewBytes(ctx, s.ID, after); err != nil || n <= minNewBytes {
+				continue
+			}
+		}
+		ms, err := db.Messages(ctx, s.ID, after, maxReadBytes)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "dream: hermes %s: session %s: %v\n", path, s.ID, err)
+			continue
+		}
+		if len(ms) == 0 {
+			continue
+		}
+		end := ms[len(ms)-1].ID
+		rows := make([]digest.HermesMessage, 0, len(ms))
+		for _, m := range ms {
+			if !m.Copy {
+				rows = append(rows, m.HermesMessage)
+			}
+		}
+		lines := digest.HermesLines(rows)
+		if !digest.Interesting(lines) {
+			st.Offsets[key] = end
+			continue
+		}
+		cwdRepo := ""
+		for _, d := range []string{s.RepoRoot, s.Cwd} {
+			if d != "" {
+				cwdRepo = RepoOfCwd(d, home, isRepo)
+				break
+			}
+		}
+		for part, c := range chunk(lines, maxWindowChars) {
+			repo := cwdRepo
+			if repo == "" {
+				repo = windowRepo(c, resolver)
+			}
+			ws = append(ws, Window{File: key, Session: s.ID, Repo: repo, Lines: c, Start: after, End: end, Part: part})
+		}
+	}
+	return ws
 }
 
 // nextLineStart is the offset just after the first newline at or after from,

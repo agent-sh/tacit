@@ -1,0 +1,105 @@
+package dream
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/agent-sh/tacit/client/internal/digest"
+	"github.com/agent-sh/tacit/client/internal/hermes"
+	"github.com/agent-sh/tacit/client/internal/hermes/hermestest"
+)
+
+func TestHermesWindowsReadOwnerSessionsOnceByMessageID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	st := hermestest.Create(t, path,
+		hermestest.Session{ID: "phone", Source: "mobile", StartedAt: 1},
+		hermestest.Session{ID: "nightly", Source: "cron", StartedAt: 2},
+	)
+	st.Add(hermestest.Message{Session: "phone", Role: "user", Content: "old turn that must never be replayed", Timestamp: 1})
+	src := []Source{{DB: path, Format: digest.Hermes}}
+	state := &State{Offsets: map[string]int64{}}
+	if ws, _ := Windows(src, state, true); len(ws) != 0 || state.Offsets[hermes.Key(path, "phone")] != 1 {
+		t.Fatalf("fresh start must only record cursors: %v %v", ws, state.Offsets)
+	}
+	if _, ok := state.Offsets[hermes.Key(path, "nightly")]; ok {
+		t.Fatal("an automation session got a cursor")
+	}
+	pad := strings.Repeat("x", minNewBytes)
+	st.Add(
+		hermestest.Message{Session: "phone", Role: "user", Content: "[Replying to: \"Report: disk at 91%\"]\n\nprune the docker images, never the volumes", Timestamp: 5},
+		hermestest.Message{Session: "phone", Role: "assistant", Content: "Pruning.", ToolCalls: `[{"function":{"name":"terminal","arguments":"{\"command\":\"docker volume prune\"}"}}]`, Timestamp: 6},
+		hermestest.Message{Session: "phone", Role: "tool", ToolName: "terminal", Content: `{"output": "permission denied", "exit_code": 1}`, Timestamp: 7},
+		hermestest.Message{Session: "phone", Role: "assistant", Content: pad, Timestamp: 8},
+		hermestest.Message{Session: "phone", Role: "user", Content: "[Replying to: \"Report: disk at 91%\"]\n\nprune the docker images, never the volumes", Timestamp: 5}, // a compaction copy
+		hermestest.Message{Session: "nightly", Role: "user", Content: "check the disk", Timestamp: 9},
+		hermestest.Message{Session: "nightly", Role: "assistant", Content: "Disk fine. " + pad, Timestamp: 10},
+	)
+	ws, _ := Windows(src, state, false)
+	if len(ws) != 1 {
+		t.Fatalf("windows %d", len(ws))
+	}
+	w := ws[0]
+	joined := strings.Join(w.Lines, "\n")
+	if w.File != hermes.Key(path, "phone") || w.Session != "phone" || w.Start != 1 || w.End != 6 {
+		t.Fatalf("window %s %s %d..%d", w.File, w.Session, w.Start, w.End)
+	}
+	if strings.Count(joined, "U: prune the docker images, never the volumes") != 1 || !strings.Contains(joined, "E: terminal: permission denied") || strings.Contains(joined, "Report: disk") || strings.Contains(joined, "old turn") {
+		t.Fatalf("lines:\n%s", joined)
+	}
+	state.Offsets[w.File] = w.End
+	if ws, _ := Windows(src, state, false); len(ws) != 0 {
+		t.Fatal("nothing new should mean no window")
+	}
+}
+
+func TestPiWindowsAndASourceAddedLater(t *testing.T) {
+	home := t.TempDir()
+	claude := filepath.Join(home, "claude", "*.jsonl")
+	os.MkdirAll(filepath.Dir(claude), 0o755)
+	cf := filepath.Join(filepath.Dir(claude), "c1.jsonl")
+	os.WriteFile(cf, []byte(`{"type":"user","message":{"content":"x"}}`+"\n"), 0o644)
+	state := &State{Offsets: map[string]int64{}}
+	Windows([]Source{{Glob: claude, Format: digest.Claude}}, state, true)
+
+	// pi appears after the dreamer started: its history is not replayed, but
+	// a session it writes from then on is read from the start.
+	dir := filepath.Join(home, "pi", "--home-u--")
+	os.MkdirAll(dir, 0o755)
+	old := filepath.Join(dir, "2026-10-01T10-00-00-000Z_01aa.jsonl")
+	os.WriteFile(old, []byte(piSession("01aa", "2026-10-01T10:00:05.000Z")), 0o644)
+	srcs := []Source{{Glob: claude, Format: digest.Claude}, {Glob: filepath.Join(home, "pi", "*", "*.jsonl"), Format: digest.Pi}}
+	if ws, _ := Windows(srcs, state, false); len(ws) != 0 || state.Offsets[old] == 0 {
+		t.Fatalf("a new source was replayed: %d windows, %v", len(ws), state.Offsets)
+	}
+	typed := filepath.Join(dir, "2026-10-02T10-00-00-000Z_02bb.jsonl")
+	headless := filepath.Join(dir, "2026-10-02T11-00-00-000Z_03cc.jsonl")
+	os.WriteFile(typed, []byte(piSession("02bb", "2026-10-02T10:00:05.000Z")), 0o644)
+	os.WriteFile(headless, []byte(piSession("03cc", "2026-10-02T10:00:00.040Z")), 0o644)
+	ws, _ := Windows(srcs, state, false)
+	got := map[string]string{}
+	for _, w := range ws {
+		got[w.Session] = strings.Join(w.Lines, "\n")
+	}
+	// A program's prompt is no owner line: with nothing else to extract, the
+	// headless session gives no window and its cursor moves to its end.
+	if len(ws) != 1 || !strings.HasPrefix(got["02bb"], "U: keep the cache warm before a release") {
+		t.Fatalf("pi windows: %d", len(ws))
+	}
+	if fi, _ := os.Stat(headless); state.Offsets[headless] != fi.Size() {
+		t.Fatalf("headless cursor %d", state.Offsets[headless])
+	}
+	if lines := digest.PiLines(strings.NewReader(piSession("03cc", "2026-10-02T10:00:00.040Z")), digest.PiHeadless([]byte(piSession("03cc", "2026-10-02T10:00:00.040Z")))); !strings.HasPrefix(lines[0], "H: keep the cache warm") {
+		t.Fatalf("headless prompt: %q", lines[0])
+	}
+}
+
+func piSession(id, first string) string {
+	return strings.Join([]string{
+		`{"type":"session","version":3,"id":"` + id + `","timestamp":"2026-10-02T10:00:00.000Z","cwd":"/home/u"}`,
+		`{"type":"model_change","id":"a1","parentId":null,"timestamp":"2026-10-02T10:00:00.000Z","provider":"p","modelId":"m"}`,
+		`{"type":"message","id":"b1","parentId":"a1","timestamp":"` + first + `","message":{"role":"user","content":[{"type":"text","text":"keep the cache warm before a release"}]}}`,
+		`{"type":"message","id":"b2","parentId":"b1","timestamp":"2026-10-02T10:00:09.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Warming it. ` + strings.Repeat("y", minNewBytes) + `"}]}}`,
+	}, "\n") + "\n"
+}

@@ -220,13 +220,16 @@ func runDream(args []string) int {
 			fmt.Fprintln(os.Stderr, "dream:", err)
 			continue
 		}
-		session := strings.TrimSuffix(filepath.Base(w.File), ".jsonl")
+		session := w.Session
 		var facts []*fact.Fact
 		for _, x := range extracted {
 			f := dream.ToFact(x, w.Repo, host, session)
 			meter.Facts++
 			if *dry {
-				fmt.Printf("- [%s/%s] %s\n", f.Meta.Scope, f.Meta.Type, f.Meta.Description)
+				fmt.Printf("- [%s/%s %s] %s\n", f.Meta.Scope, f.Meta.Type, f.Meta.Source.Kind, f.Meta.Description)
+				if q := strings.Join(strings.Fields(string(x.Quote)), " "); f.Meta.Source.Kind == "user" && q != "" {
+					fmt.Printf("  quote (%s): %q\n", session, q)
+				}
 				continue
 			}
 			facts = append(facts, f)
