@@ -42,8 +42,8 @@ const (
 	// ruleSlotFloor is the floor for the one owner ruling a prompt block may
 	// add when none of its facts is a ruling. Rulings are stated in general
 	// words ("one approval", "no rotation") and the request in task words, so
-	// they score below the floors above (eval/VALUE.md, "Prompt delivery:
-	// stems, a rule slot, rare anchors, thicker lines").
+	// they score below the floors above (eval/VALUE.md, "A rule slot and
+	// rare anchors in live sessions").
 	ruleSlotFloor = 10.0
 	startFloor    = 1.0
 	// derivedPromptFloor is the floor for the one derived fact (hot spots,
