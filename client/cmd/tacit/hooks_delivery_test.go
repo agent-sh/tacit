@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -126,5 +129,65 @@ func TestPromptRuleSlotTwoRulings(t *testing.T) {
 	}
 	if got := names(promptSelection(inThree, nil, map[string]bool{"r0": true}, promptFloor)); got != "a,c" {
 		t.Fatalf("a seen ruling in the three still counts: %s", got)
+	}
+}
+
+// A ruling whose quote was an instruction inside its task ("lets clear the
+// widget cache eviction settings now") is their ruling, guarded as one, but
+// delivered as an ordinary fact: in the three it leaves the rule slot open
+// for a standing rule, it is no RULE line, and SessionStart does not put it
+// first.
+func TestInTaskRulingIsAnOrdinaryFact(t *testing.T) {
+	quotes := map[string]string{
+		"clear-widget-cache-now":     "lets clear the widget cache eviction settings now",
+		"keep-eviction-off-weekends": "never change eviction settings on a weekend",
+	}
+	specs := []fact.Meta{
+		{Name: "widget-cache-eviction-lru", Description: "widget cache eviction is lru with a widget cache size cap"},
+		{Name: "widget-cache-eviction-ttl", Description: "widget cache eviction ttl defaults to one hour for the widget cache"},
+		{Name: "clear-widget-cache-now", Description: "Owner 2026-10-01: lets clear the widget cache eviction settings now"},
+		{Name: "keep-eviction-off-weekends", Description: "Never change eviction settings on a weekend"},
+	}
+	var ledger strings.Builder
+	for i, m := range specs {
+		if q := quotes[m.Name]; q != "" {
+			specs[i].Source = fact.Source{Kind: "user", OwnerQuote: q, OwnerQuoteFrom: "claude:s1"}
+			fmt.Fprintf(&ledger, `{"name":%q,"quote":%q,"from":"claude:s1","turn_hash":"h","at":"2026-10-01"}`+"\n", m.Name, q)
+		}
+	}
+	root := relevanceStore(t, specs)
+	os.MkdirAll(filepath.Join(root, "review"), 0o755)
+	os.WriteFile(filepath.Join(root, "review", "rulings-audit.json"), []byte(`{"version":1,"audited_head":"x","at":"t"}`), 0o644)
+	os.WriteFile(filepath.Join(root, "review", "owner-quotes.jsonl"), []byte(ledger.String()), 0o644)
+	ix := openRelevance(t, root)
+	ctx := context.Background()
+
+	got, err := promptHits(ctx, ix, search.Situation{}, "widget cache eviction settings", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(names(got[:min(len(got), promptLimit)]), "clear-widget-cache-now") {
+		t.Fatalf("setup: the in-task ruling is not in the three: %s", names(got))
+	}
+	if len(got) != promptLimit+1 || got[promptLimit].Name != "keep-eviction-off-weekends" {
+		t.Fatalf("the standing rule must take the slot: %s", names(got))
+	}
+	for _, h := range got {
+		if h.Name == "clear-widget-cache-now" && (!h.Ruling || !h.InTask || h.Rule()) {
+			t.Fatalf("in-task ruling indexed as %+v", h)
+		}
+	}
+	block := search.Block(got, "facts:")
+	if strings.Contains(block, "RULE clear-widget-cache-now") || !strings.Contains(block, "- RULE keep-eviction-off-weekends") {
+		t.Fatalf("block:\n%s", block)
+	}
+
+	start := startSelection([]search.Hit{
+		{Name: "host-fact", Scope: "machines/host-a", Score: 9},
+		{Name: "clear-widget-cache-now", Scope: "system", Ruling: true, InTask: true, Score: 8},
+		{Name: "keep-eviction-off-weekends", Scope: "system", Ruling: true, Score: 2},
+	}, "", startLimit)
+	if names(start) != "keep-eviction-off-weekends,host-fact,clear-widget-cache-now" {
+		t.Fatalf("start order: %s", names(start))
 	}
 }

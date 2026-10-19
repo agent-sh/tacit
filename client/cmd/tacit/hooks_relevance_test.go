@@ -15,6 +15,13 @@ import (
 
 func relevanceIndex(t *testing.T, specs []fact.Meta) *search.Index {
 	t.Helper()
+	return openRelevance(t, relevanceStore(t, specs))
+}
+
+// relevanceStore writes the specs among 6,000 unrelated fillers, so the
+// rarity gates see a store of a real size.
+func relevanceStore(t *testing.T, specs []fact.Meta) string {
+	t.Helper()
 	root := filepath.Join(t.TempDir(), "store")
 	for i := 0; i < 6000; i++ {
 		writeFact(t, root, fact.Meta{Name: fmt.Sprintf("filler-%d", i), Description: "unrelated filler material", Type: "machine_fact", Scope: "system"}, "filler")
@@ -26,6 +33,11 @@ func relevanceIndex(t *testing.T, specs []fact.Meta) *search.Index {
 		}
 		writeFact(t, root, m, "detail")
 	}
+	return root
+}
+
+func openRelevance(t *testing.T, root string) *search.Index {
+	t.Helper()
 	t.Setenv("TACIT_INDEX", filepath.Join(filepath.Dir(root), "index"))
 	t.Setenv("TACIT_LOCAL", filepath.Join(filepath.Dir(root), "local"))
 	ix, err := search.Open(context.Background(), root, "relevance")

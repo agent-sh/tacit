@@ -283,18 +283,19 @@ func promptHits(ctx context.Context, ix *search.Index, sit search.Situation, p s
 }
 
 // promptSelection takes curated matches above the BM25 floor or with supported
-// weighted relationship evidence. When none of them is an owner ruling, the
-// best ruling among the gated candidates at ruleSlotFloor or above is one more
-// line. It drops what this session already saw, then adds the best derived
-// fact if it clears its separate floor. No backfill: repeated requests must
-// not pull weaker facts into the context.
+// weighted relationship evidence. When none of them is an owner rule
+// (search.Hit.Rule: a ruling whose quote was an instruction inside its task is
+// an ordinary fact here), the best rule among the gated candidates at
+// ruleSlotFloor or above is one more line. It drops what this session already
+// saw, then adds the best derived fact if it clears its separate floor. No
+// backfill: repeated requests must not pull weaker facts into the context.
 func promptSelection(hits, derived []search.Hit, seen map[string]bool, floor float64) []search.Hit {
 	var strong []search.Hit
 	ruling := false
 	for _, h := range hits {
 		if (h.Score >= floor || (h.Evidence != nil && h.Evidence.Supported)) && len(strong) < promptLimit && !isDerived(h) {
 			strong = append(strong, h)
-			ruling = ruling || h.Ruling
+			ruling = ruling || h.Rule()
 		}
 	}
 	var out []search.Hit
@@ -307,7 +308,7 @@ func promptSelection(hits, derived []search.Hit, seen map[string]bool, floor flo
 	// does the best ruling here when it was seen: the slot is not backfilled.
 	if !ruling {
 		for _, h := range hits {
-			if h.Ruling && h.Score >= ruleSlotFloor && !isDerived(h) && !slices.ContainsFunc(strong, func(s search.Hit) bool { return s.Name == h.Name }) {
+			if h.Rule() && h.Score >= ruleSlotFloor && !isDerived(h) && !slices.ContainsFunc(strong, func(s search.Hit) bool { return s.Name == h.Name }) {
 				if !seen[h.Name] {
 					out = append(out, h)
 				}
@@ -324,13 +325,14 @@ func promptSelection(hits, derived []search.Hit, seen map[string]bool, floor flo
 	return out
 }
 
-// startSelection orders the SessionStart block: owner rules first, then
-// repo and machine facts, then the rest; nothing under the score floor and
-// nothing derived (the block is for owner rulings and host facts).
+// startSelection orders the SessionStart block: owner rules first
+// (search.Hit.Rule), then repo and machine facts, then the rest; nothing under
+// the score floor and nothing derived (the block is for owner rulings and host
+// facts).
 func startSelection(hits []search.Hit, repo string, limit int) []search.Hit {
 	rank := func(h search.Hit) int {
 		switch {
-		case h.Ruling:
+		case h.Rule():
 			return 0
 		case strings.HasPrefix(h.Scope, "projects/"):
 			return 1
