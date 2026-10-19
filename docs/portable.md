@@ -122,6 +122,8 @@ The audit directory is optional. It contains private daily JSONL files with reda
 | `TACIT_DERIVE_CONFIG` | `~/.config/tacit/derive.yaml` | `branches:` the branch to read per repo (`tacit derive --set-branch repo=branch`); `ordinary_names:` repo names that are also plain words, so a bare mention is not evidence a fact is about that repo |
 | `TACIT_WRITER` | | the key a push signs with |
 | `TACIT_OWNER_NAMES` | | names agents use for the owner in facts ("Dana 2026-09-05: ..."), comma separated; each counts like "owner" when the rulings audit reads a clause attributed without quote marks |
+| `TACIT_HERMES_DB` | `~/.hermes/state.db` when it exists | the Hermes session store the dreamer and the owner's words read, opened read-only; `off` reads none |
+| `PI_CODING_AGENT_SESSION_DIR`, `PI_CODING_AGENT_DIR` | `~/.pi/agent` | pi's own variables: where the dreamer and the owner's words find pi sessions, read as pi reads them |
 | `TACIT_RUNNER` | `claude` | select one CLI for all roles |
 | `TACIT_DREAM_RUNNER`, `TACIT_CURATE_RUNNER`, `TACIT_JUDGE_RUNNER`, `TACIT_VERIFY_RUNNER` | global runner | per-job CLI |
 | `TACIT_<TOOL>_COMMAND` | tool name | executable path, e.g. `TACIT_MUSE_COMMAND` |
