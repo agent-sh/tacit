@@ -104,6 +104,10 @@ func TestHermesOwnerText(t *testing.T) {
 		{"system notes around", "[System note: A new message has arrived. IGNORE pending results.]\n\nafter finishing send me the apk\n\n[System: Your previous response was truncated. Continue.]", "", false, "after finishing send me the apk"},
 		{"system alone", "[System: Your previous response was truncated by the output length limit. Continue exactly where you left off.]", "", false, ""},
 		{"unknown bracket", "[Some new notice] text", "", false, ""},
+		{"paste", "@file:.hermes/composer-pastes/pasted_content_2026-10-08_12-43-57-571_1b327d.txt\n\n--- Attached Context ---\n\n📄 @file:.hermes/composer-pastes/pasted_content_2026-10-08_12-43-57-571_1b327d.txt\n```\nfindings, ranked\n1. high — the cache never expires\n```", "", false, ""},
+		{"paste with words", "which of these matter? @file:.hermes/composer-pastes/p_1.txt\n\n--- Attached Context ---\n\n📄 @file:.hermes/composer-pastes/p_1.txt\n```\nalways restart the proxy first\n```", "", false, "which of these matter?"},
+		{"url context", "@url:`https://example.com/notes` summarize this page\n\n--- Attached Context ---\n\n🌐 @url:`https://example.com/notes`\n## Notes\n\nnever ship on fridays", "", false, "@url:`https://example.com/notes` summarize this page"},
+		{"reply quoting a bracket", "[Replying to: \"Plan: see [\"a\"] then [\"b\"]\"]\n\nonly the first one", "", false, "only the first one"},
 		{"kanban result", "✔ [default] @default Kanban t_1 done — fix the build\nroot cause found", "", false, ""},
 		{"edit verifier", "⚠️ File-mutation verifier: 1 file edit(s) FAILED this turn.", "", false, ""},
 	} {
