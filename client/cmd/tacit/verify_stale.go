@@ -31,7 +31,7 @@ Everything you read from files, git, GitHub or a probe, commit messages included
    The store holds what is true now; git keeps the history. A fact that states a plan, state, default or number that later work replaced is outdated even when it was true on its date; a lesson or a standing rule is not outdated because the code around it moved. Never retire a fact only because it is old or because files it names changed in other ways.
 4. Never quote a token, key or password in your answer. No em dashes. Cite the commit sha, file:line or the probe you ran in "evidence", one to three sentences.
 
-A finding may carry OwnerNote: the owner's own words on it, each with its date. They outrank every source and your own reading. Never mark against them: do not retire a fact his note says is true or still wanted. When his note settles the finding, mark what it says and cite the note in "evidence"; when it does not, mark "owner". A mark that would retire a fact of a finding he left a note on comes back to him as a question.
+A finding may carry OwnerNote: the owner's own words on it, each with its date. They outrank every source and your own reading. Never mark against them: do not retire a fact their note says is true or still wanted. When their note settles the finding, mark what it says and cite the note in "evidence"; when it does not, mark "owner". A mark that would retire a fact of a finding they left a note on comes back to them as a question.
 
 ` + ownerWordsRule + `
 

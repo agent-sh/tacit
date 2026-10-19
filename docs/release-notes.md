@@ -1,13 +1,14 @@
 Tacit keeps memory for coding agents in Markdown and git. Use a local store or share one across machines.
 
-This release is about which facts reach each prompt.
+This release is about what the dreamer keeps and what reaches each prompt. Measurements are in [eval/VALUE.md](https://github.com/agent-sh/tacit/blob/main/eval/VALUE.md).
 
-- **Choose a model to judge each prompt's facts (optional).** The utility selector asks a model whether each candidate fact adds something useful for the request, beyond topic overlap. Providers: `jev` (TypeSafe, recommended), `bedrock` (any Amazon Bedrock model; Amazon Nova Micro is the measured option for data that stays in AWS), `systemone` (any System One-compatible server, such as a self-hosted Strands Decider), and `openai` (any OpenAI-compatible chat endpoint). Each provider reads only its own key and sends it only to its own endpoint. A failed or slow model falls back to the lexical selection. [Setup and benchmark](https://github.com/agent-sh/tacit/blob/main/docs/selectors.md).
-- **Code before the model.** A prompt that only asks for a text operation on a literal it supplies gets no facts and no model call. Three other code rules were measured and not shipped; the results are in eval/DELIVERY.md.
-- **Stricter prompt delivery.** Facts need coherent matches in their name and description, unsolicited facts respect repository restrictions, and weighted relationship evidence can route a fact from a related project.
-- **Evaluation tools.** Offline selection and CPU scorer tools are in `eval/selection` and `eval/cpu`, for measuring a selector on your own labelled prompts.
-- **macOS.** The client test suite passes on macOS.
+- **Rulings keep the owner's words.** Dream prompt v5 copies the owner's exact words for each ruling, so curation can check them against the owner's own turns. On one owner's history, curation kept 254 of 374 dreamed owner notes as the owner's own rulings, against 4 of 85 before.
+- **Opus by default** for dreaming, curation and verification, with Haiku as the contradiction judge. Opus dreamed more of the facts that matter than Sonnet, Haiku, GPT-6 Astra and GPT-6.1 Sol. Opus also curated better than Sonnet, mostly by not dropping facts. A 60k-character window costs about $0.27 to dream.
+- **The repository from what the session works in.** A session started in the home directory or a folder of checkouts now gets its repository from the paths it works in, not from the folder's name.
+- **More of the store reaches the prompt.** The index stems words, so "amended" finds "amend". Offline delivery went from 100 to 106 of 254 situations.
+- **Curation and dreaming keep moving.** A batch with an invalid answer is split until the bad note is found, and it is set aside after 3 runs. One overlong transcript line is skipped, not retried forever. The dreamer's output is checked against a JSON schema.
+- **The prompt selector is optional and off by default.** In live sessions, Jev did not beat the local selection, so the docs recommend leaving it off.
 
-Upgrading: existing `utility.provider: jev` settings keep working unchanged. Every other provider needs its own `utility.threshold`.
+Upgrading: the search index rebuilds once (schema 7). Notes dreamed before v5 carry no owner quote, and curation files most of their rulings as observed. Existing `models` settings keep working; only the generic defaults changed.
 
 Builds for Linux, macOS and Windows on amd64 and arm64 include the CLI, the browser app and a compatible scrump redactor. Git 2.29+ is required. [Setup and platform validation](https://github.com/agent-sh/tacit/blob/main/docs/portable.md).
