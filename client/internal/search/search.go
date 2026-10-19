@@ -65,8 +65,9 @@ func IndexDir() string {
 
 // anchorRareDF: a query term in at most this many indexed names and
 // descriptions, and in at most anchorRarePct percent of the indexed facts,
-// anchors the coherence gate by itself (eval/VALUE.md, "Prompt delivery:
-// stems, a rule slot, rare anchors, thicker lines"). The share keeps a small
+// anchors the coherence gate by itself (eval/VALUE.md, "A rule slot and rare
+// anchors in live sessions"; offline it was inside the noise, "Prompt
+// delivery: a stemmed index"). The share keeps a small
 // store, where every word is in fewer than 50 facts, on the rarest term alone.
 const (
 	anchorRareDF  = 50
