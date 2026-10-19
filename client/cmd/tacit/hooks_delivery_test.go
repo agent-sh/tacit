@@ -187,7 +187,7 @@ func TestInTaskRulingIsAnOrdinaryFact(t *testing.T) {
 		{Name: "clear-widget-cache-now", Scope: "system", Ruling: true, InTask: true, Score: 8},
 		{Name: "keep-eviction-off-weekends", Scope: "system", Ruling: true, Score: 2},
 	}, "", startLimit)
-	if names(start) != "keep-eviction-off-weekends,host-fact,clear-widget-cache-now" {
+	if names(start) != "keep-eviction-off-weekends,clear-widget-cache-now,host-fact" {
 		t.Fatalf("start order: %s", names(start))
 	}
 }

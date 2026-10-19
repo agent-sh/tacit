@@ -975,3 +975,6 @@ The prototype the lists started from marked 22 of 89 and 3 of 51 on the test hal
 | in-task rulings | 0.92 | 0.92 | 0.91 | 1.0 | 42k | 18 |
 
 Neither result separates from chance: offline is a tie, and live the one task whose blocks differ moved the way the change predicts. The change is about what a block calls a rule, and on this store it reaches few blocks. Cost: $5.5 offline judge, $6.2 live runs and judge.
+
+What ships keeps a ruling in its task in the SessionStart block, after the owner rules and ahead of repo and machine facts. The one offline loss above came from taking it out of that block; at the prompt it is an ordinary fact as measured. The SessionStart order was not measured again.
+

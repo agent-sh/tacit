@@ -326,7 +326,9 @@ func promptSelection(hits, derived []search.Hit, seen map[string]bool, floor flo
 }
 
 // startSelection orders the SessionStart block: owner rules first
-// (search.Hit.Rule), then repo and machine facts, then the rest; nothing under
+// (search.Hit.Rule), then their rulings given inside a task (still theirs,
+// and on 254 situations dropping them lost one the session needed), then
+// repo and machine facts, then the rest; nothing under
 // the score floor and nothing derived (the block is for owner rulings and host
 // facts).
 func startSelection(hits []search.Hit, repo string, limit int) []search.Hit {
@@ -334,12 +336,14 @@ func startSelection(hits []search.Hit, repo string, limit int) []search.Hit {
 		switch {
 		case h.Rule():
 			return 0
-		case strings.HasPrefix(h.Scope, "projects/"):
+		case h.Ruling:
 			return 1
-		case strings.HasPrefix(h.Scope, "machines/"):
+		case strings.HasPrefix(h.Scope, "projects/"):
 			return 2
+		case strings.HasPrefix(h.Scope, "machines/"):
+			return 3
 		}
-		return 3
+		return 4
 	}
 	var keep []search.Hit
 	local := 0
