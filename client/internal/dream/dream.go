@@ -400,9 +400,11 @@ const hermesTimeout = 2 * time.Minute
 // order, up to maxReadBytes a run, and a row Hermes wrote again when it
 // compacted the conversation is passed over (hermes.Message.Copy), so it is
 // not read twice. A seen session waits for minNewBytes of new content, like a
-// file. The repo is the session's git root or cwd when it records one, else
-// the window's paths. A store that cannot be read is reported and left for
-// the next run, its cursors unmoved.
+// file. A cursor past the session's last id (the store was restored from a
+// backup) restarts at its current end, as a truncated file does. The repo is
+// the session's git root or cwd when it records one, else the window's paths.
+// A store that cannot be read is reported and left for the next run, its
+// cursors unmoved.
 func hermesWindows(path string, st *State, fresh bool, exclude map[string]bool, home string) []Window {
 	ctx, cancel := context.WithTimeout(context.Background(), hermesTimeout)
 	defer cancel()
@@ -435,7 +437,13 @@ func hermesWindows(path string, st *State, fresh bool, exclude map[string]bool, 
 			st.Offsets[key] = lastID
 			continue
 		}
-		if lastID <= after {
+		if lastID < after {
+			// The store went back (restored from a backup): restart from its
+			// current end, as a truncated file does.
+			st.Offsets[key] = lastID
+			continue
+		}
+		if lastID == after {
 			continue
 		}
 		if seen {
