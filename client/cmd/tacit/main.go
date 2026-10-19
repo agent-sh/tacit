@@ -41,6 +41,7 @@ func usage() {
   tacit hook session-start|prompt  Claude Code hooks (JSON on stdin, block on stdout)
   tacit mcp [--harness H]          MCP stdio server: tacit_search, tacit_fact, tacit_add
   tacit install claude|codex|hermes|grok|pi|muse|agy|follow|dream|curate|app
+  tacit install claude [--no-mcp]   hooks, and the tacit MCP server in Claude Code's user config (~/.claude.json); --no-mcp: hooks only
   tacit install dream [--env-file F]   the dreamer every 4 h (a systemd timer on Linux, a launchd agent on macOS)
   tacit dream [--model M] [--dry-run] [--max-calls N] [--env-file F]   transcript deltas -> facts in inbox/dreamer@<host>/
   tacit curate [--model M] [--dry-run] [--max-batches N] [--budget D] [--recheck-conflicts --since D] inbox notes -> curated one-fact entries, conflict check, index, push; then the derive step

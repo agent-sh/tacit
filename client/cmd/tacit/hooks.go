@@ -90,6 +90,17 @@ func openIndex(ctx context.Context, s *store.Store) (*search.Index, error) {
 	return search.Open(ctx, s.Dir, head)
 }
 
+// startTitle is the SessionStart block's first line. With tacit's MCP server
+// in the session (--mcp, written by `tacit install claude`) it names the
+// tools as the model sees them; without, the command.
+func startTitle(sit search.Situation, mcp bool) string {
+	detail := "`tacit fact <name>` for detail"
+	if mcp {
+		detail = "`mcp__tacit__tacit_fact` for detail, `mcp__tacit__tacit_search` for more"
+	}
+	return fmt.Sprintf("# tacit: facts for %s on %s (read before acting; %s)", sit.Repo, sit.Host, detail)
+}
+
 // runHook implements `tacit hook session-start|prompt`. It reads the hook
 // JSON on stdin, prints the fact block on stdout (Claude Code adds it as
 // context), and exits 0 on every failure: a missing store or a slow network
@@ -151,7 +162,7 @@ func runHook(args []string) int {
 			return 0
 		}
 		remember(in.SessionID, hits)
-		fmt.Print(search.Block(hits, fmt.Sprintf("# tacit: facts for %s on %s (read before acting; `tacit fact <name>` for detail)", sit.Repo, sit.Host)))
+		fmt.Print(search.Block(hits, startTitle(sit, slices.Contains(args[1:], "--mcp"))))
 	case "prompt":
 		p := strings.TrimSpace(in.Prompt)
 		if !promptWorthy(p) {

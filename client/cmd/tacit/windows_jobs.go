@@ -36,12 +36,13 @@ func decodePowerShell(encoded string) (string, error) {
 	return string(utf16.Decode(u)), nil
 }
 
-func hookCommand(exe, sub, goos string) string {
+func hookCommand(exe, sub, goos string, extra ...string) string {
 	var args []string
 	if cfg := os.Getenv("TACIT_SETTINGS"); cfg != "" {
 		args = append(args, "--config", cfg)
 	}
 	args = append(args, "hook", sub)
+	args = append(args, extra...)
 	if goos == "windows" {
 		script := "& " + psQuote(exe)
 		for _, a := range args {
