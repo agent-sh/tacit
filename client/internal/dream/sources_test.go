@@ -52,6 +52,45 @@ func TestHermesWindowsReadOwnerSessionsOnceByMessageID(t *testing.T) {
 	if ws, _ := Windows(src, state, false); len(ws) != 0 {
 		t.Fatal("nothing new should mean no window")
 	}
+
+	// A seen session waits for minNewBytes of new content.
+	st.Add(
+		hermestest.Message{Session: "phone", Role: "user", Content: "and keep the build cache", Timestamp: 11},
+		hermestest.Message{Session: "phone", Role: "assistant", Content: "Kept.", Timestamp: 12},
+	)
+	if ws, _ := Windows(src, state, false); len(ws) != 0 {
+		t.Fatalf("a small delta of a seen session was read: %d windows", len(ws))
+	}
+
+	// An excluded session is never read, though it is new and long enough.
+	t.Setenv("TACIT_STATE_DIR", t.TempDir())
+	if err := Exclude("laptop"); err != nil {
+		t.Fatal(err)
+	}
+	st.AddSession(hermestest.Session{ID: "laptop", Source: "desktop", StartedAt: 20})
+	st.Add(
+		hermestest.Message{Session: "laptop", Role: "user", Content: "ship the hotfix tonight", Timestamp: 21},
+		hermestest.Message{Session: "laptop", Role: "assistant", Content: pad, Timestamp: 22},
+	)
+	if ws, _ := Windows(src, state, false); len(ws) != 0 {
+		t.Fatalf("an excluded session was read: %d windows", len(ws))
+	}
+
+	// The store went back (restored from a backup): the cursor restarts at the
+	// session's last id, and what comes after it is read.
+	key := hermes.Key(path, "phone")
+	state.Offsets[key] = 1000
+	if ws, _ := Windows(src, state, false); len(ws) != 0 || state.Offsets[key] != 10 {
+		t.Fatalf("after a restore: %d windows, cursor %d", len(ws), state.Offsets[key])
+	}
+	st.Add(
+		hermestest.Message{Session: "phone", Role: "user", Content: "rebuild the index after a restore", Timestamp: 30},
+		hermestest.Message{Session: "phone", Role: "assistant", Content: pad, Timestamp: 31},
+	)
+	ws, _ = Windows(src, state, false)
+	if len(ws) != 1 || ws[0].Start != 10 || !strings.Contains(strings.Join(ws[0].Lines, "\n"), "U: rebuild the index after a restore") {
+		t.Fatalf("after a restore, new rows: %+v", ws)
+	}
 }
 
 func TestPiWindowsAndASourceAddedLater(t *testing.T) {
@@ -68,15 +107,15 @@ func TestPiWindowsAndASourceAddedLater(t *testing.T) {
 	dir := filepath.Join(home, "pi", "--home-u--")
 	os.MkdirAll(dir, 0o755)
 	old := filepath.Join(dir, "2026-10-01T10-00-00-000Z_01aa.jsonl")
-	os.WriteFile(old, []byte(piSession("01aa", "2026-10-01T10:00:05.000Z")), 0o644)
+	os.WriteFile(old, []byte(piSession("01aa", "2026-10-01T10:00:00.000Z", "2026-10-01T10:00:05.000Z")), 0o644)
 	srcs := []Source{{Glob: claude, Format: digest.Claude}, {Glob: filepath.Join(home, "pi", "*", "*.jsonl"), Format: digest.Pi}}
 	if ws, _ := Windows(srcs, state, false); len(ws) != 0 || state.Offsets[old] == 0 {
 		t.Fatalf("a new source was replayed: %d windows, %v", len(ws), state.Offsets)
 	}
 	typed := filepath.Join(dir, "2026-10-02T10-00-00-000Z_02bb.jsonl")
 	headless := filepath.Join(dir, "2026-10-02T11-00-00-000Z_03cc.jsonl")
-	os.WriteFile(typed, []byte(piSession("02bb", "2026-10-02T10:00:05.000Z")), 0o644)
-	os.WriteFile(headless, []byte(piSession("03cc", "2026-10-02T10:00:00.040Z")), 0o644)
+	os.WriteFile(typed, []byte(piSession("02bb", "2026-10-02T10:00:00.000Z", "2026-10-02T10:00:05.000Z")), 0o644)
+	os.WriteFile(headless, []byte(piSession("03cc", "2026-10-02T10:00:00.000Z", "2026-10-02T10:00:00.040Z")), 0o644)
 	ws, _ := Windows(srcs, state, false)
 	got := map[string]string{}
 	for _, w := range ws {
@@ -90,15 +129,17 @@ func TestPiWindowsAndASourceAddedLater(t *testing.T) {
 	if fi, _ := os.Stat(headless); state.Offsets[headless] != fi.Size() {
 		t.Fatalf("headless cursor %d", state.Offsets[headless])
 	}
-	if lines := digest.PiLines(strings.NewReader(piSession("03cc", "2026-10-02T10:00:00.040Z")), digest.PiHeadless([]byte(piSession("03cc", "2026-10-02T10:00:00.040Z")))); !strings.HasPrefix(lines[0], "H: keep the cache warm") {
+	if lines := digest.PiLines(strings.NewReader(piSession("03cc", "2026-10-02T10:00:00.000Z", "2026-10-02T10:00:00.040Z")), digest.PiHeadless([]byte(piSession("03cc", "2026-10-02T10:00:00.000Z", "2026-10-02T10:00:00.040Z")))); !strings.HasPrefix(lines[0], "H: keep the cache warm") {
 		t.Fatalf("headless prompt: %q", lines[0])
 	}
 }
 
-func piSession(id, first string) string {
+// piSession is a synthetic pi session: header and startup entry at header,
+// the first prompt at first.
+func piSession(id, header, first string) string {
 	return strings.Join([]string{
-		`{"type":"session","version":3,"id":"` + id + `","timestamp":"2026-10-02T10:00:00.000Z","cwd":"/home/u"}`,
-		`{"type":"model_change","id":"a1","parentId":null,"timestamp":"2026-10-02T10:00:00.000Z","provider":"p","modelId":"m"}`,
+		`{"type":"session","version":3,"id":"` + id + `","timestamp":"` + header + `","cwd":"/home/u"}`,
+		`{"type":"model_change","id":"a1","parentId":null,"timestamp":"` + header + `","provider":"p","modelId":"m"}`,
 		`{"type":"message","id":"b1","parentId":"a1","timestamp":"` + first + `","message":{"role":"user","content":[{"type":"text","text":"keep the cache warm before a release"}]}}`,
 		`{"type":"message","id":"b2","parentId":"b1","timestamp":"2026-10-02T10:00:09.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Warming it. ` + strings.Repeat("y", minNewBytes) + `"}]}}`,
 	}, "\n") + "\n"
