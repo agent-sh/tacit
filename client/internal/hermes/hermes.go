@@ -90,27 +90,38 @@ func (d *DB) Close() error { return d.db.Close() }
 type Session struct {
 	ID, Source, CreatedSource, Parent, EndReason, Cwd, RepoRoot string
 	StartedAt                                                   float64
+	// Delegated is a session Hermes started for a delegation: its
+	// model_config names the session it came from ("_delegate_from"). Hermes
+	// marks every delegation so, from Telegram, the desktop app or a phone
+	// subagent, whether or not it records a parent.
+	Delegated bool
 	// Owner is a session the owner types into: an owner source, not created
-	// by an agent (created_source empty or an owner source); a CLI session
-	// only when created_source says cli; not one of several started together;
-	// and, when it has a parent, the continuation of an owner session (the
-	// parent ended by compression or a reset). Measured 2026-10-20 on one
-	// workstation's store (154 sessions of owner sources): 7 phone sessions
-	// are subagents' (created_source subagent); 16 desktop ones are
-	// delegations from a phone session (created_source desktop, the parent
-	// still open); 17 Telegram sessions from an older Hermes are a
-	// delegation's fan-out with no parent recorded (two or three started
-	// within a second, one prompt each); 23 CLI sessions with no created
-	// source are scripted one-query runs (`hermes chat -q`, all but one a
-	// single prompt such as "Reply with exactly: OK"). Every child of an owner
-	// session that ended by compression or a reset continues its
-	// conversation.
+	// by an agent (created_source empty or an owner source); not a
+	// delegation (Delegated); a CLI session only when created_source says
+	// cli; not one of several started together; and, when it has a parent,
+	// the continuation of an owner session (the parent ended by compression
+	// or a reset). Measured 2026-10-20 on one workstation's store (154
+	// sessions of owner sources): 7 phone sessions are subagents'
+	// (created_source subagent); 16 desktop ones are delegations from a phone
+	// session (created_source desktop, the parent still open); 17 Telegram
+	// sessions from an older Hermes are a delegation's fan-out with no parent
+	// recorded (two or three started within a second, one prompt each); 23
+	// CLI sessions with no created source are scripted one-query runs
+	// (`hermes chat -q`, all but one a single prompt such as "Reply with
+	// exactly: OK"). Every child of an owner session that ended by compression
+	// or a reset continues its conversation. Re-measured the same day (161
+	// sessions of owner sources): 7 of the 94 sessions those rules let in are
+	// lone Telegram delegations with no parent and no created source that
+	// only the delegation marker tells apart, and one more continues one of
+	// them; 86 are left.
 	Owner bool
 }
 
 // Sessions lists every session, oldest first, with Owner decided.
 func (d *DB) Sessions(ctx context.Context) ([]Session, error) {
-	rows, err := d.db.QueryContext(ctx, `select id, source, coalesce(created_source, ''), coalesce(parent_session_id, ''), coalesce(end_reason, ''), coalesce(cwd, ''), coalesce(git_repo_root, ''), started_at from sessions order by started_at, id`)
+	rows, err := d.db.QueryContext(ctx, `select id, source, coalesce(created_source, ''), coalesce(parent_session_id, ''), coalesce(end_reason, ''), coalesce(cwd, ''), coalesce(git_repo_root, ''), started_at,
+		json_extract(case when json_valid(model_config) then model_config else '{}' end, '$._delegate_from') is not null
+		from sessions order by started_at, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +129,7 @@ func (d *DB) Sessions(ctx context.Context) ([]Session, error) {
 	var out []Session
 	for rows.Next() {
 		var s Session
-		if err := rows.Scan(&s.ID, &s.Source, &s.CreatedSource, &s.Parent, &s.EndReason, &s.Cwd, &s.RepoRoot, &s.StartedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.Source, &s.CreatedSource, &s.Parent, &s.EndReason, &s.Cwd, &s.RepoRoot, &s.StartedAt, &s.Delegated); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -151,7 +162,7 @@ func (d *DB) Sessions(ctx context.Context) ([]Session, error) {
 		if v, ok := memo[s.ID]; ok {
 			return v
 		}
-		v := OwnerSources[s.Source] && (s.CreatedSource == "" || OwnerSources[s.CreatedSource]) && !together[s.ID]
+		v := OwnerSources[s.Source] && (s.CreatedSource == "" || OwnerSources[s.CreatedSource]) && !together[s.ID] && !s.Delegated
 		if s.Source == "cli" && s.CreatedSource != "cli" {
 			v = false
 		}

@@ -4,18 +4,22 @@ package hermestest
 
 import (
 	"database/sql"
+	"encoding/json"
 	"testing"
 
 	_ "modernc.org/sqlite"
 )
 
-const schema = `create table sessions (id text primary key, source text not null, created_source text, parent_session_id text, started_at real not null, ended_at real, end_reason text, cwd text, git_repo_root text, title text);
+const schema = `create table sessions (id text primary key, source text not null, created_source text, model_config text, parent_session_id text, started_at real not null, ended_at real, end_reason text, cwd text, git_repo_root text, title text);
 create table messages (id integer primary key autoincrement, session_id text not null references sessions(id), role text not null, content text, tool_call_id text, tool_calls text, tool_name text, timestamp real not null, _compressed_summary integer default 0, display_kind text);
 create index idx_messages_session on messages(session_id, timestamp);`
 
-// Session is a sessions row.
+// Session is a sessions row. DelegateFrom, when set, is the session a
+// delegation came from, in model_config's "_delegate_from" (as Hermes marks
+// one); ModelConfig, when set, is model_config as written.
 type Session struct {
 	ID, Source, CreatedSource, Parent, EndReason, Cwd string
+	DelegateFrom, ModelConfig                         string
 	StartedAt                                         float64
 }
 
@@ -60,8 +64,13 @@ func (s *Store) AddSession(se Session) {
 		}
 		return v
 	}
-	if _, err := s.db.Exec(`insert into sessions (id, source, created_source, parent_session_id, end_reason, cwd, started_at) values (?, ?, ?, ?, ?, ?, ?)`,
-		se.ID, se.Source, null(se.CreatedSource), null(se.Parent), null(se.EndReason), null(se.Cwd), se.StartedAt); err != nil {
+	config := se.ModelConfig
+	if se.DelegateFrom != "" {
+		b, _ := json.Marshal(map[string]string{"model": "m", "_delegate_from": se.DelegateFrom})
+		config = string(b)
+	}
+	if _, err := s.db.Exec(`insert into sessions (id, source, created_source, model_config, parent_session_id, end_reason, cwd, started_at) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+		se.ID, se.Source, null(se.CreatedSource), null(config), null(se.Parent), null(se.EndReason), null(se.Cwd), se.StartedAt); err != nil {
 		s.t.Fatal(err)
 	}
 }
