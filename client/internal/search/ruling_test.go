@@ -86,6 +86,9 @@ func TestIndexMarksInTaskRulings(t *testing.T) {
 		"in-task":  src("in-task", "curator", "  kind: user\n  owner_quote: lets rent the zebra box now\n  owner_quote_from: claude:s1\n"),
 		"app-rule": src("app-rule", "human", "  kind: user\n  owner_quote: lets rent the zebra box now\n  owner_quote_from: note:app-rule\n"),
 		"agents":   src("agents", "curator", "  kind: observed\n"),
+		// Their decision proves it, not the quote: a quote no ledger backs
+		// does not make it a ruling in its task.
+		"endorsed": src("endorsed", "curator", "  kind: user\n  owner_quote: lets rent the zebra box now\n  owner_quote_from: claude:s9\n  endorsed: 0123456789ab\n"),
 	} {
 		p := filepath.Join(root, "user", name+".md")
 		os.MkdirAll(filepath.Dir(p), 0o755)
@@ -93,6 +96,7 @@ func TestIndexMarksInTaskRulings(t *testing.T) {
 	}
 	os.MkdirAll(filepath.Join(root, "review"), 0o755)
 	os.WriteFile(filepath.Join(root, "review", "rulings-audit.json"), []byte(`{"version":1,"audited_head":"x","at":"t"}`), 0o644)
+	os.WriteFile(filepath.Join(root, "review", "decisions.jsonl"), []byte(`{"id":"0123456789ab","action":"mine","a":"endorsed","at":"2026-10-11T07:00:00Z"}`+"\n"), 0o644)
 	os.WriteFile(filepath.Join(root, "review", "owner-quotes.jsonl"), []byte(`{"name":"standing","quote":"never rent a zebra box","from":"claude:s1","turn_hash":"h","at":"2026-10-11"}`+"\n"+
 		`{"name":"in-task","quote":"lets rent the zebra box now","from":"claude:s1","turn_hash":"h","at":"2026-10-11"}`+"\n"+
 		`{"name":"app-rule","quote":"lets rent the zebra box now","from":"note:app-rule","turn_hash":"h","at":"2026-10-11"}`+"\n"), 0o644)
@@ -104,7 +108,7 @@ func TestIndexMarksInTaskRulings(t *testing.T) {
 	}
 	defer ix.Close()
 	hits, err := ix.Query(context.Background(), Situation{Query: "zebra quokka"}, 5, false)
-	if err != nil || len(hits) != 4 {
+	if err != nil || len(hits) != 5 {
 		t.Fatalf("hits %v %v", hits, err)
 	}
 	want := map[string][3]bool{ // ruling, in task, rule
@@ -112,6 +116,7 @@ func TestIndexMarksInTaskRulings(t *testing.T) {
 		"in-task":  {true, true, false},
 		"app-rule": {true, false, true},
 		"agents":   {false, false, false},
+		"endorsed": {true, false, true},
 	}
 	for _, h := range hits {
 		if got := [3]bool{h.Ruling, h.InTask, h.Rule()}; got != want[h.Name] {

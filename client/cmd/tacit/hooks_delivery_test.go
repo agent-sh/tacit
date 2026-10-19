@@ -184,10 +184,11 @@ func TestInTaskRulingIsAnOrdinaryFact(t *testing.T) {
 
 	start := startSelection([]search.Hit{
 		{Name: "host-fact", Scope: "machines/host-a", Score: 9},
+		{Name: "repo-fact", Scope: "projects/demo", Score: 9},
 		{Name: "clear-widget-cache-now", Scope: "system", Ruling: true, InTask: true, Score: 8},
 		{Name: "keep-eviction-off-weekends", Scope: "system", Ruling: true, Score: 2},
 	}, "", startLimit)
-	if names(start) != "keep-eviction-off-weekends,clear-widget-cache-now,host-fact" {
+	if names(start) != "keep-eviction-off-weekends,clear-widget-cache-now,repo-fact,host-fact" {
 		t.Fatalf("start order: %s", names(start))
 	}
 }

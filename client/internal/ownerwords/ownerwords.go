@@ -176,7 +176,7 @@ func Request(quote string) bool {
 //
 // The lists were derived on the dev half of a judge's labels of 283 kept
 // rulings on the author's store (2026-10-19): on the test half it flags 25
-// of 89 one-off instructions and 3 of 51 standing rules.
+// of 89 one-off instructions and 2 of 51 standing rules.
 func InTask(quote string) bool {
 	ws := strings.Fields(Normalize(quote))
 	for len(ws) > 0 && inTaskLead[ws[0]] {
@@ -186,8 +186,9 @@ func InTask(quote string) bool {
 		return false
 	}
 	digits := 0
-	for _, w := range ws {
-		if generalWords[w] {
+	for i, w := range ws {
+		// "do not" is "dont" spelled out.
+		if generalWords[w] || (w == "not" && i > 0 && ws[i-1] == "do") {
 			return false
 		}
 		if len(w) == 1 && w[0] >= '0' && w[0] <= '9' {
@@ -195,7 +196,7 @@ func InTask(quote string) bool {
 		}
 	}
 	switch {
-	case numberedItem.MatchString(quote), digits >= 2, strings.Contains(quote, "?"), slices.Contains(ws, "im"):
+	case numberedStart.MatchString(quote), len(numberedItem.FindAllString(quote, -1)) >= 2, digits >= 2, strings.Contains(quote, "?"), slices.Contains(ws, "im"):
 		return true
 	case taskOpeners[ws[0]]:
 		return true
@@ -207,7 +208,10 @@ func InTask(quote string) bool {
 
 var (
 	// numberedItem is an answer by number: "1. keep it", "2) drop", "3- fix".
-	numberedItem = regexp.MustCompile(`(^|\s)\d+[.)-]\s`)
+	// One counts at the start of the quote; elsewhere it takes two, since a
+	// sentence may end in a number ("keep the cap at 50. it is the limit").
+	numberedItem  = regexp.MustCompile(`(^|\s)\d+[.)-]\s`)
+	numberedStart = regexp.MustCompile(`^\s*\d+[.)-]\s`)
 	// generalWords make a quote hold beyond the task: a condition, a
 	// quantifier, a rule word or a preference.
 	generalWords = wordSet("if when whenever before after unless until any every some something anything problem way general always never dont ever instead rather better prefer")

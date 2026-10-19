@@ -331,23 +331,27 @@ func TestOwnerNamesAttribute(t *testing.T) {
 // whatever it opens with.
 func TestInTask(t *testing.T) {
 	for q, want := range map[string]bool{
-		"lets create the bucket as a draft":               true,
-		"set the cli to run on the staging region":        true,
-		"ok, push it and open the review":                 true,
-		"so first rebase on main, then rerun the suite":   true,
-		"1. keep it 2. drop it 3. fix the typo":           true,
-		"drop 2 and 4, keep the rest":                     true,
-		"which region did the deploy go to?":              true,
-		"im on the train, keep it short":                  true,
-		"you can delete the scratch bucket":               true,
-		"i approve removing the old key":                  true,
-		"lets always run the linter before a push":        false, // always, before
-		"check the logs if the deploy fails":              false, // a condition
-		"use the staging account instead of prod":         false, // a preference
-		"dont open a pr without the numbers":              false,
-		"the review bot posts one summary comment per pr": false, // a statement, no task opener
-		"we keep the api keys in the vault":               false,
-		"never rent a gpu box without checking the price": false,
+		"lets create the bucket as a draft":                     true,
+		"set the cli to run on the staging region":              true,
+		"ok, push it and open the review":                       true,
+		"so first rebase on main, then rerun the suite":         true,
+		"1. keep it 2. drop it 3. fix the typo":                 true,
+		"drop 2 and 4, keep the rest":                           true,
+		"which region did the deploy go to?":                    true,
+		"im on the train, keep it short":                        true,
+		"you can delete the scratch bucket":                     true,
+		"i approve removing the old key":                        true,
+		"lets always run the linter before a push":              false, // always, before
+		"check the logs if the deploy fails":                    false, // a condition
+		"use the staging account instead of prod":               false, // a preference
+		"dont open a pr without the numbers":                    false,
+		"the review bot posts one summary comment per pr":       false, // a statement, no task opener
+		"we keep the api keys in the vault":                     false,
+		"never rent a gpu box without checking the price":       false,
+		"do not push to main on a friday":                       false, // "do not" is "dont"
+		"Do NOT merge with the override button":                 false,
+		"3) keep the old index":                                 true,  // a numbered answer opens it
+		"keep the request cap at 50. it is what the api allows": false, // a sentence ends in a number
 		"": false,
 	} {
 		if got := InTask(q); got != want {

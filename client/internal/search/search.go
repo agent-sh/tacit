@@ -242,7 +242,9 @@ func build(ctx context.Context, storeDir, localDir, path string) error {
 
 // inTaskRuling reports a ruling proved by a quote of theirs that is an
 // instruction inside its task (ownerwords.InTask). A rule they wrote
-// themself in tacit app is a rule whatever its words.
+// themself in tacit app is a rule whatever its words. The mark is made when
+// the index is built: a change to InTask's word lists needs a schema bump,
+// or a cached index keeps the old marks until the store's HEAD moves.
 func inTaskRuling(f *fact.Fact) bool {
 	q := f.Meta.Source.OwnerQuote
 	return q != "" && f.QuoteBacked && !fact.OwnerWrote(f) && ownerwords.InTask(q)
