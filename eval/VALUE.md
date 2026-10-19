@@ -998,3 +998,20 @@ By hand, 29 of 30 sampled clusters at 0.6 are restatements. The one wrong cluste
 Most of the duplicate lines stay, because their facts are not restatements. Each fact in the pair holds a detail the other lacks: two error messages for one expired certificate, or "5 to 7 minutes" against "10 to 15 minutes" for one restart gap. Retiring either fact loses that detail. Folding the two into one fact is a model's job, and it is not done here. With the repo known (bench problem 1 of the gap analysis), duplicates fill 8.7 percent of the prompt block, not 16.
 
 Cost: no model. A dry run reads the store in about 1 s. The judge cost $3.03, because the baseline took the verdicts of an identical earlier run of v0.3.1 on the same store and only changed contexts were judged.
+
+## Hermes and pi as dreamer sources (2026-10-20)
+
+The dreamer and the owner's words read pi sessions and the Hermes store as well as Claude Code and Codex (SPEC.md "Dreamer sources"). Measured read-only on the author's Mac and Linux workstation; nothing was written to either store.
+
+**Owner turns found per source** (`ownerwords`, transcripts read in full):
+
+| machine | Claude Code + Codex | pi | Hermes |
+|---|---|---|---|
+| Mac | 1,053 turns in 49 sessions (40 agent sessions skipped) | 53 turns in 9 sessions (4 skipped) | no store |
+| workstation | 3,177 turns in 157 sessions (5,567 skipped) | 209 turns in 35 sessions (64 skipped) | 837 turns in 92 sessions (7,559 skipped, 283 injected rows dropped) |
+
+**Which pi sessions are a program's.** pi records no mode. On 131 sessions, 84 first user turns that a program sent came at most 0.18 s after pi's last startup entry, and 47 that a person typed came 1.3 s or more after it. The threshold is 1 s.
+
+**Which Hermes sessions are the owner's.** Of 7,653 sessions, 154 have a source a person types into. The source alone let in four kinds of agent sessions, found by reading samples: 7 phone sessions that a subagent created, 16 desktop delegations from a phone session (the parent still open), 17 Telegram sessions from an older Hermes that are a delegation's fan-out (two or three started within a second, with no parent recorded), and 23 CLI sessions with no created source that are scripted one-query runs. Each kind is now a rule. A private read of 40 sampled `U:` lines found 3 that were not the owner's: one CLI one-query run, one fan-out session, and a kanban result notice. After the CLI, fan-out and notice rules, a second sample of 40 found 2: a single delegation in an older Telegram session that no session field marks, and an agent's report stored as a user row. So about 1 in 20 Hermes owner lines is still an agent's. The curator's quote check sees these lines as the owner's.
+
+**A dry-run dream of one week.** Cursors were set at the end of every transcript and of every Hermes session started before 2026-10-13. The run read the 26 owner sessions started after that from their start: 28 windows and 152 `U:` lines. Opus 5.5 with prompt v5 wrote 264 facts: 220 observed and 44 owner facts with a quote. 34 of the 44 quotes are verbatim in the owner's Hermes turns of the same session, all as statements (not questions, not negated). The other 10 are not found as written. The run cost $2.61 for 28 calls and 330k input tokens, plus one call of an interrupted first attempt. The run wrote nothing: the cursor file was unchanged, no note was written to the store, and none of the run's 57 model sessions is in `~/.claude`. The Mac's newest pi session is a month old, so pi was not dreamed.

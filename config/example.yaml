@@ -6,6 +6,8 @@ index: ~/.local/state/tacit/index
 keys: ~/.config/tacit
 local_overlay: ~/.local/share/tacit/local
 owner_names: []
+# Hermes session store (read-only); default ~/.hermes/state.db when it exists, off for none.
+# hermes_db: off
 verify_roots: []
 runner: claude
 runners: {}
