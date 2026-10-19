@@ -946,3 +946,32 @@ Offline, both changes were inside the noise ("Prompt delivery: a stemmed index")
 
 Per task, the changes scored higher on 5, lower on 3, and tied on 16. A sign test on 8 tasks cannot tell that apart from chance (p = 0.7), but the gains are the predicted ones. A secret-scan ruling and a parked-model decision each rose by two points over their three runs, and the cr-amend case and two more by one. Each of the three losses is one run of three. In the same harness NeptuneMemory with its episodes scores 0.76, after rerunning 18 of its cells that had received the owner's own hooks (with cwd = home, Claude Code read the home settings as project settings). Shipped on the live result, with the offline null recorded above.
 
+
+## In-task rulings (2026-10-19)
+
+Of the 283 facts the curator kept as the owner's rulings on the rebuilt store ("One-off instructions kept as rulings", above), a judge (Sonnet 5.5, shown the fact and the owner's quote) labelled 91 standing and 190 one-off: an instruction inside the task, such as "lets create it as draft", that the fact turned into a rule. The owner's words are real and a one-off can still be a rule of theirs, so nothing is dropped. A ruling whose quote is in its task (`ownerwords.InTask`, SPEC.md Rulings) stays their ruling and stays guarded, but is delivered as an ordinary fact: no `RULE` line, not first at SessionStart, and it neither fills nor blocks the prompt hook's rule slot.
+
+The rule has no model. Its word lists were derived on the dev half of the labels (the curator experiment's split) and checked once on the test half:
+
+| half | one-off marked | standing marked |
+|---|---|---|
+| dev | 54 of 101 | 1 of 40 |
+| test | 25 of 89 | 3 of 51 |
+
+The prototype the lists started from marked 22 of 89 and 3 of 51 on the test half; five task verbs (clean, empty, review, scan, solve), "you can", "i approve" and a skipped leading "so"/"and"/"plus" each caught dev one-offs and no dev standing rule. The three standing rules it marks on the test half open like a task (a "lets not ..." that sets a research focus, a "do not ..." and a "we need ..." with numbered steps). On the bench store it marks 83 of 280 rulings.
+
+**Offline**, on the fixed bench (254 situations, SessionStart plus prompt block, Sonnet 5.5 judge), against a fresh run of release v0.3.1: the blocks differ in 26 situations. In 14 only the label changed (a `RULE` line became a plain one). In 2 a standing rule took the slot that an in-task ruling among the three had blocked. In 10 an in-task ruling left the block (a slot line, or a SessionStart line pushed past the limit of 10 once rules no longer went first), and in 4 of those a standing rule or another fact took its place. Verdicts on the 26: 1 rose from no to partial (a standing rule took the slot), 1 from partial to yes and 1 fell from yes to partial where only labels changed, 1 fell from yes to partial because it lost the in-task slot ruling that carried the needed fact, and 22 held. Overall the score is unchanged:
+
+| arm | yes | partial | score | rulings (user_standard, 59) |
+|---|---|---|---|---|
+| v0.3.1 | 110 | 77 | 0.58 | 17 yes, 14 partial (0.41) |
+| in-task rulings | 109 | 79 | 0.58 | 15 yes, 17 partial (0.40) |
+
+**Live**, the 24 tasks of "A rule slot and rare anchors in live sessions", 3 runs each, against that section's v0.3.0-plus-slot arm. Before the run, the two builds' blocks for each task's prompt were compared without a model: they differ on one task only, the secret-scan one, where an in-task ruling (clean and scan one repo before it goes public) stops holding the slot and a standing one (recommend the scanner's push hook for anything that goes public, the rubric's second half) takes it. That task rose from 1.5 to 2.5 points over its three runs. The other 23 tasks got the same blocks, so their changes are run-to-run noise: 4 higher, 3 lower.
+
+| arm | judged | decision tasks | read tasks | tool calls | input tokens | seconds |
+|---|---|---|---|---|---|---|
+| rule slot (v0.3.0 + slot) | 0.90 | 0.91 | 0.88 | 1.0 | 43k | 16 |
+| in-task rulings | 0.92 | 0.92 | 0.91 | 1.0 | 42k | 18 |
+
+Neither result separates from chance: offline is a tie, and live the one task whose blocks differ moved the way the change predicts. The change is about what a block calls a rule, and on this store it reaches few blocks. Cost: $5.5 offline judge, $6.2 live runs and judge.
