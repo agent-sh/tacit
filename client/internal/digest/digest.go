@@ -1,8 +1,9 @@
-// Package digest compacts Claude Code and Codex transcript JSONL into the
-// line form the dreamer reads: U: owner text, H: harness-injected text,
-// A: assistant text, T: tool call, E: tool error. Raw tool output is
-// dropped and secrets are redacted. It is the Go port of eval/mine/digest.py,
-// which the truth set was mined with, so the dreamer sees what was measured.
+// Package digest compacts Claude Code, Codex and pi transcript JSONL, and
+// Hermes session rows, into the line form the dreamer reads: U: owner text,
+// H: harness-injected text, A: assistant text, T: tool call, E: tool error.
+// Raw tool output is dropped and secrets are redacted. The Claude and Codex
+// readers are the Go port of eval/mine/digest.py, which the truth set was
+// mined with, so the dreamer sees what was measured.
 package digest
 
 import (
@@ -203,6 +204,12 @@ type Format int
 const (
 	Claude Format = iota
 	Codex
+	// Pi is pi's session JSONL (see pi.go). Lines reads every user turn as
+	// the owner's; PiLines takes whether a program started the session.
+	Pi
+	// Hermes is Hermes's session store, a SQLite database, not JSONL: its rows
+	// are digested by HermesLines, and Lines reads nothing in this format.
+	Hermes
 )
 
 // Lines digests JSONL from r in the given format. Only complete lines are
@@ -216,10 +223,13 @@ func Lines(r io.Reader, f Format) []string {
 		if json.Unmarshal(sc.Bytes(), &o) != nil {
 			continue
 		}
-		if f == Claude {
+		switch f {
+		case Claude:
 			out = append(out, claudeLine(o)...)
-		} else {
+		case Codex:
 			out = append(out, codexLine(o)...)
+		case Pi:
+			out = append(out, piLine(o, false)...)
 		}
 	}
 	return out
@@ -288,8 +298,14 @@ func Width(line string) int {
 // HarnessText reports text a harness injected into a user turn (a
 // notification, a command echo, a reminder): not the owner's words.
 func HarnessText(f Format, txt string) bool {
-	if f == Claude {
+	switch f {
+	case Claude:
 		return claudeHarness.MatchString(txt)
+	case Pi:
+		return piHarness.MatchString(txt)
+	case Hermes:
+		_, injected := HermesOwnerText(txt, "", false)
+		return injected
 	}
 	return codexHarness.MatchString(txt)
 }
