@@ -134,8 +134,10 @@ func (b *Builder) jsonLines(path string, fn func([]byte)) error {
 
 // AddHermes adds what the owner wrote in the owner sessions of a Hermes store
 // (hermes.Session.Owner), under "hermes:<session>": each user row's own words
-// (digest.HermesOwnerText), less the rows Hermes wrote again when it compacted
-// a conversation. A store that cannot be read is an error, as a transcript is.
+// (digest.HermesOwnerText: frames, attached context and pastes cut), less the
+// rows Hermes wrote again when it compacted a conversation, a pasted table or
+// log (PastedBlob) and, in Add, a turn that opens with a tag (as piUserTurns).
+// A store that cannot be read is an error, as a transcript is.
 func (b *Builder) AddHermes(path string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -165,6 +167,9 @@ func (b *Builder) AddHermes(path string) error {
 			if injected {
 				b.c.Stats.AgentTurns++
 				continue
+			}
+			if PastedBlob(t) {
+				continue // a pasted table or log, as for pi (Add drops a tag-framed turn)
 			}
 			b.Add("hermes", "hermes:"+s.ID, t)
 		}
