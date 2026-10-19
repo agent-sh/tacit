@@ -39,6 +39,9 @@ jobs:
       - name: gofmt
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - run: go vet ./...
+      # The release builds the tests on Windows; a Unix-only call in a test
+      # broke the v0.3.0 release there.
+      - run: GOOS=windows GOARCH=amd64 go vet ./...
       - run: go build ./cmd/tacit
       - name: cross-build for macOS
         run: GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o /dev/null ./cmd/tacit
