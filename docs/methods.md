@@ -52,7 +52,7 @@ The proof ledger preserves evidence when the original transcript disappears. The
 
 The guard is shared by curation, verification, staleness checks, results and link repair. An agent cannot retire or supersede a protected ruling. The owner reviews the proposed change in the app.
 
-Some of the owner's quoted words are instructions inside the task at hand ("lets create the bucket as a draft"): they open with a task verb or a reply, are a numbered answer or a question, and hold no word that generalizes (if, when, any, always, never, instead ...). Such a ruling stays protected, and the owner's words stay on it; delivery treats it as an ordinary fact rather than a rule. A rule the owner wrote in the app is never treated this way.
+Some of the owner's quoted words are instructions inside the task at hand ("lets create the bucket as a draft"): they open with a task verb or a reply, are a numbered answer or a question, and hold no word that generalizes (if, when, any, always, never, instead ...). Such a ruling stays protected, and the owner's words stay on it; at the prompt it is delivered as an ordinary fact rather than a rule, and at session start it comes right after the standing rules. A rule the owner wrote in the app is never treated this way.
 
 ## Retrieval and delivery
 
