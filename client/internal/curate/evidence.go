@@ -10,8 +10,8 @@ import (
 )
 
 // Where says where the owner said a phrase as a statement of theirs (not their
-// question, not negated), as an owner_quote_from ref (claude:<session>,
-// codex:<session>), preferring the given session, with the hash
+// question, not negated), as an owner_quote_from ref (claude:, codex:, pi: or
+// hermes:<session>), preferring the given session, with the hash
 // of that turn for the quote ledger; "" when the owner did not say it anywhere it can
 // see.
 type Where func(quote, session string) (from, turnHash string)

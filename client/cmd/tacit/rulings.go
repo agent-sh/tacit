@@ -715,7 +715,7 @@ func writeRulingsReport(w io.Writer, rep *rulingsReport, dry bool) {
 	c := rep.counts()
 	st := rep.Corpus
 	var src []string
-	for _, k := range []string{"transcript", "digest", "claude-history", "codex-history"} {
+	for _, k := range []string{"transcript", "pi", "hermes", "digest", "claude-history", "codex-history"} {
 		if st.Turns[k] > 0 {
 			src = append(src, fmt.Sprintf("%s %d", k, st.Turns[k]))
 		}

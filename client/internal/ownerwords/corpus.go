@@ -49,12 +49,14 @@ type Source struct {
 
 // DefaultSources are the transcripts of this machine: Claude Code projects
 // (top-level sessions only; subagent transcripts are agents talking to
-// agents) and Codex sessions.
+// agents), Codex sessions and pi sessions (top-level only, as for Claude
+// Code). Hermes keeps its sessions in a database (AddHermes).
 func DefaultSources(home string) []Source {
 	return []Source{
 		{Glob: filepath.Join(home, ".claude", "projects", "*", "*.jsonl"), Format: digest.Claude},
 		{Glob: filepath.Join(home, ".codex", "sessions", "*", "*", "*", "*.jsonl"), Format: digest.Codex},
 		{Glob: filepath.Join(home, ".codex", "sessions", "*", "*.jsonl"), Format: digest.Codex},
+		{Glob: digest.PiSessionGlob(home), Format: digest.Pi},
 	}
 }
 
@@ -78,7 +80,7 @@ type Corpus struct {
 type Stats struct {
 	OwnerSessions   int            `json:"owner_sessions"`
 	OwnerTurns      int            `json:"owner_turns"`
-	Turns           map[string]int `json:"turns"`            // owner turns by source: transcript, digest, claude-history, codex-history
+	Turns           map[string]int `json:"turns"`            // owner turns by source: transcript (Claude Code, Codex), pi, hermes, digest, claude-history, codex-history
 	AgentSessions   int            `json:"agent_sessions"`   // headless, SDK, runner or scratch sessions, skipped
 	UnknownSessions int            `json:"unknown_sessions"` // no way to tell who started it (a digest whose transcript is gone), skipped
 	AgentTurns      int            `json:"agent_turns"`      // turns in their sessions that an agent or a harness wrote, skipped
@@ -105,7 +107,8 @@ func NewBuilder() *Builder {
 func (b *Builder) Has(ref string) bool { return b.known[ref] }
 
 // Add puts one of the owner's turns, read from source, in the corpus under a
-// session ref ("claude:<session>", "codex:<session>"). Text an
+// session ref ("claude:<session>", "codex:<session>", "pi:<session>",
+// "hermes:<session>"). Text an
 // agent or a harness injected (AgentInjected) is left out, and so is text the owner
 // pasted.
 func (b *Builder) Add(source, ref, text string) {
@@ -244,7 +247,9 @@ func (c *Corpus) Find(quote, session string, exactOnly bool) (Match, bool) {
 	}
 	var preferred []int
 	if session != "" {
-		preferred = append(append(preferred, c.turns["claude:"+session]...), c.turns["codex:"+session]...)
+		for _, src := range []string{"claude:", "codex:", "pi:", "hermes:"} {
+			preferred = append(preferred, c.turns[src+session]...)
+		}
 	}
 	if m, ok := try(preferred, false); ok {
 		return m, true
@@ -475,10 +480,21 @@ func AgentCwd(cwd string) bool {
 
 // Who says whether a transcript can hold owner turns, from its first bytes:
 // "owner", "agent" or "unknown". For Claude Code each turn is decided again
-// on its own line (claudeUserTurns); this only rules sessions out.
+// on its own line (claudeUserTurns); this only rules sessions out. pi records
+// no mode: a session whose first turn came right after pi set it up is a
+// program's (digest.PiHeadless).
 func Who(head []byte, f digest.Format) string {
 	if m := cwdRx.FindSubmatch(head); m != nil && AgentCwd(string(m[1])) {
 		return "agent"
+	}
+	if f == digest.Pi {
+		if _, ok := digest.ReadPiHeader(head); !ok {
+			return "unknown"
+		}
+		if digest.PiHeadless(head) {
+			return "agent"
+		}
+		return "owner"
 	}
 	if f == digest.Claude {
 		ms := entryRx.FindAllSubmatch(head, -1)
@@ -529,6 +545,10 @@ func (b *Builder) AddTranscripts(sources []Source) error {
 			if fi, err := os.Lstat(f); err != nil || !fi.Mode().IsRegular() {
 				continue
 			}
+			if src.Format == digest.Pi && filepath.Base(filepath.Dir(f)) == "tasks" {
+				b.c.Stats.AgentSessions++ // a pi subagent's session
+				continue
+			}
 			switch Who(readHead(f), src.Format) {
 			case "agent":
 				b.c.Stats.AgentSessions++
@@ -559,6 +579,21 @@ func (b *Builder) addTranscript(path string, f digest.Format) error {
 	sc.Buffer(make([]byte, 1<<20), 128<<20)
 	for sc.Scan() {
 		line := sc.Bytes()
+		if f == digest.Pi {
+			if ref == "" {
+				if h, ok := digest.ReadPiHeader(line); ok && h.ID != "" {
+					ref = "pi:" + h.ID
+				} else {
+					ref = "pi:" + strings.TrimSuffix(filepath.Base(path), ".jsonl")
+				}
+			}
+			if bytes.Contains(line, []byte(`"role":"user"`)) {
+				for _, t := range piUserTurns(line) {
+					b.Add("pi", ref, t)
+				}
+			}
+			continue
+		}
 		if f == digest.Claude {
 			if !bytes.Contains(line, []byte(`"type":"user"`)) {
 				continue
@@ -661,6 +696,46 @@ var (
 	commandArgs = regexp.MustCompile(`(?s)<command-args>(.*?)</command-args>`)
 	pastedBlock = regexp.MustCompile(`(?s)<pasted_content\b[^>]*>.*?</pasted_content>`)
 )
+
+// piUserTurns is what the owner typed in one pi user message: its text
+// blocks, less harness frames (an attached file, a skill expansion) and
+// pasted tables or logs (pi keeps no record of pastes either).
+func piUserTurns(line []byte) []string {
+	var o struct {
+		Type    string `json:"type"`
+		Message struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"message"`
+	}
+	if json.Unmarshal(line, &o) != nil || o.Type != "message" || o.Message.Role != "user" {
+		return nil
+	}
+	var texts []string
+	var s string
+	if json.Unmarshal(o.Message.Content, &s) == nil {
+		texts = []string{s}
+	} else {
+		var blocks []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		_ = json.Unmarshal(o.Message.Content, &blocks)
+		for _, bl := range blocks {
+			if bl.Type == "text" {
+				texts = append(texts, bl.Text)
+			}
+		}
+	}
+	var out []string
+	for _, t := range texts {
+		if strings.TrimSpace(t) == "" || harnessFrame(t) || PastedBlob(t) {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
 
 func codexUserTurns(line []byte) []string {
 	var o struct {

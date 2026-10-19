@@ -2,13 +2,19 @@ package ownerwords
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
+
+	"github.com/agent-sh/tacit/client/internal/digest"
+	"github.com/agent-sh/tacit/client/internal/hermes"
 )
 
 // agentInjected are user turns that an agent or a harness wrote into one of
@@ -126,9 +132,50 @@ func (b *Builder) jsonLines(path string, fn func([]byte)) error {
 	return sc.Err()
 }
 
+// AddHermes adds what the owner wrote in the owner sessions of a Hermes store
+// (hermes.Session.Owner), under "hermes:<session>": each user row's own words
+// (digest.HermesOwnerText), less the rows Hermes wrote again when it compacted
+// a conversation. A store that cannot be read is an error, as a transcript is.
+func (b *Builder) AddHermes(path string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	db, err := hermes.Open(path)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	sessions, err := db.Sessions(ctx)
+	if err != nil {
+		return err
+	}
+	for _, s := range sessions {
+		if !s.Owner {
+			b.c.Stats.AgentSessions++
+			continue
+		}
+		ms, err := db.UserMessages(ctx, s.ID)
+		if err != nil {
+			return fmt.Errorf("session %s: %w", s.ID, err)
+		}
+		for _, m := range ms {
+			if m.Copy {
+				continue
+			}
+			t, injected := digest.HermesOwnerText(m.Content, m.DisplayKind, m.Summary)
+			if injected {
+				b.c.Stats.AgentTurns++
+				continue
+			}
+			b.Add("hermes", "hermes:"+s.ID, t)
+		}
+	}
+	return nil
+}
+
 // LoadAll builds the corpus from every source on this machine: owner sessions
-// in the Claude Code and Codex transcripts, the session digests under digests
-// (when not empty) and both prompt histories.
+// in the Claude Code, Codex and pi transcripts and in the Hermes store
+// (hermes.DefaultDB), the session digests under digests (when not empty) and
+// both prompt histories.
 func LoadAll(home, digests string) (*Corpus, error) {
 	b := NewBuilder()
 	if err := b.LoadPastes(filepath.Join(home, ".claude", "history.jsonl")); err != nil {
@@ -136,6 +183,11 @@ func LoadAll(home, digests string) (*Corpus, error) {
 	}
 	if err := b.AddTranscripts(DefaultSources(home)); err != nil {
 		return nil, err
+	}
+	if db := hermes.DefaultDB(home); db != "" {
+		if err := b.AddHermes(db); err != nil {
+			return nil, fmt.Errorf("hermes %s: %w", db, err)
+		}
 	}
 	if digests != "" {
 		if err := b.AddDigests(digests); err != nil {
