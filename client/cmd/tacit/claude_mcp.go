@@ -108,18 +108,52 @@ func ourMCPEntry(raw json.RawMessage) bool {
 // setClaudeMCP registers (entry non-nil) or removes (entry nil) tacit's
 // server in the mcpServers of Claude Code's config at path, keeping every
 // other member and server as written. A server named tacit that does not run
-// `tacit mcp` is someone else's: it is left alone and the call fails. The
-// file is replaced atomically (writeFileMode) with its mode kept, after the old bytes are
-// copied to claudeConfigBackup(path); nothing is written when nothing
-// changes. It reports whether the file changed.
+// `tacit mcp` is someone else's: registering fails and leaves it alone, and
+// removing ours (--no-mcp) leaves it alone too. A symlinked config is written
+// through the link. The file is replaced atomically (writeFileMode) with its
+// mode kept, after the old bytes are copied to claudeConfigBackup(path);
+// nothing is written when nothing changes. A running Claude Code rewrites the
+// file often, so the merge is redone when the file changed while it was
+// made. It reports whether the file changed.
 func setClaudeMCP(path string, entry map[string]any) (bool, error) {
-	old, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return false, err
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		path = real
 	}
+	for attempt := 0; ; attempt++ {
+		old, err := os.ReadFile(path)
+		if err != nil && !os.IsNotExist(err) {
+			return false, err
+		}
+		out, changed, err := mergeClaudeMCP(path, old, entry)
+		if err != nil || !changed {
+			return false, err
+		}
+		readHook()
+		if now, _ := os.ReadFile(path); !bytes.Equal(now, old) {
+			if attempt < 4 {
+				continue
+			}
+			return false, fmt.Errorf("%s keeps changing (a running Claude Code?); nothing written, run the install again", path)
+		}
+		mode := os.FileMode(0o600) // Claude Code keeps its account state here
+		if st, err := os.Stat(path); err == nil {
+			mode = st.Mode().Perm()
+		}
+		if old != nil {
+			if err := writeFileMode(claudeConfigBackup(path), old, mode); err != nil {
+				return false, fmt.Errorf("backup: %w", err)
+			}
+		}
+		return true, writeFileMode(path, out, mode)
+	}
+}
+
+// mergeClaudeMCP is setClaudeMCP's merge of old: the new bytes, and whether
+// they differ.
+func mergeClaudeMCP(path string, old []byte, entry map[string]any) ([]byte, bool, error) {
 	top, err := readJSONObject(old)
 	if err != nil {
-		return false, fmt.Errorf("%s: %w", path, err)
+		return nil, false, fmt.Errorf("%s: %w", path, err)
 	}
 	at := -1
 	var servers []jsonField
@@ -127,29 +161,38 @@ func setClaudeMCP(path string, entry map[string]any) (bool, error) {
 		if f.key == "mcpServers" {
 			at = i
 			if servers, err = readJSONObject(f.val); err != nil {
-				return false, fmt.Errorf("%s: mcpServers: %w", path, err)
+				return nil, false, fmt.Errorf("%s: mcpServers: %w", path, err)
 			}
 		}
 	}
 	var kept []jsonField
 	var mine json.RawMessage
+	foreign := false
 	for _, s := range servers {
 		if s.key != claudeMCPName {
 			kept = append(kept, s)
 			continue
 		}
 		if !ourMCPEntry(s.val) {
-			return false, fmt.Errorf("%s already has an MCP server named %q that does not run `tacit mcp`; nothing written (remove it, or install with --no-mcp)", path, claudeMCPName)
+			foreign = true
+			kept = append(kept, s)
+			continue
 		}
 		mine = s.val
 	}
+	if foreign {
+		if entry != nil {
+			return nil, false, fmt.Errorf("%s already has an MCP server named %q that does not run `tacit mcp`; nothing written (remove it, or install with --no-mcp)", path, claudeMCPName)
+		}
+		return nil, false, nil
+	}
 	if entry == nil && mine == nil {
-		return false, nil
+		return nil, false, nil
 	}
 	if entry != nil {
 		raw, _ := json.Marshal(entry)
 		if mine != nil && jsonEqual(mine, raw) {
-			return false, nil
+			return nil, false, nil
 		}
 		// Replace ours where it is; a new one goes last.
 		placed := false
@@ -165,7 +208,7 @@ func setClaudeMCP(path string, entry map[string]any) (bool, error) {
 	}
 	sv, err := writeJSONObject(kept)
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 	if at >= 0 {
 		top[at].val = sv
@@ -174,19 +217,14 @@ func setClaudeMCP(path string, entry map[string]any) (bool, error) {
 	}
 	out, err := writeJSONObject(top)
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
-	mode := os.FileMode(0o600) // Claude Code keeps its account state here
-	if st, err := os.Stat(path); err == nil {
-		mode = st.Mode().Perm()
-	}
-	if old != nil {
-		if err := writeFileMode(claudeConfigBackup(path), old, mode); err != nil {
-			return false, fmt.Errorf("backup: %w", err)
-		}
-	}
-	return true, writeFileMode(path, out, mode)
+	return out, true, nil
 }
+
+// readHook runs between the merge and the check that the file is unchanged;
+// tests use it to change the file there.
+var readHook = func() {}
 
 // jsonEqual compares two JSON values by meaning.
 func jsonEqual(a, b json.RawMessage) bool {

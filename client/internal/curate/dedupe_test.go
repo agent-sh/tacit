@@ -139,3 +139,40 @@ func TestAbsorberAbsorbsARestatedFactNotARuling(t *testing.T) {
 		t.Fatalf("absorbed by a retired fact: %q", got)
 	}
 }
+
+// Copies of one statement that only an owner could retire stay: system
+// facts, rulings of a store the audit has not run on, a fact the owner
+// endorsed. A command one copy names in code is a specific the other lacks.
+func TestDuplicatesKeepsSystemPreAuditEndorsedAndCode(t *testing.T) {
+	const ws = "machines/ws"
+	desc := "The quokka build cache lives in ~/.cache/quokka and is safe to delete"
+	pre := func(name, day string) *fact.Fact {
+		f := cf(ws, name, day, desc)
+		f.Meta.Source.Kind = "user" // unaudited store: kind user is a ruling
+		return f
+	}
+	endorsed := cf("user", "endorsed-copy", "2026-10-01", desc)
+	endorsed.Meta.Source.Endorsed, endorsed.EndorsedBacked = "0123456789ab", true
+	// Two facts the owner endorsed: neither is ever a copy.
+	en := func(name, day string) *fact.Fact {
+		f := cf("projects/quokka", name, day, desc)
+		f.Meta.Source.Endorsed, f.EndorsedBacked = "ab"+name, true
+		return f
+	}
+	withCode := cf("user", "with-code", "2026-10-01", desc)
+	withCode.Body = desc + "; clear it with `quokka cache purge --all`.\n"
+	facts := []*fact.Fact{
+		cf("system", "sys-a", "2026-10-01", desc), cf("system", "sys-b", "2026-10-02", desc),
+		pre("pre-a", "2026-10-01"), pre("pre-b", "2026-10-02"),
+		endorsed, cf("user", "plain-newer", "2026-10-05", desc),
+		withCode,
+		en("endorsed-a", "2026-10-01"), en("endorsed-b", "2026-10-02"),
+	}
+	// The endorsed fact is never the one retired: the newer plain copy goes
+	// into it.
+	got := copiesOf(Duplicates(facts, DedupeGuard{}))
+	want := map[string][]string{"endorsed-copy": {"plain-newer"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Duplicates = %v, want %v", got, want)
+	}
+}
