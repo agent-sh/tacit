@@ -350,7 +350,10 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	// the repo is not more relevant to the situation.
 	// One term per stem: the index stems, so "amend" and "amended" are one
 	// match, and counted twice they would pass the two-match gate alone.
-	terms := distinctStems(Terms(strings.Join(append([]string{sit.Query, sit.Command}, sit.Paths...), " ")))
+	// The relationship evidence stores words as written, so it gets every
+	// spelling; dropping one would lose the pairs it supports.
+	all := Terms(strings.Join(append([]string{sit.Query, sit.Command}, sit.Paths...), " "))
+	terms := distinctStems(all)
 	if len(terms) == 0 || (sit.OnlyDerived && sit.Repo == "") {
 		return nil, nil
 	}
@@ -359,7 +362,7 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	if sit.PromptRelevance && !sit.OnlyDerived {
 		var ids []int
 		var err error
-		evidence, ids, err = ix.promptEvidence(ctx, terms, strings.Join(append([]string{sit.Query, sit.Command}, sit.Paths...), " "))
+		evidence, ids, err = ix.promptEvidence(ctx, all, strings.Join(append([]string{sit.Query, sit.Command}, sit.Paths...), " "))
 		if err != nil {
 			return nil, err
 		}

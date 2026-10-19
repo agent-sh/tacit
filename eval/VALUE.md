@@ -898,3 +898,23 @@ Measured on the second owner's machine with the rebuilt store of the section abo
 
 Per task, local scored higher on 2 tasks, Jev on 2, and 20 tied. The median per-task difference in tool calls and input tokens is 0. Across the offline and live runs, Jev answered 304 calls and missed the 2 s deadline once. Offline, on the 254 truth situations, Jev delivered the truth fact for 77 and the local selection for 72. That does not carry over to the sessions. Jev's own cost is not in these numbers. So no provider is the default and the docs recommend leaving it off; the selector benchmark in docs/selectors.md still ranks the models for anyone who wants one.
 
+## Prompt delivery: a stemmed index (2026-10-19)
+
+Measured offline on the second owner's machine: the rebuilt store of the sections above, 254 truth situations, each session in a git checkout named after its repo, and the bench's Sonnet 5.5 judge (yes, partial, no on "does this context give the agent the fact"). A context identical to main's kept main's verdict, and every changed context was judged once. On 15 contexts judged twice with no change, 2 verdicts flipped, so a difference of 2 or 3 is within what one run can tell apart.
+
+| build | yes | partial | no | rulings yes / partial / no (59) | truth target in the context | prompt lines | median context chars |
+|---|---|---|---|---|---|---|---|
+| main | 100 | 81 | 73 | 15 / 16 / 28 | 116 | 602 | 2,507 |
+| porter stemming, one count per stem | 106 | 79 | 69 | 16 / 15 / 28 | 123 (+11, -4) | 626 | 2,518 |
+
+The index stems with Porter, and a query term counts once per stem, so "amend" and "amended" are one match for the two-match gate. 150 prompt blocks change. Where the truth fact entered or left the context, the verdict rose 9 times and fell 3; where it did not, 12 rose and 9 fell, which is the judge's noise. "Amended" now finds the facts about `cr` re-runs after an amend, and "rotate" finds "rotation". The Go stemmer gives SQLite's stem on all 236,064 words of `/usr/share/dict/words`. Porter also stems a half-typed prefix ("deploy"* becomes "deploi"*), so the app's search-as-you-type reads an unstemmed copy of the index (the index grows from 12.8 to 14.6 MB here). The relationship route matches words as written and gets every spelling. The hook's warm time per prompt went from 181 to 191 ms at the median.
+
+Measured on the same ladder and not shipped:
+
+- **A ruling line** when the three facts hold none (score 10 or more): 105 yes against 106. It adds a line on 19 prompts, mostly rulings on the task's subject, but only 2 are the truth target.
+- **Rare-term anchors** (any term in at most 50 summaries anchors the coherence gate): +1 yes, 3 fewer no, inside the noise, and about a third of its 22 new lines are off topic.
+- **No repo mention of three letters or fewer**: 3 contexts change, and the real short repo names `pi` and `lpt` stop counting.
+- **Body text on thick lines**: 105 yes against 107, and a redaction pass of about 350 ms on every prompt with a block.
+
+Rulings stay at 15 to 16 of 59. Their main loss is vocabulary: the ruling is stored in general words and the situation names the task. On the same corrected bench NeptuneMemory delivers 75 (rulings 26), and with its episodes 69 (rulings 22).
+
