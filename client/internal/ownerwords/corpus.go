@@ -49,8 +49,9 @@ type Source struct {
 
 // DefaultSources are the transcripts of this machine: Claude Code projects
 // (top-level sessions only; subagent transcripts are agents talking to
-// agents), Codex sessions and pi sessions (top-level only, as for Claude
-// Code). Hermes keeps its sessions in a database (AddHermes).
+// agents), Codex sessions and pi sessions (top-level only: the glob,
+// digest.PiSessionGlob, does not reach a subagent's <session>/tasks/).
+// Hermes keeps its sessions in a database (AddHermes).
 func DefaultSources(home string) []Source {
 	return []Source{
 		{Glob: filepath.Join(home, ".claude", "projects", "*", "*.jsonl"), Format: digest.Claude},
@@ -543,10 +544,6 @@ func (b *Builder) AddTranscripts(sources []Source) error {
 		sort.Strings(files)
 		for _, f := range files {
 			if fi, err := os.Lstat(f); err != nil || !fi.Mode().IsRegular() {
-				continue
-			}
-			if src.Format == digest.Pi && filepath.Base(filepath.Dir(f)) == "tasks" {
-				b.c.Stats.AgentSessions++ // a pi subagent's session
 				continue
 			}
 			switch Who(readHead(f), src.Format) {
