@@ -38,6 +38,7 @@ type Hit struct {
 	Inbox       bool
 	Kind        string
 	Ruling      bool // an owner ruling: their own words (fact.IsRuling); no agent may supersede it
+	InTask      bool // a ruling whose quote is an instruction in its task (ownerwords.InTask): guarded as a ruling, delivered as an ordinary fact (Rule)
 	Words       bool // holds backed words of theirs (fact.OwnerWordsOf); no agent supersedes it without asking them
 	Conflicts   []string
 	// Local is a note in this machine's overlay (internal/overlay): written
@@ -77,8 +78,8 @@ const (
 
 // schemaVersion is part of the index file name, so a schema change rebuilds
 // instead of failing on a column that an older build does not have. 7: the
-// FTS tokenizer stems (porter).
-const schemaVersion = 7
+// FTS tokenizer stems (porter). 8: the intask column (Hit.InTask).
+const schemaVersion = 8
 
 // Open returns the index for the store at head, building it when missing.
 // Index files are index-v<schema>-<sha>.db under IndexDir, or
@@ -185,7 +186,7 @@ func build(ctx context.Context, storeDir, localDir, path string) error {
 	}
 	defer db.Close()
 	stmts := []string{
-		`CREATE TABLE facts(id INTEGER PRIMARY KEY, path TEXT, name TEXT, scope TEXT, type TEXT, description TEXT, body TEXT, inbox INT, superseded INT, applies TEXT, kind TEXT, conflicts TEXT, ruling INT, words INT, local INT)`,
+		`CREATE TABLE facts(id INTEGER PRIMARY KEY, path TEXT, name TEXT, scope TEXT, type TEXT, description TEXT, body TEXT, inbox INT, superseded INT, applies TEXT, kind TEXT, conflicts TEXT, ruling INT, intask INT, words INT, local INT)`,
 		`CREATE VIRTUAL TABLE fts USING fts5(name, description, body, content='facts', content_rowid='id', tokenize='porter unicode61 remove_diacritics 2')`,
 		// Rank's prefix search needs the words as written: porter stems a
 		// half-typed prefix too ("deploy"* becomes "deploi"*, which no stem
@@ -201,7 +202,7 @@ func build(ctx context.Context, storeDir, localDir, path string) error {
 	if err != nil {
 		return err
 	}
-	ins, err := tx.PrepareContext(ctx, `INSERT INTO facts(path, name, scope, type, description, body, inbox, superseded, applies, kind, conflicts, ruling, words, local) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+	ins, err := tx.PrepareContext(ctx, `INSERT INTO facts(path, name, scope, type, description, body, inbox, superseded, applies, kind, conflicts, ruling, intask, words, local) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
@@ -214,7 +215,8 @@ func build(ctx context.Context, storeDir, localDir, path string) error {
 		if isLocal {
 			ruling, words = false, false
 		}
-		if _, err := ins.ExecContext(ctx, f.Path, f.Meta.Name, f.Meta.Scope, f.Meta.Type, f.Meta.Description, strings.TrimSpace(f.Body), b2i(f.InInbox()), b2i(f.Meta.SupersededBy != "" || f.Meta.Retired != ""), string(applies), f.Meta.Source.Kind, strings.Join(f.Meta.ConflictsWith, ","), b2i(ruling), b2i(words), b2i(isLocal)); err != nil {
+		intask := ruling && inTaskRuling(f)
+		if _, err := ins.ExecContext(ctx, f.Path, f.Meta.Name, f.Meta.Scope, f.Meta.Type, f.Meta.Description, strings.TrimSpace(f.Body), b2i(f.InInbox()), b2i(f.Meta.SupersededBy != "" || f.Meta.Retired != ""), string(applies), f.Meta.Source.Kind, strings.Join(f.Meta.ConflictsWith, ","), b2i(ruling), b2i(intask), b2i(words), b2i(isLocal)); err != nil {
 			return err
 		}
 	}
@@ -237,6 +239,19 @@ func build(ctx context.Context, storeDir, localDir, path string) error {
 	}
 	return os.Rename(tmp, path)
 }
+
+// inTaskRuling reports a ruling proved by a quote of theirs that is an
+// instruction inside its task (ownerwords.InTask). A rule they wrote
+// themself in tacit app is a rule whatever its words.
+func inTaskRuling(f *fact.Fact) bool {
+	q := f.Meta.Source.OwnerQuote
+	return q != "" && f.QuoteBacked && !fact.OwnerWrote(f) && ownerwords.InTask(q)
+}
+
+// Rule reports a ruling delivery ranks as a rule: the prompt hook's rule
+// slot, first in the SessionStart block, a RULE line. A ruling in its task
+// (InTask) competes as an ordinary fact.
+func (h Hit) Rule() bool { return h.Ruling && !h.InTask }
 
 // prune removes the index files no process should need: other heads of this
 // schema version, older schema versions, and temp files whose builder has
@@ -554,7 +569,7 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	if allowRelationRouting && sit.PromptRelevance && !sit.OnlyDerived {
 		scopeClause = "(" + scopeClause + " OR (f.scope LIKE 'projects/%' AND (" + route + ")))"
 	}
-	q := fmt.Sprintf(`SELECT f.path, f.name, f.scope, f.type, f.description, f.body, f.inbox, f.kind, f.conflicts, f.ruling, f.words, f.local, -bm25(fts, 6.0, 6.0, 1.0) AS score %s
+	q := fmt.Sprintf(`SELECT f.path, f.name, f.scope, f.type, f.description, f.body, f.inbox, f.kind, f.conflicts, f.ruling, f.intask, f.words, f.local, -bm25(fts, 6.0, 6.0, 1.0) AS score %s
 		FROM fts JOIN facts f ON f.id = fts.rowid
 		WHERE fts MATCH :query AND f.superseded = 0 AND %s %s
 		ORDER BY score DESC LIMIT :candidateLimit`, selectCoverage, scopeClause, inboxClause)
@@ -567,10 +582,10 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	var hits []Hit
 	for rows.Next() {
 		var h Hit
-		var inbox, ruling, words, local int
+		var inbox, ruling, intask, words, local int
 		var conflicts string
 		matched := make([]int, len(coverage))
-		dest := []any{&h.Path, &h.Name, &h.Scope, &h.Type, &h.Description, &h.Body, &inbox, &h.Kind, &conflicts, &ruling, &words, &local, &h.Score}
+		dest := []any{&h.Path, &h.Name, &h.Scope, &h.Type, &h.Description, &h.Body, &inbox, &h.Kind, &conflicts, &ruling, &intask, &words, &local, &h.Score}
 		for i := range matched {
 			dest = append(dest, &matched[i])
 		}
@@ -583,7 +598,7 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 			}
 		}
 		h.Evidence = evidence[h.Path]
-		h.Inbox, h.Ruling, h.Words, h.Local = inbox == 1, ruling == 1, words == 1, local == 1
+		h.Inbox, h.Ruling, h.InTask, h.Words, h.Local = inbox == 1, ruling == 1, intask == 1, words == 1, local == 1
 		if conflicts != "" {
 			h.Conflicts = strings.Split(conflicts, ",")
 		}
@@ -653,7 +668,8 @@ func dropConflictPartners(hits []Hit) []Hit {
 // per fact, name and description only. Bodies are a tool call away. Owner
 // rulings (fact.IsRuling: their own words) are rendered as rules, not as quotes of what the owner
 // once said: a dated quote beside "the current request wins" weakens the
-// rule (eval/VALUE.md, D7). Known contradictions are marked.
+// rule (eval/VALUE.md, D7). A ruling whose quote was an instruction inside its
+// task is a plain line (Rule). Known contradictions are marked.
 func Block(hits []Hit, title string) string {
 	if len(hits) == 0 {
 		return ""
@@ -664,7 +680,7 @@ func Block(hits []Hit, title string) string {
 	for _, h := range hits {
 		desc := strings.Join(strings.Fields(h.Description), " ")
 		line := "- " + h.Name
-		if h.Ruling {
+		if h.Rule() {
 			line = "- RULE " + h.Name
 			desc = asRule(desc)
 		}

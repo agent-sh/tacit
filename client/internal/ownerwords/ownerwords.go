@@ -10,6 +10,7 @@ package ownerwords
 import (
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -160,6 +161,68 @@ func Request(quote string) bool {
 		}
 	}
 	return false
+}
+
+// InTask reports a quote of theirs that is an instruction inside the task at
+// hand ("lets create the bucket as a draft", "set the cli to run on the
+// staging region", "1. drop it 3. fix it") rather than a rule for later
+// sessions: it opens with a task verb or a reply (yes, ok, lets, first,
+// now, check, fix, you can, ...; a leading so, and or plus is skipped), is a
+// numbered answer, holds a question mark or says "im", and holds no word that
+// generalizes (if, when, before, after, any, every, always, never, dont,
+// instead, prefer, ...: "now run the tests before any push" is a standing
+// condition). It is still their
+// ruling; delivery ranks it as an ordinary fact (SPEC.md, Delivery).
+//
+// The lists were derived on the dev half of a judge's labels of 283 kept
+// rulings on the author's store (2026-10-19): on the test half it flags 25
+// of 89 one-off instructions and 3 of 51 standing rules.
+func InTask(quote string) bool {
+	ws := strings.Fields(Normalize(quote))
+	for len(ws) > 0 && inTaskLead[ws[0]] {
+		ws = ws[1:]
+	}
+	if len(ws) == 0 {
+		return false
+	}
+	digits := 0
+	for _, w := range ws {
+		if generalWords[w] {
+			return false
+		}
+		if len(w) == 1 && w[0] >= '0' && w[0] <= '9' {
+			digits++
+		}
+	}
+	switch {
+	case numberedItem.MatchString(quote), digits >= 2, strings.Contains(quote, "?"), slices.Contains(ws, "im"):
+		return true
+	case taskOpeners[ws[0]]:
+		return true
+	case len(ws) > 1 && taskOpeners2[ws[0]+" "+ws[1]]:
+		return true
+	}
+	return false
+}
+
+var (
+	// numberedItem is an answer by number: "1. keep it", "2) drop", "3- fix".
+	numberedItem = regexp.MustCompile(`(^|\s)\d+[.)-]\s`)
+	// generalWords make a quote hold beyond the task: a condition, a
+	// quantifier, a rule word or a preference.
+	generalWords = wordSet("if when whenever before after unless until any every some something anything problem way general always never dont ever instead rather better prefer")
+	// taskOpeners open an instruction or a reply inside the task.
+	taskOpeners  = wordSet("yes yea yeah ok okay lets first now do check open update remove try use go continue run fix push merge add make create set change clean empty review scan solve")
+	taskOpeners2 = map[string]bool{"you can": true, "i approve": true}
+	inTaskLead   = wordSet("so and plus")
+)
+
+func wordSet(s string) map[string]bool {
+	m := map[string]bool{}
+	for _, w := range strings.Fields(s) {
+		m[w] = true
+	}
+	return m
 }
 
 var (

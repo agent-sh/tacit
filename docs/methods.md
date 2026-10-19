@@ -52,6 +52,8 @@ The proof ledger preserves evidence when the original transcript disappears. The
 
 The guard is shared by curation, verification, staleness checks, results and link repair. An agent cannot retire or supersede a protected ruling. The owner reviews the proposed change in the app.
 
+Some of the owner's quoted words are instructions inside the task at hand ("lets create the bucket as a draft"): they open with a task verb or a reply, are a numbered answer or a question, and hold no word that generalizes (if, when, any, always, never, instead ...). Such a ruling stays protected, and the owner's words stay on it; delivery treats it as an ordinary fact rather than a rule. A rule the owner wrote in the app is never treated this way.
+
 ## Retrieval and delivery
 
 The client builds a local SQLite FTS5 index over names, descriptions and bodies. The cache is keyed by store HEAD, schema version and local-overlay state. The ranker does not call a model.
@@ -62,8 +64,8 @@ The hooks use two delivery moments:
 
 | Moment | Selection |
 |---|---|
-| Session start | Query by repo name, keep up to 10 matches above the start floor, order rulings before project, host and general facts. No computed facts. |
-| User prompt | Keep up to 3 curated matches above the prompt floor, plus one owner ruling when the three hold none, then remove facts already delivered in this session. No backfill with weaker matches. A separate query can add the best computed fact above its own floor. |
+| Session start | Query by repo name, keep up to 10 matches above the start floor, order rulings before project, host and general facts. A ruling whose quote was an instruction inside its task is not ordered first. No computed facts. |
+| User prompt | Keep up to 3 curated matches above the prompt floor, plus one owner ruling when the three hold none (a ruling in its task neither counts nor takes that line), then remove facts already delivered in this session. No backfill with weaker matches. A separate query can add the best computed fact above its own floor. |
 
 Harness-injected turns do not trigger prompt delivery, nor does a pure text operation on a literal the prompt supplies (for example the uppercase form of a literal), which needs no memory and gets no scorer call. A single searchable term is considered only when it is a syntactically specific identifier, and must still clear rarity and score checks. Curated prompt floors are 15 in a known repo and 20 without one; derived facts retain 12. When the three facts hold no owner ruling, the best gated ruling at 10 or more is a fourth line. The stricter repo-less floor intentionally trades recall for precision; see [delivery measurements](../eval/DELIVERY.md). Hook output contains names and descriptions; `tacit fact <name>` supplies the detail. Explicit `tacit search` and the MCP search tool can include computed facts. Hooks return no output when the store or query is unavailable.
 
