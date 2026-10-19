@@ -25,8 +25,12 @@ const RestateOverlap = 0.6
 // (file.go, a.b.c).
 var specificRx = regexp.MustCompile(`[\w./~@:-]*\d[\w./~@:-]*|[\w~.-]*/[\w./~-]+|\w+\.\w[\w.]*`)
 
+// codeRx finds a `code span`: a command or a name an agent marked as one
+// ("use `aws logs start-query`"), which holds no digit or path as often as not.
+var codeRx = regexp.MustCompile("`([^`\n]{2,120})`")
+
 // specifics is the set of specific tokens in s, compared whole: port 778 is
-// not in a fact that says 7781.
+// not in a fact that says 7781. A code span is one token, whole.
 func specifics(s string) map[string]bool {
 	out := map[string]bool{}
 	for _, m := range specificRx.FindAllString(s, -1) {
@@ -34,6 +38,9 @@ func specifics(s string) map[string]bool {
 		if len(m) >= 2 {
 			out[m] = true
 		}
+	}
+	for _, m := range codeRx.FindAllStringSubmatch(s, -1) {
+		out["`"+strings.Join(strings.Fields(strings.ToLower(m[1])), " ")+"`"] = true
 	}
 	return out
 }

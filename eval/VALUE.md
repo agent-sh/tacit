@@ -981,6 +981,8 @@ What ships keeps a ruling in its task in the SessionStart block, after the owner
 
 ## Near-duplicates (2026-10-19)
 
+Measured against release v0.3.1, before in-task rulings (#31) were merged. After review, a `code span` in either fact's text also counts as a specific the other must cover; that only keeps more copies apart, and was not measured again.
+
 The gap analysis counted 82 of 515 delivered lines as near-duplicates (half their name and description terms shared with an earlier line of the same context), and dropping them at selection time changed recall by about 0. So the curator now stops them at the source, with the rule of `curate.Restated` extended to curated facts (SPEC.md "Near-duplicates"): an entry of the split that only restates a curated fact of its scope is not written, and `tacit dedupe` retires the copies a store already holds. Measured on a copy of the rebuilt store of the sections above (about 3,200 live curated facts) with the offline bench of "Prompt delivery: a stemmed index".
 
 | | clusters | copies retired | yes | partial | no | lines (prompt block) | duplicate lines, whole context | duplicate lines, prompt block |

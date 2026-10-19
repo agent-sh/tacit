@@ -266,6 +266,58 @@ func TestInstallClaudeLeavesAnotherServerNamedTacit(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); err == nil {
 		t.Fatal("hooks pointing at the MCP tools were installed without the server")
 	}
+	// --no-mcp installs the hooks and leaves their server alone.
+	if code := runInstall([]string{"claude", "--no-mcp"}); code != 0 {
+		t.Fatalf("install --no-mcp exited %d, want 0", code)
+	}
+	if b, _ := os.ReadFile(cfg); string(b) != start {
+		t.Fatalf("--no-mcp changed their server:\n%s", b)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); err != nil {
+		t.Fatalf("--no-mcp installed no hooks: %v", err)
+	}
+}
+
+// A symlinked config is written through the link, and the link stays.
+func TestInstallClaudeWritesThroughASymlink(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	real := filepath.Join(home, "dotfiles", "claude.json")
+	os.MkdirAll(filepath.Dir(real), 0o755)
+	os.WriteFile(real, []byte(`{"theme": "dark"}`), 0o600)
+	link := filepath.Join(home, ".claude.json")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skip("no symlinks here")
+	}
+	if code := runInstall([]string{"claude"}); code != 0 {
+		t.Fatalf("install exited %d", code)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the symlink was replaced: %v", err)
+	}
+	if b, _ := os.ReadFile(real); !strings.Contains(string(b), `"tacit"`) || !strings.Contains(string(b), `"theme"`) {
+		t.Fatalf("the target was not merged:\n%s", b)
+	}
+}
+
+// The file changed while the merge was made (Claude Code wrote it): the
+// merge is redone on what is there now, so their change is kept.
+func TestSetClaudeMCPRedoesTheMergeWhenTheFileChanged(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), ".claude.json")
+	os.WriteFile(cfg, []byte(`{"a": 1}`), 0o600)
+	calls := 0
+	readHook = func() {
+		if calls++; calls == 1 {
+			os.WriteFile(cfg, []byte(`{"a": 1, "b": 2}`), 0o600)
+		}
+	}
+	defer func() { readHook = func() {} }()
+	if _, err := setClaudeMCP(cfg, map[string]any{"type": "stdio", "command": "tacit", "args": []string{"mcp"}}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(cfg); !strings.Contains(string(b), `"b"`) || !strings.Contains(string(b), `"tacit"`) {
+		t.Fatalf("a concurrent change was lost:\n%s", b)
+	}
 }
 
 // No config yet: a new file with the server alone.
