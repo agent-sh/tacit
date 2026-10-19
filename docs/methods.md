@@ -38,7 +38,7 @@ Agents write only to `inbox/<harness>@<host>/`. The server enforces that boundar
 
 `tacit add` records an agent note. `tacit import` converts existing harness memory files with provenance. `tacit dream` reads new transcript deltas, makes compact redacted digests, and asks a model for reusable candidate facts. The dreamer's output is unreviewed inbox material. Redaction must work before agent notes or digests leave the machine.
 
-`tacit curate` first sets aside plain restatements it can recognize without a model. A model then splits pending notes into individual entries, with a real type, scope and source. A contradiction judge compares new entries with nearby existing facts and same-scope facts from that run. A failed conflict check stops the batch before it is written.
+`tacit curate` first sets aside plain restatements it can recognize without a model. A model then splits pending notes into individual entries, with a real type, scope and source. An entry that only restates a curated fact is not written a second time; `tacit dedupe` retires the copies a store already holds. A contradiction judge compares new entries with nearby existing facts and same-scope facts from that run. A failed conflict check stops the batch before it is written.
 
 Automatic supersession is restricted to closely related observations. Contradictions, uncertain supersessions and conflicts with owner rulings become findings. The curator generates `MEMORY.md`, lints the changes and pushes as the curator key. It does not silently discard an owner's ruling to make the store consistent.
 

@@ -309,6 +309,7 @@ type Report struct {
 	Restated         int             `json:"restated,omitempty"` // pending notes dropped before the split: they restate a curated fact or an earlier note
 	Batches          int             `json:"batches"`
 	Facts            int             `json:"facts"`
+	Absorbed         int             `json:"absorbed,omitempty"` // facts of the split not written: they only restate a curated fact (curate.Absorber)
 	Rulings          int             `json:"rulings"`
 	NotOwnerWords    int             `json:"not_owner_words,omitempty"` // kind user entries with no verified quote of theirs, filed as observed
 	RecoveredRulings int             `json:"recovered_rulings"`

@@ -1,0 +1,166 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/agent-sh/tacit/client/internal/curate"
+	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/ledger"
+	"github.com/agent-sh/tacit/client/internal/store"
+)
+
+// runDedupe implements `tacit dedupe`: the curated facts that only restate
+// another curated fact are retired with superseded_by the fact they restate.
+//
+//	tacit dedupe --dry-run   read the clone as it is (no sync), print the clusters, change nothing
+//	tacit dedupe             sync, supersede the copies, commit and push as curator
+//
+// No model is called. The contract is SPEC.md "Near-duplicates".
+func runDedupe(args []string) int {
+	fs := flag.NewFlagSet("dedupe", flag.ExitOnError)
+	dry := fs.Bool("dry-run", false, "print the clusters and the copies it would retire, write nothing (no sync)")
+	out := fs.String("json", "", "also write the clusters to this file as JSON lines")
+	fs.Parse(args)
+	s, err := store.Default()
+	if err != nil || !s.Exists() {
+		fmt.Fprintln(os.Stderr, "dedupe: no store")
+		return 2
+	}
+	// Before any work: a machine that cannot write as curator does nothing.
+	if !*dry && refuseWriter(context.Background(), s, "curator", "dedupe") {
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	if *dry {
+		cs, err := dedupePlan(s.Dir)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "dedupe:", err)
+			return 1
+		}
+		printDedupe(cs, true)
+		return writeDedupeJSON(*out, cs)
+	}
+	var cs []curate.Copies
+	pushed, err := curatorWrite(ctx, s, func() (map[string][]byte, string, error) {
+		var err error
+		if cs, err = dedupePlan(s.Dir); err != nil || len(cs) == 0 {
+			return nil, "", err
+		}
+		return dedupeFiles(s.Dir, cs, time.Now())
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "dedupe:", err)
+		return 1
+	}
+	if !pushed {
+		cs = nil
+	}
+	printDedupe(cs, false)
+	return writeDedupeJSON(*out, cs)
+}
+
+// dedupePlan reads the clone: the clusters of near-identical curated facts,
+// with the owner's decisions as guards.
+func dedupePlan(dir string) ([]curate.Copies, error) {
+	facts, _, err := fact.Walk(dir)
+	if err != nil {
+		return nil, err
+	}
+	dl, _ := os.ReadFile(filepath.Join(dir, filepath.FromSlash(ledger.DecisionsPath)))
+	g := curate.DedupeGuard{Kept: map[string]bool{}}
+	for name := range ledger.Endorsements(dl) {
+		g.Kept[name] = true
+	}
+	answered := map[[2]string]bool{}
+	ds, _ := ledger.Standing(dl)
+	for _, d := range ds {
+		if d.By == "" && d.A != "" && d.B != "" {
+			answered[[2]string{d.A, d.B}], answered[[2]string{d.B, d.A}] = true, true
+		}
+	}
+	g.Answered = func(a, b string) bool { return answered[[2]string{a, b}] }
+	return curate.Duplicates(facts, g), nil
+}
+
+// dedupeFiles is each copy with superseded_by the fact kept and updated
+// today; every other byte of the file stays.
+func dedupeFiles(dir string, cs []curate.Copies, now time.Time) (map[string][]byte, string, error) {
+	files := map[string][]byte{}
+	var lines []string
+	for _, c := range cs {
+		for _, x := range c.Copies {
+			data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(x.Path)))
+			if err != nil {
+				return nil, "", err
+			}
+			y := *x
+			y.Meta.SupersededBy, y.Meta.Updated = c.Kept.Meta.Name, now.Format("2006-01-02")
+			nb, err := fact.PatchRelations(data, &y)
+			if err != nil {
+				return nil, "", fmt.Errorf("%s: %w", x.Path, err)
+			}
+			files[x.Path] = nb
+			lines = append(lines, x.Meta.Name+" -> "+c.Kept.Meta.Name)
+		}
+	}
+	msg := fmt.Sprintf("curator: dedupe: %d near-duplicate fact(s) superseded by the fact they restate, in %d cluster(s)\n\n%s", len(files), len(cs), strings.Join(lines, "\n"))
+	return files, msg, nil
+}
+
+func printDedupe(cs []curate.Copies, dry bool) {
+	n := 0
+	for _, c := range cs {
+		n += len(c.Copies)
+	}
+	verb := "superseded"
+	if dry {
+		verb = "would supersede"
+	}
+	for _, c := range cs {
+		fmt.Printf("- kept [[%s]] (%s): %s\n", c.Kept.Meta.Name, c.Kept.Meta.Scope, c.Kept.Meta.Description)
+		for _, x := range c.Copies {
+			fmt.Printf("  - copy [[%s]]: %s\n", x.Meta.Name, x.Meta.Description)
+		}
+	}
+	fmt.Printf("dedupe: %d cluster(s); %s %d copy fact(s)\n", len(cs), verb, n)
+}
+
+// writeDedupeJSON writes one line per cluster: the fact kept and its copies.
+func writeDedupeJSON(path string, cs []curate.Copies) int {
+	if path == "" {
+		return 0
+	}
+	type row struct {
+		Name, Description string
+	}
+	fh, err := os.Create(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "dedupe:", err)
+		return 1
+	}
+	defer fh.Close()
+	enc := json.NewEncoder(fh)
+	for _, c := range cs {
+		v := struct {
+			Scope  string `json:"scope"`
+			Kept   row    `json:"kept"`
+			Copies []row  `json:"copies"`
+		}{Scope: c.Kept.Meta.Scope, Kept: row{c.Kept.Meta.Name, c.Kept.Meta.Description}}
+		for _, x := range c.Copies {
+			v.Copies = append(v.Copies, row{x.Meta.Name, x.Meta.Description})
+		}
+		if err := enc.Encode(v); err != nil {
+			fmt.Fprintln(os.Stderr, "dedupe:", err)
+			return 1
+		}
+	}
+	return 0
+}

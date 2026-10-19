@@ -31,7 +31,9 @@ import (
 type curatorState struct {
 	Empty map[string]string `json:"empty_origins"` // origin -> date
 	// Restated holds the notes that only restate a curated fact or an earlier
-	// note (curate.Restated, no model): note -> the fact it restates.
+	// note (curate.Restated, no model), and the notes whose every fact of the
+	// split restated a curated fact (curate.Absorber): note -> the fact it
+	// restates.
 	Restated map[string]string `json:"restated,omitempty"`
 	// Failed counts, per note, the runs in which the note failed on its own:
 	// the curator's answer for a batch of just that note was malformed or
@@ -198,6 +200,9 @@ func runCurate(args []string) int {
 		}
 		pending = kept
 	}
+	// A fact of the split that only restates a curated fact (or one an earlier
+	// batch of this run wrote) is not written a second time (no model).
+	absorber := curate.NewAbsorber(curated)
 	rep := curate.Report{At: time.Now().Format(time.RFC3339), Notes: len(pending), Restated: len(restated), DeferredOwner: deferredOwner}
 	rep.ModelCalls = &modelrun.Trace{}
 	ctx = modelrun.WithTrace(ctx, rep.ModelCalls)
@@ -338,6 +343,10 @@ func runCurate(args []string) int {
 		}
 		batchNames := maps.Clone(names)
 		var newFacts []*fact.Fact
+		var newRulings []bool
+		inBatch := curate.NewAbsorber(nil) // the batch's own facts, for a second entry restating a first
+		absorbed := map[string]string{}    // note -> the fact one of its entries restates
+		nAbsorbed := 0
 		var ledgerLines []byte
 		produced := map[string]bool{}
 		nRulings, notWords := 0, 0
@@ -355,17 +364,38 @@ func runCurate(args []string) int {
 			f := curate.ToFact(e, host, batchNames)
 			// A ruling is the owner's own words: kind user stays only with their
 			// quote found in the note and in their turns or notes.
-			if q, ok := curate.ApplyEvidence(f, e, noteByName[e.Origin], where); ok {
-				nRulings++
-				ledgerLines = append(ledgerLines, q.Line()...)
-			} else if e.Kind == "user" {
+			q, ruling := curate.ApplyEvidence(f, e, noteByName[e.Origin], where)
+			if !ruling && e.Kind == "user" {
 				if noOwnerCorpus {
 					invalidBatch, unbackedRuling = true, true
 					break
 				}
 				notWords++
 			}
+			// The same fact again, in other words: the note is absorbed by the
+			// fact it restates, and no second copy is written. A ruling is only
+			// absorbed by a ruling with the same quote (curate.Absorber).
+			by := absorber.Restates(f, ruling)
+			if by == "" {
+				by = inBatch.Restates(f, ruling)
+			}
+			if by != "" {
+				if absorbed[e.Origin] == "" {
+					absorbed[e.Origin] = by
+				}
+				nAbsorbed++
+				if *dry {
+					fmt.Printf("- absorbed: [%s] %s (restates [[%s]])\n", f.Meta.Scope, f.Meta.Description, by)
+				}
+				continue
+			}
+			if ruling {
+				nRulings++
+				ledgerLines = append(ledgerLines, q.Line()...)
+			}
+			inBatch.Add(f, ruling)
 			newFacts = append(newFacts, f)
+			newRulings = append(newRulings, ruling)
 			produced[e.Origin] = true
 		}
 
@@ -414,6 +444,7 @@ func runCurate(args []string) int {
 			continue
 		}
 		rep.Facts += len(newFacts)
+		rep.Absorbed += nAbsorbed
 		rep.Rulings += nRulings
 		rep.NotOwnerWords += notWords
 		rep.RecoveredRulings += recovered
@@ -421,7 +452,7 @@ func runCurate(args []string) int {
 		if len(newFacts) == 0 {
 			if !*dry {
 				for _, n := range batch {
-					cst.Empty[n.Meta.Name] = time.Now().Format("2006-01-02")
+					markDone(cst, n.Meta.Name, absorbed)
 				}
 			}
 			continue
@@ -489,7 +520,17 @@ func runCurate(args []string) int {
 		}
 		for _, n := range batch {
 			if !produced[n.Meta.Name] {
-				cst.Empty[n.Meta.Name] = time.Now().Format("2006-01-02")
+				markDone(cst, n.Meta.Name, absorbed)
+			}
+		}
+		fresh := map[string]bool{}
+		for i, f := range newFacts {
+			absorber.Add(f, newRulings[i])
+			fresh[f.Path] = true
+		}
+		for _, rel := range written {
+			if !fresh[rel] {
+				absorber.Drop(rel) // a fact this batch superseded
 			}
 		}
 		names = batchNames
@@ -553,11 +594,22 @@ func runCurate(args []string) int {
 	// it can take most of an hour and must not be what a kill loses. It flags
 	// curated facts git has overtaken; it never retires.
 	rep.Errors += curateStale(ctx, s, *dry)
-	fmt.Printf("curate: %d notes in %d batches (%d split) -> %d facts (%d rulings), %d pairs in %d judge calls, %d contradictions, %d supersedes, %d unchecked, %d set aside, %s, %d error(s)\n", rep.Notes, rep.Batches, rep.BatchSplits, rep.Facts, rep.Rulings, rep.Checked, rep.JudgeCalls, rep.Contradicts, rep.Supersedes, rep.JudgeUnchecked, rep.SetAside, rep.ModelCalls.CostSummary(rep.CostUSD), rep.Errors)
+	fmt.Printf("curate: %d notes in %d batches (%d split) -> %d facts (%d rulings, %d absorbed), %d pairs in %d judge calls, %d contradictions, %d supersedes, %d unchecked, %d set aside, %s, %d error(s)\n", rep.Notes, rep.Batches, rep.BatchSplits, rep.Facts, rep.Rulings, rep.Absorbed, rep.Checked, rep.JudgeCalls, rep.Contradicts, rep.Supersedes, rep.JudgeUnchecked, rep.SetAside, rep.ModelCalls.CostSummary(rep.CostUSD), rep.Errors)
 	if rep.Errors > 0 || rep.DeferredOwner > 0 {
 		return 1
 	}
 	return 0
+}
+
+// markDone records a note the split wrote no fact for: absorbed, when its
+// entries only restated curated facts (note -> the fact, like a restated
+// note), else empty.
+func markDone(cst *curatorState, note string, absorbed map[string]string) {
+	if by := absorbed[note]; by != "" {
+		cst.Restated[note] = by
+		return
+	}
+	cst.Empty[note] = time.Now().Format("2006-01-02")
 }
 
 // supersedeRoute is what the curator does with a judge's "supersedes" on an
