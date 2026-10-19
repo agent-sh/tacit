@@ -102,3 +102,29 @@ func TestPromptRuleSlotFloor(t *testing.T) {
 		t.Fatalf("supported ruling: %s", got)
 	}
 }
+
+// The slot takes the best ruling only: with two that qualify, a seen best
+// one is not replaced by the next, and a ruling in the three (seen or not)
+// leaves no slot at all.
+func TestPromptRuleSlotTwoRulings(t *testing.T) {
+	hits := []search.Hit{
+		{Name: "a", Score: 30}, {Name: "b", Score: 25}, {Name: "c", Score: 20},
+		{Name: "r1", Score: 14, Ruling: true}, {Name: "r2", Score: 12, Ruling: true},
+	}
+	if got := names(promptSelection(hits, nil, nil, promptFloor)); got != "a,b,c,r1" {
+		t.Fatalf("best ruling: %s", got)
+	}
+	if got := names(promptSelection(hits, nil, map[string]bool{"r1": true}, promptFloor)); got != "a,b,c" {
+		t.Fatalf("the slot was refilled after its ruling was seen: %s", got)
+	}
+	inThree := []search.Hit{
+		{Name: "a", Score: 30}, {Name: "r0", Score: 25, Ruling: true}, {Name: "c", Score: 20},
+		{Name: "r1", Score: 14, Ruling: true},
+	}
+	if got := names(promptSelection(inThree, nil, nil, promptFloor)); got != "a,r0,c" {
+		t.Fatalf("a ruling in the three got a second: %s", got)
+	}
+	if got := names(promptSelection(inThree, nil, map[string]bool{"r0": true}, promptFloor)); got != "a,c" {
+		t.Fatalf("a seen ruling in the three still counts: %s", got)
+	}
+}
