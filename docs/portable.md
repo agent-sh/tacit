@@ -114,7 +114,8 @@ The audit directory is optional. It contains private daily JSONL files with reda
 | `TACIT_SETTINGS` | platform config file above | optional client YAML settings |
 | `TACIT_STORE` | `~/.local/share/tacit/store` | the store clone |
 | `TACIT_CONFIG` | `~/.config/tacit` | keys |
-| `TACIT_INDEX` | `~/.local/state/tacit/index` | FTS5 index files |
+| `TACIT_INDEX` | `$TACIT_STATE_DIR/index` | FTS5 index files |
+| `TACIT_STATE_DIR` | `~/.local/state/tacit` | per-machine state: dreamer and curator cursors, stale and verify state, session marks, logs; a second store on one machine (a shadow rebuild) takes its own without changing `HOME` |
 | `TACIT_LOCAL` | `~/.local/share/tacit/local` | local overlay of a read-only clone |
 | `TACIT_FOLLOW_STATE` | `~/.local/state/tacit/follow.json` | follower heartbeat |
 | `TACIT_PROJECTS` | `~/projects` | where repo checkouts live: derive, results, stale, the timeline, the verifier, the dreamer and import |

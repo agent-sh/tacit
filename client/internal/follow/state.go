@@ -74,7 +74,7 @@ func StatePath(store string) string {
 		return p
 	}
 	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, ".local", "state", "tacit")
+	dir := platform.StateDir(home)
 	store = filepath.Clean(store)
 	if store == filepath.Join(home, ".local", "share", "tacit", "store") {
 		return filepath.Join(dir, "follow.json")

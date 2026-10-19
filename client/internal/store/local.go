@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/agent-sh/tacit/client/internal/platform"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -149,7 +150,7 @@ func (s *Store) invalidateLocalIndexes(ctx context.Context) {
 	dir := os.Getenv("TACIT_INDEX")
 	if dir == "" {
 		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".local", "state", "tacit", "index")
+		dir = filepath.Join(platform.StateDir(home), "index")
 	}
 	files, _ := filepath.Glob(filepath.Join(dir, "index-v*-"+head+"*.db"))
 	for _, p := range files {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/agent-sh/tacit/client/internal/platform"
 	"os"
 	"path/filepath"
 	"slices"
@@ -333,7 +334,7 @@ func recheckConflicts(ctx context.Context, s *store.Store, host, since, until st
 			return 1
 		}
 		home, _ := os.UserHomeDir()
-		if f, err := os.OpenFile(filepath.Join(home, ".local", "state", "tacit", "curator.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+		if f, err := os.OpenFile(filepath.Join(platform.StateDir(home), "curator.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
 			json.NewEncoder(f).Encode(rep)
 			f.Close()
 		}

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/xml"
 	"fmt"
+	"github.com/agent-sh/tacit/client/internal/platform"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,7 +68,7 @@ func installWindowsJob(home, exe, target, envFile string) (string, error) {
 	switch target {
 	case "follow":
 		trigger = "<LogonTrigger><Enabled>true</Enabled></LogonTrigger>"
-		args = "follow --log " + psQuote(filepath.Join(home, ".local", "state", "tacit", "follow.log"))
+		args = "follow --log " + psQuote(filepath.Join(platform.StateDir(home), "follow.log"))
 	case "dream":
 		trigger = "<TimeTrigger><Repetition><Interval>PT4H</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition><StartBoundary>" + boundary + "</StartBoundary><Enabled>true</Enabled></TimeTrigger>"
 		args = "dream --env-file " + psQuote(envFile)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/agent-sh/tacit/client/internal/platform"
 	"maps"
 	"os"
 	"path/filepath"
@@ -98,7 +99,7 @@ func runCurate(args []string) int {
 		return recheckConflicts(ctx, s, host, *since, *until, *limit, *dry)
 	}
 	home, _ := os.UserHomeDir()
-	stateDir := filepath.Join(home, ".local", "state", "tacit")
+	stateDir := platform.StateDir(home)
 	cst := loadCuratorState(filepath.Join(stateDir, "curator.json"))
 	if *retrySetAside {
 		cst.Failed = map[string]int{}

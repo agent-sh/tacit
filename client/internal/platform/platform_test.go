@@ -44,3 +44,14 @@ func TestProcessLiveness(t *testing.T) {
 		t.Fatal("invalid process id is alive")
 	}
 }
+
+func TestStateDir(t *testing.T) {
+	t.Setenv("TACIT_STATE_DIR", "")
+	if got := StateDir("/h"); got != filepath.Join("/h", ".local", "state", "tacit") {
+		t.Errorf("default: %s", got)
+	}
+	t.Setenv("TACIT_STATE_DIR", "/shadow/state/")
+	if got := StateDir("/h"); got != filepath.Clean("/shadow/state") {
+		t.Errorf("override: %s", got)
+	}
+}

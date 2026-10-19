@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/agent-sh/tacit/client/internal/platform"
 	"io"
 	"net/url"
 	"os"
@@ -328,7 +329,7 @@ func nextLineStart(path string, from int64) (int64, bool) {
 func loadExclude() map[string]bool {
 	out := map[string]bool{}
 	home, _ := os.UserHomeDir()
-	b, err := os.ReadFile(filepath.Join(home, ".local", "state", "tacit", "dream-exclude"))
+	b, err := os.ReadFile(filepath.Join(platform.StateDir(home), "dream-exclude"))
 	if err != nil {
 		return out
 	}
@@ -341,7 +342,7 @@ func loadExclude() map[string]bool {
 // Exclude appends session ids to the exclude list.
 func Exclude(ids ...string) error {
 	home, _ := os.UserHomeDir()
-	p := filepath.Join(home, ".local", "state", "tacit", "dream-exclude")
+	p := filepath.Join(platform.StateDir(home), "dream-exclude")
 	os.MkdirAll(filepath.Dir(p), 0o700)
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {

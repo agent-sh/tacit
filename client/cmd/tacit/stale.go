@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/agent-sh/tacit/client/internal/platform"
 	"os"
 	"path/filepath"
 	"sort"
@@ -446,7 +447,7 @@ func staleResolver(branches map[string]string) func(ctx context.Context, repo, d
 // staleStatePath is where this machine keeps the staleness cursor.
 func staleStatePath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "state", "tacit", "stale.json")
+	return filepath.Join(platform.StateDir(home), "stale.json")
 }
 
 // curateStale is the call `tacit curate` makes after the derived-facts step.
