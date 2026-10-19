@@ -54,7 +54,7 @@ Rules:
 - ` + "`description`" + ` (max 200 chars) must STATE the fact itself, including the key path, command, host or number. Not a topic label.
 - ` + "`body`" + `: one to three sentences, the fact plus the why if known. Keep dates absolute (YYYY-MM-DD).
 - Owner rulings (something the owner said or decided, source kind user) are facts of their own: keep the ruling's wording as closely as the note gives it, with its date, one entry per ruling. Never fold a ruling into a neighbouring fact or drop it because a related procedure exists.
-- A ruling is the owner's OWN WORDS. For every kind user entry, ` + "`owner_quote`" + ` is his words exactly as the note quotes them (at least six words, copied character for character, typos included) and the body holds that phrase in double quotes. A note that only describes what he wants, or an agent's reading of a remark of his, gives a kind observed entry, never kind user. An agent's conclusion is never kind user, however sure the note sounds.
+- A ruling is the owner's OWN WORDS. For every kind user entry, ` + "`owner_quote`" + ` is their words exactly as the note quotes them (at least six words, copied character for character, typos included) and the body holds that phrase in double quotes. A note that only describes what they want, or an agent's reading of a remark of theirs, gives a kind observed entry, never kind user. An agent's conclusion is never kind user, however sure the note sounds.
 - ` + "`type`" + ` is one of: user_standard, design_decision, past_mistake, machine_fact, code_change, hot_spot, structure, history, user, reference.
 - ` + "`scope`" + ` is ` + "`user`, `system`, `projects/<repo>`, or `machines/<host>`" + ` (the curator's host is ` + "`%s`" + `; use machines/%s for facts about this machine: paths, tools, shell, hardware).
 - ` + "`kind`" + `: user only when the note quotes the owner's own words for it (see owner_quote), observed if an agent found it out or concluded it, web if it came from a fetched page.
@@ -62,7 +62,7 @@ Rules:
 - Drop anything derivable from the code or from git log, anything that is only a session log, and anything purely about the past with no present consequence. Facts that mark a thing as obsolete, retired, renamed or dead ARE valuable (keep them).
 - If a note states the same fact twice, emit it once. Do not invent facts.
 - Output ONLY a JSON array, no prose, no code fence. Each item:
-  {"origin": "<note name>", "name": "<slug>", "description": "...", "type": "...", "scope": "...", "kind": "user|observed|web", "owner_quote": "<kind user only: his exact words from the note>", "applies_to": {"paths": [], "repos": [], "hosts": [], "commands": []}, "body": "..."}
+  {"origin": "<note name>", "name": "<slug>", "description": "...", "type": "...", "scope": "...", "kind": "user|observed|web", "owner_quote": "<kind user only: their exact words from the note>", "applies_to": {"paths": [], "repos": [], "hosts": [], "commands": []}, "body": "..."}
 
 NOTES:
 %s
@@ -83,9 +83,9 @@ Output ONLY a JSON array of strings, one per pair in order, each exactly "contra
 // notes must have a kind:user entry. The first live split dropped a ruling
 // while keeping its surroundings (eval/VALUE.md, D6).
 const RulingsPrompt = `Below are agent memory notes and the list of OWNER RULINGS already extracted from them (kind user: something the owner said, decided or standardized).
-List every owner ruling in the notes that is NOT yet covered by the extracted list. A ruling is covered when an extracted entry states the same decision. A ruling is the owner's OWN WORDS as the note quotes them: list only those, never an agent's reading of what he wants. ` + "`owner_quote`" + ` is his words exactly as the note gives them (at least six words, character for character, typos included) and the body holds that phrase in double quotes. Keep the date if visible, one entry per ruling, the note name as origin.
+List every owner ruling in the notes that is NOT yet covered by the extracted list. A ruling is covered when an extracted entry states the same decision. A ruling is the owner's OWN WORDS as the note quotes them: list only those, never an agent's reading of what they want. ` + "`owner_quote`" + ` is their words exactly as the note gives them (at least six words, character for character, typos included) and the body holds that phrase in double quotes. Keep the date if visible, one entry per ruling, the note name as origin.
 Output ONLY a JSON array (possibly empty) of items:
-  {"origin": "<note name>", "name": "<slug>", "description": "...", "type": "user_standard|design_decision", "scope": "<same scope as the note>", "kind": "user", "owner_quote": "<his exact words from the note>", "applies_to": {"paths": [], "repos": [], "hosts": [], "commands": []}, "body": "..."}
+  {"origin": "<note name>", "name": "<slug>", "description": "...", "type": "user_standard|design_decision", "scope": "<same scope as the note>", "kind": "user", "owner_quote": "<their exact words from the note>", "applies_to": {"paths": [], "repos": [], "hosts": [], "commands": []}, "body": "..."}
 
 EXTRACTED RULINGS:
 %s

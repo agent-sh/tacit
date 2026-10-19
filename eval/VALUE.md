@@ -918,3 +918,20 @@ Measured on the same ladder and not shipped:
 
 Rulings stay at 15 to 16 of 59. Their main loss is vocabulary: the ruling is stored in general words and the situation names the task. On the same corrected bench NeptuneMemory delivers 75 (rulings 26), and with its episodes 69 (rulings 22).
 
+## Dreamer models and prompts after v5 (2026-10-19)
+
+The 89 windows of the dreamer comparison above, prompt v5 unless named, the same Sonnet 5.5 judge on "do the extracted facts state the truth fact". GPT models were called on Amazon Bedrock's OpenAI-compatible endpoint with reasoning effort high.
+
+| dreamer | truth fact written down | rulings | facts per window | median seconds per window |
+|---|---|---|---|---|
+| Opus 5.5, v5 (two runs) | 74%, 76% | 42, 46 / 53 | 21 | 50 |
+| GPT-6 Astra | 48% | 28 / 53 | 31 | 143 |
+| GPT-6.1 Sol | 45% | 27 / 53 | 31 | 112 |
+| Opus 5.5, v6 | 62% | 33 / 53 | 19 | 49 |
+
+Opus stays the dreamer. Both GPT models write more facts and miss more of the ones that matter.
+
+**One-off instructions kept as rulings.** Of the 283 facts curation kept as the owner's on the full v5 re-dream, a Sonnet 5.5 judge asked "a rule for future sessions, or an instruction for the task in progress turned into a rule" called 91 standing and 190 one-off ("set codex cli to run on bedrock", "lets create it as draft"). The quotes are the owner's, so the ruling check passes them. No code rule separates them: "no rule word in the quote" caught 11 of 22 one-offs on a development half and also 60 of 120 standing rulings. Prompt v6 told the dreamer what a ruling is and that an instruction for the task in progress is not one, however firmly said. On the 89 windows (full outputs, the same judge), owner facts went from 3.8 to 2.4 per window: one-off ones 156 to 61, standing ones 166 to 139. But truth rulings fell from 46 to 33 of 53. A missed ruling costs more than a stored one-off, which seldom matches a later prompt, so v5 stays.
+
+**Situation-first ruling descriptions.** The truth rulings that are stored but not delivered mostly fail on vocabulary: the ruling is in general words and the situation names the task. One more curator rule ("a ruling's description starts with the situation it was said in, in the note's own words") was tested on two copies of the rebuilt store, both re-curating the 374 dreamed owner notes with Opus 5.5 (244 descriptions start with "When" against 83). Offline delivery on the 59 ruling situations: 18 yes against 16, inside the noise. The curator sees only the note, and the note seldom names the situation; it is not shipped.
+
