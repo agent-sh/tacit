@@ -47,8 +47,8 @@ func PiSessionGlob(home string) string {
 // "custom" (an extension's message) and summaries of compacted or abandoned
 // branches. "custom_message" entries are text an extension put into the
 // context. Subagents write their sessions one level down, with the parent in
-// the header (<session>/tasks/<time>_<id>.jsonl, "parentSession"), which the
-// glob does not reach.
+// the header (<session>/tasks/<time>_<id>.jsonl, "parentSession"): the glob
+// does not reach them, and that is all that keeps them out.
 var piHarness = regexp.MustCompile(`^\s*<[A-Za-z][\w:-]*[\s>/]`) // an attached file (<file name=...>), a skill or template expansion
 
 // PiHeadlessGap is how soon after pi set a session up its first user turn
@@ -100,12 +100,10 @@ func PiHeadless(head []byte) bool {
 	return false
 }
 
-// PiHeader is the first line of a pi session: its id, where it started, and
-// the session it was forked from.
+// PiHeader is the first line of a pi session: its id and where it started.
 type PiHeader struct {
-	ID            string `json:"id"`
-	Cwd           string `json:"cwd"`
-	ParentSession string `json:"parentSession"`
+	ID  string `json:"id"`
+	Cwd string `json:"cwd"`
 }
 
 // ReadPiHeader parses the header line at the start of head; ok is false when
