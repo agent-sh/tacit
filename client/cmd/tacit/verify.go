@@ -347,7 +347,7 @@ func runVerify(args []string) int {
 	}
 	home, _ := os.UserHomeDir()
 	r := verifyRun{model: *model, max: *max, per: *batch, budget: *budget, dry: *dry, cwd: defaultProjects(),
-		stateDir: filepath.Join(home, ".local", "state", "tacit", "verify")}
+		stateDir: filepath.Join(platform.StateDir(home), "verify")}
 	named := false
 	fsf.Visit(func(f *flag.Flag) { named = named || f.Name == "model" })
 	route, err := modelrun.Resolve("verify", *model)

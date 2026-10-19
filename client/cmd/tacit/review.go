@@ -11,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/agent-sh/tacit/client/internal/platform"
 	"io/fs"
 	"net"
 	"net/http"
@@ -1147,7 +1148,7 @@ func runReview(args []string) int {
 		if rs.labelFile == "" {
 			home, _ := os.UserHomeDir()
 			base := strings.TrimSuffix(filepath.Base(*sample), filepath.Ext(*sample))
-			rs.labelFile = filepath.Join(home, ".local", "state", "tacit", "labels", base+".jsonl")
+			rs.labelFile = filepath.Join(platform.StateDir(home), "labels", base+".jsonl")
 		}
 		fmt.Println("tacit review: label mode,", len(rs.sampleIDs), "samples, marks go to", rs.labelFile)
 	}

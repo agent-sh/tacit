@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/agent-sh/tacit/client/internal/platform"
 	"io"
 	"os"
 	"os/exec"
@@ -368,7 +369,7 @@ func sessionFile(id string) string {
 		return ""
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "state", "tacit", "sessions", id)
+	return filepath.Join(platform.StateDir(home), "sessions", id)
 }
 
 func delivered(id string) map[string]bool {

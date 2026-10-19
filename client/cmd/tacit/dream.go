@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/agent-sh/tacit/client/internal/platform"
 	"io"
 	"os"
 	"os/exec"
@@ -109,7 +110,7 @@ func runDream(args []string) int {
 		}
 	}
 	home, _ := os.UserHomeDir()
-	stateDir := filepath.Join(home, ".local", "state", "tacit")
+	stateDir := platform.StateDir(home)
 	statePath := filepath.Join(stateDir, "dreamer.json")
 	st, err := dream.LoadState(statePath)
 	if err != nil {

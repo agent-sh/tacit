@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/agent-sh/tacit/client/internal/platform"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -60,7 +61,7 @@ func IndexDir() string {
 		return d
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "state", "tacit", "index")
+	return filepath.Join(platform.StateDir(home), "index")
 }
 
 // anchorRareDF: a query term in at most this many indexed names and
