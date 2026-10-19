@@ -16,13 +16,19 @@ func TestSessionsTellTheOwnersFromAutomation(t *testing.T) {
 		hermestest.Session{ID: "chat-2", Source: "telegram", Parent: "chat", StartedAt: 300},
 		hermestest.Session{ID: "nightly", Source: "cron", StartedAt: 400},
 		hermestest.Session{ID: "runner", Source: "oneshot", StartedAt: 500},
-		hermestest.Session{ID: "helper", Source: "mobile", CreatedSource: "subagent", Parent: "phone", StartedAt: 600},
+		// A subagent's session with no parent recorded: only created_source
+		// tells it apart.
+		hermestest.Session{ID: "helper", Source: "mobile", CreatedSource: "subagent", StartedAt: 600},
 		hermestest.Session{ID: "delegated", Source: "desktop", CreatedSource: "desktop", Parent: "phone", StartedAt: 700},
 		hermestest.Session{ID: "after-cron", Source: "webui", Parent: "nightly", StartedAt: 800},
 		hermestest.Session{ID: "fan-1", Source: "telegram", StartedAt: 900},
 		hermestest.Session{ID: "fan-2", Source: "telegram", StartedAt: 900.6},
 		hermestest.Session{ID: "terminal", Source: "cli", CreatedSource: "cli", StartedAt: 1000},
 		hermestest.Session{ID: "query", Source: "cli", StartedAt: 1100},
+		// A lone Telegram delegation from an older Hermes: no parent, no
+		// created source, only the marker in model_config.
+		hermestest.Session{ID: "delegation", Source: "telegram", DelegateFrom: "chat", StartedAt: 1200},
+		hermestest.Session{ID: "bad-config", Source: "telegram", ModelConfig: "not json", StartedAt: 1300},
 	)
 	d, err := Open(path)
 	if err != nil {
@@ -33,7 +39,7 @@ func TestSessionsTellTheOwnersFromAutomation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{"phone": true, "chat": true, "chat-2": true, "terminal": true}
+	want := map[string]bool{"phone": true, "chat": true, "chat-2": true, "terminal": true, "bad-config": true}
 	for _, s := range ss {
 		if s.Owner != want[s.ID] {
 			t.Errorf("%s: owner %v, want %v", s.ID, s.Owner, want[s.ID])
