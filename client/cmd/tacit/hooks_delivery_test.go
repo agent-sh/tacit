@@ -86,6 +86,7 @@ func TestPromptRuleSlot(t *testing.T) {
 }
 
 func TestPromptRuleSlotFloor(t *testing.T) {
+	releaseCaps(t)
 	// The only ruling that matches scores under ruleSlotFloor: no slot line.
 	hits := []search.Hit{
 		{Name: "a", Score: 30}, {Name: "b", Score: 25}, {Name: "c", Score: 20},
@@ -110,6 +111,7 @@ func TestPromptRuleSlotFloor(t *testing.T) {
 // one is not replaced by the next, and a ruling in the three (seen or not)
 // leaves no slot at all.
 func TestPromptRuleSlotTwoRulings(t *testing.T) {
+	releaseCaps(t)
 	hits := []search.Hit{
 		{Name: "a", Score: 30}, {Name: "b", Score: 25}, {Name: "c", Score: 20},
 		{Name: "r1", Score: 14, Ruling: true}, {Name: "r2", Score: 12, Ruling: true},
@@ -190,5 +192,36 @@ func TestInTaskRulingIsAnOrdinaryFact(t *testing.T) {
 	}, "", startLimit)
 	if names(start) != "keep-eviction-off-weekends,clear-widget-cache-now,repo-fact,host-fact" {
 		t.Fatalf("start order: %s", names(start))
+	}
+}
+
+// releaseCaps pins the prompt block to the release's fixed cap of three with
+// no relative threshold, for tests of what the cap leaves (the rule slot,
+// the derived line, no backfill), not of the cap.
+func releaseCaps(t *testing.T) {
+	t.Helper()
+	t.Setenv("TACIT_DELIVERY_PROMPT_CEILING", "3")
+	t.Setenv("TACIT_DELIVERY_PROMPT_RELATIVE", "0")
+}
+
+// The prompt block takes the curated facts above the floor that score at
+// least prompt_relative of the best one, up to prompt_ceiling: a weak tail
+// does not ride on a strong head, and an even field fills to the ceiling.
+func TestPromptSelectionThresholdAndCeiling(t *testing.T) {
+	hits := []search.Hit{{Name: "a", Score: 40}, {Name: "b", Score: 30}, {Name: "c", Score: 27.9}, {Name: "d", Score: 26}}
+	if got := names(promptSelection(hits, nil, nil, promptFloor)); got != "a,b" {
+		t.Fatalf("0.7 of 40 is 28: %s", got)
+	}
+	even := []search.Hit{{Name: "a", Score: 30}, {Name: "b", Score: 29}, {Name: "c", Score: 28}, {Name: "d", Score: 27}, {Name: "e", Score: 26}, {Name: "f", Score: 25}}
+	if got := names(promptSelection(even, nil, nil, promptFloor)); got != "a,b,c,d,e" {
+		t.Fatalf("ceiling 5: %s", got)
+	}
+	t.Setenv("TACIT_DELIVERY_PROMPT_RELATIVE", "0")
+	if got := names(promptSelection(hits, nil, nil, promptFloor)); got != "a,b,c,d" {
+		t.Fatalf("no threshold: %s", got)
+	}
+	t.Setenv("TACIT_DELIVERY_PROMPT_CEILING", "2")
+	if got := names(promptSelection(even, nil, nil, promptFloor)); got != "a,b" {
+		t.Fatalf("ceiling 2: %s", got)
 	}
 }

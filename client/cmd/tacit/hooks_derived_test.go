@@ -119,17 +119,17 @@ func TestPromptHookAddsOneDerivedFactAfterTheCuratedOnes(t *testing.T) {
 	p := "quokka scheduler zebra rule: also check src/scheduler/worker.go"
 	ref := demo
 	ref.Query = p
-	cur, err := ix.Query(ctx, ref, promptLimit*2, false)
+	cur, err := ix.Query(ctx, ref, promptCeiling*2, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var want []search.Hit
 	for _, h := range cur {
-		if h.Score >= promptFloor && len(want) < promptLimit {
+		if h.Score >= promptFloor && h.Score >= promptRelative*cur[0].Score && len(want) < promptCeiling {
 			want = append(want, h)
 		}
 	}
-	if len(want) != promptLimit {
+	if len(want) != promptCeiling {
 		t.Fatalf("test store should fill the curated slots: %d above the floor", len(want))
 	}
 
@@ -137,20 +137,20 @@ func TestPromptHookAddsOneDerivedFactAfterTheCuratedOnes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != promptLimit+1 {
-		t.Fatalf("expected %d curated + 1 derived, got %s", promptLimit, names(got))
+	if len(got) != promptCeiling+1 {
+		t.Fatalf("expected %d curated + 1 derived, got %s", promptCeiling, names(got))
 	}
-	for i := 0; i < promptLimit; i++ {
+	for i := 0; i < promptCeiling; i++ {
 		if got[i].Name != want[i].Name || isDerived(got[i]) {
 			t.Fatalf("curated facts displaced or reordered: got %s, want %s first", names(got), names(want))
 		}
 	}
-	if d := got[promptLimit]; d.Name != "demo-hot-spots" || d.Score < derivedPromptFloor {
+	if d := got[promptCeiling]; d.Name != "demo-hot-spots" || d.Score < derivedPromptFloor {
 		t.Fatalf("derived slot: %+v", d)
 	}
 	// the owner ruling is among the curated ones
 	hasRule := false
-	for _, h := range got[:promptLimit] {
+	for _, h := range got[:promptCeiling] {
 		hasRule = hasRule || h.Ruling
 	}
 	_ = hasRule
@@ -202,6 +202,7 @@ func TestPromptHookDerivedNeedsAMatch(t *testing.T) {
 }
 
 func TestPromptSelectionRules(t *testing.T) {
+	releaseCaps(t)
 	cur := func(name string, score float64) search.Hit {
 		return search.Hit{Name: name, Scope: "projects/demo", Score: score}
 	}

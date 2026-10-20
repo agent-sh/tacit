@@ -41,8 +41,12 @@ func TestInstallHooksMergesAndIsIdempotent(t *testing.T) {
 	if err := json.Unmarshal(first, &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Hooks["PreToolUse"]) != 1 || !strings.Contains(got.Hooks["PreToolUse"][0].Hooks[0].Command, "guard.py") {
+	ptu := got.Hooks["PreToolUse"]
+	if len(ptu) != 2 || !strings.Contains(ptu[0].Hooks[0].Command, "guard.py") {
 		t.Fatalf("guard lost: %s", first)
+	}
+	if ptu[1].Matcher != toolPushTools || ptu[1].Hooks[0].Command != "/bin/tacit hook pre-tool" {
+		t.Fatalf("pre-tool hook: %s", first)
 	}
 	ups := got.Hooks["UserPromptSubmit"]
 	if len(ups) != 1 || ups[0].Hooks[0].Command != "/bin/tacit hook prompt" {
@@ -390,13 +394,19 @@ func TestSessionStartNamesTheMCPToolWhenInstalled(t *testing.T) {
 	payload := func(session string) string {
 		return `{"session_id":"` + session + `","cwd":"` + cwd + `","hook_event_name":"SessionStart","source":"startup"}`
 	}
-	title := func(out string) string { return strings.SplitN(out, "\n", 2)[0] }
+	title := func(out string) string { return strings.Join(strings.SplitN(out, "\n", 3)[:2], "\n") }
 	with := title(hookOut(t, payload("s1"), "session-start", "--mcp"))
-	if !strings.Contains(with, "`mcp__tacit__tacit_fact` for detail") || strings.Contains(with, "`tacit fact") {
+	if !strings.Contains(with, "`mcp__tacit__tacit_fact <name>` opens one") || !strings.Contains(with, "run one `mcp__tacit__tacit_search` for it") || strings.Contains(with, "`tacit ") {
 		t.Fatalf("with the server: %q", with)
 	}
 	without := title(hookOut(t, payload("s2"), "session-start"))
-	if !strings.Contains(without, "`tacit fact <name>` for detail") || strings.Contains(without, "mcp__") {
+	if !strings.Contains(without, "`tacit fact <name>` opens one") || !strings.Contains(without, "run one `tacit search <what you will do>` for it") || strings.Contains(without, "mcp__") {
 		t.Fatalf("without the server: %q", without)
+	}
+	// With the instruction off the title names the tools as before.
+	t.Setenv("TACIT_DELIVERY_INSTRUCTION", "off")
+	off := hookOut(t, payload("s3"), "session-start", "--mcp")
+	if first := strings.SplitN(off, "\n", 2)[0]; !strings.Contains(first, "`mcp__tacit__tacit_fact` for detail, `mcp__tacit__tacit_search` for more") || strings.Contains(off, "tacit holds") {
+		t.Fatalf("instruction off: %q", off)
 	}
 }

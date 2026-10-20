@@ -19,11 +19,11 @@ import (
 // runInstall wires tacit into a harness. Idempotent: existing tacit
 // entries are replaced.
 //
-//   - claude: SessionStart and UserPromptSubmit hooks in ~/.claude/settings.json,
+//   - claude: SessionStart, UserPromptSubmit, PreToolUse and PreCompact hooks in ~/.claude/settings.json,
 //     and the MCP server (tacit_search, tacit_fact, tacit_add) in the user
 //     scope of ~/.claude.json; --no-mcp installs the hooks only and removes
 //     the server.
-//   - codex: the same two hooks in ~/.codex/hooks.json (Codex takes the same
+//   - codex: the same hooks in ~/.codex/hooks.json (Codex takes the same
 //     hook JSON and adds plain stdout as context); Codex asks the owner to
 //     trust new hooks once, in /hooks.
 //   - hermes: a memory provider plugin in ~/.hermes/plugins/tacit that calls
@@ -64,7 +64,7 @@ func runInstall(args []string) int {
 			fmt.Fprintln(os.Stderr, "install:", err)
 			return 1
 		}
-		fmt.Println("installed SessionStart, UserPromptSubmit and PreCompact hooks in", path)
+		fmt.Println("installed SessionStart, UserPromptSubmit, PreToolUse and PreCompact hooks in", path)
 		fmt.Println("Codex skips new hooks until you trust them: run /hooks in Codex once.")
 		fmt.Printf("MCP (~/.codex/config.toml):\n[mcp_servers.tacit]\ncommand = %q\nargs = %s\n", exe, mcpArguments("codex"))
 	case "hermes":
@@ -417,7 +417,7 @@ func installClaude(home, exe string, args []string) int {
 		fmt.Fprintln(os.Stderr, "install:", err)
 		return 1
 	}
-	fmt.Println("installed SessionStart, UserPromptSubmit and PreCompact hooks in", path)
+	fmt.Println("installed SessionStart, UserPromptSubmit, PreToolUse and PreCompact hooks in", path)
 	switch {
 	case *noMCP && changed:
 		fmt.Println("removed the tacit MCP server from", cfg, "(the file as it was:", claudeConfigBackup(cfg)+")")
@@ -446,7 +446,8 @@ func installHooksFor(path, exe, goos string) error { return installHooksWith(pat
 //
 // The entries: SessionStart for a real start (matcher startup: not on
 // resume, clear or compact; after a compaction the summary carries what the
-// session was given); UserPromptSubmit; PreCompact, which starts the dream
+// session was given); UserPromptSubmit; PreToolUse for the edit and shell
+// tools (toolPushTools); PreCompact, which starts the dream
 // of the session about to compact, so its facts reach the store for other
 // and later sessions. Claude Code and Codex 0.162 take the same events and
 // input. A tacit entry under a matcher none of these has (the compact entry
@@ -470,6 +471,10 @@ func installHooksWith(path, exe, goos string, startArgs []string) error {
 		"SessionStart":     {{"startup", "session-start", startArgs}},
 		"UserPromptSubmit": {{"", "prompt", nil}},
 		"PreCompact":       {{"", "pre-compact", nil}},
+		// PreToolUse: before an edit or a shell command, the one rule,
+		// decision or past mistake whose applies_to names that file or
+		// command (preTool). It never blocks the call.
+		"PreToolUse": {{toolPushTools, "pre-tool", nil}},
 	}
 	for event, specs := range events {
 		handlers := make([]map[string]any, len(specs))

@@ -84,6 +84,10 @@ type hookInput struct {
 	// (on_pre_compress) and prompt (prefetch, for windowDream): Hermes has
 	// no transcript file.
 	HermesSession string `json:"hermes_session_id"`
+	// ToolName and ToolInput are PreToolUse's: the tool about to run and
+	// its arguments.
+	ToolName  string          `json:"tool_name"`
+	ToolInput json.RawMessage `json:"tool_input"`
 }
 
 func openIndex(ctx context.Context, s *store.Store) (*search.Index, error) {
@@ -97,7 +101,18 @@ func openIndex(ctx context.Context, s *store.Store) (*search.Index, error) {
 // startTitle is the SessionStart block's first line. With tacit's MCP server
 // in the session (--mcp, written by `tacit install claude`) it names the
 // tools as the model sees them; without, the command.
+//
+// With the instruction setting on (the default) the title carries the
+// instruction line instead of the bare tool names: what tacit holds and the
+// one lookup to make before an action that changes something.
 func startTitle(sit search.Situation, mcp bool) string {
+	if deliveryOn("INSTRUCTION", true) {
+		detail := "`tacit fact <name>` opens one"
+		if mcp {
+			detail = "`mcp__tacit__tacit_fact <name>` opens one"
+		}
+		return fmt.Sprintf("# tacit: facts for %s on %s (read before acting; %s)\n%s", sit.Repo, sit.Host, detail, instruction(mcp))
+	}
 	detail := "`tacit fact <name>` for detail"
 	if mcp {
 		detail = "`mcp__tacit__tacit_fact` for detail, `mcp__tacit__tacit_search` for more"
@@ -136,6 +151,10 @@ func runHook(args []string) int {
 	}
 	if args[0] == "pre-compact" {
 		preCompact(s, in)
+		return 0
+	}
+	if args[0] == "pre-tool" {
+		preTool(s, in)
 		return 0
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), queryBudget+syncBudget)
@@ -208,10 +227,19 @@ func runHook(args []string) int {
 // hookRepoAliases keeps the lexical checkout name as well as its symlink
 // target and origin name. Only a verified checkout contributes aliases; a
 // non-repository cwd named like a project is not evidence of that project.
+//
+// With the repo-aliases setting on (the default) a checkout also answers to
+// the names its own data gives it (repoDataNames): every remote's repository
+// name, not only origin's, and the package name its root manifest declares
+// when that name shares a word with one of the others. A repo renamed or
+// republished keeps the facts filed under its old name that way, with no
+// list of renames to maintain.
 func hookRepoAliases(ctx context.Context, cwd string) []string {
 	var aliases []string
+	root := ""
 	for dir := filepath.Clean(cwd); filepath.IsAbs(dir); dir = filepath.Dir(dir) {
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			root = dir
 			aliases = append(aliases, filepath.Base(dir))
 			if real, err := filepath.EvalSymlinks(dir); err == nil {
 				aliases = append(aliases, filepath.Base(real))
@@ -222,18 +250,27 @@ func hookRepoAliases(ctx context.Context, cwd string) []string {
 			break
 		}
 	}
+	if deliveryOn("REPO_ALIASES", true) {
+		return append(aliases, repoDataNames(ctx, cwd, root, aliases)...)
+	}
 	cmd := exec.CommandContext(ctx, "git", "-C", cwd, "remote", "get-url", "origin")
 	cmd.WaitDelay = 100 * time.Millisecond
 	if out, err := cmd.Output(); err == nil {
-		remote := strings.TrimSuffix(strings.TrimRight(strings.TrimSpace(string(out)), "/"), ".git")
-		if i := strings.LastIndexAny(remote, "/:"); i >= 0 {
-			remote = remote[i+1:]
-		}
-		if remote != "" {
+		if remote := remoteRepoName(string(out)); remote != "" {
 			aliases = append(aliases, remote)
 		}
 	}
 	return aliases
+}
+
+// remoteRepoName is the repository name in a remote URL: the last path part
+// without .git.
+func remoteRepoName(url string) string {
+	remote := strings.TrimSuffix(strings.TrimRight(strings.TrimSpace(url), "/"), ".git")
+	if i := strings.LastIndexAny(remote, "/:"); i >= 0 {
+		remote = remote[i+1:]
+	}
+	return remote
 }
 
 // isDerived reports a generated fact (derived/<repo>): hot spots, module map.
@@ -243,7 +280,16 @@ func isDerived(h search.Hit) bool { return strings.HasPrefix(h.Scope, "derived/"
 // the host a scope filter (a host name can also be the user name and would
 // match every generic fact). Derived facts are not in the query's
 // scopes at all, so they cannot take one of the ten lines.
+//
+// In a repo, with the repo-start setting on (the default), the block is
+// repoStartHits instead: the repo's own rules, standards, decisions and past
+// mistakes, chosen by metadata, not by how often a fact names the repo.
 func sessionStartHits(ctx context.Context, ix *search.Index, sit search.Situation) ([]search.Hit, error) {
+	if deliveryOn("REPO_START", true) {
+		if hits, ok, err := repoStartHits(ctx, ix, sit); ok {
+			return hits, err
+		}
+	}
 	sit.Query = sit.Repo
 	sit.RestrictRepos = true
 	sit.PromptRelevance = false
@@ -291,7 +337,11 @@ func promptHits(ctx context.Context, ix *search.Index, sit search.Situation, p s
 	sit.Query = p
 	sit.RestrictRepos, sit.PromptRelevance = true, true
 	sit.Derived, sit.OnlyDerived = false, false
-	hits, err := ix.Query(ctx, sit, promptLimit*2, false)
+	ceiling, _ := promptCaps()
+	if utilityProvider() != "" {
+		ceiling = promptLimit // the scorer's pool and cap are its own (SPEC.md, Delivery)
+	}
+	hits, err := ix.Query(ctx, sit, ceiling*2, false)
 	if err != nil {
 		return nil, err
 	}
@@ -304,7 +354,11 @@ func promptHits(ctx context.Context, ix *search.Index, sit search.Situation, p s
 	if sit.Repo == "" {
 		floor = repoLessPromptFloor
 	}
-	return utilityPromptSelection(ctx, p, hits, dhits, seen, floor), nil
+	out := utilityPromptSelection(ctx, p, hits, dhits, seen, floor)
+	// The repo-first lines: the fact whose metadata names a path or command
+	// of the request, and the best rule or decision for it (hooks_delivery.go).
+	out = append(out, promptMetaHits(ctx, ix, sit, p, withSeen(seen, out))...)
+	return append(out, promptActionHits(ctx, ix, sit, p, withSeen(seen, out), out)...), nil
 }
 
 // promptSelection takes curated matches above the BM25 floor or with supported
@@ -317,8 +371,17 @@ func promptHits(ctx context.Context, ix *search.Index, sit search.Situation, p s
 func promptSelection(hits, derived []search.Hit, seen map[string]bool, floor float64) []search.Hit {
 	var strong []search.Hit
 	ruling := false
+	limit, relative := promptCaps()
+	if relative > 0 {
+		for _, h := range hits {
+			if !isDerived(h) {
+				floor = max(floor, relative*h.Score) // hits are best first
+				break
+			}
+		}
+	}
 	for _, h := range hits {
-		if (h.Score >= floor || (h.Evidence != nil && h.Evidence.Supported)) && len(strong) < promptLimit && !isDerived(h) {
+		if (h.Score >= floor || (h.Evidence != nil && h.Evidence.Supported)) && len(strong) < limit && !isDerived(h) {
 			strong = append(strong, h)
 			ruling = ruling || h.Rule()
 		}
@@ -456,7 +519,19 @@ func runSearch(args []string) int {
 	inbox := fs.Bool("inbox", false, "include unreviewed inbox facts")
 	asJSON := fs.Bool("json", false, "JSON output")
 	explainPrompt := fs.Bool("prompt", false, "diagnose prompt-hook selection with evidence; no session state, ignores --limit and --inbox")
+	scope := fs.String("scope", "", "one scope: user, system, projects/<repo>, machines/<host>, derived/<repo> (tacit_search's filter)")
+	typ := fs.String("type", "", "only facts of this type")
+	rulings := fs.Bool("rulings", false, "only the owner's rulings")
+	path := fs.String("path", "", "only facts whose applies_to paths cover this file")
+	command := fs.String("command", "", "only facts whose applies_to commands match this command")
+	offset := fs.Int("offset", 0, "skip this many, for the next page")
 	fs.Parse(args)
+	if *scope != "" || *typ != "" || *rulings || *path != "" || *command != "" || *offset > 0 {
+		// tacit_search's tree filters: the same answer the agent gets.
+		return runIndexed(func(ctx context.Context, ix *search.Index, cwd string) (string, error) {
+			return treeSearch(ctx, ix, browseArgs{Query: strings.Join(fs.Args(), " "), Repo: *repo, Cwd: cwd, Scope: *scope, Type: *typ, RulingsOnly: *rulings, Path: *path, Command: *command, Inbox: *inbox, Limit: *limit, Offset: *offset})
+		})
+	}
 	s, err := store.Default()
 	if err != nil || !s.Exists() {
 		fmt.Fprintln(os.Stderr, "search: no store; run `tacit clone <url> <harness>`")
