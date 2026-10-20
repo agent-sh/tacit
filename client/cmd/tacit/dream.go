@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"github.com/agent-sh/tacit/client/internal/platform"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,10 +35,17 @@ var dreamBatchContext = func(limit time.Duration) (context.Context, context.Canc
 	return context.WithTimeoutCause(context.Background(), limit, errDreamRuntime)
 }
 
-// runDream implements `tacit dream [--model M] [--dry-run] [--max-calls N]`:
-// digest transcript deltas since the last run, extract facts with the
-// dreamer model, write them to inbox/dreamer@<host>/, push, and append a
-// metering line. The first run on a machine only records the cursors.
+// defaultIdle is the quiet time `tacit dream --idle` waits for when the flag
+// has no value; the idle job passes it explicitly.
+const defaultIdle = 20 * time.Minute
+
+// runDream implements `tacit dream [--model M] [--dry-run] [--max-calls N]
+// [--idle D] [--session T]`: digest transcript deltas since the last run,
+// extract facts with the dreamer model, write them to inbox/dreamer@<host>/,
+// push, and append a metering line. The first run on a machine only records
+// the cursors. --idle takes only the transcripts that went quiet or
+// compacted (dream.Select); --session only one transcript. One dream runs
+// at a time on a machine: a second exits 0 with "busy" and touches nothing.
 func runDream(args []string) int {
 	fs := flag.NewFlagSet("dream", flag.ExitOnError)
 	model := fs.String("model", dream.DefaultModel, "extraction model")
@@ -45,10 +53,32 @@ func runDream(args []string) int {
 	maxCalls := fs.Int("max-calls", 40, "cap on model calls per run")
 	maxRuntime := fs.String("max-runtime", "45m", "batch runtime before pausing; 0 disables the batch limit")
 	envFile := fs.String("env-file", "", "KEY=VALUE lines (the variables claude -p needs, for example the Bedrock ones) set before `claude -p` runs; for launchd, which has no EnvironmentFile")
-	fs.Parse(args)
+	idle := fs.Duration("idle", 0, "only transcripts with no write for this long (--idle alone: 20m), or whose new content holds a compaction")
+	session := fs.String("session", "", "only this transcript (its path; a Hermes session id)")
+	fs.Parse(idleDefault(args))
 	if *maxCalls < 0 {
 		fmt.Fprintln(os.Stderr, "dream: --max-calls must be nonnegative")
 		return 2
+	}
+	if *idle < 0 {
+		fmt.Fprintln(os.Stderr, "dream: --idle must be a positive duration")
+		return 2
+	}
+	home, _ := os.UserHomeDir()
+	stateDir := platform.StateDir(home)
+	// Before anything reads or moves a cursor. A dry run writes no state and
+	// takes no lock.
+	if !*dry {
+		release, err := tryJobLock(stateDir, "dreamer")
+		if errors.Is(err, platform.ErrBusy) {
+			fmt.Println("dream: busy (another dream holds " + filepath.Join(stateDir, "dreamer.lock") + "); nothing done")
+			return 0
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "dream: lock:", err)
+			return 2
+		}
+		defer release()
 	}
 	if *envFile != "" {
 		if err := loadEnvFile(*envFile); err != nil {
@@ -91,7 +121,7 @@ func runDream(args []string) int {
 			return 2
 		}
 	}
-	if !*dry {
+	recover := func() int {
 		s, _ := store.Default()
 		timeout, err := modelrun.Timeout("dream")
 		if err != nil {
@@ -108,9 +138,16 @@ func runDream(args []string) int {
 		if n > 0 {
 			fmt.Printf("dream: recovered %d pending note(s)\n", n)
 		}
+		return 0
 	}
-	home, _ := os.UserHomeDir()
-	stateDir := platform.StateDir(home)
+	// A selecting run (--idle every 10 minutes, --session) usually finds
+	// nothing to take: it syncs and recovers only when it found something.
+	selecting := *idle > 0 || *session != ""
+	if !*dry && !selecting {
+		if code := recover(); code != 0 {
+			return code
+		}
+	}
 	statePath := filepath.Join(stateDir, "dreamer.json")
 	st, err := dream.LoadState(statePath)
 	if err != nil {
@@ -118,11 +155,24 @@ func runDream(args []string) int {
 		return 2
 	}
 	fresh := len(st.Offsets) == 0
+	if fresh && *session != "" {
+		// Recording one transcript's cursor would make every other one look
+		// new to the next run, which would replay them from the start.
+		fmt.Println("dream: no cursors yet; the first full run records them")
+		return 0
+	}
 	if err := digest.RedactionReady(); err != nil {
 		fmt.Fprintln(os.Stderr, "dream: redaction needs scrump with the text profile:", err)
 		return 2
 	}
-	windows, err := dream.Windows(dream.DefaultSources(home), st, fresh)
+	sel := dream.Select{Idle: *idle, Now: time.Now()}
+	if *session != "" {
+		sel.Only = *session
+		if abs, err := filepath.Abs(*session); err == nil && strings.ContainsRune(*session, filepath.Separator) {
+			sel.Only = abs
+		}
+	}
+	windows, err := dream.WindowsFor(dream.DefaultSources(home), st, fresh, sel)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "dream:", err)
 		return 2
@@ -150,6 +200,39 @@ func runDream(args []string) int {
 		remaining = append(remaining, w)
 	}
 	windows = remaining
+	if *dry && sel.Idle > 0 {
+		// What the idle run took and why, before any cap.
+		why := map[string]string{}
+		for _, w := range windows {
+			why[w.File] = w.Why
+		}
+		for _, f := range slices.Sorted(maps.Keys(why)) {
+			fmt.Printf("dream: %s: %s\n", why[f], f)
+		}
+	}
+	if selecting {
+		if len(windows) == 0 {
+			// Cursors moved past deltas with nothing to extract; no meter line,
+			// so dreamer.log stays one line per run that did work.
+			if !*dry {
+				if err := dream.SaveState(statePath, st); err != nil {
+					fmt.Fprintln(os.Stderr, "dream: state:", err)
+					return 1
+				}
+			}
+			if *session != "" {
+				fmt.Println("dream: nothing new to dream in", *session)
+			} else {
+				fmt.Println("dream: no transcript with new content went quiet or compacted")
+			}
+			return 0
+		}
+		if !*dry {
+			if code := recover(); code != 0 {
+				return code
+			}
+		}
+	}
 	if len(windows) > *maxCalls {
 		windows = windows[:*maxCalls]
 	}
@@ -163,6 +246,12 @@ func runDream(args []string) int {
 	defer cancel()
 
 	meter := dream.Meter{At: time.Now().Format(time.RFC3339), Windows: len(windows)}
+	switch {
+	case *session != "":
+		meter.Mode = "session"
+	case *idle > 0:
+		meter.Mode = "idle"
+	}
 	meter.ModelCalls = &modelrun.Trace{}
 	ctx = modelrun.WithTrace(ctx, meter.ModelCalls)
 	var written []string
@@ -287,6 +376,24 @@ func runDream(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// idleDefault lets --idle stand alone: with no duration after it, it is
+// --idle=20m. Go's flag package gives a flag a value or none, not either.
+func idleDefault(args []string) []string {
+	out := slices.Clone(args)
+	for i, a := range out {
+		if a != "--idle" && a != "-idle" {
+			continue
+		}
+		if i+1 < len(out) {
+			if _, err := time.ParseDuration(out[i+1]); err == nil {
+				continue
+			}
+		}
+		out[i] = "--idle=" + defaultIdle.String()
+	}
+	return out
 }
 
 // Content and chunk position identify durable progress even when a transcript

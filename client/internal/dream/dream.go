@@ -175,6 +175,25 @@ func (q *Quote) UnmarshalJSON(b []byte) error {
 // rule, not the owner's whole turn.
 const maxQuote = 700
 
+// Select narrows which transcripts a run reads (tacit dream --idle,
+// --session). The zero value reads every transcript with new content.
+type Select struct {
+	// Only is one transcript (its path) or one Hermes session (its id):
+	// nothing else is read and no other cursor moves. A source with no
+	// cursors yet is not read at all, so a later full run still records it
+	// at its end instead of replaying it.
+	Only string
+	// Idle, when set, takes a transcript only when it has had no write for
+	// that long (the file's mtime; a Hermes session's newest message), or
+	// when its new content holds a compaction (digest.Compacted; a Hermes
+	// session that ended by compression or a reset, hermes.Continued). Any
+	// other transcript waits with its cursor unmoved: the session is still
+	// being written, and its turns are still in the agent's context.
+	Idle time.Duration
+	// Now is the time idleness is measured against.
+	Now time.Time
+}
+
 // Window is one digest ready for the model. File is the transcript, or a
 // Hermes session's cursor key; Start and End are byte offsets in the file, or
 // the message ids the window was read after and up to.
@@ -186,6 +205,9 @@ type Window struct {
 	Start   int64
 	End     int64
 	Part    int
+	// Why is the reason a selecting run took the transcript: "idle" or
+	// "compacted" (Select.Idle), empty otherwise.
+	Why string
 }
 
 // Runner is the LLM call; tests substitute it.
@@ -258,20 +280,32 @@ func SaveState(path string, st *State) error {
 // truncated) restarts from its current end. A complete line longer than
 // maxReadBytes is passed over: its cursor moves past it with no window.
 func Windows(sources []Source, st *State, fresh bool) ([]Window, error) {
+	return WindowsFor(sources, st, fresh, Select{})
+}
+
+// WindowsFor is Windows for the transcripts sel takes. A transcript it passes
+// over keeps its cursor, so a later run reads the same delta.
+func WindowsFor(sources []Source, st *State, fresh bool, sel Select) ([]Window, error) {
 	home, _ := os.UserHomeDir()
 	var ws []Window
 	exclude := loadExclude()
 	for _, src := range sources {
+		if sel.Only != "" && !st.started(src) {
+			continue
+		}
 		fresh := fresh || !st.started(src)
 		if !slices.Contains(st.Sources, src.root()) {
 			st.Sources = append(st.Sources, src.root())
 		}
 		if src.Format == digest.Hermes {
-			ws = append(ws, hermesWindows(src.DB, st, fresh, exclude, home)...)
+			ws = append(ws, hermesWindows(src.DB, st, fresh, exclude, home, sel)...)
 			continue
 		}
 		files, _ := filepath.Glob(src.Glob)
 		for _, f := range files {
+			if sel.Only != "" && !sameFile(f, sel.Only) {
+				continue
+			}
 			session := sessionOf(f, src.Format)
 			if exclude[strings.TrimSuffix(filepath.Base(f), ".jsonl")] || exclude[session] {
 				continue
@@ -336,6 +370,17 @@ func Windows(sources []Source, st *State, fresh bool) ([]Window, error) {
 			}
 			buf = buf[:last+1]
 			end := off + int64(len(buf))
+			why := ""
+			if sel.Idle > 0 {
+				switch {
+				case sel.Now.Sub(info.ModTime()) >= sel.Idle:
+					why = "idle"
+				case digest.Compacted(buf, src.Format):
+					why = "compacted"
+				default:
+					continue // still being written: it waits, cursor unmoved
+				}
+			}
 			var lines []string
 			head := buf
 			if src.Format == digest.Pi {
@@ -360,11 +405,24 @@ func Windows(sources []Source, st *State, fresh bool) ([]Window, error) {
 				if repo == "" {
 					repo = windowRepo(c, resolver)
 				}
-				ws = append(ws, Window{File: f, Session: session, Repo: repo, Lines: c, Start: off, End: end, Part: part})
+				ws = append(ws, Window{File: f, Session: session, Repo: repo, Lines: c, Start: off, End: end, Part: part, Why: why})
 			}
 		}
 	}
 	return ws, nil
+}
+
+// sameFile reports whether two paths name one transcript.
+func sameFile(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(b)
+	return err == nil && os.SameFile(fa, fb)
 }
 
 // sessionOf is the session id of a transcript file: its name, less the time
@@ -405,7 +463,7 @@ const hermesTimeout = 2 * time.Minute
 // the session's git root or cwd when it records one, else the window's paths.
 // A store that cannot be read is reported and left for the next run, its
 // cursors unmoved.
-func hermesWindows(path string, st *State, fresh bool, exclude map[string]bool, home string) []Window {
+func hermesWindows(path string, st *State, fresh bool, exclude map[string]bool, home string, sel Select) []Window {
 	ctx, cancel := context.WithTimeout(context.Background(), hermesTimeout)
 	defer cancel()
 	db, err := hermes.Open(path)
@@ -424,11 +482,21 @@ func hermesWindows(path string, st *State, fresh bool, exclude map[string]bool, 
 		fmt.Fprintf(os.Stderr, "dream: hermes %s: %v\n", path, err)
 		return nil
 	}
+	var lastAt map[string]float64
+	if sel.Idle > 0 {
+		if lastAt, err = db.LastTimes(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "dream: hermes %s: %v\n", path, err)
+			return nil
+		}
+	}
 	resolver := repoinfer.NewResolver(home)
 	var ws []Window
 	for _, s := range sessions {
 		lastID, ok := last[s.ID]
 		if !s.Owner || !ok || exclude[s.ID] {
+			continue
+		}
+		if sel.Only != "" && s.ID != sel.Only && hermes.Key(path, s.ID) != sel.Only {
 			continue
 		}
 		key := hermes.Key(path, s.ID)
@@ -448,6 +516,17 @@ func hermesWindows(path string, st *State, fresh bool, exclude map[string]bool, 
 		}
 		if seen {
 			if n, err := db.NewBytes(ctx, s.ID, after); err != nil || n <= minNewBytes {
+				continue
+			}
+		}
+		why := ""
+		if sel.Idle > 0 {
+			switch {
+			case float64(sel.Now.Unix())-lastAt[s.ID] >= sel.Idle.Seconds():
+				why = "idle"
+			case hermes.Continued(s.EndReason):
+				why = "compacted"
+			default:
 				continue
 			}
 		}
@@ -483,7 +562,7 @@ func hermesWindows(path string, st *State, fresh bool, exclude map[string]bool, 
 			if repo == "" {
 				repo = windowRepo(c, resolver)
 			}
-			ws = append(ws, Window{File: key, Session: s.ID, Repo: repo, Lines: c, Start: after, End: end, Part: part})
+			ws = append(ws, Window{File: key, Session: s.ID, Repo: repo, Lines: c, Start: after, End: end, Part: part, Why: why})
 		}
 	}
 	return ws
@@ -823,4 +902,7 @@ type Meter struct {
 	InTokens         int             `json:"in_tokens"`
 	CostUSD          float64         `json:"cost_usd"`
 	Errors           int             `json:"errors"`
+	// Mode is how the run chose its transcripts: "idle" (--idle), "session"
+	// (--session), empty for every transcript with new content.
+	Mode string `json:"mode,omitempty"`
 }
