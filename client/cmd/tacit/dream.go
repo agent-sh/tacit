@@ -35,6 +35,10 @@ var dreamBatchContext = func(limit time.Duration) (context.Context, context.Canc
 	return context.WithTimeoutCause(context.Background(), limit, errDreamRuntime)
 }
 
+// dreamLockWait is how long the full dream waits for an idle or session
+// dream that holds dreamer.lock; tests shorten it.
+var dreamLockWait = 45 * time.Minute
+
 // defaultIdle is the quiet time `tacit dream --idle` waits for when the flag
 // has no value; the idle job passes it explicitly.
 const defaultIdle = 20 * time.Minute
@@ -45,7 +49,11 @@ const defaultIdle = 20 * time.Minute
 // push, and append a metering line. The first run on a machine only records
 // the cursors. --idle takes only the transcripts that went quiet or
 // compacted (dream.Select); --session only one transcript. One dream runs
-// at a time on a machine: a second exits 0 with "busy" and touches nothing.
+// at a time on a machine: an idle or session run that finds one running
+// exits 0 with "busy" and touches nothing; a full run waits for it, up to
+// dreamLockWait. An idle or session run also passes over a transcript that
+// failed within dream.FailureBackoff (the full run retries it), and on a
+// machine that cannot write as the dreamer it does nothing, quietly.
 func runDream(args []string) int {
 	fs := flag.NewFlagSet("dream", flag.ExitOnError)
 	model := fs.String("model", dream.DefaultModel, "extraction model")
@@ -66,12 +74,32 @@ func runDream(args []string) int {
 	}
 	home, _ := os.UserHomeDir()
 	stateDir := platform.StateDir(home)
+	// A selecting run (--idle every 10 minutes, --session from the PreCompact
+	// hook) is one of many: it yields to a running dream, it fails quietly,
+	// and it does not retry a transcript that just failed.
+	selecting := *idle > 0 || *session != ""
 	// Before anything reads or moves a cursor. A dry run writes no state and
 	// takes no lock.
 	if !*dry {
-		release, err := tryJobLock(stateDir, "dreamer")
+		lockPath := filepath.Join(stateDir, "dreamer.lock")
+		var release func()
+		var err error
+		if selecting {
+			release, err = tryJobLock(stateDir, "dreamer")
+		} else {
+			// The full run comes every 4 hours: it waits for an idle or session
+			// dream rather than miss its turn.
+			wctx, wcancel := context.WithTimeout(context.Background(), dreamLockWait)
+			release, err = waitJobLock(wctx, stateDir, "dreamer", func() {
+				fmt.Fprintln(os.Stderr, "dream: waiting for the dream that holds", lockPath)
+			})
+			wcancel()
+			if errors.Is(err, context.DeadlineExceeded) {
+				err = platform.ErrBusy
+			}
+		}
 		if errors.Is(err, platform.ErrBusy) {
-			fmt.Println("dream: busy (another dream holds " + filepath.Join(stateDir, "dreamer.lock") + "); nothing done")
+			fmt.Println("dream: busy (another dream holds " + lockPath + "); nothing done")
 			return 0
 		}
 		if err != nil {
@@ -117,7 +145,14 @@ func runDream(args []string) int {
 			fmt.Fprintln(os.Stderr, "dream: no store")
 			return 2
 		}
-		if refuseWriter(context.Background(), ws, "dreamer", "dream") {
+		if selecting {
+			// The idle job runs every 10 minutes and the PreCompact hook at
+			// every compaction: on a read-only clone or a machine without the
+			// dreamer's key (a Mac that only reads) they end here, with no line.
+			if writerCheck(context.Background(), ws, "dreamer") != nil {
+				return 0
+			}
+		} else if refuseWriter(context.Background(), ws, "dreamer", "dream") {
 			return 2
 		}
 	}
@@ -140,9 +175,8 @@ func runDream(args []string) int {
 		}
 		return 0
 	}
-	// A selecting run (--idle every 10 minutes, --session) usually finds
-	// nothing to take: it syncs and recovers only when it found something.
-	selecting := *idle > 0 || *session != ""
+	// A selecting run usually finds nothing to take: it syncs and recovers
+	// only when it found something.
 	if !*dry && !selecting {
 		if code := recover(); code != 0 {
 			return code
@@ -192,8 +226,16 @@ func runDream(args []string) int {
 	// end offset; advancing after only a prefix would skip the remaining chunks.
 	pending := map[string]int{}
 	var remaining []dream.Window
+	backedOff := map[string]bool{}
+	now := time.Now()
 	for _, w := range windows {
 		if slices.Contains(st.Completed[w.File], dreamWindowKey(w)) {
+			continue
+		}
+		// A transcript whose window failed lately waits for the full run: its
+		// cursor is unmoved, so the full run reads the same delta.
+		if selecting && st.RecentlyFailed(w.File, now) {
+			backedOff[w.File] = true
 			continue
 		}
 		pending[w.File]++
@@ -209,6 +251,9 @@ func runDream(args []string) int {
 		for _, f := range slices.Sorted(maps.Keys(why)) {
 			fmt.Printf("dream: %s: %s\n", why[f], f)
 		}
+	}
+	if len(backedOff) > 0 {
+		fmt.Printf("dream: %d transcript(s) failed within %s; the full run retries them\n", len(backedOff), dream.FailureBackoff)
 	}
 	if selecting {
 		if len(windows) == 0 {
@@ -342,6 +387,7 @@ func runDream(args []string) int {
 				if pending[w.File] == 0 && !failed[w.File] {
 					st.Offsets[w.File] = w.End
 					delete(st.Completed, w.File)
+					delete(st.FailedAt, w.File)
 				}
 				st.LastRun = meter.At
 				if err := dream.SaveState(statePath, st); err != nil {
@@ -352,6 +398,14 @@ func runDream(args []string) int {
 		} else {
 			completed++
 		}
+	}
+	for f := range st.FailedAt {
+		if !st.RecentlyFailed(f, now) {
+			delete(st.FailedAt, f) // past the backoff: the entry says nothing
+		}
+	}
+	for f := range failed {
+		st.Failed(f, now)
 	}
 	meter.RemainingWindows = len(remaining) - completed
 	if meter.PauseReason == "" && len(remaining) > *maxCalls {
