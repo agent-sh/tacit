@@ -83,7 +83,32 @@ func layerPath(dir, storeDir, rel string) (string, error) {
 		!(strings.HasPrefix(clean, InboxDir+"/") || strings.HasPrefix(clean, CuratedDir+"/")) {
 		return "", fmt.Errorf("%w: %s", errEscape, rel)
 	}
-	return filepath.Join(dir, filepath.FromSlash(clean)), nil
+	full := filepath.Join(dir, filepath.FromSlash(clean))
+	if err := landsInside(dir, storeDir, full); err != nil {
+		return "", err
+	}
+	return full, nil
+}
+
+// landsInside checks where full really lands: every symlink on the way
+// resolved (a linked curated/ or inbox/, a dangling link, a linked file),
+// the result must be inside the overlay and outside the clone.
+func landsInside(dir, storeDir, full string) error {
+	final, err := resolve(full)
+	if err != nil {
+		return err
+	}
+	root, err := resolve(dir)
+	if err != nil {
+		return err
+	}
+	if !Outside(final, storeDir) {
+		return ErrInside
+	}
+	if rel, err := filepath.Rel(root, final); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%w: %s resolves outside the overlay", errEscape, full)
+	}
+	return nil
 }
 
 // Write puts data at rel in the overlay (inbox/... or curated/...),
@@ -96,6 +121,9 @@ func Write(dir, storeDir, rel string, data []byte) error {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+		return err
+	}
+	if err := landsInside(dir, storeDir, full); err != nil {
 		return err
 	}
 	f, err := os.CreateTemp(filepath.Dir(full), ".tacit-*")

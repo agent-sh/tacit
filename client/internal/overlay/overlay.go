@@ -253,6 +253,11 @@ func Add(dir, storeDir, writer string, f *fact.Fact, suffix func() string) (stri
 	if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
 		return "", err
 	}
+	// A writer directory linked into the clone (or anywhere outside the
+	// overlay) is refused like the overlay itself.
+	if err := landsInside(dir, storeDir, full); err != nil {
+		return "", err
+	}
 	tmp := full + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return "", err

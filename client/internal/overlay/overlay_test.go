@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -263,5 +264,53 @@ func TestLayerOn(t *testing.T) {
 		if LayerOn() != want {
 			t.Errorf("TACIT_LOCAL_LAYER=%q: LayerOn = %v", v, !want)
 		}
+	}
+}
+
+// A write lands where its final path resolves: a curated/ or inbox/ (or an
+// agent's writer directory) linked into the clone, or out of the overlay, is
+// refused and nothing reaches the target.
+func TestLayerWritesResolveTheFinalPath(t *testing.T) {
+	root := t.TempDir()
+	store := filepath.Join(root, "store")
+	away := filepath.Join(root, "away")
+	dir := filepath.Join(root, "local")
+	for _, d := range []string{filepath.Join(store, "user"), away, dir} {
+		os.MkdirAll(d, 0o755)
+	}
+	os.Symlink(store, filepath.Join(dir, "curated"))
+	os.Symlink(filepath.Join(store, "user"), filepath.Join(dir, "inbox"))
+	if err := Write(dir, store, "curated/user/escaped.md", []byte("x")); !errors.Is(err, ErrInside) {
+		t.Fatalf("Write through a linked curated/: %v", err)
+	}
+	if err := Append(dir, store, "inbox/dreamer@h/escaped.md", []byte("x")); !errors.Is(err, ErrInside) {
+		t.Fatalf("Append through a linked inbox/: %v", err)
+	}
+	os.Remove(filepath.Join(dir, "curated"))
+	os.Symlink(away, filepath.Join(dir, "curated"))
+	if err := Write(dir, store, "curated/user/escaped.md", []byte("x")); err == nil {
+		t.Fatal("Write through a curated/ linked out of the overlay")
+	}
+	// A linked file at the final path.
+	os.Remove(filepath.Join(dir, "curated"))
+	os.MkdirAll(filepath.Join(dir, "curated", "user"), 0o700)
+	os.Symlink(filepath.Join(store, "user", "target.md"), filepath.Join(dir, "curated", "user", "x.md"))
+	if err := Write(dir, store, "curated/user/x.md", []byte("x")); !errors.Is(err, ErrInside) {
+		t.Fatalf("Write to a file linked into the clone: %v", err)
+	}
+	// An agent's writer directory linked into the clone.
+	os.Symlink(filepath.Join(store, "user"), filepath.Join(dir, "claude@host-b"))
+	if _, err := Add(dir, store, "claude@host-b", note("x", "a linked writer dir", "b"), func() string { return "s" }); !errors.Is(err, ErrInside) {
+		t.Fatalf("Add through a linked writer dir: %v", err)
+	}
+	var found []string
+	filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && (strings.HasPrefix(p, store) || strings.HasPrefix(p, away)) {
+			found = append(found, p)
+		}
+		return nil
+	})
+	if len(found) != 0 {
+		t.Fatalf("written outside the overlay: %v", found)
 	}
 }
