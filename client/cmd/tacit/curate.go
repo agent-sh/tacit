@@ -66,9 +66,13 @@ const systemicSplits = 8
 // --quick is the idle job's curate: only the notes added in the last
 // quickWindow, newest first, through the same split, rulings check,
 // conflict judge, index and push; no derive, results, disowned, links or
-// staleness step. One curate runs at a time (curator.lock): a quick run that
-// finds one running, or that comes within --min-interval of the last quick
-// run, exits 0 doing nothing; a full run waits for a quick one.
+// staleness step. A quick run counts no strike against a note that fails
+// alone (curator.json "failed"; only the full run does), and owner notes it
+// must leave pending for want of owner history are not an error. One curate
+// runs at a time (curator.lock): a quick run that finds one running, or that
+// comes within --min-interval of the last quick run, exits 0 doing nothing; a
+// full run waits for a quick one (up to curateLockWait), and its deadline
+// starts once it holds the lock.
 func runCurate(args []string) int {
 	fs := flag.NewFlagSet("curate", flag.ExitOnError)
 	model := fs.String("model", curate.DefaultModel, "split model")
@@ -120,13 +124,17 @@ func runCurate(args []string) int {
 		return 2
 	}
 	// Before any work: a machine that cannot write as curator does nothing.
-	// The idle job runs the quick curate on every machine that dreams; one
-	// without the curator key ends there, and not as a failure.
-	if !*dry && refuseWriter(context.Background(), s, "curator", "curate") {
+	// The idle job runs the quick curate every 10 minutes on every machine
+	// that dreams; one without the curator key, or a read-only clone, ends
+	// there, not as a failure and with no line.
+	if !*dry {
 		if *quick {
-			return 0
+			if writerCheck(context.Background(), s, "curator") != nil {
+				return 0
+			}
+		} else if refuseWriter(context.Background(), s, "curator", "curate") {
+			return 2
 		}
-		return 2
 	}
 	host := store.ShortHost()
 	// The batches stop at --budget; the steps after them (derive, results,
@@ -135,8 +143,6 @@ func runCurate(args []string) int {
 	if *quick {
 		tail = 10 * time.Minute // the last batch's judge and push
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), *budget+tail)
-	defer cancel()
 	home, _ := os.UserHomeDir()
 	stateDir := platform.StateDir(home)
 	if !*dry {
@@ -149,9 +155,13 @@ func runCurate(args []string) int {
 				return 0
 			}
 		} else {
-			release, err = waitJobLock(ctx, stateDir, "curator", func() {
+			// A quick run ends within its budget and tail (half an hour); the
+			// full run's own deadline starts once it holds the lock.
+			wctx, wcancel := context.WithTimeout(context.Background(), curateLockWait)
+			release, err = waitJobLock(wctx, stateDir, "curator", func() {
 				fmt.Fprintln(os.Stderr, "curate: waiting for the curate run that holds", filepath.Join(stateDir, "curator.lock"))
 			})
+			wcancel()
 		}
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "curate: lock:", err)
@@ -169,6 +179,8 @@ func runCurate(args []string) int {
 			saveQuickRun(qpath, time.Now())
 		}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), *budget+tail)
+	defer cancel()
 	batchesUntil := time.Now().Add(*budget)
 	if err := s.Sync(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "curate: sync:", err)
@@ -615,11 +627,13 @@ func runCurate(args []string) int {
 		fmt.Printf("curate: batch %d pushed: %d fact(s) from %d note(s)\n", bi+1, len(newFacts), len(batch))
 	}
 
-	if valid > 0 {
+	if valid > 0 && !*quick {
+		// Only the full run counts a strike: the quick one comes every 10
+		// minutes and would set a note aside within the hour.
 		for _, n := range failedAlone {
 			cst.Failed[n]++
 		}
-	} else if len(failedAlone) > 0 || rep.BatchSplits >= systemicSplits {
+	} else if valid == 0 && (len(failedAlone) > 0 || rep.BatchSplits >= systemicSplits) {
 		fmt.Fprintf(os.Stderr, "curate: no batch got a valid answer; nothing counted against the notes (check the model and runner)\n")
 	}
 
@@ -636,7 +650,7 @@ func runCurate(args []string) int {
 		if !*quick {
 			rep.Errors += curateStaleStep(ctx, s, *dry)
 		}
-		if rep.Errors > 0 || rep.DeferredOwner > 0 {
+		if rep.Errors > 0 || rep.DeferredOwner > 0 && !*quick {
 			return 1
 		}
 		return 0
@@ -656,11 +670,15 @@ func runCurate(args []string) int {
 		rep.Errors += curateStaleStep(ctx, s, *dry)
 	}
 	fmt.Printf("curate: %d notes in %d batches (%d split) -> %d facts (%d rulings, %d absorbed), %d pairs in %d judge calls, %d contradictions, %d supersedes, %d unchecked, %d set aside, %s, %d error(s)\n", rep.Notes, rep.Batches, rep.BatchSplits, rep.Facts, rep.Rulings, rep.Absorbed, rep.Checked, rep.JudgeCalls, rep.Contradicts, rep.Supersedes, rep.JudgeUnchecked, rep.SetAside, rep.ModelCalls.CostSummary(rep.CostUSD), rep.Errors)
-	if rep.Errors > 0 || rep.DeferredOwner > 0 {
+	if rep.Errors > 0 || rep.DeferredOwner > 0 && !*quick {
 		return 1
 	}
 	return 0
 }
+
+// curateLockWait bounds how long the full curate waits for a quick one that
+// holds curator.lock (a quick run ends within quickBudget and its tail).
+var curateLockWait = time.Hour
 
 // The quick curate's limits (--quick): the notes of the last day, newest
 // first, at most two batches (about 170 dreamer notes; the dreamer adds about
