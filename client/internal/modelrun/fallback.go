@@ -17,7 +17,7 @@ func CanFallback(err error) bool {
 	}
 	var failure *Failure
 	if errors.As(err, &failure) {
-		return failure.Kind == "capacity" || failure.Kind == "unavailable" || failure.Kind == "authentication"
+		return failure.Kind == "capacity" || failure.Kind == "unavailable" || failure.Kind == "authentication" || failure.Kind == "refusal"
 	}
 	return false
 }

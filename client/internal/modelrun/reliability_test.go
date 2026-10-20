@@ -117,3 +117,20 @@ func TestUnknownCostAndPiRetries(t *testing.T) {
 		t.Fatal(r, err)
 	}
 }
+
+// A model's safety refusal fails the same prompt on that model every time:
+// it is the fallback's to try. Words like "flagged" elsewhere are not one.
+func TestRefusalFallsBack(t *testing.T) {
+	refusal := ProviderFailure(0, "", "API Error: Opus 5.5's safeguards flagged this session (https://www.anthropic.com/legal/aup). Try rephrasing the request in a new session or change your model.")
+	if refusal.Kind != "refusal" || !CanFallback(refusal) {
+		t.Fatalf("a safety refusal: kind %q, fallback %v", refusal.Kind, CanFallback(refusal))
+	}
+	for _, msg := range []string{"the linter flagged this session's config", "invalid request: model flagged as deprecated"} {
+		if f := ProviderFailure(0, "", msg); f.Kind == "refusal" {
+			t.Errorf("%q read as a refusal", msg)
+		}
+	}
+	if f := ProviderFailure(400, "", "safeguards flagged this request"); f.Kind == "refusal" {
+		t.Error("a status-bearing request error read as a refusal")
+	}
+}
