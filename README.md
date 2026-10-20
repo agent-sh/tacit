@@ -47,8 +47,8 @@ Choose the integration for your agent:
 
 | Agent | Install | Connection |
 |---|---|---|
-| Claude Code | `tacit install claude` | Session-start and prompt hooks, and the MCP tools (`--no-mcp`: hooks only) |
-| Codex | `tacit install codex` | Hooks; trust them once in `/hooks` |
+| Claude Code | `tacit install claude` | Session-start, prompt and pre-compact hooks, and the MCP tools (`--no-mcp`: hooks only) |
+| Codex | `tacit install codex` | The same hooks; trust them once in `/hooks` |
 | Hermes | `tacit install hermes` | Memory provider; follow the printed configuration steps |
 | Grok / pi / Muse | `tacit install grok` / `pi` / `muse` | Prints the MCP configuration |
 | agy | `tacit install agy` | Prints the MCP registration command |
@@ -79,9 +79,9 @@ Open **Inbox** to inspect the note and its source. After curation, installed int
 
 ## How it works
 
-1. **Collect.** Agents write short inbox notes. Imports bring in existing memory files. An optional dreamer extracts candidates from redacted transcript deltas. It saves each successful window before the next call and recovers pending notes after interrupted runs.
-2. **Curate.** Notes become individual facts with sources and scopes. Contradictions and uncertain changes become review items.
-3. **Deliver.** A local SQLite FTS5 index matches facts to the repo, host and prompt. Hooks supply up to 10 facts at session start and 3 curated facts per prompt, with a separate match for a computed fact. Explicit search can return the full text.
+1. **Collect.** Agents write short inbox notes. Imports bring in existing memory files. An optional dreamer extracts candidates from redacted transcript deltas: every 4 hours, and every 10 minutes for the sessions that went quiet or compacted. It saves each successful window before the next call and recovers pending notes after interrupted runs.
+2. **Curate.** Notes become individual facts with sources and scopes. Contradictions and uncertain changes become review items. A quick run after the idle dream curates the last day's notes, so a session's fact reaches other sessions within about an hour.
+3. **Deliver.** A local SQLite FTS5 index matches facts to the repo, host and prompt. Hooks supply up to 10 facts at session start and 3 curated facts per prompt, with a separate match for a computed fact. After a compaction the start block also brings the session's own notes the dreamer just took from the dropped turns, marked as not yet reviewed. Explicit search can return the full text.
 4. **Check.** A verifier reads code, git, docs and permitted machine sources. It records evidence for its decisions and leaves unresolved questions for you.
 
 Git also supplies hot spots, module maps, committed measurements and deletion-based staleness checks. Those steps need no model. The app brings facts, sources, history and review decisions together.
@@ -231,7 +231,7 @@ The server reads its own settings at startup:
 | `TACIT_ALLOW_LOOPBACK` | `1` permits loopback in the tailnet check; testing only |
 | `TACIT_PUBLIC_PORT` | Optional reader-only listener on `127.0.0.1`; disabled when unset |
 
-For background work, `tacit install dream` and `tacit install curate` write native job files and print start commands. Select the private config and provide the job environment before starting them. See [portable job setup](docs/portable.md#linux-and-macos).
+For background work, `tacit install dream` (the 4-hour dreamer and the 10-minute idle job) and `tacit install curate` write native job files and print start commands. Select the private config and provide the job environment before starting them. See [portable job setup](docs/portable.md#linux-and-macos).
 
 ## What we measured
 

@@ -165,7 +165,7 @@ tacit install dream --env-file ~/.config/tacit/env
 tacit install curate --env-file ~/.config/tacit/env
 ```
 
-Install writes files and prints start commands; it starts nothing. Linux gets user services/timers. macOS gets launchd agents. Dreaming runs every four hours; curation and verification run daily. `tacit maintain --env-file FILE` runs the daily sequence manually on any OS. Local jobs need no enrollment. Server-backed jobs retain their key requirements. Create the env file and configure the provider and PATH before starting a model job.
+Install writes files and prints start commands; it starts nothing. Linux gets user services/timers. macOS gets launchd agents. Dreaming runs every four hours; curation and verification run daily. `install dream` also writes the idle job, every 10 minutes: `tacit dream --idle 20m` (the sessions quiet for 20 minutes or just compacted), then `tacit curate --quick --min-interval 30m` (the last day's notes, at most every 30 minutes; it does nothing on a machine without the curator key). `tacit maintain --env-file FILE` runs the daily sequence manually on any OS. Local jobs need no enrollment. Server-backed jobs retain their key requirements. Create the env file and configure the provider and PATH before starting a model job.
 
 ## Windows
 
@@ -184,7 +184,7 @@ Claude hooks use its [executable-plus-arguments form](https://code.claude.com/do
 
 Model jobs need the selected native agent executable and compatible scrump on PATH. Verifier filesystem probes also need Git for Windows' Unix utilities: include its `usr\bin` directory in the job PATH for grep, find and ls.
 
-`install dream`, `install curate` and server-mode `install follow` write Task Scheduler XML under `~\.config\tacit\tasks`. Run the printed PowerShell registration/start commands under the current Windows account. No administrator account or stored password is requested. Tasks run while that account is logged in and suppress overlapping instances. `install app` writes a PowerShell browser launcher.
+`install dream` (two tasks, the dreamer and the idle job), `install curate` and server-mode `install follow` write Task Scheduler XML under `~\.config\tacit\tasks`. Run the printed PowerShell registration/start commands under the current Windows account. No administrator account or stored password is requested. Tasks run while that account is logged in and suppress overlapping instances. `install app` writes a PowerShell browser launcher.
 
 Real task registration and default-browser launching require Windows. Generating XML or running under Wine does not verify those Windows services. Both are checked in the native Windows VM described below. Env files may use UTF-8 with or without the BOM written by Windows PowerShell.
 
@@ -270,3 +270,7 @@ Changes to the release workflow, archive builder or installer scripts run native
 `dream_max_runtime` in YAML or `TACIT_DREAM_MAX_RUNTIME` controls the extraction/persistence phase of a batch. Its existing default is `45m`. `tacit dream --max-runtime 1h` overrides it for a run; `0` disables the batch limit while per-attempt deadlines still apply. Preparation and pending-note recovery retain their separate bounds.
 
 Reaching the batch runtime or call limit is a pause with exit 0. Successful notes are already pushed and cursor/chunk progress is saved. The interrupted window remains pending. A prior genuine failure still makes that run exit 1; a model-attempt timeout on its own remains a failure. Accounting includes `pause_reason` (`runtime` or `call_limit`) and the number of `remaining_windows`.
+
+### Idle dreaming and quick curation
+
+`tacit dream --idle D` (`--idle` alone: 20m) dreams only the transcripts with new content that had no write for D, or whose new content holds a compaction (taken at once). `tacit dream --session T` dreams one transcript (a path, or a Hermes session id); the PreCompact hook starts it. One dream runs at a time (`dreamer.lock` in the state directory); a second exits 0 with "busy". `tacit curate --quick [--min-interval D]` curates the notes added in the last 24 hours (at most `--max-batches 2` in `--budget 20m` unless set), with no derive, results, links or staleness step; it shares `curator.lock` with the full run (a quick run that finds one running exits 0; a full one waits) and does nothing within `--min-interval` (default 30m, kept in `curate-quick.json`) of the last quick run. `tacit curate --env-file F` loads provider variables like `tacit dream --env-file F`. Rules: SPEC.md "When a transcript is dreamed" and "Curator runs".
