@@ -326,4 +326,5 @@ type Report struct {
 	JudgeUnchecked   int             `json:"judge_unchecked,omitempty"` // pairs the judge gave no valid verdict for alone; written, sent to review, counted as errors
 	DerivedFiles     int             `json:"derived_files,omitempty"`   // derived/ files written or retired by the git pass
 	Recheck          bool            `json:"recheck,omitempty"`         // a --recheck-conflicts run: Facts are the facts checked again
+	Quick            bool            `json:"quick,omitempty"`           // a --quick run: recent notes only, no derive, results, links or staleness step
 }

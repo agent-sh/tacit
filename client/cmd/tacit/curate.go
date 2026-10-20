@@ -52,7 +52,8 @@ const maxNoteFailures = 3
 // fails every half is failing the run, not a note.
 const systemicSplits = 8
 
-// runCurate implements `tacit curate [--model M] [--max-batches N] [--dry-run]`.
+// runCurate implements `tacit curate [--model M] [--max-batches N] [--dry-run]
+// [--quick [--min-interval D]]`.
 //
 // Per batch of pending inbox notes (no curated child by origin, not known
 // empty): split with the curator model; judge every new fact against its
@@ -61,6 +62,13 @@ const systemicSplits = 8
 // commit and push. A batch is pushed before the next starts, so a deadline
 // or crash leaves nothing half-done, and nothing is counted as curated
 // unless it reached the server.
+//
+// --quick is the idle job's curate: only the notes added in the last
+// quickWindow, newest first, through the same split, rulings check,
+// conflict judge, index and push; no derive, results, disowned, links or
+// staleness step. One curate runs at a time (curator.lock): a quick run that
+// finds one running, or that comes within --min-interval of the last quick
+// run, exits 0 doing nothing; a full run waits for a quick one.
 func runCurate(args []string) int {
 	fs := flag.NewFlagSet("curate", flag.ExitOnError)
 	model := fs.String("model", curate.DefaultModel, "split model")
@@ -72,10 +80,38 @@ func runCurate(args []string) int {
 	until := fs.String("until", "", "with --recheck-conflicts: last creation day, YYYY-MM-DD (default: no end)")
 	limit := fs.Int("limit", 0, "with --recheck-conflicts: check only the first N facts (trial runs)")
 	retrySetAside := fs.Bool("retry-set-aside", false, "try again the notes set aside after failing alone (curator.json \"failed\")")
+	quick := fs.Bool("quick", false, "only the notes added in the last 24 hours: split, rulings check, conflict judge, index, push; no derive, results, links or staleness step")
+	minInterval := fs.Duration("min-interval", 30*time.Minute, "with --quick: do nothing within this long of the last quick run")
+	envFile := fs.String("env-file", "", "KEY=VALUE lines with the runner's provider variables, set before any model call (for launchd and Windows, which have no EnvironmentFile)")
 	fs.Parse(args)
 	if *recheck && *since == "" {
 		fmt.Fprintln(os.Stderr, "curate: --recheck-conflicts needs --since YYYY-MM-DD")
 		return 2
+	}
+	if *quick && *recheck {
+		fmt.Fprintln(os.Stderr, "curate: --quick and --recheck-conflicts are separate runs")
+		return 2
+	}
+	explicit := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	if *envFile != "" {
+		if err := loadEnvFile(*envFile); err != nil {
+			fmt.Fprintln(os.Stderr, "curate:", err)
+			return 2
+		}
+		refreshModels()
+		if !explicit["model"] {
+			*model = curate.DefaultModel
+		}
+	}
+	if *quick {
+		// A few minutes, not hours: the backlog is the full run's.
+		if !explicit["max-batches"] {
+			*maxBatches = quickBatches
+		}
+		if !explicit["budget"] {
+			*budget = quickBudget
+		}
 	}
 
 	s, err := store.Default()
@@ -84,14 +120,55 @@ func runCurate(args []string) int {
 		return 2
 	}
 	// Before any work: a machine that cannot write as curator does nothing.
+	// The idle job runs the quick curate on every machine that dreams; one
+	// without the curator key ends there, and not as a failure.
 	if !*dry && refuseWriter(context.Background(), s, "curator", "curate") {
+		if *quick {
+			return 0
+		}
 		return 2
 	}
 	host := store.ShortHost()
 	// The batches stop at --budget; the steps after them (derive, results,
 	// links, staleness: about 25 minutes on the author's workstation) have the rest.
-	ctx, cancel := context.WithTimeout(context.Background(), *budget+75*time.Minute)
+	tail := 75 * time.Minute
+	if *quick {
+		tail = 10 * time.Minute // the last batch's judge and push
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *budget+tail)
 	defer cancel()
+	home, _ := os.UserHomeDir()
+	stateDir := platform.StateDir(home)
+	if !*dry {
+		var release func()
+		var err error
+		if *quick {
+			release, err = tryJobLock(stateDir, "curator")
+			if errors.Is(err, platform.ErrBusy) {
+				fmt.Println("curate: busy (another curate holds " + filepath.Join(stateDir, "curator.lock") + "); nothing done")
+				return 0
+			}
+		} else {
+			release, err = waitJobLock(ctx, stateDir, "curator", func() {
+				fmt.Fprintln(os.Stderr, "curate: waiting for the curate run that holds", filepath.Join(stateDir, "curator.lock"))
+			})
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "curate: lock:", err)
+			return 2
+		}
+		defer release()
+		if *quick {
+			qpath := filepath.Join(stateDir, "curate-quick.json")
+			if last, ok := lastQuickRun(qpath); ok && time.Since(last) < *minInterval {
+				fmt.Printf("curate: quick run %s ago, within --min-interval %s; nothing done\n", time.Since(last).Round(time.Second), *minInterval)
+				return 0
+			}
+			// Stamped before the run: a run that fails still waits its
+			// interval, so a failing model is not asked every 10 minutes.
+			saveQuickRun(qpath, time.Now())
+		}
+	}
 	batchesUntil := time.Now().Add(*budget)
 	if err := s.Sync(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "curate: sync:", err)
@@ -100,8 +177,6 @@ func runCurate(args []string) int {
 	if *recheck {
 		return recheckConflicts(ctx, s, host, *since, *until, *limit, *dry)
 	}
-	home, _ := os.UserHomeDir()
-	stateDir := platform.StateDir(home)
 	cst := loadCuratorState(filepath.Join(stateDir, "curator.json"))
 	if *retrySetAside {
 		cst.Failed = map[string]int{}
@@ -148,6 +223,9 @@ func runCurate(args []string) int {
 		}
 	}
 	sort.Slice(pending, func(i, j int) bool { return pending[i].Path < pending[j].Path })
+	if *quick {
+		pending = recentNotes(ctx, s.Dir, pending, time.Now().Add(-quickWindow))
+	}
 	var where curate.Where
 	noOwnerCorpus := false
 	deferredOwner := 0
@@ -203,7 +281,7 @@ func runCurate(args []string) int {
 	// A fact of the split that only restates a curated fact (or one an earlier
 	// batch of this run wrote) is not written a second time (no model).
 	absorber := curate.NewAbsorber(curated)
-	rep := curate.Report{At: time.Now().Format(time.RFC3339), Notes: len(pending), Restated: len(restated), DeferredOwner: deferredOwner}
+	rep := curate.Report{At: time.Now().Format(time.RFC3339), Notes: len(pending), Restated: len(restated), DeferredOwner: deferredOwner, Quick: *quick}
 	rep.ModelCalls = &modelrun.Trace{}
 	ctx = modelrun.WithTrace(ctx, rep.ModelCalls)
 	batches := curate.Batches(pending)
@@ -231,7 +309,7 @@ func runCurate(args []string) int {
 	}
 
 	rep.SetAside = heldBack
-	if heldBack > 0 {
+	if heldBack > 0 && !*quick {
 		fmt.Fprintf(os.Stderr, "curate: %d note(s) set aside after failing alone in %d runs (curator.json \"failed\"; --retry-set-aside tries them again)\n", heldBack, maxNoteFailures)
 	}
 	if cst.Failed == nil {
@@ -545,38 +623,19 @@ func runCurate(args []string) int {
 		fmt.Fprintf(os.Stderr, "curate: no batch got a valid answer; nothing counted against the notes (check the model and runner)\n")
 	}
 
-	// The derived-facts step needs no inbox notes and no model: hot spots,
-	// co-change and module maps from git, as curator. It runs even when
-	// nothing was pending.
-	var drep *derive.Report
-	dopts, derr := deriveOptions(s.Dir, host)
-	if derr == nil {
-		dopts.Projects = defaultProjects()
-		drep, derr = deriveStep(ctx, s, dopts, *dry)
-	}
-	derr = errors.Join(derr, curateResults(ctx, s, dopts, *dry)) // results from git: result facts and the saved facts they replace
-	printDerive(drep, false)
-	if drep != nil {
-		for _, r := range drep.Repos {
-			if r.Status != derive.Failed {
-				rep.DerivedFiles += len(r.Paths)
-			}
-		}
-		if drep.Count(derive.Failed) > 0 {
-			rep.Errors++
+	if !*quick {
+		curateUpkeep(ctx, s, host, *dry, &rep)
+	} else if !*dry && rep.Facts > 0 {
+		// The hooks read the index at the new HEAD: build it now, not in the
+		// first session that asks.
+		if ix, err := openIndex(ctx, s); err == nil {
+			ix.Close()
 		}
 	}
-	if derr != nil {
-		rep.Errors++
-		fmt.Fprintln(os.Stderr, "curate: derive:", derr)
-	}
-	// Facts the owner's notes say are not their words lose kind user. No model.
-	rep.Errors += curateDisowned(ctx, s, *dry)
-	// Dead [[links]] in curated facts: rewritten to a clear match or made plain
-	// text; owner rulings get a review line instead (links.go). No model.
-	rep.Errors += curateLinks(ctx, s, *dry)
 	if len(batches) == 0 {
-		rep.Errors += curateStale(ctx, s, *dry)
+		if !*quick {
+			rep.Errors += curateStaleStep(ctx, s, *dry)
+		}
 		if rep.Errors > 0 || rep.DeferredOwner > 0 {
 			return 1
 		}
@@ -593,12 +652,108 @@ func runCurate(args []string) int {
 	// The staleness step (stale.go) runs last, after this run's state is saved:
 	// it can take most of an hour and must not be what a kill loses. It flags
 	// curated facts git has overtaken; it never retires.
-	rep.Errors += curateStale(ctx, s, *dry)
+	if !*quick {
+		rep.Errors += curateStaleStep(ctx, s, *dry)
+	}
 	fmt.Printf("curate: %d notes in %d batches (%d split) -> %d facts (%d rulings, %d absorbed), %d pairs in %d judge calls, %d contradictions, %d supersedes, %d unchecked, %d set aside, %s, %d error(s)\n", rep.Notes, rep.Batches, rep.BatchSplits, rep.Facts, rep.Rulings, rep.Absorbed, rep.Checked, rep.JudgeCalls, rep.Contradicts, rep.Supersedes, rep.JudgeUnchecked, rep.SetAside, rep.ModelCalls.CostSummary(rep.CostUSD), rep.Errors)
 	if rep.Errors > 0 || rep.DeferredOwner > 0 {
 		return 1
 	}
 	return 0
+}
+
+// The quick curate's limits (--quick): the notes of the last day, newest
+// first, at most two batches (about 170 dreamer notes; the dreamer adds about
+// 12 a half hour on the author's workstation) started within 20 minutes.
+// Older pending notes are the full run's.
+const (
+	quickWindow  = 24 * time.Hour
+	quickBatches = 2
+	quickBudget  = 20 * time.Minute
+)
+
+// recentNotes keeps the pending notes a commit added to the clone since
+// since, newest first. A note no commit added (still uncommitted) is not
+// taken: it has not reached the server yet.
+func recentNotes(ctx context.Context, dir string, pending []*fact.Fact, since time.Time) []*fact.Fact {
+	log, err := store.Git(ctx, dir, "log", "--diff-filter=A", "--since="+since.Format(time.RFC3339), "--format=%x01%cI", "--name-only", "--", "inbox/")
+	if err != nil {
+		return nil
+	}
+	added := map[string]string{}
+	at := ""
+	for _, l := range strings.Split(log, "\n") {
+		if t, ok := strings.CutPrefix(l, "\x01"); ok {
+			at = t
+			continue
+		}
+		if l = strings.TrimSpace(l); l != "" && added[l] == "" {
+			added[l] = at // newest first: the first is the latest add
+		}
+	}
+	var out []*fact.Fact
+	for _, n := range pending {
+		if added[n.Path] != "" {
+			out = append(out, n)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return added[out[i].Path] > added[out[j].Path] })
+	return out
+}
+
+// lastQuickRun reads when the last quick curate started (curate-quick.json).
+func lastQuickRun(path string) (time.Time, bool) {
+	var st struct {
+		LastRun time.Time `json:"last_run"`
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(b, &st) != nil || st.LastRun.IsZero() {
+		return time.Time{}, false
+	}
+	return st.LastRun, true
+}
+
+func saveQuickRun(path string, at time.Time) {
+	b, _ := json.Marshal(map[string]string{"last_run": at.Format(time.RFC3339Nano)})
+	os.WriteFile(path, append(b, '\n'), 0o600)
+}
+
+// curateStaleStep is the staleness step; tests substitute it.
+var curateStaleStep = curateStale
+
+// curateUpkeep is the full curate's no-model steps after the batches: derive,
+// results, disowned, links. Tests substitute it.
+var curateUpkeep = func(ctx context.Context, s *store.Store, host string, dry bool, rep *curate.Report) {
+	// The derived-facts step needs no inbox notes and no model: hot spots,
+	// co-change and module maps from git, as curator. It runs even when
+	// nothing was pending.
+	var drep *derive.Report
+	dopts, derr := deriveOptions(s.Dir, host)
+	if derr == nil {
+		dopts.Projects = defaultProjects()
+		drep, derr = deriveStep(ctx, s, dopts, dry)
+	}
+	derr = errors.Join(derr, curateResults(ctx, s, dopts, dry)) // results from git: result facts and the saved facts they replace
+	printDerive(drep, false)
+	if drep != nil {
+		for _, r := range drep.Repos {
+			if r.Status != derive.Failed {
+				rep.DerivedFiles += len(r.Paths)
+			}
+		}
+		if drep.Count(derive.Failed) > 0 {
+			rep.Errors++
+		}
+	}
+	if derr != nil {
+		rep.Errors++
+		fmt.Fprintln(os.Stderr, "curate: derive:", derr)
+	}
+	// Facts the owner's notes say are not their words lose kind user. No model.
+	rep.Errors += curateDisowned(ctx, s, dry)
+	// Dead [[links]] in curated facts: rewritten to a clear match or made plain
+	// text; owner rulings get a review line instead (links.go). No model.
+	rep.Errors += curateLinks(ctx, s, dry)
 }
 
 // markDone records a note the split wrote no fact for: absorbed, when its
