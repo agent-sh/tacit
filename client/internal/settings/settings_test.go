@@ -372,3 +372,27 @@ func TestLocalLayerSetting(t *testing.T) {
 		t.Fatalf("an unknown local_layer value loaded: %v", err)
 	}
 }
+
+func TestDeliverySettingsBecomeEnvironment(t *testing.T) {
+	for _, k := range []string{"TACIT_DELIVERY_TOOL_PUSH", "TACIT_DELIVERY_START_CEILING", "TACIT_DELIVERY_PROMPT_RELATIVE", "TACIT_DELIVERY_REPO_START"} {
+		t.Setenv(k, "")
+		os.Unsetenv(k)
+	}
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(p, []byte("delivery:\n  tool_push: off\n  start_ceiling: 4\n  prompt_relative: 0.5\n"), 0o644)
+	if err := Load(p, true); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("TACIT_DELIVERY_TOOL_PUSH") != "off" || os.Getenv("TACIT_DELIVERY_START_CEILING") != "4" || os.Getenv("TACIT_DELIVERY_PROMPT_RELATIVE") != "0.5" {
+		t.Fatalf("env: %q %q %q", os.Getenv("TACIT_DELIVERY_TOOL_PUSH"), os.Getenv("TACIT_DELIVERY_START_CEILING"), os.Getenv("TACIT_DELIVERY_PROMPT_RELATIVE"))
+	}
+	if _, set := os.LookupEnv("TACIT_DELIVERY_REPO_START"); set {
+		t.Fatal("an unset switch was set")
+	}
+	for _, bad := range []string{"delivery:\n  tool_push: maybe\n", "delivery:\n  start_ceiling: 0\n", "delivery:\n  prompt_relative: 2\n"} {
+		os.WriteFile(p, []byte(bad), 0o644)
+		if err := Load(p, true); err == nil {
+			t.Fatalf("accepted %q", bad)
+		}
+	}
+}

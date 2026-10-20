@@ -45,9 +45,25 @@ type Utility struct {
 	AuditDir  string   `yaml:"audit_dir"`
 }
 
+// Delivery switches and bounds the hooks' repo-first delivery (SPEC.md,
+// Delivery). Each switch is on or off; every one defaults to on.
+type Delivery struct {
+	RepoStart      string   `yaml:"repo_start"`      // TACIT_DELIVERY_REPO_START
+	RepoAliases    string   `yaml:"repo_aliases"`    // TACIT_DELIVERY_REPO_ALIASES
+	PromptMetadata string   `yaml:"prompt_metadata"` // TACIT_DELIVERY_PROMPT_METADATA
+	PromptAction   string   `yaml:"prompt_action"`   // TACIT_DELIVERY_PROMPT_ACTION
+	Instruction    string   `yaml:"instruction"`     // TACIT_DELIVERY_INSTRUCTION
+	ToolPush       string   `yaml:"tool_push"`       // TACIT_DELIVERY_TOOL_PUSH
+	StartCeiling   *int     `yaml:"start_ceiling"`   // TACIT_DELIVERY_START_CEILING
+	PromptCeiling  *int     `yaml:"prompt_ceiling"`  // TACIT_DELIVERY_PROMPT_CEILING
+	PromptRelative *float64 `yaml:"prompt_relative"` // TACIT_DELIVERY_PROMPT_RELATIVE
+	MetaCeiling    *int     `yaml:"meta_ceiling"`    // TACIT_DELIVERY_META_CEILING
+}
+
 type Config struct {
-	Utility         Utility `yaml:"utility"`
-	DreamMaxRuntime string  `yaml:"dream_max_runtime"`
+	Utility         Utility  `yaml:"utility"`
+	Delivery        Delivery `yaml:"delivery"`
+	DreamMaxRuntime string   `yaml:"dream_max_runtime"`
 	// StaleWorkers is how many facts the curator's stale step checks at once
 	// (git commands in parallel); 0 is the default, 4.
 	StaleWorkers int                        `yaml:"stale_workers"`
@@ -152,6 +168,21 @@ func Load(path string, required bool) error {
 	default:
 		return fmt.Errorf("local_layer must be on or off")
 	}
+	for key, v := range map[string]string{"repo_start": c.Delivery.RepoStart, "repo_aliases": c.Delivery.RepoAliases, "prompt_metadata": c.Delivery.PromptMetadata, "prompt_action": c.Delivery.PromptAction, "instruction": c.Delivery.Instruction, "tool_push": c.Delivery.ToolPush} {
+		switch strings.ToLower(v) {
+		case "", "on", "off", "true", "false":
+		default:
+			return fmt.Errorf("delivery.%s must be on or off", key)
+		}
+	}
+	for key, v := range map[string]*int{"start_ceiling": c.Delivery.StartCeiling, "prompt_ceiling": c.Delivery.PromptCeiling, "meta_ceiling": c.Delivery.MetaCeiling} {
+		if v != nil && (*v < 1 || *v > 20) {
+			return fmt.Errorf("delivery.%s must be 1 to 20", key)
+		}
+	}
+	if v := c.Delivery.PromptRelative; v != nil && (math.IsNaN(*v) || *v < 0 || *v > 1) {
+		return fmt.Errorf("delivery.prompt_relative must be in [0,1]")
+	}
 	values := map[string]string{"TACIT_LOCAL_LAYER": strings.ToLower(c.LocalLayer), "TACIT_STORE": resolve(c.Store), "TACIT_PROJECTS": resolve(c.Projects), "TACIT_INDEX": resolve(c.Index), "TACIT_CONFIG": resolve(c.Keys), "TACIT_LOCAL": resolve(c.Local), "TACIT_OWNER_NAMES": strings.Join(c.OwnerNames, ","), "TACIT_CURATE_MODEL": c.Models.Curate, "TACIT_JUDGE_MODEL": c.Models.Judge, "TACIT_DREAM_MODEL": c.Models.Dream, "TACIT_VERIFY_MODEL": c.Models.Verify, "TACIT_VERIFY_FALLBACK_MODEL": c.Models.Fallback}
 	switch c.Utility.Provider {
 	case "", "jev":
@@ -188,6 +219,17 @@ func Load(path string, required bool) error {
 		if err != nil || v <= 0 || v > 2*time.Second {
 			return fmt.Errorf("utility timeout must be positive and no more than 2s")
 		}
+	}
+	for key, v := range map[string]string{"REPO_START": c.Delivery.RepoStart, "REPO_ALIASES": c.Delivery.RepoAliases, "PROMPT_METADATA": c.Delivery.PromptMetadata, "PROMPT_ACTION": c.Delivery.PromptAction, "INSTRUCTION": c.Delivery.Instruction, "TOOL_PUSH": c.Delivery.ToolPush} {
+		values["TACIT_DELIVERY_"+key] = strings.ToLower(v)
+	}
+	for key, v := range map[string]*int{"START_CEILING": c.Delivery.StartCeiling, "PROMPT_CEILING": c.Delivery.PromptCeiling, "META_CEILING": c.Delivery.MetaCeiling} {
+		if v != nil {
+			values["TACIT_DELIVERY_"+key] = strconv.Itoa(*v)
+		}
+	}
+	if v := c.Delivery.PromptRelative; v != nil {
+		values["TACIT_DELIVERY_PROMPT_RELATIVE"] = strconv.FormatFloat(*v, 'g', -1, 64)
 	}
 	values["TACIT_UTILITY_PROVIDER"] = c.Utility.Provider
 	values["TACIT_UTILITY_MODEL"] = c.Utility.Model

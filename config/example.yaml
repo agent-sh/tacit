@@ -11,6 +11,18 @@ owner_names: []
 # Hermes session store (read-only); default ~/.hermes/state.db when it exists, off for none.
 # hermes_db: off
 verify_roots: []
+# Hook delivery; every switch defaults to on (README, Client settings).
+delivery:
+  repo_start: on
+  repo_aliases: on
+  prompt_metadata: on
+  prompt_action: on
+  instruction: on
+  tool_push: on
+  start_ceiling: 6
+  prompt_ceiling: 5
+  prompt_relative: 0.7
+  meta_ceiling: 1
 runner: claude
 runners: {}
 models:
