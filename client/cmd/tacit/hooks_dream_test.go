@@ -282,3 +282,30 @@ func TestPromptHookStartsAHermesDreamAtAFullWindow(t *testing.T) {
 		t.Fatalf("a full window: %v", got)
 	}
 }
+
+// After a compaction (source compact) the start hook prints nothing: the
+// compaction's summary carries what the session had, the start block
+// included. Neither does a compact entry an earlier build of this branch
+// installed (`session-start --compact`), nor a resume or a clear.
+func TestStartHookPrintsNothingAfterACompaction(t *testing.T) {
+	r := newRig(t, rigOpts{repos: []string{"demo"}, filler: 200, rules: 1})
+	t.Setenv("TACIT_STORE", r.clone)
+	t.Setenv("HOME", filepath.Join(r.root, "home"))
+	t.Setenv("TACIT_STATE_DIR", "")
+	t.Setenv("TACIT_FOLLOW_STATE", filepath.Join(r.root, "no-follower.json"))
+	cwd := filepath.Join(r.projects, "demo")
+	payload := func(session, source string) string {
+		return `{"session_id":"` + session + `","cwd":"` + cwd + `","hook_event_name":"SessionStart","source":"` + source + `"}`
+	}
+	if start := hookOut(t, payload("s1", "startup"), "session-start"); !strings.Contains(start, "\n- ") {
+		t.Fatalf("no start block:\n%s", start)
+	}
+	for i, c := range []struct {
+		source string
+		args   []string
+	}{{"compact", nil}, {"compact", []string{"--compact"}}, {"resume", nil}, {"clear", nil}} {
+		if out := hookOut(t, payload("s"+strconv.Itoa(i+2), c.source), append([]string{"session-start"}, c.args...)...); out != "" {
+			t.Fatalf("source %s %v printed:\n%s", c.source, c.args, out)
+		}
+	}
+}
