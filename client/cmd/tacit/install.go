@@ -210,10 +210,20 @@ func installDream(goos, home, exe string, args []string) int {
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return 2
 	}
-	// The dreamer writes: a read-only clone gets no dreamer.
+	// The dreamer writes: a read-only clone gets no dreamer, unless its local
+	// layer is on: then the dreamer and a daily curate work on this machine's
+	// overlay (local_layer.go), and the jobs carry the setting.
+	localInstall := false
 	if s, err := store.Default(); err == nil && s.Exists() && s.ReadOnly(context.Background()) {
-		fmt.Fprintln(os.Stderr, "install: no dreamer on a read-only clone:", store.ErrReadOnly)
-		return 1
+		if !overlay.LayerOn() {
+			fmt.Fprintln(os.Stderr, "install: no dreamer on a read-only clone:", store.ErrReadOnly)
+			return 1
+		}
+		if !overlay.Outside(overlay.Dir(), s.Dir) {
+			fmt.Fprintln(os.Stderr, "install:", overlay.ErrInside)
+			return 1
+		}
+		localInstall = true
 	}
 	env, err := filepath.Abs(*envFile)
 	if err != nil {
@@ -244,6 +254,11 @@ func installDream(goos, home, exe string, args []string) int {
 	} else {
 		paths, err = installDreamSystemd(home, exe, env)
 	}
+	if localInstall && err == nil {
+		var more []string
+		more, err = installLocalCurate(goos, home, exe, env)
+		paths = append(paths, more...)
+	}
 	for _, p := range paths {
 		if p != "" {
 			fmt.Println("wrote", p)
@@ -259,16 +274,34 @@ func installDream(goos, home, exe string, args []string) int {
 	if goos == "windows" {
 		printWindowsJob(paths[0], "dream")
 		printWindowsJob(paths[1], "dream-idle")
+		if localInstall {
+			printWindowsJob(paths[2], localCurateJob)
+		}
 	} else if goos == "darwin" {
 		fmt.Println("start them (and after every reinstall):")
-		for i, label := range []string{launchdDreamLabel, launchdIdleLabel} {
+		labels := []string{launchdDreamLabel, launchdIdleLabel}
+		if localInstall {
+			labels = append(labels, launchdLocalCurateLabel)
+		}
+		for i, label := range labels {
 			for _, l := range launchctlLines(label, paths[i]) {
 				fmt.Println("  " + l)
 			}
 		}
-		fmt.Println("logs:", filepath.Join(launchdLogDir(home), "dream.log"), filepath.Join(launchdLogDir(home), "dream-idle.log"))
+		logs := []string{filepath.Join(launchdLogDir(home), "dream.log"), filepath.Join(launchdLogDir(home), "dream-idle.log")}
+		if localInstall {
+			logs = append(logs, filepath.Join(launchdLogDir(home), "curate-local.log"))
+		}
+		fmt.Println("logs:", strings.Join(logs, " "))
+	} else if localInstall {
+		fmt.Println("start them: systemctl --user daemon-reload && systemctl --user enable --now tacit-dream.timer tacit-dream-idle.timer tacit-curate-local.timer")
 	} else {
 		fmt.Println("start them: systemctl --user daemon-reload && systemctl --user enable --now tacit-dream.timer tacit-dream-idle.timer")
+	}
+	if localInstall {
+		fmt.Println("local layer: this read-only clone dreams and curates its own sessions into " + overlay.Dir() + ", which never leaves this machine; nothing is written to the clone or pushed. The jobs carry the setting (TACIT_LOCAL_LAYER, TACIT_LOCAL): to turn the layer off, unload and remove them.")
+		fmt.Println("the dreamer and the curator need their selected runners and scrump (text profile) on the job's PATH.")
+		return 0
 	}
 	fmt.Println("the idle job dreams every 10 minutes the sessions quiet for 20 minutes or just compacted, then runs a quick curate (on the machine with the curator key; elsewhere it does nothing).")
 	local := false
