@@ -439,6 +439,20 @@ func TestLocalCurateWritesTheOverlayAndNeverTheStore(t *testing.T) {
 	if _, ok := byName["old-local-walrus-port"]; ok {
 		t.Fatal("a superseded local fact was delivered")
 	}
+	// With the layer off, nothing the layer wrote is delivered.
+	t.Setenv("TACIT_LOCAL_LAYER", "off")
+	offIx, err := openIndex(context.Background(), r.s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	offHits, _ := offIx.Query(context.Background(), search.Situation{Host: host, Query: "walrus deploy fridays rollback plan driver port"}, 10, true)
+	offIx.Close()
+	for _, h := range offHits {
+		if h.Local {
+			t.Fatalf("layer off, a local fact is delivered: %+v", h)
+		}
+	}
+	t.Setenv("TACIT_LOCAL_LAYER", "on")
 	// A curated local fact competes like a curated one: not under the cap of
 	// this machine's raw notes.
 	var many []search.Hit

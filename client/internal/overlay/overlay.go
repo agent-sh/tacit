@@ -122,7 +122,7 @@ func Load(dir string) (facts []*fact.Fact, errs []error) {
 			return nil
 		}
 		if d.IsDir() {
-			if p != dir && strings.HasPrefix(d.Name(), ".") || isReviewDir(dir, p) {
+			if p != dir && strings.HasPrefix(d.Name(), ".") || isReviewDir(dir, p) || layerOff(dir, p) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -159,6 +159,18 @@ func Load(dir string) (facts []*fact.Fact, errs []error) {
 	return facts, errs
 }
 
+// layerOff reports a directory of the local layer (inbox/, curated/) while
+// the layer is off: then the overlay is the agents' notes alone, as before
+// the layer, and nothing the layer wrote is indexed, delivered or found.
+func layerOff(dir, p string) bool {
+	if LayerOn() {
+		return false
+	}
+	rel, err := filepath.Rel(dir, p)
+	rel = filepath.ToSlash(rel)
+	return err == nil && (rel == InboxDir || rel == CuratedDir)
+}
+
 // isReviewDir reports the local layer's review directory.
 func isReviewDir(dir, p string) bool {
 	rel, err := filepath.Rel(dir, p)
@@ -176,6 +188,9 @@ func Stamp(dir string) string {
 	h := sha256.New()
 	n := 0
 	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() && layerOff(dir, p) {
+			return filepath.SkipDir
+		}
 		if err != nil || d.IsDir() || d.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
@@ -205,7 +220,7 @@ func Find(dir, name string) (string, bool) {
 	}
 	var found string
 	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err == nil && d.IsDir() && isReviewDir(dir, p) {
+		if err == nil && d.IsDir() && (isReviewDir(dir, p) || layerOff(dir, p)) {
 			return filepath.SkipDir
 		}
 		if err == nil && !d.IsDir() && d.Name() == name+".md" && d.Type()&os.ModeSymlink == 0 {
