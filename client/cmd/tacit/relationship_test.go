@@ -6,6 +6,7 @@ import (
 )
 
 func TestRelationshipSelectionKeepsNoBackfillAndDerivedIsolation(t *testing.T) {
+	releaseCaps(t)
 	var hits []search.Hit
 	for _, name := range []string{"first", "second", "third", "weaker"} {
 		hits = append(hits, search.Hit{Name: name, Scope: "system", Score: 1, Evidence: &search.RetrievalEvidence{Supported: true}})

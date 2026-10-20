@@ -751,10 +751,10 @@ func TestStoreCuratorNeverPairsWithTheOverlay(t *testing.T) {
 
 // tacit_search marks a local dreamer note as unreviewed and as this machine's.
 func TestMCPTagsALocalDreamerNoteUnreviewed(t *testing.T) {
-	if got := mcpTag(search.Hit{Inbox: true, Local: true}); got != " [unreviewed] (this machine)" {
+	if got := page([]search.Hit{{Name: "n", Description: "d", Inbox: true, Local: true}}, 0, 8); !strings.Contains(got, "- n (unreviewed) (this machine): d") {
 		t.Fatalf("tag %q", got)
 	}
-	if got := mcpTag(search.Hit{Local: true}); got != " (this machine)" {
+	if got := page([]search.Hit{{Name: "n", Description: "d", Local: true}}, 0, 8); !strings.Contains(got, "- n (this machine): d") || strings.Contains(got, "unreviewed") {
 		t.Fatalf("tag %q", got)
 	}
 }

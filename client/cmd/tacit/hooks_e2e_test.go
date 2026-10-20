@@ -67,19 +67,20 @@ func TestHooksEndToEndOnGeneratedFacts(t *testing.T) {
 		t.Fatalf("%d lines, cap %d plus the title:\n%s", n, startLimit, start)
 	}
 
-	// A prompt that matches rulings and names a hot file: three curated lines,
-	// then the one derived line
+	// A prompt that matches rulings and names a hot file: the curated lines up
+	// to the ceiling (the five rules score alike, so all pass the relative
+	// threshold), then the one derived line
 	p := "quokka scheduler zebra rule: also check src/scheduler/worker.go and pool.go"
 	got := hookOut(t, payload("prompt1", "UserPromptSubmit", `,"prompt":"`+p+`"`), "prompt")
 	lines := strings.Split(strings.TrimSpace(got), "\n")
-	if len(lines) != 1+promptLimit+1 {
-		t.Fatalf("expected a title, %d curated lines and 1 derived line:\n%s", promptLimit, got)
+	if len(lines) != 1+promptCeiling+1 {
+		t.Fatalf("expected a title, %d curated lines and 1 derived line:\n%s", promptCeiling, got)
 	}
 	last := lines[len(lines)-1]
 	if !strings.HasPrefix(last, "- demo-hot-spots (computed from") {
 		t.Fatalf("the derived line is not last:\n%s", got)
 	}
-	for _, l := range lines[1 : 1+promptLimit] {
+	for _, l := range lines[1 : 1+promptCeiling] {
 		if strings.Contains(l, "computed from") || !strings.Contains(l, "quokka") {
 			t.Fatalf("a curated slot was taken or reordered: %q\n%s", l, got)
 		}
