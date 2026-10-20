@@ -84,6 +84,30 @@ type State struct {
 	// were recorded: a root not listed, with no cursor yet, starts at its end,
 	// so a source added to a running dreamer is not replayed from the start.
 	Sources []string `json:"sources,omitempty"`
+	// FailedAt is, per transcript (a cursor key), when a window of it last
+	// failed (a model, redaction or push error; RFC 3339). An idle or session
+	// run passes over a transcript that failed within FailureBackoff, so a
+	// window the model cannot answer is not sent again every 10 minutes; the
+	// full run retries it. Cleared when the transcript's cursor moves.
+	FailedAt map[string]string `json:"failed_at,omitempty"`
+}
+
+// FailureBackoff is how long idle and session runs leave a failed transcript
+// alone: the full run's cadence, which retries it.
+const FailureBackoff = 4 * time.Hour
+
+// RecentlyFailed reports whether file failed within FailureBackoff of now.
+func (st *State) RecentlyFailed(file string, now time.Time) bool {
+	at, err := time.Parse(time.RFC3339, st.FailedAt[file])
+	return err == nil && now.Sub(at) < FailureBackoff
+}
+
+// Failed records that a window of file failed at now.
+func (st *State) Failed(file string, now time.Time) {
+	if st.FailedAt == nil {
+		st.FailedAt = map[string]string{}
+	}
+	st.FailedAt[file] = now.Format(time.RFC3339)
 }
 
 // Source is one transcript root: a glob of JSONL files, or a Hermes store.

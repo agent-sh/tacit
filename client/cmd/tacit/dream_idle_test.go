@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -57,6 +60,10 @@ func TestDreamLockMakesASecondDreamExitBusy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The full run waits (here 100ms, not 45 minutes) and then gives up as
+	// busy, like the idle and session runs at once.
+	defer func(d time.Duration) { dreamLockWait = d }(dreamLockWait)
+	dreamLockWait = 100 * time.Millisecond
 	for _, args := range [][]string{nil, {"--idle", "1ms"}, {"--session", transcript}} {
 		if code := runDream(args); code != 0 {
 			t.Fatalf("%v: busy dream exit %d", args, code)
@@ -69,13 +76,165 @@ func TestDreamLockMakesASecondDreamExitBusy(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(platform.StateDir(home), "dreamer.log")); err == nil {
 		t.Fatal("a busy dream wrote a meter line")
 	}
+	// The full run waits for the holder and dreams once the lock is free.
+	dreamLockWait = time.Minute
+	done := make(chan int, 1)
+	go func() { done <- runDream(nil) }()
+	time.Sleep(time.Second)
+	select {
+	case code := <-done:
+		t.Fatalf("the full dream did not wait for the lock: exit %d", code)
+	default:
+	}
 	release()
-	if code := runDream(nil); code != 0 || calls != 1 {
-		t.Fatalf("free lock: exit %d, %d call(s)", code, calls)
+	select {
+	case code := <-done:
+		if code != 0 || calls != 1 {
+			t.Fatalf("free lock: exit %d, %d call(s)", code, calls)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the full dream never took the lock")
 	}
 	if st, _ := dream.LoadState(statePath); st.Offsets[transcript] == 0 {
 		t.Fatal("the cursor did not move")
 	}
+}
+
+// A transcript whose window failed is not sent again by the idle and
+// session runs (every 10 minutes, every compaction) for
+// dream.FailureBackoff: its cursor stays, the full run retries it, and once
+// the backoff has passed the idle run does too. Success clears the record.
+func TestFailedTranscriptWaitsForTheFullRun(t *testing.T) {
+	_, transcript, statePath := dreamHome(t)
+	previous := dreamRun
+	defer func() { dreamRun = previous }()
+	calls, fail := 0, true
+	dreamRun = func(context.Context, string, string) (string, float64, int, error) {
+		calls++
+		if fail {
+			return "", .01, 10, errors.New("fixture model refused")
+		}
+		return `[]`, .01, 10, nil
+	}
+	quiet := time.Now().Add(-time.Hour)
+	os.Chtimes(transcript, quiet, quiet)
+	if code := runDream([]string{"--idle", "20m"}); code != 1 || calls != 1 {
+		t.Fatalf("failing idle run: exit %d, %d call(s)", code, calls)
+	}
+	st, _ := dream.LoadState(statePath)
+	if !st.RecentlyFailed(transcript, time.Now()) || st.Offsets[transcript] != 0 {
+		t.Fatalf("after the failure: %+v", st)
+	}
+	for _, args := range [][]string{{"--idle", "20m"}, {"--session", transcript}} {
+		if code := runDream(args); code != 0 || calls != 1 {
+			t.Fatalf("%v within the backoff: exit %d, %d call(s)", args, code, calls)
+		}
+	}
+	// The full run retries (and fails again).
+	if code := runDream(nil); code != 1 || calls != 2 {
+		t.Fatalf("full run: exit %d, %d call(s)", code, calls)
+	}
+	// Past the backoff the idle run takes it again, and success clears it.
+	st, _ = dream.LoadState(statePath)
+	st.FailedAt[transcript] = time.Now().Add(-dream.FailureBackoff - time.Minute).Format(time.RFC3339)
+	dream.SaveState(statePath, st)
+	fail = false
+	if code := runDream([]string{"--idle", "20m"}); code != 0 || calls != 3 {
+		t.Fatalf("past the backoff: exit %d, %d call(s)", code, calls)
+	}
+	if st, _ := dream.LoadState(statePath); st.Offsets[transcript] == 0 || len(st.FailedAt) != 0 {
+		t.Fatalf("after success: %+v", st)
+	}
+}
+
+// captureStderr runs fn and returns what it wrote to stderr.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	done := make(chan string)
+	go func() { b, _ := io.ReadAll(r); done <- string(b) }()
+	fn()
+	w.Close()
+	os.Stderr = old
+	return <-done
+}
+
+// On a read-only clone, and on a clone of the server without the dreamer's
+// key (a Mac that only reads), the idle job's dream and the session dream
+// exit 0 with no model call and no stderr line (they run every 10 minutes
+// and at every compaction); the full dream still refuses out loud. The
+// PreCompact hook starts no dream there at all.
+func TestIdleJobAndHooksDoNothingWhereTheDreamerCannotWrite(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stand-in")
+	}
+	home, transcript, statePath := dreamHome(t)
+	before, _ := os.ReadFile(statePath)
+	quiet := time.Now().Add(-time.Hour)
+	os.Chtimes(transcript, quiet, quiet)
+	previous := dreamRun
+	defer func() { dreamRun = previous }()
+	calls := 0
+	dreamRun = func(context.Context, string, string) (string, float64, int, error) {
+		calls++
+		return `[]`, 0, 0, nil
+	}
+	started := filepath.Join(t.TempDir(), "started")
+	fake := filepath.Join(t.TempDir(), "tacit")
+	os.WriteFile(fake, []byte("#!/bin/sh\necho \"$*\" >> '"+started+"'\n"), 0o700)
+	prevExe := hookExe
+	defer func() { hookExe = prevExe }()
+	hookExe = func() (string, error) { return fake, nil }
+	defer func(f func(string) bool) { hasKey = f }(hasKey)
+	hasKey = func(string) bool { return true }
+
+	storeDir := os.Getenv("TACIT_STORE")
+	setups := []struct {
+		name  string
+		setup func()
+	}{
+		{"read-only clone", func() { git(t, storeDir, "config", "tacit.readonly", "true") }},
+		{"no dreamer key", func() {
+			git(t, storeDir, "config", "--unset", "tacit.readonly")
+			git(t, storeDir, "remote", "add", "origin", "https://tacit.invalid/git")
+			hasKey = func(string) bool { return false }
+		}},
+	}
+	for _, c := range setups {
+		c.setup()
+		for _, args := range [][]string{{"--idle", "20m"}, {"--session", transcript}} {
+			code := 0
+			if errs := captureStderr(t, func() { code = runDream(args) }); code != 0 || errs != "" {
+				t.Fatalf("%s: %v: exit %d, stderr %q", c.name, args, code, errs)
+			}
+		}
+		code := 0
+		if errs := captureStderr(t, func() { code = runDream(nil) }); code != 2 || !strings.Contains(errs, "nothing done") {
+			t.Fatalf("%s: full dream: exit %d, stderr %q", c.name, code, errs)
+		}
+		hookOut(t, `{"session_id":"s1","transcript_path":"`+transcript+`","cwd":"`+home+`","hook_event_name":"PreCompact"}`, "pre-compact")
+	}
+	time.Sleep(500 * time.Millisecond)
+	if b, err := os.ReadFile(started); err == nil {
+		t.Fatalf("the hook started a dream: %s", b)
+	}
+	if after, _ := os.ReadFile(statePath); calls != 0 || string(after) != string(before) {
+		t.Fatalf("%d call(s), state %s", calls, after)
+	}
+	// The control: with the key, the same hook starts the dream.
+	hasKey = func(string) bool { return true }
+	hookOut(t, `{"session_id":"s1","transcript_path":"`+transcript+`","cwd":"`+home+`","hook_event_name":"PreCompact"}`, "pre-compact")
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		if b, _ := os.ReadFile(started); len(b) > 0 {
+			return
+		}
+	}
+	t.Fatal("with the key, the hook started no dream")
 }
 
 // --session dreams only that transcript, and on a machine with no cursors it
