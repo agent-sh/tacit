@@ -19,6 +19,10 @@ func TestLocalStoreAgentNoteOwnerRulingAndSearch(t *testing.T) {
 	t.Setenv("TACIT_LOCAL", filepath.Join(root, "overlay"))
 	t.Setenv("TACIT_PROJECTS", filepath.Join(root, "projects"))
 	stubScrump(t)
+	// demo is a checkout on this machine: a project scope names a real repository.
+	if err := os.MkdirAll(filepath.Join(root, "projects", "demo", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if code := runInit(nil); code != 0 {
 		t.Fatalf("init: %d", code)
 	}

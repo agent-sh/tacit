@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -13,7 +14,9 @@ import (
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/importer"
 	"github.com/agent-sh/tacit/client/internal/overlay"
+	"github.com/agent-sh/tacit/client/internal/repoid"
 	"github.com/agent-sh/tacit/client/internal/store"
+	"github.com/agent-sh/tacit/client/internal/validate"
 )
 
 // agentHarness reports a harness an agent may write as. The owner's notes are
@@ -55,12 +58,13 @@ func addFact(ctx context.Context, s *store.Store, harness string, m fact.Meta, b
 	}
 	m.Description, body = red[0], red[1]
 	// Name and scope reach the file name, the frontmatter and the commit
-	// message; a masked one is rebuilt rather than kept.
+	// message; a masked name is rebuilt rather than kept, a masked scope is
+	// refused (no scope of code's choosing replaces the writer's).
 	if red[2] != m.Name {
 		m.Name = importer.Slug(red[2], 80)
 	}
 	if red[3] != m.Scope {
-		m.Scope = "user"
+		return "", errors.New("refused: scope: the redaction masked part of it; give a scope without secrets (user, projects/<repo>, machines/<host>)")
 	}
 	if !fact.IsSlug(m.Name) {
 		m.Name = importer.Slug(m.Name, 80)
@@ -68,15 +72,22 @@ func addFact(ctx context.Context, s *store.Store, harness string, m fact.Meta, b
 	if m.Name == "" {
 		m.Name = "fact-" + shortHash(m.Description+body)
 	}
-	if m.Type == "" || !fact.Types[m.Type] {
+	// Defaults for what the writer left out; anything it gave is checked
+	// (internal/validate) and refused with the reason, never replaced.
+	if m.Type == "" {
 		m.Type = "unclassified"
 	}
-	if !fact.ValidScope(m.Scope) {
+	if m.Scope == "" {
 		m.Scope = "user"
 	}
+	// A repo or host in capitals is the same scope in lower case (the store's
+	// scopes are lower case, as the curator's split normalizes them).
+	if l := strings.ToLower(m.Scope); l != m.Scope && fact.ValidScope(l) {
+		m.Scope = l
+	}
 	m.Source = fact.Source{Harness: harness, Host: host, Kind: firstNonEmpty(m.Source.Kind, "observed"), Session: m.Source.Session}
-	if !fact.SourceKinds[m.Source.Kind] {
-		m.Source.Kind = "observed"
+	if err := validate.Error(addEnv(s).Meta(m, body, true, false)); err != nil {
+		return "", err
 	}
 	m.Created = time.Now().Format("2006-01-02")
 	m.Description = fact.ClipDescription(m.Description, 200)
@@ -120,6 +131,12 @@ func addFact(ctx context.Context, s *store.Store, harness string, m fact.Meta, b
 	return rel, err
 }
 
+// addEnv is what an agent's note is checked against: this machine's
+// checkouts and the store's folders (and the local layer's, when it is on).
+var addEnv = func(s *store.Store) validate.Env {
+	return curateEnv(s.Dir, overlay.LayerOn())
+}
+
 // runAdd implements `tacit add --harness H --type T --scope S --kind K --desc D [--body B] <name>`.
 func runAdd(args []string) int {
 	fs := flag.NewFlagSet("add", flag.ExitOnError)
@@ -148,7 +165,7 @@ func runAdd(args []string) int {
 	defer cancel()
 	if *scope == "" {
 		cwd, _ := os.Getwd()
-		if r := store.RepoName(ctx, cwd); r != "" {
+		if r := repoid.Slug(store.RepoName(ctx, cwd)); r != "" {
 			*scope = "projects/" + r
 		} else {
 			*scope = "user"

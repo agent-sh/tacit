@@ -284,7 +284,7 @@ func TestStoreCuratorLogsInvalidEntries(t *testing.T) {
 	runCurate([]string{"--quick"})
 	lb, err := os.ReadFile(filepath.Join(platform.StateDir(home), "curator.log"))
 	var rep curate.Report
-	if err != nil || json.Unmarshal(lb, &rep) != nil || strings.Join(rep.InvalidEntries, "|") != "split: entry 1: type: not a known type" {
+	if err != nil || json.Unmarshal(lb, &rep) != nil || strings.Join(rep.InvalidEntries, "|") != "split (sent back): entry 1: type: not a known type|split: entry 1: type: not a known type" || rep.Retries != 1 {
 		t.Fatalf("curator.log: %s %v", lb, err)
 	}
 	if strings.Contains(string(lb), "quokka") {

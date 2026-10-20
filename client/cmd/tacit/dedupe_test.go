@@ -177,12 +177,12 @@ func TestCurateAbsorbsAcrossBatchesOfOneRun(t *testing.T) {
 	s := &store.Store{Dir: filepath.Join(home, "store")}
 	// Each note fills most of a batch, so the two are split apart.
 	for _, n := range []string{"n1", "n2"} {
-		if _, err := addFact(context.Background(), s, "muse", fact.Meta{Name: n, Description: "a session note " + n, Type: "unclassified", Scope: "machines/host-a", Source: fact.Source{Kind: "observed"}}, strings.Repeat("Several things happened. ", 1200)); err != nil {
+		if _, err := addFact(context.Background(), s, "muse", fact.Meta{Name: n, Description: "a session note " + n, Type: "unclassified", Scope: "user", Source: fact.Source{Kind: "observed"}}, strings.Repeat("Several things happened. ", 1200)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	entry := func(origin, name, desc string) string {
-		return `[{"origin":"` + origin + `","name":"` + name + `","description":"` + desc + `","type":"machine_fact","scope":"machines/host-a","kind":"observed","body":"Look there first."}]`
+		return `[{"origin":"` + origin + `","name":"` + name + `","description":"` + desc + `","type":"machine_fact","scope":"user","kind":"observed","body":"Look there first."}]`
 	}
 	r1, _ := json.Marshal(map[string]any{"result": entry("n1", "zebra-receipts", "The zebra crossing tool writes its receipts under receipts/zebra in the repo root"), "total_cost_usd": .01})
 	r2, _ := json.Marshal(map[string]any{"result": entry("n2", "zebra-receipts-again", "zebra crossing tool writes receipts under receipts/zebra in the root of the repo"), "total_cost_usd": .01})
@@ -197,10 +197,10 @@ func TestCurateAbsorbsAcrossBatchesOfOneRun(t *testing.T) {
 	if code := runCurate([]string{"--max-batches", "2"}); code != 0 {
 		t.Fatalf("curate exited %d", code)
 	}
-	if _, err := os.Stat(filepath.Join(s.Dir, "machines/host-a/zebra-receipts.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(s.Dir, "user/zebra-receipts.md")); err != nil {
 		t.Fatal("the first batch's fact was not written:", err)
 	}
-	if _, err := os.Stat(filepath.Join(s.Dir, "machines/host-a/zebra-receipts-again.md")); err == nil {
+	if _, err := os.Stat(filepath.Join(s.Dir, "user/zebra-receipts-again.md")); err == nil {
 		t.Fatal("the second batch wrote a copy")
 	}
 	state := loadCuratorState(filepath.Join(home, ".local/state/tacit/curator.json"))

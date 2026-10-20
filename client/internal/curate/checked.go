@@ -28,9 +28,21 @@ type Problem struct {
 	Entry int
 	Field string
 	Rule  string
+	// Hint is the refused value and what to do instead, for the model's
+	// retry (RetryPrompt). It may hold the entry's text, so String leaves it
+	// out of logs.
+	Hint string
 }
 
 func (p Problem) String() string { return fmt.Sprintf("entry %d: %s: %s", p.Entry, p.Field, p.Rule) }
+
+// Feedback is the problem for the model: String and the hint.
+func (p Problem) Feedback() string {
+	if p.Hint == "" {
+		return p.String()
+	}
+	return p.String() + " (" + p.Hint + ")"
+}
 
 // InvalidEntries is an answer rejected for its entries; it wraps
 // modelrun.ErrInvalidResult and lists every problem, so a caller can log
