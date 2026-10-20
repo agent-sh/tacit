@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/xml"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
+	"github.com/agent-sh/tacit/client/internal/overlay"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -158,7 +159,30 @@ func jobEnv(path, storeEnv string) []string {
 	if cfg := os.Getenv("TACIT_SETTINGS"); cfg != "" {
 		kv = append(kv, "TACIT_SETTINGS", cfg)
 	}
+	for _, key := range localJobEnvKeys() {
+		if v := os.Getenv(key); v != "" {
+			kv = append(kv, key, v)
+		}
+	}
 	return kv
+}
+
+// jobEnvKeys are the variables a systemd unit or a Windows task carries from
+// install time: the store and the settings file, and with the local layer on
+// the layer and its overlay (localJobEnvKeys).
+func jobEnvKeys() []string {
+	return append([]string{"TACIT_STORE", "TACIT_SETTINGS"}, localJobEnvKeys()...)
+}
+
+// localJobEnvKeys: a job installed with the local layer on runs in the local
+// layer whatever its settings file says later (TACIT_LOCAL_LAYER), on the
+// overlay chosen at install time (TACIT_LOCAL). With the layer off a job
+// carries neither, as before.
+func localJobEnvKeys() []string {
+	if !overlay.LayerOn() {
+		return nil
+	}
+	return []string{"TACIT_LOCAL_LAYER", "TACIT_LOCAL"}
 }
 
 // followPlist is ~/Library/LaunchAgents/ai.tacit.follow.plist.
@@ -277,7 +301,7 @@ func shellQuote(s string) string {
 // (systemd specifiers such as %h expand in it).
 func dreamUnit(exec, envFile string) string {
 	extra := ""
-	for _, key := range []string{"TACIT_STORE", "TACIT_SETTINGS"} {
+	for _, key := range jobEnvKeys() {
 		if value := os.Getenv(key); value != "" {
 			extra += "Environment=" + unitQuote(key+"="+value, true) + "\n"
 		}
@@ -313,7 +337,7 @@ WantedBy=timers.target
 // every 10 minutes on a machine someone works on.
 func dreamIdleUnit(exec, envFile string) string {
 	extra := ""
-	for _, key := range []string{"TACIT_STORE", "TACIT_SETTINGS"} {
+	for _, key := range jobEnvKeys() {
 		if value := os.Getenv(key); value != "" {
 			extra += "Environment=" + unitQuote(key+"="+value, true) + "\n"
 		}

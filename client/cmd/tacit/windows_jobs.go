@@ -82,11 +82,15 @@ func installWindowsJob(home, exe, target, envFile string) (string, error) {
 	case "curate":
 		trigger = "<CalendarTrigger><StartBoundary>" + boundary + "</StartBoundary><Enabled>true</Enabled><ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay></CalendarTrigger>"
 		args = "maintain --env-file " + psQuote(envFile)
+	case localCurateJob:
+		// The local layer's daily curate: no verifier (local_install.go).
+		trigger = "<CalendarTrigger><StartBoundary>" + boundary + "</StartBoundary><Enabled>true</Enabled><ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay></CalendarTrigger>"
+		args = "curate --env-file " + psQuote(envFile)
 	default:
 		return "", fmt.Errorf("unknown Windows job %q", target)
 	}
 	script := ""
-	for _, k := range []string{"TACIT_STORE", "TACIT_SETTINGS"} {
+	for _, k := range jobEnvKeys() {
 		if v := os.Getenv(k); v != "" {
 			script += "$env:" + k + "=" + psQuote(v) + "; "
 		}
