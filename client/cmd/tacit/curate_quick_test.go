@@ -272,3 +272,22 @@ func TestQuickCurateDoesNothingQuietlyWhereItCannotWrite(t *testing.T) {
 		t.Fatal("a refused quick run stamped the interval")
 	}
 }
+
+// The store curator logs a rejected split answer by entry, field and rule
+// in curator.log, never with the entry's text.
+func TestStoreCuratorLogsInvalidEntries(t *testing.T) {
+	home, _ := quickHome(t)
+	countSteps(t)
+	b, _ := json.Marshal([]map[string]any{{"origin": "fresh-note", "name": "fresh-note-fact", "description": "The quokka fixture driver uses port 7790", "type": "no_such_type", "scope": "system", "kind": "observed", "body": "The quokka fixture driver uses port 7790"}})
+	r, _ := json.Marshal(map[string]any{"result": string(b), "total_cost_usd": .01})
+	t.Setenv("FIXTURE_FRESH", string(r))
+	runCurate([]string{"--quick"})
+	lb, err := os.ReadFile(filepath.Join(platform.StateDir(home), "curator.log"))
+	var rep curate.Report
+	if err != nil || json.Unmarshal(lb, &rep) != nil || strings.Join(rep.InvalidEntries, "|") != "split: entry 1: type: not a known type" {
+		t.Fatalf("curator.log: %s %v", lb, err)
+	}
+	if strings.Contains(string(lb), "quokka") {
+		t.Fatalf("curator.log holds the entry's text: %s", lb)
+	}
+}
