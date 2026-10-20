@@ -1,6 +1,7 @@
 package search
 
 import (
+	"regexp"
 	"strings"
 	"unicode"
 )
@@ -226,3 +227,12 @@ func porterStep4(b []byte) []byte {
 	}
 	return b
 }
+
+// Stem is the index's stem of one lowercase word (porter, as FTS5 stems).
+func Stem(w string) string { return stem(w) }
+
+var wordRx = regexp.MustCompile(`[\p{L}\p{N}_]+`)
+
+// Words splits text into lowercase words, without stop-word removal or
+// splitting limits: for matching commands a prompt names.
+func Words(text string) []string { return wordRx.FindAllString(strings.ToLower(text), -1) }

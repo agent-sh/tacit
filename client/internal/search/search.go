@@ -44,7 +44,11 @@ type Hit struct {
 	// Local is a note in this machine's overlay (internal/overlay): written
 	// by a harness here on a read-only clone, never pushed, never reviewed.
 	Local bool
-	Score float64
+	// Applies is the fact's applies_to and Created its created date, for
+	// the hooks' repo, metadata and tool-call selection.
+	Applies fact.AppliesTo `json:",omitempty"`
+	Created string         `json:",omitempty"`
+	Score   float64
 	// MatchedTerms records distinct name/description FTS matches for prompt evaluation.
 	MatchedTerms []string           `json:",omitempty"`
 	Evidence     *RetrievalEvidence `json:",omitempty"`
@@ -78,8 +82,9 @@ const (
 
 // schemaVersion is part of the index file name, so a schema change rebuilds
 // instead of failing on a column that an older build does not have. 7: the
-// FTS tokenizer stems (porter). 8: the intask column (Hit.InTask).
-const schemaVersion = 8
+// FTS tokenizer stems (porter). 8: the intask column (Hit.InTask). 9: the
+// created column (Hit.Created).
+const schemaVersion = 9
 
 // Open returns the index for the store at head, building it when missing.
 // Index files are index-v<schema>-<sha>.db under IndexDir, or
@@ -186,7 +191,7 @@ func build(ctx context.Context, storeDir, localDir, path string) error {
 	}
 	defer db.Close()
 	stmts := []string{
-		`CREATE TABLE facts(id INTEGER PRIMARY KEY, path TEXT, name TEXT, scope TEXT, type TEXT, description TEXT, body TEXT, inbox INT, superseded INT, applies TEXT, kind TEXT, conflicts TEXT, ruling INT, intask INT, words INT, local INT)`,
+		`CREATE TABLE facts(id INTEGER PRIMARY KEY, path TEXT, name TEXT, scope TEXT, type TEXT, description TEXT, body TEXT, inbox INT, superseded INT, applies TEXT, kind TEXT, conflicts TEXT, ruling INT, intask INT, words INT, local INT, created TEXT)`,
 		`CREATE VIRTUAL TABLE fts USING fts5(name, description, body, content='facts', content_rowid='id', tokenize='porter unicode61 remove_diacritics 2')`,
 		// Rank's prefix search needs the words as written: porter stems a
 		// half-typed prefix too ("deploy"* becomes "deploi"*, which no stem
@@ -202,7 +207,7 @@ func build(ctx context.Context, storeDir, localDir, path string) error {
 	if err != nil {
 		return err
 	}
-	ins, err := tx.PrepareContext(ctx, `INSERT INTO facts(path, name, scope, type, description, body, inbox, superseded, applies, kind, conflicts, ruling, intask, words, local) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+	ins, err := tx.PrepareContext(ctx, `INSERT INTO facts(path, name, scope, type, description, body, inbox, superseded, applies, kind, conflicts, ruling, intask, words, local, created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
@@ -219,7 +224,7 @@ func build(ctx context.Context, storeDir, localDir, path string) error {
 			ruling, words, inbox = overlay.IsRuling(f), false, overlay.IsInbox(f.Path)
 		}
 		intask := ruling && inTaskRuling(f)
-		if _, err := ins.ExecContext(ctx, f.Path, f.Meta.Name, f.Meta.Scope, f.Meta.Type, f.Meta.Description, strings.TrimSpace(f.Body), b2i(inbox), b2i(f.Meta.SupersededBy != "" || f.Meta.Retired != ""), string(applies), f.Meta.Source.Kind, strings.Join(f.Meta.ConflictsWith, ","), b2i(ruling), b2i(intask), b2i(words), b2i(isLocal)); err != nil {
+		if _, err := ins.ExecContext(ctx, f.Path, f.Meta.Name, f.Meta.Scope, f.Meta.Type, f.Meta.Description, strings.TrimSpace(f.Body), b2i(inbox), b2i(f.Meta.SupersededBy != "" || f.Meta.Retired != ""), string(applies), f.Meta.Source.Kind, strings.Join(f.Meta.ConflictsWith, ","), b2i(ruling), b2i(intask), b2i(words), b2i(isLocal), f.Meta.Created); err != nil {
 			return err
 		}
 	}
@@ -317,6 +322,12 @@ type Situation struct {
 	// RestrictRepos enforces nonempty applies_to.repos for hook delivery,
 	// including when Repo is unknown. Explicit search leaves this off.
 	RestrictRepos bool
+	// Scopes, when set, replace the scopes the situation can use: an
+	// explicit search names the scopes it reads (the MCP tool's scope).
+	Scopes []string
+	// Type keeps only facts of that type; RulingsOnly only owner rulings.
+	Type        string
+	RulingsOnly bool
 	// PromptRelevance uses summary coverage/coherence, with an additional
 	// corpus-weighted, supported-phrase route (see RetrievalEvidence). The
 	// route can resolve a fact despite capture-repo metadata when cwd has no
@@ -461,6 +472,9 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	if (sit.Derived || sit.OnlyDerived) && sit.Repo != "" {
 		scopes = append(scopes, "derived/"+strings.ToLower(sit.Repo))
 	}
+	if len(sit.Scopes) > 0 {
+		scopes = append([]string(nil), sit.Scopes...)
+	}
 	// FTS5 OR query; bm25 weights: name 6, description 6, body 1 (descriptions
 	// state the fact; bodies carry context that dilutes).
 	quoted := make([]string, len(terms))
@@ -482,6 +496,13 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	}
 	if sit.Printable {
 		inboxClause += " AND f.type != 'result_ref'"
+	}
+	if sit.Type != "" {
+		inboxClause += " AND f.type = :onlyType"
+		args = append(args, sql.Named("onlyType", sit.Type))
+	}
+	if sit.RulingsOnly {
+		inboxClause += " AND f.ruling = 1"
 	}
 	// Eligibility is part of WHERE, before the candidate LIMIT. Filtering a
 	// truncated OR ranking afterward would let unrelated facts starve hits.
@@ -574,7 +595,7 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	if allowRelationRouting && sit.PromptRelevance && !sit.OnlyDerived {
 		scopeClause = "(" + scopeClause + " OR (f.scope LIKE 'projects/%' AND (" + route + ")))"
 	}
-	q := fmt.Sprintf(`SELECT f.path, f.name, f.scope, f.type, f.description, f.body, f.inbox, f.kind, f.conflicts, f.ruling, f.intask, f.words, f.local, -bm25(fts, 6.0, 6.0, 1.0) AS score %s
+	q := fmt.Sprintf(`SELECT f.path, f.name, f.scope, f.type, f.description, f.body, f.inbox, f.kind, f.conflicts, f.ruling, f.intask, f.words, f.local, coalesce(f.applies, ''), coalesce(f.created, ''), -bm25(fts, 6.0, 6.0, 1.0) AS score %s
 		FROM fts JOIN facts f ON f.id = fts.rowid
 		WHERE fts MATCH :query AND f.superseded = 0 AND %s %s
 		ORDER BY score DESC LIMIT :candidateLimit`, selectCoverage, scopeClause, inboxClause)
@@ -588,9 +609,9 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	for rows.Next() {
 		var h Hit
 		var inbox, ruling, intask, words, local int
-		var conflicts string
+		var conflicts, applies string
 		matched := make([]int, len(coverage))
-		dest := []any{&h.Path, &h.Name, &h.Scope, &h.Type, &h.Description, &h.Body, &inbox, &h.Kind, &conflicts, &ruling, &intask, &words, &local, &h.Score}
+		dest := []any{&h.Path, &h.Name, &h.Scope, &h.Type, &h.Description, &h.Body, &inbox, &h.Kind, &conflicts, &ruling, &intask, &words, &local, &applies, &h.Created, &h.Score}
 		for i := range matched {
 			dest = append(dest, &matched[i])
 		}
@@ -603,6 +624,7 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 			}
 		}
 		h.Evidence = evidence[h.Path]
+		_ = json.Unmarshal([]byte(applies), &h.Applies)
 		h.Inbox, h.Ruling, h.InTask, h.Words, h.Local = inbox == 1, ruling == 1, intask == 1, words == 1, local == 1
 		if conflicts != "" {
 			h.Conflicts = strings.Split(conflicts, ",")
