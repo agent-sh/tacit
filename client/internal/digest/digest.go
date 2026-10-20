@@ -318,6 +318,10 @@ func claudeLine(o map[string]any) []string {
 	msg, _ := o["message"].(map[string]any)
 	content := msg["content"]
 	meta, _ := o["isMeta"].(bool)
+	// The summary Claude Code writes as a user turn after a compaction is the
+	// harness's text, not the owner's words.
+	summary, _ := o["isCompactSummary"].(bool)
+	meta = meta || summary
 	var out []string
 	userText := func(txt string) {
 		if strings.TrimSpace(txt) == "" {

@@ -1,6 +1,9 @@
 package digest
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Each harness's compaction entry, as it writes it (synthetic copies of the
 // shapes in ~/.claude/projects, ~/.codex/sessions and pi's session manager),
@@ -33,5 +36,23 @@ func TestCompactedReadsEachHarnessMarker(t *testing.T) {
 	}
 	if Compacted([]byte(turn+turn), Claude) {
 		t.Error("plain turns read as a compaction")
+	}
+}
+
+// Claude Code writes the compaction summary as a user turn: it is the
+// harness's text (H:), never the owner's words (U:). The same words in a
+// turn without the flag stay the owner's.
+func TestClaudeCompactSummaryIsHarnessText(t *testing.T) {
+	in := `{"type":"user","message":{"role":"user","content":"This session is being continued from a previous conversation. The owner said: always rebase."},"isVisibleInTranscriptOnly":true,"isCompactSummary":true}` + "\n" +
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Summary block as text, flagged."}]},"isCompactSummary":true}` + "\n" +
+		`{"type":"user","isCompactSummary":false,"message":{"content":"This session is being continued, says the owner."}}` + "\n"
+	got := Lines(strings.NewReader(in), Claude)
+	want := []string{
+		"H: This session is being continued from a previous conversation. The owner said: always rebase.",
+		"H: Summary block as text, flagged.",
+		"U: This session is being continued, says the owner.",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
