@@ -315,6 +315,22 @@ func TestDreamRuntimeSetting(t *testing.T) {
 	}
 }
 
+func TestStaleWorkersSetting(t *testing.T) {
+	clear(t, "TACIT_STALE_WORKERS")
+	file := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(file, []byte("stale_workers: 1\n"), 0600)
+	if err := Load(file, true); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("TACIT_STALE_WORKERS") != "1" {
+		t.Fatal("stale_workers not applied")
+	}
+	os.WriteFile(file, []byte("stale_workers: -1\n"), 0600)
+	if err := Load(file, true); err == nil {
+		t.Fatal("negative stale_workers accepted")
+	}
+}
+
 func TestHermesStoreSetting(t *testing.T) {
 	clear(t, "TACIT_HERMES_DB")
 	dir := t.TempDir()

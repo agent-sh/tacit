@@ -265,6 +265,8 @@ Changes to the release workflow, archive builder or installer scripts run native
 
 ### Runtime pauses
 
+`stale_workers` in YAML or `TACIT_STALE_WORKERS` sets how many facts the curator's stale step checks at once (default 4). Each runs its own git commands against the checkouts, tens of thousands per run on a large store, so a machine that does other work sets 1.
+
 `dream_max_runtime` in YAML or `TACIT_DREAM_MAX_RUNTIME` controls the extraction/persistence phase of a batch. Its existing default is `45m`. `tacit dream --max-runtime 1h` overrides it for a run; `0` disables the batch limit while per-attempt deadlines still apply. Preparation and pending-note recovery retain their separate bounds.
 
 Reaching the batch runtime or call limit is a pause with exit 0. Successful notes are already pushed and cursor/chunk progress is saved. The interrupted window remains pending. A prior genuine failure still makes that run exit 1; a model-attempt timeout on its own remains a failure. Accounting includes `pause_reason` (`runtime` or `call_limit`) and the number of `remaining_windows`.

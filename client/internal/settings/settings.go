@@ -46,16 +46,19 @@ type Utility struct {
 }
 
 type Config struct {
-	Utility         Utility                    `yaml:"utility"`
-	DreamMaxRuntime string                     `yaml:"dream_max_runtime"`
-	Efforts         map[string]string          `yaml:"efforts"`
-	Profiles        map[string]string          `yaml:"profiles"`
-	Timeouts        map[string]string          `yaml:"timeouts"`
-	Fallbacks       map[string]*modelrun.Route `yaml:"fallbacks"`
-	RunnerArgs      map[string][]string        `yaml:"runner_args"`
-	Runner          string                     `yaml:"runner"`
-	Runners         Runners                    `yaml:"runners"`
-	Commands        map[string]string          `yaml:"commands"`
+	Utility         Utility `yaml:"utility"`
+	DreamMaxRuntime string  `yaml:"dream_max_runtime"`
+	// StaleWorkers is how many facts the curator's stale step checks at once
+	// (git commands in parallel); 0 is the default, 4.
+	StaleWorkers int                        `yaml:"stale_workers"`
+	Efforts      map[string]string          `yaml:"efforts"`
+	Profiles     map[string]string          `yaml:"profiles"`
+	Timeouts     map[string]string          `yaml:"timeouts"`
+	Fallbacks    map[string]*modelrun.Route `yaml:"fallbacks"`
+	RunnerArgs   map[string][]string        `yaml:"runner_args"`
+	Runner       string                     `yaml:"runner"`
+	Runners      Runners                    `yaml:"runners"`
+	Commands     map[string]string          `yaml:"commands"`
 
 	Store       string   `yaml:"store"`
 	Projects    string   `yaml:"projects"`
@@ -135,6 +138,9 @@ func Load(path string, required bool) error {
 		return filepath.Clean(p)
 	}
 	explicitEmpty := map[string]bool{}
+	if c.StaleWorkers < 0 {
+		return fmt.Errorf("stale_workers must be 0 (the default) or more")
+	}
 	if c.DreamMaxRuntime != "" {
 		if limit, err := time.ParseDuration(c.DreamMaxRuntime); err != nil || limit < 0 {
 			return fmt.Errorf("dream_max_runtime must be a nonnegative duration")
@@ -190,6 +196,9 @@ func Load(path string, required bool) error {
 	}
 	values["TACIT_RUNNER"] = c.Runner
 	values["TACIT_DREAM_MAX_RUNTIME"] = c.DreamMaxRuntime
+	if c.StaleWorkers > 0 {
+		values["TACIT_STALE_WORKERS"] = strconv.Itoa(c.StaleWorkers)
+	}
 	for role, name := range map[string]string{"DREAM": c.Runners.Dream, "CURATE": c.Runners.Curate, "JUDGE": c.Runners.Judge, "VERIFY": c.Runners.Verify} {
 		values["TACIT_"+role+"_RUNNER"] = name
 	}
