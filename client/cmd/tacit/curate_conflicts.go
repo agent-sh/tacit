@@ -48,14 +48,14 @@ var openConflictIndex = func(ctx context.Context, storeDir, head string) (confli
 
 // conflictPairs pairs every fact in facts with its closest curated fact in
 // the index at the clone's HEAD (score 8 or more, never itself, never one
-// skip rejects) and, with withinSet, with the other facts of the set in the
+// skip rejects, never this machine's overlay unless withLocal) and, with withinSet, with the other facts of the set in the
 // same scope that share most of their terms.
 //
 // A failed index query opens the index again and asks once more; when that
 // fails too the error is returned and the caller writes nothing: the
 // 2026-10-11 run logged 509 failed queries and wrote 509 facts without their
 // check.
-func conflictPairs(ctx context.Context, s *store.Store, facts []*fact.Fact, host string, withinSet bool, skip func(f *fact.Fact, h search.Hit) bool) ([]curate.Pair, []judgedPair, error) {
+func conflictPairs(ctx context.Context, s *store.Store, facts []*fact.Fact, host string, withinSet, withLocal bool, skip func(f *fact.Fact, h search.Hit) bool) ([]curate.Pair, []judgedPair, error) {
 	var ix conflictIndex
 	open := func() error {
 		if ix != nil {
@@ -99,7 +99,10 @@ func conflictPairs(ctx context.Context, s *store.Store, facts []*fact.Fact, host
 			}
 		}
 		for _, h := range hits {
-			if h.Name == f.Meta.Name || (skip != nil && skip(f, h)) {
+			// This machine's overlay is never a store fact's partner: a pair
+			// would put its name and description in a review file the store
+			// curator pushes. Only the local curator (withLocal) pairs with it.
+			if h.Name == f.Meta.Name || (h.Local && !withLocal) || (skip != nil && skip(f, h)) {
 				continue
 			}
 			key := [2]string{h.Name, f.Meta.Name}
@@ -305,7 +308,7 @@ func recheckConflicts(ctx context.Context, s *store.Store, host, since, until st
 	rep.ModelCalls = &modelrun.Trace{}
 	ctx = modelrun.WithTrace(ctx, rep.ModelCalls)
 	newer := func(f *fact.Fact, h search.Hit) bool { return created[h.Name] > f.Meta.Created }
-	pairs, refs, err := conflictPairs(ctx, s, set, host, false, newer)
+	pairs, refs, err := conflictPairs(ctx, s, set, host, false, false, newer)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "curate: recheck:", err)
 		return 1

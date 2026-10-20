@@ -677,3 +677,60 @@ func TestLocalCurateTakesDreamerNotesAndChecksTheOwnersTurns(t *testing.T) {
 	}
 	r.untouched()
 }
+
+// On a writer clone the store curator never pairs a new fact with this
+// machine's overlay: no local fact reaches its judge, its review file or the
+// server, also with a local fact the judge would call a contradiction.
+func TestStoreCuratorNeverPairsWithTheOverlay(t *testing.T) {
+	r := newLocalRig(t)
+	host := store.ShortHost()
+	secret := "The marmot vault unlock phrase lives in the ops notebook on this laptop"
+	lf := &fact.Fact{Meta: fact.Meta{Name: "marmot-vault-phrase", Description: secret, Type: "machine_fact", Scope: "user",
+		Source: fact.Source{Harness: "curator", Host: host, Kind: "observed"}, Created: "2026-10-20"}, Body: secret + ".\n"}
+	b, _ := lf.Encode()
+	if err := overlay.Write(r.local, r.s.Dir, "curated/user/marmot-vault-phrase.md", b); err != nil {
+		t.Fatal(err)
+	}
+	// The machine becomes a writer clone (a path remote needs no key).
+	gitIn(t, r.s.Dir, "config", "--unset", "tacit.readonly")
+	gitIn(t, r.s.Dir, "config", "--unset", "remote.origin.pushurl")
+	gitIn(t, r.s.Dir, "config", "user.name", "curator")
+	gitIn(t, r.s.Dir, "config", "user.email", "curator@tacit")
+	note := &fact.Fact{Path: "inbox/claude@" + host + "/marmot-note.md", Meta: fact.Meta{Name: "marmot-note", Description: "The marmot vault unlock phrase moved to the shared password manager", Type: "unclassified", Scope: "user",
+		Source: fact.Source{Harness: "claude", Host: host, Kind: "observed"}, Created: "2026-10-20"}, Body: "The marmot vault unlock phrase moved to the shared password manager.\n"}
+	writeFactFile(t, r.s.Dir, note)
+	git(t, r.s.Dir, "add", "-A")
+	git(t, r.s.Dir, "commit", "-q", "-m", "note")
+	git(t, r.s.Dir, "push", "-q", "origin", "HEAD:main")
+	r.split(map[string]any{"origin": "marmot-note", "name": "marmot-phrase-moved", "description": "The marmot vault unlock phrase moved to the shared password manager", "type": "machine_fact", "scope": "user", "kind": "observed", "body": "Moved.", "applies_to": map[string]any{}})
+	var asked []string
+	judgeRun = func(_ context.Context, _, prompt string) (string, float64, error) {
+		var out []string
+		for _, m := range regexp.MustCompile(`EXISTING \(([^)]*)\)`).FindAllStringSubmatch(prompt, -1) {
+			asked = append(asked, m[1])
+			out = append(out, "contradicts")
+		}
+		b, _ := json.Marshal(out)
+		return string(b), 0, nil
+	}
+	previous := curateUpkeep
+	defer func() { curateUpkeep = previous }()
+	curateUpkeep = func(context.Context, *store.Store, string, bool, *curate.Report) {}
+	prevStale := curateStaleStep
+	defer func() { curateStaleStep = prevStale }()
+	curateStaleStep = func(context.Context, *store.Store, bool) int { return 0 }
+	if code := runCurate([]string{"--max-batches", "1"}); code != 0 {
+		t.Fatalf("store curate exit %d", code)
+	}
+	if _, ok := findFact(r.s.Dir, "marmot-phrase-moved"); !ok {
+		t.Fatal("the store curator wrote nothing")
+	}
+	for _, a := range asked {
+		if a == "marmot-vault-phrase" {
+			t.Fatal("the judge was asked about a local fact")
+		}
+	}
+	if all := gitIn(t, r.bare, "log", "--all", "-p"); strings.Contains(all, "marmot-vault-phrase") || strings.Contains(all, "ops notebook") {
+		t.Fatal("the server holds this machine's local fact")
+	}
+}
