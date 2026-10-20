@@ -22,6 +22,8 @@ func (e *Failure) Error() string {
 }
 
 var statusPattern = regexp.MustCompile(`(?i)\b(?:HTTP|API error|status(?: code)?)\s*[:=]?\s*(\d{3})\b`)
+var refusalPattern = regexp.MustCompile(`(?i)safeguards flagged this (session|request)|anthropic\.com/legal/aup`)
+
 var providerCodePattern = regexp.MustCompile(`(?i)\b(overloaded_error|ThrottlingException|ServiceUnavailableException|ModelNotReadyException|rate_limit_error|authentication_error|AccessDeniedException|ValidationException|ResourceNotFoundException)\b`)
 
 // ProviderFailure accepts structured status/code first and only recognizes
@@ -65,6 +67,13 @@ func ProviderFailure(status int, code, message string) *Failure {
 		if strings.HasPrefix(t, "repeated 529 overloaded errors") || strings.HasPrefix(t, "api error: repeated 529 overloaded errors") || strings.HasPrefix(t, "opus is experiencing high load, please use /model") {
 			kind = "capacity"
 		}
+	}
+	// The model's own safety filter refused the request (Claude: "Opus 5.5's
+	// safeguards flagged this session", linking the usage policy). The same
+	// prompt fails on that model every time, so it is the configured
+	// fallback's to try, not a retry's.
+	if status == 0 && refusalPattern.MatchString(message) {
+		kind = "refusal"
 	}
 	return &Failure{kind, status, code, message}
 }
