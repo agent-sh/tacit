@@ -130,20 +130,33 @@ func TestFailedTranscriptWaitsForTheFullRun(t *testing.T) {
 			t.Fatalf("%v within the backoff: exit %d, %d call(s)", args, code, calls)
 		}
 	}
-	// The full run retries (and fails again).
+	// The full run retries (and fails again); then it succeeds, and the
+	// record goes with the moved cursor.
 	if code := runDream(nil); code != 1 || calls != 2 {
 		t.Fatalf("full run: exit %d, %d call(s)", code, calls)
 	}
-	// Past the backoff the idle run takes it again, and success clears it.
+	fail = false
+	if code := runDream(nil); code != 0 || calls != 3 {
+		t.Fatalf("full run, model back: exit %d, %d call(s)", code, calls)
+	}
+	if st, _ := dream.LoadState(statePath); st.Offsets[transcript] == 0 || len(st.FailedAt) != 0 {
+		t.Fatalf("after success: %+v", st)
+	}
+	// Past the backoff the idle run takes a failed transcript again.
+	f, _ := os.OpenFile(transcript, os.O_APPEND|os.O_WRONLY, 0o600)
+	f.WriteString(`{"type":"user","message":{"content":"Check the fixture write mode too."}}` + "\n" + `{"type":"assistant","message":{"content":[{"type":"text","text":"The fixture driver requires synchronous writes."}]}}` + "\n" + strings.Repeat(" ", 5000) + "\n")
+	f.Close()
+	os.Chtimes(transcript, quiet, quiet)
+	fail = true
+	if code := runDream([]string{"--idle", "20m"}); code != 1 || calls != 4 {
+		t.Fatalf("failing again: exit %d, %d call(s)", code, calls)
+	}
 	st, _ = dream.LoadState(statePath)
 	st.FailedAt[transcript] = time.Now().Add(-dream.FailureBackoff - time.Minute).Format(time.RFC3339)
 	dream.SaveState(statePath, st)
 	fail = false
-	if code := runDream([]string{"--idle", "20m"}); code != 0 || calls != 3 {
+	if code := runDream([]string{"--idle", "20m"}); code != 0 || calls != 5 {
 		t.Fatalf("past the backoff: exit %d, %d call(s)", code, calls)
-	}
-	if st, _ := dream.LoadState(statePath); st.Offsets[transcript] == 0 || len(st.FailedAt) != 0 {
-		t.Fatalf("after success: %+v", st)
 	}
 }
 
@@ -231,10 +244,15 @@ func TestIdleJobAndHooksDoNothingWhereTheDreamerCannotWrite(t *testing.T) {
 	hookOut(t, `{"session_id":"s1","transcript_path":"`+transcript+`","cwd":"`+home+`","hook_event_name":"PreCompact"}`, "pre-compact")
 	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
 		if b, _ := os.ReadFile(started); len(b) > 0 {
-			return
+			break
 		}
 	}
-	t.Fatal("with the key, the hook started no dream")
+	// A new executable's first runs can be slow to start: count once more
+	// after a pause, so a late start from the refused cases shows too.
+	time.Sleep(time.Second)
+	if b, _ := os.ReadFile(started); strings.Count(string(b), "\n") != 1 {
+		t.Fatalf("want the one dream of the control, started:\n%s", b)
+	}
 }
 
 // --session dreams only that transcript, and on a machine with no cursors it
