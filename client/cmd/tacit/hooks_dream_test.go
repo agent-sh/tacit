@@ -190,15 +190,24 @@ func TestPromptHookStartsTheDreamAtAFullWindow(t *testing.T) {
 		st.Offsets[transcript] = at
 		dream.SaveState(statePath, st)
 	}
+	// A started dream is recorded at its cursor in dream-trigger.json when
+	// the hook returns; the stand-in's own line may come later (a new
+	// executable's first runs can be slow to start), so it is counted with a
+	// wait, and once more at the end.
+	triggers := filepath.Join(platform.StateDir(home), "dream-trigger.json")
 	n := 0
 	expect := func(what string, start bool) {
 		t.Helper()
+		before, _ := os.ReadFile(triggers)
 		hookOut(t, prompt, "prompt")
+		after, _ := os.ReadFile(triggers)
+		if string(after) != string(before) != start {
+			t.Fatalf("%s: dream-trigger.json %s -> %s, want a dream started: %v", what, before, after, start)
+		}
 		if start {
 			n++
 		}
-		got := started(n)
-		if len(got) != n || n > 0 && got[n-1] != want {
+		if got := started(n); len(got) < n || n > 0 && got[n-1] != want {
 			t.Fatalf("%s: started %v, want %d dream(s) of %s", what, got, n, transcript)
 		}
 	}
@@ -231,6 +240,11 @@ func TestPromptHookStartsTheDreamAtAFullWindow(t *testing.T) {
 	expect("a read-only clone", false)
 	git(t, os.Getenv("TACIT_STORE"), "config", "--unset", "tacit.readonly")
 	expect("a writable clone", true)
+
+	time.Sleep(time.Second)
+	if got := started(n); len(got) != n {
+		t.Fatalf("started %d dream(s), want %d: %v", len(got), n, got)
+	}
 
 	// The check's cost on a machine with many cursors: a stat and a state
 	// read, no digest, no model, no git when below the threshold.
@@ -273,8 +287,8 @@ func TestPromptHookStartsAHermesDreamAtAFullWindow(t *testing.T) {
 	prompt := `{"session_id":"hermes-20261020-abc","hermes_session_id":"20261020_abc","cwd":"` + home + `","prompt":""}`
 	windowHermesBytes = 5000
 	hookOut(t, prompt, "prompt")
-	if got := started(0); len(got) != 0 {
-		t.Fatalf("below a window: %v", got)
+	if _, err := os.Stat(filepath.Join(platform.StateDir(home), "dream-trigger.json")); err == nil {
+		t.Fatal("below a window, a dream started")
 	}
 	windowHermesBytes = 1000
 	hookOut(t, prompt, "prompt")
