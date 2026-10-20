@@ -356,9 +356,18 @@ func ValidScope(s string) bool {
 	}
 }
 
+// IndexFile is the generated index file of a store folder (internal/tree).
+// Its name starts with an underscore, which a fact's name (a slug) cannot,
+// so it never collides with a fact and is never read as one.
+const IndexFile = "_index.md"
+
+// IsIndexFile reports a folder index file by its base name.
+func IsIndexFile(name string) bool { return name == IndexFile }
+
 // Walk loads every .md fact under root, in path order. Skipped: the
-// generated MEMORY.md, a root README.md, keys/, review/, dot directories
-// and symlinks (a symlink could point outside the store). Files that fail to
+// generated MEMORY.md and folder indexes (_index.md), a root README.md,
+// keys/, review/, dot directories and symlinks (a symlink could point
+// outside the store). Files that fail to
 // parse are returned in errs with their path.
 func Walk(root string) (facts []*Fact, errs []error, err error) {
 	err = filepath.WalkDir(root, func(p string, d os.DirEntry, werr error) error {
@@ -372,7 +381,7 @@ func Walk(root string) (facts []*Fact, errs []error, err error) {
 			}
 			return nil
 		}
-		if d.Type()&os.ModeSymlink != 0 || !strings.HasSuffix(name, ".md") {
+		if d.Type()&os.ModeSymlink != 0 || !strings.HasSuffix(name, ".md") || IsIndexFile(name) {
 			return nil
 		}
 		rel, _ := filepath.Rel(root, p)

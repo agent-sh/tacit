@@ -688,6 +688,11 @@ func writeLocalBatch(dir, storeDir string, facts []*fact.Fact, rulings []bool, l
 			return n, retired, err
 		}
 	}
+	// The local layer's folder indexes follow its facts (tacit_tree reads them).
+	local, _ := overlay.Load(dir)
+	if err := regenLocalIndexes(dir, storeDir, local); err != nil {
+		return n, retired, err
+	}
 	return n, retired, nil
 }
 

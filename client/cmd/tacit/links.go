@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -15,7 +16,6 @@ import (
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
-	"github.com/agent-sh/tacit/client/internal/index"
 	"github.com/agent-sh/tacit/client/internal/links"
 	"github.com/agent-sh/tacit/client/internal/lint"
 	"github.com/agent-sh/tacit/client/internal/search"
@@ -267,6 +267,7 @@ func linksLocked(ctx context.Context, s *store.Store, now func() time.Time) (*li
 			}
 		}
 		// final is what goes in the commit: it shrinks when the gate drops a fact.
+		var indexRels []string // the folder indexes regenIndexes wrote
 		final := func() []string {
 			var ps []string
 			for _, fx := range fixes {
@@ -279,7 +280,7 @@ func linksLocked(ctx context.Context, s *store.Store, now func() time.Time) (*li
 			for rel := range t.ownDirt {
 				ps = append(ps, rel)
 			}
-			ps = dedupe(append(ps, "MEMORY.md"))
+			ps = dedupe(append(append(ps, "MEMORY.md"), indexRels...))
 			sort.Strings(ps)
 			return ps
 		}
@@ -318,7 +319,7 @@ func linksLocked(ctx context.Context, s *store.Store, now func() time.Time) (*li
 			if err != nil {
 				return fail(err)
 			}
-			if err := os.WriteFile(filepath.Join(s.Dir, "MEMORY.md"), []byte(index.Generate(all)), 0o644); err != nil {
+			if indexRels, err = regenIndexes(ctx, s.Dir, all, before); err != nil {
 				return fail(err)
 			}
 			findings, err := lintRun(s.Dir) // a linter that cannot run is a failed gate
@@ -327,7 +328,7 @@ func linksLocked(ctx context.Context, s *store.Store, now func() time.Time) (*li
 			}
 			var bad []lint.Finding
 			for _, f := range findings {
-				if !known[f.String()] {
+				if !known[f.String()] && !indexFinding(f) {
 					bad = append(bad, f)
 				}
 			}
@@ -528,9 +529,9 @@ func appendReview(full string, at time.Time, lines []string) error {
 }
 
 // isFactPath is a curated fact file: a Markdown file outside inbox/, review/,
-// keys/ and the two root files.
+// keys/, the two root files and the folder indexes.
 func isFactPath(rel string) bool {
-	if !strings.HasSuffix(rel, ".md") || rel == "MEMORY.md" || rel == "README.md" {
+	if !strings.HasSuffix(rel, ".md") || rel == "MEMORY.md" || rel == "README.md" || fact.IsIndexFile(path.Base(rel)) {
 		return false
 	}
 	for _, d := range []string{"inbox/", "review/", "keys/"} {

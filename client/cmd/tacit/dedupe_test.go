@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
-	"github.com/agent-sh/tacit/client/internal/index"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
@@ -120,7 +119,7 @@ func TestCurateAbsorbsAFactThatRestatesACuratedOne(t *testing.T) {
 	cwd := "The Bash tool resets cwd to /Users/u/work after every call; start every command with cd"
 	writeFact(t, s.Dir, fact.Meta{Name: "cwd-resets", Description: cwd, Type: "machine_fact", Scope: "machines/host-a"}, cwd+"\n")
 	all, _, _ := fact.Walk(s.Dir)
-	os.WriteFile(filepath.Join(s.Dir, "MEMORY.md"), []byte(index.Generate(all)), 0o644)
+	writeIndexesForTest(t, s.Dir, all)
 	gitIn(t, s.Dir, "add", "-A")
 	gitIn(t, s.Dir, "commit", "-q", "-m", "curator: seed")
 	for _, n := range []string{"n1", "n2"} {

@@ -229,6 +229,19 @@ func TestLocalLayerFiles(t *testing.T) {
 	if err := Append(dir, store, ReviewDir+"/2026-10-20.md", []byte("- supersedes? [[a]] may replace the store's [[b]]\n")); err != nil {
 		t.Fatal(err)
 	}
+	// The layer's folder indexes (no frontmatter) are no facts, and Remove
+	// keeps to the layer like Write.
+	for _, rel := range []string{"curated/" + fact.IndexFile, "curated/user/" + fact.IndexFile} {
+		if err := Write(dir, store, rel, []byte("# index\n")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Remove(dir, store, "curated/"+fact.IndexFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(dir, store, "../x.md"); err == nil {
+		t.Fatal("Remove left the layer")
+	}
 	facts, errs := Load(dir)
 	if len(errs) != 0 || len(facts) != 5 {
 		t.Fatalf("Load: %d facts, %v", len(facts), errs)

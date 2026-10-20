@@ -157,6 +157,16 @@ func runResolve(args []string) int {
 	default:
 		usage()
 	}
+	// A superseded fact leaves MEMORY.md and its folder's index.
+	if all, _, err := fact.Walk(s.Dir); err == nil {
+		ix, err := regenIndexes(ctx, s.Dir, all, nil)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "resolve: index:", err)
+			s.Restore(append(changed, ix...))
+			return 2
+		}
+		changed = append(changed, ix...)
+	}
 	if err := s.CommitPush(ctx, changed, msg, "curator"); err != nil {
 		fmt.Fprintln(os.Stderr, "resolve: push:", err)
 		return 1

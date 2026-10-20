@@ -8,7 +8,6 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/derive"
 	"github.com/agent-sh/tacit/client/internal/fact"
-	"github.com/agent-sh/tacit/client/internal/index"
 )
 
 // The real pre-receive hook stops at the first offending file, so a second
@@ -190,7 +189,7 @@ func TestCleaningAKilledRunsDirtLeavesHandMadeFilesAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	all, _, _ := fact.Walk(r.clone)
-	os.WriteFile(filepath.Join(r.clone, "MEMORY.md"), []byte(index.Generate(all)), 0o644)
+	writeIndexesForTest(t, r.clone, all)
 
 	rep, err = r.step(ctxMinute(t))
 	if err != nil {

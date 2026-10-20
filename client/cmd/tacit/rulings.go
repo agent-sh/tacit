@@ -32,7 +32,6 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/curate"
 	"github.com/agent-sh/tacit/client/internal/fact"
-	"github.com/agent-sh/tacit/client/internal/index"
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/lint"
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
@@ -787,7 +786,8 @@ func oneLine(s string) string {
 
 // curatorWrite is the curator's locked write for a step whose change is a
 // function of the store: under the store lock it syncs, plans on the fresh
-// clone, lints, writes, regenerates MEMORY.md, lints again and pushes once as
+// clone, lints, writes, regenerates MEMORY.md and the folder indexes, lints
+// again and pushes once as
 // curator, committing only the files it names. A lint finding the store did
 // not have, a refusal or a failure puts every file back; a lost push race
 // plans again (up to four times). It reports whether a commit was pushed.
@@ -842,7 +842,7 @@ func curatorWrite(ctx context.Context, s *store.Store, plan func() (map[string][
 			if err != nil {
 				return fail(err)
 			}
-			// MEMORY.md names only facts the commit's tree holds.
+			// MEMORY.md and the folder indexes name only facts the commit's tree holds.
 			untracked := untrackedFacts(ctx, s)
 			var tracked []*fact.Fact
 			for _, f := range all {
@@ -850,9 +850,11 @@ func curatorWrite(ctx context.Context, s *store.Store, plan func() (map[string][
 					tracked = append(tracked, f)
 				}
 			}
-			if err := os.WriteFile(filepath.Join(s.Dir, "MEMORY.md"), []byte(index.Generate(tracked)), 0o644); err != nil {
+			ix, err := regenIndexes(ctx, s.Dir, tracked, snap)
+			if err != nil {
 				return fail(err)
 			}
+			rels = dedupe(append(rels, ix...))
 			after, err := lint.Run(s.Dir)
 			if err != nil {
 				return fail(fmt.Errorf("lint could not run, nothing written: %w", err))

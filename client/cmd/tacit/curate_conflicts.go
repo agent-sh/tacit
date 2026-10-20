@@ -14,7 +14,6 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/curate"
 	"github.com/agent-sh/tacit/client/internal/fact"
-	"github.com/agent-sh/tacit/client/internal/index"
 	"github.com/agent-sh/tacit/client/internal/lint"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
 	"github.com/agent-sh/tacit/client/internal/search"
@@ -346,8 +345,12 @@ func recheckConflicts(ctx context.Context, s *store.Store, host, since, until st
 			written = append(written, rel)
 		}
 		facts, _, _ := fact.Walk(s.Dir)
-		os.WriteFile(filepath.Join(s.Dir, "MEMORY.md"), []byte(index.Generate(facts)), 0o644)
-		written = append(written, "MEMORY.md")
+		rels, err := regenIndexes(ctx, s.Dir, facts, nil)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "curate: recheck: index:", err)
+			return 1
+		}
+		written = append(written, rels...)
 		if findings, err := lint.Run(s.Dir); err == nil && len(findings) > 0 {
 			fmt.Fprintf(os.Stderr, "curate: lint: %d finding(s) remain (first: %s)\n", len(findings), findings[0])
 		}

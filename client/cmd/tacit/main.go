@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
 	"github.com/agent-sh/tacit/client/internal/settings"
 	tstore "github.com/agent-sh/tacit/client/internal/store"
+	"github.com/agent-sh/tacit/client/internal/tree"
 )
 
 func usage() {
@@ -28,7 +30,8 @@ func usage() {
   tacit maintain [--env-file FILE]   curate then verify on this machine
   tacit doctor [--models] [--role dream|curate|judge|verify] [--json]   offline configuration and dependency checks
   tacit lint   [--store DIR]
-  tacit index  [--store DIR] [--check]
+  tacit index  [--store DIR] [--check]   MEMORY.md and every folder's _index.md
+  tacit tree   [--depth N] [--repo R] [--host H] [path]   folder indexes from path (default the root) down N levels (default 3)
   tacit import [--store DIR] [--host NAME] claude <memory-dir>...
   tacit import [--store DIR] [--host NAME] codex  <memories-dir>
   tacit clone <url> <harness>     clone the store and set up the credential helper
@@ -133,6 +136,8 @@ func main() {
 		os.Exit(runInit(os.Args[2:]))
 	case "lint":
 		os.Exit(runLint(os.Args[2:]))
+	case "tree":
+		os.Exit(runTree(os.Args[2:]))
 	case "index":
 		os.Exit(runIndex(os.Args[2:]))
 	case "import":
@@ -214,7 +219,7 @@ func runLint(args []string) int {
 func runIndex(args []string) int {
 	fs := flag.NewFlagSet("index", flag.ExitOnError)
 	store := storeFlag(fs)
-	check := fs.Bool("check", false, "exit 1 if MEMORY.md differs instead of writing it")
+	check := fs.Bool("check", false, "exit 1 if MEMORY.md or a folder index differs instead of writing them")
 	fs.Parse(args)
 	facts, perrs, err := fact.Walk(*store)
 	if err != nil {
@@ -228,11 +233,33 @@ func runIndex(args []string) int {
 		return 1
 	}
 	want := index.Generate(facts)
+	gen := tree.Generate(facts, "")
 	dst := filepath.Join(*store, "MEMORY.md")
 	if *check {
-		have, _ := os.ReadFile(dst)
-		if string(have) != want {
+		stale := false
+		if have, _ := os.ReadFile(dst); string(have) != want {
 			fmt.Fprintln(os.Stderr, "MEMORY.md is stale")
+			stale = true
+		}
+		write, remove, err := tree.Plan(*store, gen)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "index:", err)
+			return 1
+		}
+		stalePaths := make([]string, 0, len(write))
+		for rel := range write {
+			stalePaths = append(stalePaths, rel)
+		}
+		sort.Strings(stalePaths)
+		for _, rel := range stalePaths {
+			fmt.Fprintln(os.Stderr, rel, "is stale")
+			stale = true
+		}
+		for _, rel := range remove {
+			fmt.Fprintln(os.Stderr, rel, "is in a folder with no facts")
+			stale = true
+		}
+		if stale {
 			return 1
 		}
 		return 0
@@ -243,6 +270,17 @@ func runIndex(args []string) int {
 		return 1
 	}
 	if err := os.Rename(tmp, dst); err != nil {
+		fmt.Fprintln(os.Stderr, "index:", err)
+		return 1
+	}
+	// The folder indexes (tacit tree, tacit_tree). A curated write commits
+	// them with its facts; this rebuilds them in the clone, and the next
+	// curated write of the store carries them.
+	write, remove, err := tree.Plan(*store, gen)
+	if err == nil {
+		err = tree.Apply(*store, write, remove)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "index:", err)
 		return 1
 	}

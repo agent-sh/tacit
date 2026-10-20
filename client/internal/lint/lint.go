@@ -1,4 +1,4 @@
-// Package lint checks a store tree against the rules in SPEC.md (L1 to L15).
+// Package lint checks a store tree against the rules in SPEC.md (L1 to L16).
 package lint
 
 import (
@@ -12,6 +12,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/index"
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
+	"github.com/agent-sh/tacit/client/internal/tree"
 )
 
 // Finding is one rule violation.
@@ -48,6 +49,17 @@ func Run(root string) ([]Finding, error) {
 		if want := index.Generate(facts); string(b) != want {
 			out = append(out, Finding{"L10", "MEMORY.md", "differs from generated index; run `tacit index`"})
 		}
+	}
+	// L16: the folder indexes equal the generated ones (once the store has
+	// its root index; a store from before the tree is checked only for the
+	// index files it holds).
+	stale, terr := tree.Check(root, tree.Generate(facts, ""))
+	if terr != nil {
+		return nil, terr
+	}
+	for _, msg := range stale {
+		p, m, _ := strings.Cut(msg, ": ")
+		out = append(out, Finding{"L16", p, m})
 	}
 	return out, nil
 }

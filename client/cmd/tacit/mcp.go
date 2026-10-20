@@ -16,8 +16,8 @@ import (
 )
 
 // runMCP serves the store over MCP on stdio: `tacit mcp --harness codex`.
-// Tools: tacit_search, tacit_fact, tacit_add. Every harness that speaks MCP
-// gets the same three verbs; Claude Code gets them too, next to its hooks.
+// Tools: tacit_tree, tacit_search, tacit_fact, tacit_add. Every harness that
+// speaks MCP gets the same verbs; Claude Code gets them too, next to its hooks.
 //
 // `tacit mcp --probe-only` serves one tool, tacit_probe, for the verifier:
 // read-only commands with validated arguments and no shell in between, so
@@ -45,7 +45,8 @@ func runMCP(args []string) int {
 		fmt.Fprintln(os.Stderr, "mcp:", err)
 		return 2
 	}
-	server := mcp.NewServer(&mcp.Implementation{Name: "tacit", Version: "0.1.0"}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "tacit", Version: "0.1.0"}, &mcp.ServerOptions{Instructions: treeInstruction})
+	addTreeTool(server, s)
 
 	type searchArgs struct {
 		Query string `json:"query" jsonschema:"what you are about to do or need to know; facts are matched on it"`

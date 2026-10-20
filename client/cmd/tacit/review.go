@@ -27,7 +27,6 @@ import (
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/gitev"
-	"github.com/agent-sh/tacit/client/internal/index"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
@@ -675,14 +674,11 @@ func (rs *reviewServer) applyOnce(ctx context.Context, ops []op) ([]string, []er
 	}
 	// Keep the index agents read in step with the retirements.
 	if all, _, err := fact.Walk(rs.s.Dir); err == nil {
-		mp := filepath.Join(rs.s.Dir, "MEMORY.md")
-		gen := index.Generate(all)
-		if cur, _ := os.ReadFile(mp); string(cur) != gen {
-			written = append(written, "MEMORY.md")
-			if err := os.WriteFile(mp, []byte(gen), 0o644); err != nil {
-				rs.s.Restore(written)
-				return notes, errs, err
-			}
+		rels, err := regenIndexes(ctx, rs.s.Dir, all, nil)
+		written = append(written, rels...)
+		if err != nil {
+			rs.s.Restore(written)
+			return notes, errs, err
 		}
 	}
 	rels := append(dedupe(written), ".gitattributes")

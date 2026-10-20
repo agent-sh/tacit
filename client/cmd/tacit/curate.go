@@ -17,7 +17,6 @@ import (
 	"github.com/agent-sh/tacit/client/internal/curate"
 	"github.com/agent-sh/tacit/client/internal/derive"
 	"github.com/agent-sh/tacit/client/internal/fact"
-	"github.com/agent-sh/tacit/client/internal/index"
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/lint"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
@@ -605,8 +604,12 @@ func runCurate(args []string) int {
 			}
 		}
 		all, _, _ := fact.Walk(s.Dir)
-		os.WriteFile(filepath.Join(s.Dir, "MEMORY.md"), []byte(index.Generate(all)), 0o644)
-		written = append(written, "MEMORY.md")
+		if rels, err := regenIndexes(ctx, s.Dir, all, nil); err != nil {
+			rep.Errors++
+			fmt.Fprintln(os.Stderr, "curate: index:", err)
+		} else {
+			written = append(written, rels...)
+		}
 		if findings, err := lint.Run(s.Dir); err == nil && len(findings) > 0 {
 			fmt.Fprintf(os.Stderr, "curate: lint: %d finding(s) remain (first: %s)\n", len(findings), findings[0])
 		}
