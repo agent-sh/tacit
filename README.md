@@ -140,10 +140,10 @@ Every YAML option is listed here:
 | `owner_names` | `TACIT_OWNER_NAMES` | Owner name aliases; YAML list, comma-separated environment value |
 | `hermes_db` | `TACIT_HERMES_DB` | Hermes session store the dreamer and the owner's words read; `~/.hermes/state.db` when it exists, `off` for none |
 | `delivery.repo_start` | `TACIT_DELIVERY_REPO_START` | `on` (default): in a repo the SessionStart block is the repo's own rules and standards, then decisions and past mistakes; `off`: the release 0.7.1 block |
-| `delivery.repo_aliases` | `TACIT_DELIVERY_REPO_ALIASES` | `on` (default): a checkout also answers to every remote's repository name and its root manifest's package name |
+| `delivery.repo_aliases` | `TACIT_DELIVERY_REPO_ALIASES` | `on` (default): a checkout also answers to every remote's repository name in its git config and its root manifest's package name |
 | `delivery.prompt_metadata` | `TACIT_DELIVERY_PROMPT_METADATA` | `on` (default): the prompt block adds the repo's fact whose `applies_to` paths or commands the prompt names |
 | `delivery.prompt_action` | `TACIT_DELIVERY_PROMPT_ACTION` | `on` (default): the prompt block adds the repo's best rule or decision for the request when it has none |
-| `delivery.instruction` | `TACIT_DELIVERY_INSTRUCTION` | `on` (default): the SessionStart title and the MCP server's instructions say what tacit holds and ask for one search before an action that changes something |
+| `delivery.instruction` | `TACIT_DELIVERY_INSTRUCTION` | `on` (default): the SessionStart title and the MCP server's instructions say what tacit holds and ask for one search before an action that changes something (the server's also point to `tacit_tree`); `off`: neither, and the server has no instructions |
 | `delivery.tool_push` | `TACIT_DELIVERY_TOOL_PUSH` | `on` (default): the PreToolUse hook gives the one matching rule or decision before an edit or a shell command |
 | `delivery.start_ceiling` | `TACIT_DELIVERY_START_CEILING` | Most lines of the SessionStart repo block; default `6` |
 | `delivery.prompt_ceiling` | `TACIT_DELIVERY_PROMPT_CEILING` | Most curated lines of the prompt block above its floor; default `5` |
