@@ -146,6 +146,7 @@ Every YAML option is listed here:
 | `efforts` | `TACIT_<ROLE>_EFFORT` | Per-role reasoning effort; omitted uses the CLI default, empty clears an override |
 | `profiles` | `TACIT_<ROLE>_PROFILE` | Per-role Codex profile name; empty clears it |
 | `dream_max_runtime` | `TACIT_DREAM_MAX_RUNTIME` | Extraction batch runtime; default `45m`, `0` disables the batch limit; `dream --max-runtime` wins |
+| `stale_workers` | `TACIT_STALE_WORKERS` | Facts the stale step checks at once, each with its own git commands; default `4`; set `1` on a busy machine; `stale --workers` wins |
 | `timeouts` | `TACIT_<ROLE>_TIMEOUT` | Positive Go duration per model attempt, such as `10m`; default `20m` |
 | `commands` | `TACIT_<TOOL>_COMMAND` | Executable name or path; default is the tool name |
 | `runner_args` | `TACIT_<TOOL>_ARGS` | Extra argv without a shell; YAML list or JSON array in the environment |

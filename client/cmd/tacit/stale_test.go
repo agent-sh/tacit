@@ -691,3 +691,12 @@ func TestStillTrueIsSpentUntilANewCommitLands(t *testing.T) {
 		t.Fatalf("%d open stale findings after the new commit, want 1 (engine-retries; the ruling was settled)", open)
 	}
 }
+
+func TestStaleWorkersFromTheEnvironment(t *testing.T) {
+	for v, want := range map[string]int{"": 4, "1": 1, " 2 ": 2, "0": 4, "-3": 4, "many": 4} {
+		t.Setenv("TACIT_STALE_WORKERS", v)
+		if got := staleWorkers(); got != want {
+			t.Errorf("TACIT_STALE_WORKERS=%q: %d, want %d", v, got, want)
+		}
+	}
+}

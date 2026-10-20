@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -465,7 +466,7 @@ func curateStale(ctx context.Context, s *store.Store, dry bool) int {
 	}
 	sctx, cancel := context.WithTimeout(ctx, 55*time.Minute)
 	defer cancel()
-	rep, err := staleStep(sctx, s, staleOptions{Projects: defaultProjects(), Max: defaultStaleMax, Dry: dry, Workers: 4, Budget: 45 * time.Minute, StatePath: staleStatePath()})
+	rep, err := staleStep(sctx, s, staleOptions{Projects: defaultProjects(), Max: defaultStaleMax, Dry: dry, Workers: staleWorkers(), Budget: 45 * time.Minute, StatePath: staleStatePath()})
 	printStale(rep, dry, false)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "curate: stale:", err)
@@ -485,7 +486,7 @@ func runStale(args []string) int {
 	max := fs.Int("max", defaultStaleMax, "write at most this many findings (0 is no cap); the strongest go first")
 	projects := fs.String("projects", defaultProjects(), "directory with the checkouts")
 	asOf := fs.String("as-of", "", "read every repo and fact date as it was at this time (RFC 3339, YYYY-MM-DD HH:MM or YYYY-MM-DD)")
-	workers := fs.Int("workers", 4, "facts checked at once")
+	workers := fs.Int("workers", staleWorkers(), "facts checked at once (default $TACIT_STALE_WORKERS, else 4)")
 	budget := fs.Duration("budget", 45*time.Minute, "read git for at most this long; the facts not reached are checked first next run")
 	gitTimeout := fs.Duration("git-timeout", 0, "bound one git command (default 15s); a loaded machine may need more")
 	verbose := fs.Bool("v", false, "print each finding")
@@ -550,4 +551,14 @@ func runStale(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// staleWorkers is how many facts the stale step checks at once:
+// $TACIT_STALE_WORKERS (settings stale_workers) when it is a positive number,
+// else 4. Each worker runs its own git commands, so a busy machine sets 1.
+func staleWorkers() int {
+	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("TACIT_STALE_WORKERS"))); err == nil && n > 0 {
+		return n
+	}
+	return 4
 }
