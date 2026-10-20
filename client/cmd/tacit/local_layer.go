@@ -209,6 +209,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 	}
 	var pending []*fact.Fact
 	heldBack := 0
+	env := curateEnv(s.Dir, true) // the metadata checks: this machine, the store and the layer's folders
 	noteByName := map[string]*fact.Fact{}
 	for _, f := range notes {
 		noteByName[f.Meta.Name] = f
@@ -340,19 +341,16 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 			fmt.Fprintf(os.Stderr, "curate: budget %s spent, %d batch(es) wait for the next run\n", o.budget, len(queue)+1)
 			break
 		}
-		res, cost, err := curate.RunCLI(ctx, o.model, fmt.Sprintf(curate.SplitPrompt, host, host, curate.Render(batch)))
-		rep.CostUSD += cost
+		// The model's metadata is checked by code (internal/validate); a refused
+		// answer goes back to the model once with the problems.
+		check := entryCheck(env, host, batch, noteByName, where, noOwnerCorpus)
+		entries, err := splitChecked(ctx, &rep, "split", curate.RunCLI, o.model, fmt.Sprintf(curate.SplitPrompt, host, host, curate.Render(batch)), check)
 		if err != nil {
-			rep.Errors++
-			rep.FailedBatches++
-			fmt.Fprintln(os.Stderr, "curate:", err)
-			continue
-		}
-		entries, err := curate.ParseChecked(res)
-		if err != nil {
-			logInvalid(&rep, "split", err)
-			if retry(batch, err, true) {
-				continue
+			if errors.Is(err, modelrun.ErrInvalidResult) {
+				logInvalid(&rep, "split", err)
+				if retry(batch, err, true) {
+					continue
+				}
 			}
 			rep.Errors++
 			rep.FailedBatches++
@@ -370,14 +368,21 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		}
 		recovered := 0
 		if !noOwnerCorpus {
-			res2, c3, rerr := curate.JudgeCLI(ctx, curate.JudgeModel, fmt.Sprintf(curate.RulingsPrompt, strings.Join(rulings, "\n"), curate.Render(batch)))
-			rep.CostUSD += c3
-			var recoveredEntries []curate.Entry
-			if rerr == nil {
-				if recoveredEntries, rerr = curate.ParseChecked(res2); rerr != nil {
-					logInvalid(&rep, "rulings", rerr)
+			// Their entries are kind user (set below): checked as such.
+			rcheck := func(es []curate.Entry) []curate.Problem {
+				us := make([]curate.Entry, len(es))
+				for k, e := range es {
+					e.Kind = "user"
+					us[k] = e
 				}
-				if rerr != nil && retry(batch, rerr, true) {
+				return check(us)
+			}
+			recoveredEntries, rerr := splitChecked(ctx, &rep, "rulings", curate.JudgeCLI, curate.JudgeModel, fmt.Sprintf(curate.RulingsPrompt, strings.Join(rulings, "\n"), curate.Render(batch)), rcheck)
+			if rerr != nil && errors.Is(rerr, modelrun.ErrInvalidResult) {
+				// Only a malformed or refused answer is split: a runner error
+				// says nothing about the notes.
+				logInvalid(&rep, "rulings", rerr)
+				if retry(batch, rerr, true) {
 					continue
 				}
 			}

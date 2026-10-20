@@ -635,7 +635,7 @@ func TestInvalidSplitAnswerIsLoggedByFieldAndRule(t *testing.T) {
 	}
 	b, _ := os.ReadFile(filepath.Join(platform.StateDir(r.home), "curator.log"))
 	var rep curate.Report
-	if json.Unmarshal(b, &rep) != nil || strings.Join(rep.InvalidEntries, "|") != "split: entry 1: applies_to.paths: a value is not a string" {
+	if json.Unmarshal(b, &rep) != nil || strings.Join(rep.InvalidEntries, "|") != "split (sent back): entry 1: applies_to.paths: a value is not a string|split: entry 1: applies_to.paths: a value is not a string" {
 		t.Fatalf("curator.log: %s", b)
 	}
 	if strings.Contains(string(b), "dingo") {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/repoid"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
@@ -106,7 +107,7 @@ func runMCP(args []string) int {
 		Name        string `json:"name" jsonschema:"short slug, e.g. memra-precommit-cargo-path"`
 		Description string `json:"description" jsonschema:"one line (max 200 chars) that states the fact itself with the concrete path, command, host or number"`
 		Body        string `json:"body,omitempty" jsonschema:"one to three sentences: the fact and the why"`
-		Type        string `json:"type" jsonschema:"user_standard | design_decision | past_mistake | machine_fact | code_change | hot_spot | structure | history"`
+		Type        string `json:"type" jsonschema:"user_standard | design_decision | past_mistake | machine_fact | code_change | structure | history | reference | user (who the owner is, user scope only)"`
 		Scope       string `json:"scope,omitempty" jsonschema:"projects/<repo> | machines/<host> | user | system; default projects/<current repo>"`
 		Kind        string `json:"kind,omitempty" jsonschema:"user if the owner said it, observed if you found it out (default), web if it came from a fetched page"`
 	}
@@ -118,7 +119,7 @@ func runMCP(args []string) int {
 		defer cancel()
 		if a.Scope == "" {
 			cwd, _ := os.Getwd()
-			if r := store.RepoName(ctx, cwd); r != "" {
+			if r := repoid.Slug(store.RepoName(ctx, cwd)); r != "" {
 				a.Scope = "projects/" + r
 			}
 		}
