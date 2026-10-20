@@ -81,14 +81,7 @@ func runMCP(args []string) int {
 		}
 		var b strings.Builder
 		for _, h := range hits {
-			tag := ""
-			if h.Inbox {
-				tag = " [unreviewed]"
-			}
-			if h.Local {
-				tag = " (this machine)"
-			}
-			fmt.Fprintf(&b, "## %s%s (%s, %s)\n%s\n\n%s\n\n", h.Name, tag, h.Scope, h.Type, h.Description, h.Body)
+			fmt.Fprintf(&b, "## %s%s (%s, %s)\n%s\n\n%s\n\n", h.Name, mcpTag(h), h.Scope, h.Type, h.Description, h.Body)
 		}
 		return text(b.String()), nil, nil
 	})
@@ -179,4 +172,17 @@ func runProbeMCP() int {
 		return 1
 	}
 	return 0
+}
+
+// mcpTag marks a tacit_search hit: unreviewed (an inbox note, the store's or
+// the local dreamer's) and from this machine's overlay, both when both hold.
+func mcpTag(h search.Hit) string {
+	tag := ""
+	if h.Inbox {
+		tag += " [unreviewed]"
+	}
+	if h.Local {
+		tag += " (this machine)"
+	}
+	return tag
 }
