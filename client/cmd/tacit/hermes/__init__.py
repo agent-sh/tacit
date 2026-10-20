@@ -6,7 +6,9 @@ Codex use, so every harness gets the same facts by the same rules:
 - system_prompt_block: `tacit hook session-start` (owner rules and the facts for
   this host, at most 10 lines), computed once per session in the background.
 - prefetch: `tacit hook prompt` with the user's message (at most 3 facts above
-  the match floor, each fact once per session).
+  the match floor, each fact once per session). With the Hermes session id, so
+  the hook starts a dream of the session once its undreamed part reaches a
+  full window.
 - on_pre_compress: `tacit hook pre-compact`, which starts a dream of this
   session in the background and returns at once, so what the compaction is
   about to drop from the context is in the inbox soon after.
@@ -140,6 +142,8 @@ class TacitProvider(MemoryProvider):
             return ""
         with self._lock:
             payload = {"session_id": self._session, "cwd": self._cwd, "prompt": query}
+            if self._context == "primary" and self._session_id:
+                payload["hermes_session_id"] = self._session_id
         block = _scan(_run(["hook", "prompt"], payload, _PROMPT_WAIT))
         self._last_count = sum(1 for line in block.splitlines() if line.startswith("- "))
         return block
