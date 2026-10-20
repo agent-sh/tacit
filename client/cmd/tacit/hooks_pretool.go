@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/agent-sh/tacit/client/internal/repoid"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
@@ -58,17 +58,21 @@ func toolTargets(name string, input json.RawMessage) (paths []string, command st
 	return paths, command
 }
 
-// gitRoot is the checkout that holds dir, or "".
-func gitRoot(dir string) string {
-	for d := filepath.Clean(dir); filepath.IsAbs(d); d = filepath.Dir(d) {
-		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
-			return d
-		}
-		if filepath.Dir(d) == d {
-			break
-		}
+// repoRel is p (absolute, or relative to cwd) relative to the checkout r
+// is (repoid's Worktree, symlinks resolved on both sides), and false when
+// p is outside it.
+func repoRel(r repoid.Repo, cwd, p string) (string, bool) {
+	if r.Worktree == "" {
+		return "", false
 	}
-	return ""
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(cwd, p)
+	}
+	rel, err := filepath.Rel(r.Worktree, repoid.RealPath(filepath.Clean(p)))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
 }
 
 // preTool is `tacit hook pre-tool` (Claude Code's and Codex's PreToolUse):
@@ -89,22 +93,15 @@ func preTool(s *store.Store, in hookInput) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), toolBudget)
 	defer cancel()
-	root := gitRoot(in.Cwd)
-	if root == "" {
+	repo, ok := sessionRepo(in.Cwd)
+	if !ok {
 		return
 	}
-	sit := search.Situation{Repo: store.RepoName(ctx, in.Cwd), Host: store.ShortHost()}
-	if sit.Repo == "" {
-		return
-	}
-	sit.RepoAliases = hookRepoAliases(ctx, in.Cwd)
+	sit := search.Situation{Repo: repo.Name, Host: store.ShortHost(), RepoAliases: repoAliases(repo)}
 	var rel []string
 	for _, p := range paths {
-		if !filepath.IsAbs(p) {
-			p = filepath.Join(in.Cwd, p)
-		}
-		if r, err := filepath.Rel(root, filepath.Clean(p)); err == nil && !strings.HasPrefix(r, "..") {
-			rel = append(rel, filepath.ToSlash(r))
+		if r, ok := repoRel(repo, in.Cwd, p); ok {
+			rel = append(rel, r)
 		}
 	}
 	if len(rel) == 0 && command == "" {

@@ -2,49 +2,58 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/repoid"
 )
 
-// repoDataNames are the names a checkout's own data gives it, beyond its
-// directory: the repository name of every remote (`git remote -v`: a fork's
-// upstream, a mirror, the URL a renamed repo still has), and the package
-// name of its root manifest (package.json, Cargo.toml, pyproject.toml,
-// go.mod; an npm scope is dropped) when that name shares a word of three
-// letters or more with a name already known, so a generic package name
-// ("agents", "server") never joins an unrelated project's facts. Only slugs
-// count; the reads are bounded by ctx and a read that fails adds nothing.
-func repoDataNames(ctx context.Context, cwd, root string, known []string) []string {
-	var out []string
-	cmd := exec.CommandContext(ctx, "git", "-C", cwd, "remote", "-v")
-	cmd.WaitDelay = 100 * time.Millisecond
-	if b, err := cmd.Output(); err == nil {
-		for _, line := range strings.Split(string(b), "\n") {
-			if f := strings.Fields(line); len(f) >= 2 {
-				if n := remoteRepoName(f[1]); n != "" {
-					out = append(out, n)
-				}
-			}
-		}
+// hookRepoAliases are the names delivery knows the repository of cwd by
+// (repoid: a real git root, a worktree's main repository), or none when cwd
+// is in no repository: a folder named like a project is not evidence of it.
+func hookRepoAliases(cwd string) []string {
+	r, ok := sessionRepo(cwd)
+	if !ok {
+		return nil
 	}
-	if root == "" {
+	return repoAliases(r)
+}
+
+// sessionRepo is the repository cwd is in, under this user's home.
+func sessionRepo(cwd string) (repoid.Repo, bool) {
+	home, _ := os.UserHomeDir()
+	return repoid.Of(cwd, home)
+}
+
+// repoAliases are r's name and the other names repoid knows it by (the
+// lexical name of a symlinked checkout the session ran through, origin's
+// repository name). With the repo-aliases setting on (the default) a
+// checkout also answers to the names its own data gives it: every remote's
+// repository name (repoid's Remotes: a fork's upstream, a mirror, the URL a
+// renamed repo still has), and the package name of its root manifest
+// (package.json, Cargo.toml, pyproject.toml, go.mod; an npm scope is
+// dropped) when that name shares a word of three letters or more with a name
+// already known, so a generic package name ("agents", "server") never joins
+// an unrelated project's facts. A repo renamed or republished keeps the facts
+// filed under its old name that way, with no list of renames to maintain.
+// Only slugs count; everything is read from files, no git process.
+func repoAliases(r repoid.Repo) []string {
+	out := append([]string{r.Name}, r.Aliases...)
+	if !deliveryOn("REPO_ALIASES", true) {
 		return dedupeNames(out)
 	}
+	out = append(out, r.Remotes...)
 	words := map[string]bool{}
-	for _, n := range append(append([]string{}, known...), out...) {
+	for _, n := range out {
 		for _, w := range nameWords(n) {
 			words[w] = true
 		}
 	}
-	for _, n := range manifestNames(root) {
+	for _, n := range manifestNames(r.Worktree) {
 		for _, w := range nameWords(n) {
 			if words[w] {
 				out = append(out, n)

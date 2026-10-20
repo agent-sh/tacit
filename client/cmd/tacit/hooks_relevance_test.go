@@ -129,14 +129,26 @@ func TestHookRepoAliasesVerifiedCheckout(t *testing.T) {
 	if err := os.Symlink(real, link); err != nil {
 		t.Skip(err)
 	}
-	got := hookRepoAliases(context.Background(), filepath.Join(link, "nested"))
+	got := hookRepoAliases(filepath.Join(link, "nested"))
 	for _, name := range []string{"canonical", "checkout-alias", "remote-name"} {
 		if !slices.Contains(got, name) {
 			t.Errorf("missing %s in %v", name, got)
 		}
 	}
-	if got := hookRepoAliases(context.Background(), root); len(got) != 0 {
+	if got := hookRepoAliases(root); len(got) != 0 {
 		t.Errorf("non-repo aliases: %v", got)
+	}
+	// A linked worktree is its main repository (repoid): its directory's
+	// name is no alias.
+	wt := filepath.Join(root, "canonical-wt")
+	for _, args := range [][]string{{"-C", real, "-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "--allow-empty", "-m", "x"}, {"-C", real, "worktree", "add", "-q", wt}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+	}
+	got = hookRepoAliases(wt)
+	if !slices.Contains(got, "canonical") || !slices.Contains(got, "remote-name") || slices.Contains(got, "canonical-wt") {
+		t.Errorf("worktree aliases: %v", got)
 	}
 }
 

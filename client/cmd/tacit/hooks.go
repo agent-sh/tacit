@@ -8,7 +8,6 @@ import (
 	"github.com/agent-sh/tacit/client/internal/platform"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -159,9 +158,9 @@ func runHook(args []string) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), queryBudget+syncBudget)
 	defer cancel()
-	sit := search.Situation{Repo: store.RepoName(ctx, in.Cwd), Host: store.ShortHost()}
-	if sit.Repo != "" {
-		sit.RepoAliases = hookRepoAliases(ctx, in.Cwd)
+	sit := search.Situation{Host: store.ShortHost()}
+	if r, ok := sessionRepo(in.Cwd); ok {
+		sit.Repo, sit.RepoAliases = r.Name, repoAliases(r)
 	}
 
 	switch args[0] {
@@ -222,55 +221,6 @@ func runHook(args []string) int {
 		usage()
 	}
 	return 0
-}
-
-// hookRepoAliases keeps the lexical checkout name as well as its symlink
-// target and origin name. Only a verified checkout contributes aliases; a
-// non-repository cwd named like a project is not evidence of that project.
-//
-// With the repo-aliases setting on (the default) a checkout also answers to
-// the names its own data gives it (repoDataNames): every remote's repository
-// name, not only origin's, and the package name its root manifest declares
-// when that name shares a word with one of the others. A repo renamed or
-// republished keeps the facts filed under its old name that way, with no
-// list of renames to maintain.
-func hookRepoAliases(ctx context.Context, cwd string) []string {
-	var aliases []string
-	root := ""
-	for dir := filepath.Clean(cwd); filepath.IsAbs(dir); dir = filepath.Dir(dir) {
-		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			root = dir
-			aliases = append(aliases, filepath.Base(dir))
-			if real, err := filepath.EvalSymlinks(dir); err == nil {
-				aliases = append(aliases, filepath.Base(real))
-			}
-			break
-		}
-		if filepath.Dir(dir) == dir {
-			break
-		}
-	}
-	if deliveryOn("REPO_ALIASES", true) {
-		return append(aliases, repoDataNames(ctx, cwd, root, aliases)...)
-	}
-	cmd := exec.CommandContext(ctx, "git", "-C", cwd, "remote", "get-url", "origin")
-	cmd.WaitDelay = 100 * time.Millisecond
-	if out, err := cmd.Output(); err == nil {
-		if remote := remoteRepoName(string(out)); remote != "" {
-			aliases = append(aliases, remote)
-		}
-	}
-	return aliases
-}
-
-// remoteRepoName is the repository name in a remote URL: the last path part
-// without .git.
-func remoteRepoName(url string) string {
-	remote := strings.TrimSuffix(strings.TrimRight(strings.TrimSpace(url), "/"), ".git")
-	if i := strings.LastIndexAny(remote, "/:"); i >= 0 {
-		remote = remote[i+1:]
-	}
-	return remote
 }
 
 // isDerived reports a generated fact (derived/<repo>): hot spots, module map.
@@ -544,7 +494,7 @@ func runSearch(args []string) int {
 		cwd, _ := os.Getwd()
 		*repo = store.RepoName(ctx, cwd)
 		if *explainPrompt {
-			repoAliases = hookRepoAliases(ctx, cwd)
+			repoAliases = hookRepoAliases(cwd)
 		}
 	}
 	ix, err := openIndex(ctx, s)

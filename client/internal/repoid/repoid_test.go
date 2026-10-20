@@ -131,6 +131,29 @@ func TestOfResolvesSymlinksToTheRealCheckout(t *testing.T) {
 	}
 }
 
+// Every remote's repository name is a Remote, read from the config (no git
+// process); only origin's is an Alias, and the repository's own name is
+// neither.
+func TestOfReadsEveryRemoteFromTheConfig(t *testing.T) {
+	home := realTemp(t)
+	dir := filepath.Join(home, "projects", "widget")
+	mkRepo(t, dir, "")
+	write(t, filepath.Join(dir, ".git", "config"), "[core]\n\tbare = false\n[remote \"upstream\"]\n\turl = https://example.com/acme/Gizmo.git/\n[remote \"origin\"]\n\turl = git@example.com:me/widget-svc.git\n[remote \"self\"]\n\turl = ../widget\n[branch \"main\"]\n\tremote = origin\n")
+	r, ok := Of(dir, home)
+	if !ok || r.Name != "widget" {
+		t.Fatalf("%+v", r)
+	}
+	if len(r.Aliases) != 1 || r.Aliases[0] != "widget-svc" {
+		t.Fatalf("aliases %v: origin's name only", r.Aliases)
+	}
+	if len(r.Remotes) != 2 || r.Remotes[0] != "gizmo" || r.Remotes[1] != "widget-svc" {
+		t.Fatalf("remotes %v", r.Remotes)
+	}
+	if got := URLName("acme/widget"); got != "widget" {
+		t.Fatalf("URLName owner/repo: %q", got)
+	}
+}
+
 func TestOfStopsAtABrokenGitfile(t *testing.T) {
 	home := realTemp(t)
 	mkRepo(t, filepath.Join(home, "outer"), "")

@@ -154,7 +154,7 @@ func TestSelectionExport(t *testing.T) {
 	defer ix.Close()
 	sit := search.Situation{Repo: store.RepoName(ctx, req.Cwd), Host: store.ShortHost()}
 	if sit.Repo != "" {
-		sit.RepoAliases = hookRepoAliases(ctx, req.Cwd)
+		sit.RepoAliases = hookRepoAliases(req.Cwd)
 	}
 	out, err := selectionExport(ctx, ix, sit, req, s.Dir)
 	if err != nil {
