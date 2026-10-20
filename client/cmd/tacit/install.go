@@ -20,7 +20,7 @@ import (
 // entries are replaced.
 //
 //   - claude: SessionStart, UserPromptSubmit, PreToolUse and PreCompact hooks in ~/.claude/settings.json,
-//     and the MCP server (tacit_search, tacit_fact, tacit_add) in the user
+//     and the MCP server (tacit_tree, tacit_search, tacit_fact, tacit_add) in the user
 //     scope of ~/.claude.json; --no-mcp installs the hooks only and removes
 //     the server.
 //   - codex: the same hooks in ~/.codex/hooks.json (Codex takes the same
@@ -424,7 +424,7 @@ func installClaude(home, exe string, args []string) int {
 	case *noMCP:
 		fmt.Println("no tacit MCP server registered (--no-mcp)")
 	case changed:
-		fmt.Println("registered the tacit MCP server (tacit_search, tacit_fact, tacit_add) for Claude Code in", cfg, "(user scope; the file as it was:", claudeConfigBackup(cfg)+")")
+		fmt.Println("registered the tacit MCP server (tacit_tree, tacit_search, tacit_fact, tacit_add) for Claude Code in", cfg, "(user scope; the file as it was:", claudeConfigBackup(cfg)+")")
 	default:
 		fmt.Println("the tacit MCP server is already registered in", cfg)
 	}
