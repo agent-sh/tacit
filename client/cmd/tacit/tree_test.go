@@ -93,28 +93,34 @@ func TestTacitSearchFiltersTheTree(t *testing.T) {
 	}
 }
 
-// tacit_list with no arguments names the scopes this session can read with
-// counts by type (a project counts the facts tied to it from elsewhere; the
-// rig files one note in projects/widget);
-// with a scope it lists that scope's facts, paged; another machine's scope
-// only when named.
-func TestTacitListBrowsesTheTree(t *testing.T) {
+// tacit_tree starts with the scopes this session reads and their facts by
+// type (a project counts the facts tied to it from elsewhere; the rig files
+// one note in projects/widget), never another project's or machine's unless
+// named as the path; tacit_search with a scope and no query lists that
+// scope's facts, paged, another machine's when named.
+func TestTreeCountsAndSearchListAScope(t *testing.T) {
 	treeRig(t)
-	got := callTool(t, "tacit_list", nil)
+	got := callTool(t, "tacit_tree", map[string]any{"depth": 0})
 	if !strings.Contains(got, "- projects/widget (4): design_decision 2, history 1, user_standard 1") {
 		t.Fatalf("scopes:\n%s", got)
 	}
 	if strings.Contains(got, "projects/gadget") || strings.Contains(got, "host-zz") {
 		t.Fatalf("a scope this session does not read:\n%s", got)
 	}
-	got = callTool(t, "tacit_list", map[string]any{"scope": "projects/widget", "limit": 2})
+	if got := callTool(t, "tacit_tree", map[string]any{"path": "projects/gadget", "depth": 0}); !strings.Contains(got, "- projects/gadget (1): design_decision 1") || !strings.Contains(got, "gadget-decision") {
+		t.Fatalf("a named project:\n%s", got)
+	}
+	got = callTool(t, "tacit_search", map[string]any{"scope": "projects/widget", "limit": 2})
 	if !strings.Contains(got, "1-2 of 4") || !strings.Contains(got, "more: offset 2") || !strings.Contains(got, "widget-signoff") {
 		t.Fatalf("page 1:\n%s", got)
 	}
-	if got := callTool(t, "tacit_list", map[string]any{"scope": "projects/widget", "limit": 2, "offset": 2}); !strings.Contains(got, "3-4 of 4") || !strings.Contains(got, "widget-old-layout") {
+	if got := callTool(t, "tacit_search", map[string]any{"scope": "projects/widget", "limit": 2, "offset": 2}); !strings.Contains(got, "3-4 of 4") || !strings.Contains(got, "widget-old-layout") {
 		t.Fatalf("page 2:\n%s", got)
 	}
-	if got := callTool(t, "tacit_list", map[string]any{"scope": "machines/host-zz"}); !strings.Contains(got, "other-host-fact") {
+	if got := callTool(t, "tacit_search", map[string]any{"scope": "projects/widget"}); !strings.Contains(got, "1-4 of 4") {
+		t.Fatalf("no query, default page:\n%s", got)
+	}
+	if got := callTool(t, "tacit_search", map[string]any{"scope": "machines/host-zz"}); !strings.Contains(got, "other-host-fact") {
 		t.Fatalf("an explicit machine scope:\n%s", got)
 	}
 }

@@ -31,19 +31,18 @@ func usage() {
   tacit doctor [--models] [--role dream|curate|judge|verify] [--json]   offline configuration and dependency checks
   tacit lint   [--store DIR]
   tacit index  [--store DIR] [--check]   MEMORY.md and every folder's _index.md
-  tacit tree   [--depth N] [--repo R] [--host H] [path]   folder indexes from path (default the root) down N levels (default 3)
+  tacit tree   [--depth N] [--repo R] [--host H] [path]   facts by scope and type, then the folder indexes from path (default the root) down N levels (default 3); another repo's or host's folder only when named
   tacit import [--store DIR] [--host NAME] claude <memory-dir>...
   tacit import [--store DIR] [--host NAME] codex  <memories-dir>
   tacit clone <url> <harness>     clone the store and set up the credential helper
   tacit clone --read-only [--as reader] <url>   clone that never pushes; --as signs fetches with that key (the server's public path asks one); agents' adds stay on this machine
   tacit sync                       fast-forward the store and refresh the index
   tacit follow [--url U] [--as H]  hold the server's change feed; sync on each push (a systemd user service)
-  tacit search [--repo R] [--limit N] [--inbox] [--json] [--scope S] [--type T] [--rulings] [--path P] [--command C] [--offset K] [query...]
-  tacit list [--scope S] [--type T] [--limit N] [--offset K]  the store's tree: scopes with counts by type, or one scope's facts
+  tacit search [--repo R] [--limit N] [--inbox] [--json] [--scope S] [--type T] [--rulings] [--path P] [--command C] [--offset K] [query...]  with a filter and no query: those facts, 20 a page
   tacit fact <name>                print one fact
   tacit add --harness H --desc "..." [--type T] [--scope S] [--kind K] <name>
   tacit hook session-start|prompt|pre-tool|pre-compact  Claude Code and Codex hooks (JSON on stdin, block on stdout; pre-tool answers PreToolUse as JSON; pre-compact starts a dream of the session and returns)
-  tacit mcp [--harness H]          MCP stdio server: tacit_search, tacit_fact, tacit_add
+  tacit mcp [--harness H]          MCP stdio server: tacit_tree, tacit_search, tacit_fact, tacit_add
   tacit install claude|codex|hermes|grok|pi|muse|agy|follow|dream|curate|app
   tacit install claude [--no-mcp]   hooks, and the tacit MCP server in Claude Code's user config (~/.claude.json); --no-mcp: hooks only
   tacit install dream [--env-file F]   the dreamer every 4 h, and the idle job every 10 min (dream --idle 20m, then curate --quick) (systemd timers on Linux, launchd agents on macOS)
@@ -155,8 +154,6 @@ func main() {
 		os.Exit(runFollow(os.Args[2:]))
 	case "search":
 		os.Exit(runSearch(os.Args[2:]))
-	case "list":
-		os.Exit(runList(os.Args[2:]))
 	case "fact":
 		os.Exit(runFact(os.Args[2:]))
 	case "add":

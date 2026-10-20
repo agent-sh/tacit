@@ -7,11 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/agent-sh/tacit/client/internal/overlay"
-	"github.com/agent-sh/tacit/client/internal/repoid"
 	"github.com/agent-sh/tacit/client/internal/store"
 	"github.com/agent-sh/tacit/client/internal/tree"
 )
@@ -43,27 +44,51 @@ func runTree(args []string) int {
 }
 
 // treeView is the tree tool's answer for the session in the current
-// directory: its repository (repoid, with the names delivery knows it by)
-// unless repo names one, and host.
+// directory (readSession: its repository under every name delivery knows
+// it by, unless repo names one, and host): first how many facts of each
+// type the answer's scopes hold (scopeCounts, from the search index; left
+// out when the index cannot be opened), then the folder indexes.
 func treeView(s *store.Store, p string, depth int, repo, host string) (string, error) {
-	var repos []string
-	if repo != "" {
-		repos = []string{repo}
-	} else if cwd, err := os.Getwd(); err == nil {
-		home, _ := os.UserHomeDir()
-		if r, ok := repoid.Of(cwd, home); ok {
-			repos = append([]string{r.Name}, r.Aliases...)
-		}
-	}
-	ro := tree.ReadOptions{Store: s.Dir, Repos: repos, Host: host}
+	cwd, _ := os.Getwd()
+	ro := tree.ReadOptions{Store: s.Dir, Session: readSession(cwd, repo, host)}
 	if overlay.LayerOn() && overlay.Outside(overlay.Dir(), s.Dir) {
 		ro.Local = filepath.Join(overlay.Dir(), filepath.FromSlash(overlay.CuratedDir))
 	}
-	return tree.Read(ro, p, depth)
+	out, err := tree.Read(ro, p, depth)
+	if err != nil {
+		return "", err
+	}
+	return treeCounts(s, ro.Session, p) + out, nil
 }
 
-// treeInstruction is the tree tool's line in the MCP server's instructions.
-const treeInstruction = "tacit_tree shows what the store holds for this session, folder by folder, from a folder (default the store root) down a depth (default 3)."
+// treeCounts is scopeCounts for the scopes of a tree answer from folder p:
+// the session's scopes from the root, those under a scope root, or the one
+// scope p is in. Best effort: "" when the index cannot be read in time.
+func treeCounts(s *store.Store, sess tree.Session, p string) string {
+	p, _ = tree.Clean(p)
+	var scopes []string
+	if named := tree.Named(p); named != "" {
+		scopes = []string{named}
+	} else {
+		for _, sc := range sess.Scopes() {
+			if p == "" || strings.HasPrefix(sc, p+"/") {
+				scopes = append(scopes, sc)
+			}
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	ix, err := openIndex(ctx, s)
+	if err != nil {
+		return ""
+	}
+	defer ix.Close()
+	out, err := scopeCounts(ctx, ix, scopes)
+	if err != nil || out == "" {
+		return ""
+	}
+	return out + "\n"
+}
 
 var errTreeArgs = errors.New("depth must be between 0 and 8")
 
@@ -92,7 +117,7 @@ func addTreeTool(server *mcp.Server, s *store.Store) {
 	}
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "tacit_tree",
-		Description: "What the store holds for this session, folder by folder: each folder's facts (name, type, one line) and its subfolders with counts. Read a fact in full with tacit_fact.",
+		Description: "What the store holds for this session, folder by folder: how many facts of each type its scopes hold, each folder's facts (name, type, one line) and its subfolders with counts. Another repository's or machine's folder only when named as the path. A scope's full list is tacit_search scope=<scope>; a fact in full, tacit_fact.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a treeArgs) (*mcp.CallToolResult, any, error) {
 		return text(treeToolText(s, a.Path, a.Depth)), nil, nil
 	})

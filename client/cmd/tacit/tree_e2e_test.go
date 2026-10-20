@@ -225,9 +225,13 @@ func TestFreshStoreCuratesIntoAnIndexedTree(t *testing.T) {
 	if got := heads(view("user", 2)); len(got) != 1 {
 		t.Errorf("user at depth 2: %v", got)
 	}
-	// Another session's repository, and paths out of the store, are refused.
-	if _, err := treeView(s, "projects/widget", 0, "gadget", host); err == nil {
-		t.Error("another repository's folder was shown")
+	// Another session's repository is not listed, but read when named;
+	// paths out of the store are refused.
+	if out, err := treeView(s, "", 3, "gadget", host); err != nil || strings.Contains(out, "widget-port") {
+		t.Errorf("another repository's folder was listed: %v\n%s", err, out)
+	}
+	if out, err := treeView(s, "projects/widget", 0, "gadget", host); err != nil || !strings.Contains(out, "`widget-port`") {
+		t.Errorf("a named repository's folder: %v\n%s", err, out)
 	}
 	for _, p := range []string{"../", "inbox", "/etc"} {
 		if out := treeToolText(s, p, nil); !strings.HasPrefix(out, "error: ") {

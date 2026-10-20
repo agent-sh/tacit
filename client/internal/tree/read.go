@@ -24,11 +24,10 @@ type ReadOptions struct {
 	// Local is the local layer's curated directory (overlay curated/), ""
 	// when the layer is off.
 	Local string
-	// Repos are the session's repository and the names delivery knows it
-	// by (any case); Host is its machine. Only their folders, system/ and
-	// user/ are in scope, as for delivery.
-	Repos []string
-	Host  string
+	// Session is what the tool may read (Session.Reads).
+	Session
+	// named is the scope the caller asked for by name (Named), set by Read.
+	named string
 }
 
 var segRx = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
@@ -53,34 +52,9 @@ func Clean(p string) (string, error) {
 	return p, nil
 }
 
-func (o ReadOptions) repoSet() map[string]bool {
-	m := map[string]bool{}
-	for _, r := range o.Repos {
-		if r != "" {
-			m[strings.ToLower(r)] = true
-		}
-	}
-	return m
-}
-
-// Eligible reports whether folder p is in the session's scope: the root, the
-// scope roots, system/ and user/, the session's project and derived folders
-// and its machine's folder, and anything below those.
-func (o ReadOptions) Eligible(p string) bool {
-	if p == "" {
-		return true
-	}
-	segs := strings.Split(p, "/")
-	switch segs[0] {
-	case "system", "user":
-		return true
-	case "projects", "derived":
-		return len(segs) == 1 || o.repoSet()[segs[1]]
-	case "machines":
-		return len(segs) == 1 || (o.Host != "" && segs[1] == strings.ToLower(o.Host))
-	}
-	return false
-}
+// Eligible reports whether folder p is in the session's scope
+// (Session.Reads), with the scope the caller named.
+func (o ReadOptions) Eligible(p string) bool { return o.Reads(p, o.named) }
 
 // known are the in-scope children of p whether or not p's index lists them
 // (a long folder list is cut at MaxFolders).
@@ -165,14 +139,16 @@ func (o ReadOptions) filter(p, content string) (string, []string) {
 	}
 	s := strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n"
 	if hidden > 0 {
-		s += fmt.Sprintf("\n(%d %s outside this session's scope not shown: another repository's or machine's.)\n", hidden, plural(hidden, "folder", "folders"))
+		s += fmt.Sprintf("\n(%d %s outside this session's scope not shown: another repository's or machine's; name one as the path to read it.)\n", hidden, plural(hidden, "folder", "folders"))
 	}
 	return s, kids
 }
 
 // Read returns the index files of folder p and the folders below it down
 // depth levels that are in the session's scope, store first and then the
-// local layer's for each folder. It reads index files only.
+// local layer's for each folder. p itself names a scope explicitly (Named):
+// another repository's or machine's folder is read when asked for by path,
+// and never listed otherwise. It reads index files only.
 func Read(o ReadOptions, p string, depth int) (string, error) {
 	p, err := Clean(p)
 	if err != nil {
@@ -181,8 +157,9 @@ func Read(o ReadOptions, p string, depth int) (string, error) {
 	if depth < 0 || depth > MaxDepth {
 		return "", fmt.Errorf("depth must be between 0 and %d", MaxDepth)
 	}
+	o.named = Named(p)
 	if !o.Eligible(p) {
-		return "", fmt.Errorf("%s is not in this session's scope: system, user, projects/<this repo>, machines/<this host> and derived/<this repo> are", p)
+		return "", fmt.Errorf("%s is not a folder of the store's tree: system, user, projects/<repo>, machines/<host> and derived/<repo> are", p)
 	}
 	var b strings.Builder
 	cut := false

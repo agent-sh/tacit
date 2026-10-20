@@ -16,9 +16,8 @@ import (
 )
 
 // runMCP serves the store over MCP on stdio: `tacit mcp --harness codex`.
-// Tools: tacit_tree, tacit_search, tacit_list, tacit_fact, tacit_add. Every
-// harness that speaks MCP gets the same verbs; Claude Code gets them too,
-// next to its hooks.
+// Tools: tacit_tree, tacit_search, tacit_fact, tacit_add. Every harness that
+// speaks MCP gets the same verbs; Claude Code gets them too, next to its hooks.
 //
 // `tacit mcp --probe-only` serves one tool, tacit_probe, for the verifier:
 // read-only commands with validated arguments and no shell in between, so
@@ -53,8 +52,8 @@ func runMCP(args []string) int {
 	return 0
 }
 
-// storeServer is tacit's MCP server for an agent harness: tacit_search,
-// tacit_fact and tacit_add over the store.
+// storeServer is tacit's MCP server for an agent harness: tacit_tree,
+// tacit_search, tacit_fact and tacit_add over the store.
 func storeServer(s *store.Store, harness string) *mcp.Server {
 	// Instructions: the harness shows them while the tools are deferred (Claude
 	// Code lists a deferred tool by name only), so the one line that says
@@ -69,12 +68,12 @@ func storeServer(s *store.Store, harness string) *mcp.Server {
 	type searchArgs struct {
 		Query       string `json:"query,omitempty" jsonschema:"what you are about to do or need to know; optional when a filter is given"`
 		Repo        string `json:"repo,omitempty" jsonschema:"repo name to scope to; default: the repo of the working directory"`
-		Scope       string `json:"scope,omitempty" jsonschema:"one scope: user, system, projects/<repo>, machines/<host>, derived/<repo>; default: this repo's, this machine's, user and system"`
+		Scope       string `json:"scope,omitempty" jsonschema:"one scope: user, system, projects/<repo>, machines/<host>, derived/<repo>; with no query, lists its facts; default: this repo's, this machine's, user and system"`
 		Type        string `json:"type,omitempty" jsonschema:"only this type: user_standard, design_decision, past_mistake, machine_fact, history, structure, ..."`
 		RulingsOnly bool   `json:"rulings_only,omitempty" jsonschema:"only the owner's rulings"`
 		Path        string `json:"path,omitempty" jsonschema:"only facts whose applies_to paths cover this file"`
 		Command     string `json:"command,omitempty" jsonschema:"only facts whose applies_to commands match this command"`
-		Limit       int    `json:"limit,omitempty" jsonschema:"facts per page, default 8"`
+		Limit       int    `json:"limit,omitempty" jsonschema:"facts per page, default 8 (20 with no query)"`
 		Offset      int    `json:"offset,omitempty" jsonschema:"skip this many, for the next page"`
 		Inbox       bool   `json:"inbox,omitempty" jsonschema:"include unreviewed inbox facts"`
 	}
@@ -97,35 +96,10 @@ func storeServer(s *store.Store, harness string) *mcp.Server {
 		return text(out), nil, nil
 	})
 
-	type listArgs struct {
-		Scope  string `json:"scope,omitempty" jsonschema:"one scope to list: user, system, projects/<repo>, machines/<host>, derived/<repo>; none: the scopes you can read, with counts by type"`
-		Type   string `json:"type,omitempty" jsonschema:"only this type"`
-		Limit  int    `json:"limit,omitempty" jsonschema:"facts per page, default 20"`
-		Offset int    `json:"offset,omitempty" jsonschema:"skip this many, for the next page"`
-	}
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "tacit_list",
-		Description: "Browse the store's tree when words would not find it: no arguments lists the scopes you can read with counts by type; a scope (and type) lists its facts, one line each, paged.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, a listArgs) (*mcp.CallToolResult, any, error) {
-		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
-		ix, err := openIndex(ctx, s)
-		if err != nil {
-			return nil, nil, err
-		}
-		defer ix.Close()
-		cwd, _ := os.Getwd()
-		out, err := treeList(ctx, ix, browseArgs{Cwd: cwd, Scope: a.Scope, Type: a.Type, Limit: a.Limit, Offset: a.Offset})
-		if err != nil {
-			return text("error: " + err.Error()), nil, nil
-		}
-		return text(out), nil, nil
-	})
-
 	type factArgs struct {
 		Name string `json:"name" jsonschema:"fact name as shown by tacit_search"`
 	}
-	mcp.AddTool(server, &mcp.Tool{Name: "tacit_fact", Description: "Read one fact in full (body, source, applies_to) by the name tacit_search or tacit_list showed."}, func(ctx context.Context, req *mcp.CallToolRequest, a factArgs) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "tacit_fact", Description: "Read one fact in full (body, source, applies_to) by the name tacit_search or tacit_tree showed."}, func(ctx context.Context, req *mcp.CallToolRequest, a factArgs) (*mcp.CallToolResult, any, error) {
 		p, ok := findFactOrLocal(s.Dir, a.Name)
 		if !ok {
 			return text("not found: " + a.Name), nil, nil
