@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/agent-sh/tacit/client/internal/platform"
+	"github.com/agent-sh/tacit/client/internal/repoid"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -720,27 +721,13 @@ func (s *Store) Changed(ctx context.Context, from, to string) ([]string, error) 
 	return paths, nil
 }
 
-// RepoName returns the short name of the repository containing dir: the
-// basename of the directory that holds the common `.git`, so a linked
-// worktree and any subdirectory report the main repository's name. "" when
-// dir is not in a repository.
+// RepoName is the name of the repository dir is in, as repoid names it (a
+// real git root; a linked worktree, a subdirectory and a symlinked checkout
+// report the main checkout's real directory name), or "" when dir is in
+// none. ctx is unused: the lookup reads the file system, no git process.
 func RepoName(ctx context.Context, dir string) string {
-	out, err := git(ctx, dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil {
-		return ""
-	}
-	common := strings.TrimSpace(out) // /path/to/repo/.git
-	if common == "" {
-		return ""
-	}
-	if resolved, err := filepath.EvalSymlinks(common); err == nil {
-		common = resolved
-	}
-	if filepath.Base(common) == ".git" {
-		return filepath.Base(filepath.Dir(common))
-	}
-	// A bare repository: its directory name without .git.
-	return strings.TrimSuffix(filepath.Base(common), ".git")
+	home, _ := os.UserHomeDir()
+	return repoid.Name(dir, home)
 }
 
 // ShortHost is the machine's short host name, lowercased.

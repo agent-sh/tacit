@@ -5,31 +5,26 @@
 // to the folder it started in.
 //
 // Only paths under the home directory count. A path counts for the repo
-// whose root holds it: the nearest directory up the path with a .git entry
-// (a worktree, whose .git is a file, counts for its repository), or, for a
-// Brazil package that was removed from a workspace that still exists, the
-// <workspace>/src/<Package>/ shape. Paths in the home directory's dot
-// directories (~/.claude, ~/.config) are agent and tool state, not repos,
-// and never count. Relative paths (`cd widget`) and Windows paths are not
-// read.
+// repoid finds for it: the nearest real git root up the path, a worktree for
+// its main repository. A folder's name never counts by itself. Paths in the
+// home directory's dot directories (~/.claude, ~/.config) are agent and tool
+// state, not repos, and never count. Relative paths (`cd widget`) and
+// Windows paths are not read.
 package repoinfer
 
 import (
-	"bufio"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/agent-sh/tacit/client/internal/repoid"
 )
 
 // pathRx matches an absolute or home-relative path of two or more parts
 // inside free text: a command, a tool input, a JSON string. It stops at
 // quotes, spaces and the usual delimiters around a path in a command line.
 var pathRx = regexp.MustCompile(`(?:~|/[A-Za-z0-9._@+-]+)(?:/[A-Za-z0-9._@+-]+)+`)
-
-// srcRx is the Brazil package shape <workspace>/src/<Package>/<more>.
-var srcRx = regexp.MustCompile(`^(.+)/src/([A-Za-z][A-Za-z0-9._-]+)/[^/]`)
 
 // workRx ends the text before a path that the agent works in, not one it
 // only reads or runs a tool from: cd, git -C, an edit's target (digest T:
@@ -70,15 +65,18 @@ func paths(t string) []mention {
 
 // Resolver names repos for paths under one home directory and remembers the
 // directories it has looked at, so one call over a transcript stats each
-// directory once. It is not safe for concurrent use.
+// directory once. The repository of a path is repoid's (a real git root,
+// worktrees to their main repository, symlinks resolved); a path mentioned
+// in text counts only under the home directory and outside its dot
+// directories, so a system path that happens to be a checkout (a toolchain,
+// a package manager) is not read as the session's work. It is not safe for
+// concurrent use.
 type Resolver struct {
-	home  string            // symlinks resolved
-	alias string            // home as given, when that differs (a symlinked home)
-	roots map[string]string // directory -> repo root ("" for none)
-	stats map[string]bool   // path (with a trailing / for "is a directory") -> exists
-	// MaxDirs caps the directories and paths one Resolver stats (0 is no
-	// cap); a lookup past it names no repo. The prompt hook sets it to bound
-	// its time on a slow file system.
+	ids   *repoid.Cache
+	roots map[string]string // name -> main checkout, for the names Name returned
+	// MaxDirs caps the directories one Resolver stats (0 is no cap); a lookup
+	// past it names no repo. The prompt hook sets it to bound its time on a
+	// slow file system.
 	MaxDirs int
 	// Stop, when set, is asked before each new directory; true stops the
 	// lookups (a hook past its deadline).
@@ -88,146 +86,35 @@ type Resolver struct {
 // NewResolver resolves paths under home, which is cleaned and has its
 // symlinks resolved the way the paths' are.
 func NewResolver(home string) *Resolver {
-	r := &Resolver{home: real(home), roots: map[string]string{}, stats: map[string]bool{}}
-	if h := filepath.Clean(home); home != "" && h != r.home {
-		r.alias = h
-	}
-	return r
+	return &Resolver{ids: repoid.NewCache(home), roots: map[string]string{}}
 }
 
-func real(p string) string {
-	if p == "" {
-		return ""
-	}
-	p = filepath.Clean(p)
-	if r, err := filepath.EvalSymlinks(p); err == nil {
-		return r
-	}
-	return p
-}
+// Stats is how many file system lookups the resolver has made (what MaxDirs
+// caps).
+func (r *Resolver) Stats() int { return r.ids.Stats() }
 
-// cut reports that the lookups must stop: the stat cap is reached or Stop
-// says so.
-func (r *Resolver) cut() bool {
-	return (r.MaxDirs > 0 && len(r.roots)+len(r.stats) >= r.MaxDirs) || (r.Stop != nil && r.Stop())
-}
-
-// exists reports whether p exists, as a directory when dir is set; each path
-// is statted once, and none past the bounds (cut).
-func (r *Resolver) exists(p string, dir bool) bool {
-	k := p
-	if dir {
-		k += "/"
-	}
-	if v, ok := r.stats[k]; ok {
-		return v
-	}
-	if r.cut() {
-		return false
-	}
-	fi, err := os.Stat(p)
-	v := err == nil && (!dir || fi.IsDir())
-	r.stats[k] = v
-	return v
-}
-
-// root is the root of the repository that holds dir: the nearest directory
-// up to home with a .git entry; "" when there is none or the lookup was cut.
-func (r *Resolver) root(dir string) string {
-	var walked []string
-	root := ""
-	for d := dir; ; d = filepath.Dir(d) {
-		if v, ok := r.roots[d]; ok {
-			root = v
-			break
-		}
-		if d == r.home || !strings.HasPrefix(d, r.home+string(filepath.Separator)) {
-			break
-		}
-		if r.cut() {
-			return ""
-		}
-		walked = append(walked, d)
-		if fi, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
-			root = d
-			if fi.Mode().IsRegular() {
-				root = WorktreeRepo(d)
-			}
-			break
-		}
-	}
-	for _, d := range walked {
-		r.roots[d] = root
-	}
-	return root
-}
-
-// WorktreeRepo is the repository a worktree at dir belongs to: its .git file
-// says "gitdir: <repo>/.git/worktrees/<name>". A .git directory, or a file
-// that says something else (a submodule), leaves dir its own root.
-func WorktreeRepo(dir string) string {
-	fh, err := os.Open(filepath.Join(dir, ".git"))
-	if err != nil {
-		return dir
-	}
-	defer fh.Close()
-	line, _ := bufio.NewReader(fh).ReadString('\n')
-	gitdir, ok := strings.CutPrefix(strings.TrimSpace(line), "gitdir:")
-	if !ok {
-		return dir
-	}
-	gitdir = strings.TrimSpace(gitdir)
-	if !filepath.IsAbs(gitdir) {
-		gitdir = filepath.Join(dir, gitdir)
-	}
-	if i := strings.Index(filepath.ToSlash(gitdir), "/.git/worktrees/"); i > 0 {
-		return filepath.Clean(gitdir[:i])
-	}
-	return dir
-}
+// Root is the main checkout of a repo name this resolver returned, or "".
+func (r *Resolver) Root(name string) string { return r.roots[name] }
 
 // Name is the repo name for path, or "" when the path is outside home, in
 // home's dot directories, or in no repository.
 func (r *Resolver) Name(path string) string {
-	if r.home == "" || r.cut() {
+	home := r.ids.Home()
+	if home == "" {
 		return ""
 	}
-	p := path
-	if p == "~" || strings.HasPrefix(p, "~/") {
-		p = r.home + p[1:]
-	}
-	p = filepath.Clean(p)
-	if r.alias != "" && strings.HasPrefix(p, r.alias+string(filepath.Separator)) {
-		p = r.home + p[len(r.alias):]
-	}
-	if !strings.HasPrefix(p, r.home+string(filepath.Separator)) || strings.HasPrefix(p, r.home+string(filepath.Separator)+".") {
+	r.ids.MaxDirs, r.ids.Stop = r.MaxDirs, r.Stop
+	p := r.ids.Expand(path)
+	sep := string(filepath.Separator)
+	if !strings.HasPrefix(p, home+sep) || strings.HasPrefix(p, home+sep+".") {
 		return ""
 	}
-	// A worktree belongs to its repository.
-	for _, m := range []string{"/.claude/worktrees/", "/.local/runners/", "/.worktrees/"} {
-		if i := strings.Index(p, m); i > 0 {
-			p = p[:i]
-		}
+	repo, ok := r.ids.Of(p)
+	if !ok {
+		return ""
 	}
-	dir := p
-	if !r.exists(dir, true) {
-		dir = filepath.Dir(dir)
-	}
-	if root := r.root(dir); root != "" {
-		name := filepath.Base(root)
-		// ~/projects/<repo>-worktrees/<task> is <repo>'s.
-		if parent := filepath.Base(filepath.Dir(root)); strings.HasSuffix(parent, "-worktrees") && parent != "-worktrees" {
-			return strings.TrimSuffix(parent, "-worktrees")
-		}
-		return name
-	}
-	// A package removed from a Brazil workspace that still exists.
-	if m := srcRx.FindStringSubmatch(p); m != nil {
-		if r.exists(filepath.Join(m[1], "packageInfo"), false) {
-			return m[2]
-		}
-	}
-	return ""
+	r.roots[repo.Name] = repo.Root
+	return repo.Name
 }
 
 // Name is Resolver.Name with a resolver of its own.
