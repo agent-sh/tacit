@@ -159,7 +159,7 @@ func readOpts(t *testing.T) ReadOptions {
 	if err := Apply(dir, w, r); err != nil {
 		t.Fatal(err)
 	}
-	return ReadOptions{Store: dir, Repos: []string{"Widget", "widget-svc"}, Host: "box"}
+	return ReadOptions{Store: dir, Session: Session{Repos: []string{"Widget", "widget-svc"}, Host: "box"}}
 }
 
 func blocks(out string) []string {
@@ -203,9 +203,50 @@ func TestReadReturnsTheIndexesInScopeDownDepthLevels(t *testing.T) {
 	}
 }
 
+// Another repository's folder is read when the caller names it, and that
+// folder alone; it is never listed from above.
+func TestReadShowsAnotherScopeOnlyWhenNamed(t *testing.T) {
+	o := readOpts(t)
+	out, err := Read(o, "projects/gadget", 1)
+	if err != nil || strings.Join(blocks(out), "|") != "projects/gadget: projects/gadget/_index.md" {
+		t.Fatalf("a named project: %v\n%s", err, out)
+	}
+	if out, _ := Read(o, "", 3); strings.Contains(out, "gadget") {
+		t.Errorf("an unnamed project listed:\n%s", out)
+	}
+	if _, err := Read(o, "machines/other", 0); err == nil || !strings.Contains(err.Error(), "no index file") {
+		t.Errorf("a named machine with no folder: %v", err)
+	}
+}
+
+func TestSessionScopesAndNamedScopes(t *testing.T) {
+	s := Session{Repos: []string{"Widget", "widget-svc", "widget"}, Host: "Box"}
+	if got := strings.Join(s.Scopes(), ","); got != "system,user,projects/widget,derived/widget,projects/widget-svc,derived/widget-svc,machines/box" {
+		t.Errorf("scopes %s", got)
+	}
+	for _, c := range []struct {
+		p, named string
+		want     bool
+	}{
+		{"", "", true}, {"projects", "", true}, {"projects/widget-svc", "", true}, {"machines/box", "", true},
+		{"projects/gadget", "", false}, {"projects/gadget", "projects/gadget", true}, {"derived/gadget", "projects/gadget", false},
+		{"machines/other", "machines/other", true}, {"inbox", "", false},
+	} {
+		if got := s.Reads(c.p, c.named); got != c.want {
+			t.Errorf("Reads(%q, %q) = %v", c.p, c.named, got)
+		}
+	}
+	for _, c := range []struct{ in, want string }{{"Projects/Gadget/", "projects/gadget"}, {"user", "user"}, {"projects", ""}, {"../etc", ""}, {"projects/a/b", ""}} {
+		got, err := Scope(c.in)
+		if got != c.want || (c.want == "") != (err != nil) {
+			t.Errorf("Scope(%q) = %q, %v", c.in, got, err)
+		}
+	}
+}
+
 func TestReadRefusesPathsOutOfTheStoreOrTheSession(t *testing.T) {
 	o := readOpts(t)
-	for _, p := range []string{"../etc", "/etc", "projects/../..", "inbox", "inbox/claude@box", "review", "keys", "projects/gadget", "machines/other", ".git", "projects\\widget", "C:/x"} {
+	for _, p := range []string{"../etc", "/etc", "projects/../..", "inbox", "inbox/claude@box", "review", "keys", ".git", "projects\\widget", "C:/x"} {
 		if out, err := Read(o, p, 1); err == nil {
 			t.Errorf("Read(%q) answered:\n%s", p, out)
 		}

@@ -1,15 +1,14 @@
 package main
 
-// The store's tree for an agent that asks (SPEC.md, "Search and list"): the
-// filters of tacit_search and `tacit search`, and tacit_list / `tacit list`.
-// Results are one line per fact, paged; a body is tacit_fact's.
+// What an agent asks the store for itself (SPEC.md, "Search and the tree"):
+// tacit_search and `tacit search`, by words or by filters, one line per fact,
+// paged; a body is tacit_fact's, the folders tacit_tree's (tree.go). Both
+// read what readSession allows.
 import (
 	"context"
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -17,9 +16,10 @@ import (
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
+	"github.com/agent-sh/tacit/client/internal/tree"
 )
 
-// browseArgs is what an agent may ask: words, filters, a page.
+// browseArgs is what an agent may ask tacit_search: words, filters, a page.
 type browseArgs struct {
 	Query       string
 	Repo        string // default: the repo of Cwd
@@ -36,52 +36,43 @@ type browseArgs struct {
 
 const (
 	treeSearchLimit = 8
-	treeListLimit   = 20
-	treeMaxLimit    = 50
+	// treeListLimit is the page with no words (a scope's or a type's facts).
+	treeListLimit = 20
+	treeMaxLimit  = 50
 	// treePool is how many ranked candidates a search with a path or
 	// command filter reads before filtering, so the filter does not starve.
 	treePool = 500
 )
 
-var treeScopeRx = regexp.MustCompile(`^(user|system|(projects|machines|derived)/[a-z0-9][a-z0-9._-]*)$`)
-
-// eligibleScopes are the scopes a search reads by default: system, user,
-// this repo's project (with its checkout aliases) and derived scopes, and
-// this machine. Another project's or machine's facts are read only when the
-// agent names that scope.
-func eligibleScopes(repo string, aliases []string, host string) []string {
-	out := []string{"system", "user"}
-	seen := map[string]bool{}
-	for _, r := range append([]string{repo}, aliases...) {
-		if r = strings.ToLower(r); r != "" && !seen[r] {
-			seen[r] = true
-			out = append(out, "projects/"+r, "derived/"+r)
-		}
+// readSession is the session a read of the store answers for (tree.Session,
+// the one rule of tacit_tree and tacit_search): the repository of cwd
+// (repoid) under every name delivery knows it by (repoAliases), unless repo
+// names another (that name alone), and host.
+func readSession(cwd, repo, host string) tree.Session {
+	sess := tree.Session{Host: host}
+	if r, ok := sessionRepo(cwd); ok && cwd != "" && (repo == "" || strings.EqualFold(repo, r.Name)) {
+		sess.Repos = repoAliases(r)
+	} else if repo != "" {
+		sess.Repos = []string{repo}
 	}
-	if host != "" {
-		out = append(out, "machines/"+strings.ToLower(host))
-	}
-	return out
+	return sess
 }
 
-// treeScopes resolves the scopes of a request, or an error for a scope that
+// treeScopes resolves the scopes of a request: the one scope it names
+// (tree.Scope), or the session's (readSession); an error for a scope that
 // is not one.
 func treeScopes(ctx context.Context, a *browseArgs) ([]string, error) {
 	if a.Repo == "" && a.Cwd != "" {
 		a.Repo = store.RepoName(ctx, a.Cwd)
 	}
 	if a.Scope != "" {
-		sc := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(a.Scope), "/"))
-		if !treeScopeRx.MatchString(sc) {
-			return nil, fmt.Errorf("scope must be user, system, projects/<repo>, machines/<host> or derived/<repo>")
+		sc, err := tree.Scope(a.Scope)
+		if err != nil {
+			return nil, err
 		}
 		return []string{sc}, nil
 	}
-	var aliases []string
-	if a.Cwd != "" && a.Repo != "" && strings.EqualFold(a.Repo, store.RepoName(ctx, a.Cwd)) {
-		aliases = hookRepoAliases(a.Cwd)
-	}
-	return eligibleScopes(a.Repo, aliases, store.ShortHost()), nil
+	return readSession(a.Cwd, a.Repo, store.ShortHost()).Scopes(), nil
 }
 
 // relPath is p relative to the checkout that holds cwd, when it is inside
@@ -203,8 +194,9 @@ func inScope(h search.Hit, scope string) bool {
 }
 
 // treeSearch is tacit_search: words ranked by BM25 within the scopes, or,
-// with no words, every fact the filters keep in kind order. Filters: scope,
-// type, rulings only, and an applies_to path or command.
+// with no words, every fact the filters keep in kind order (a scope's facts,
+// 20 a page: what browsing a scope takes). Filters: scope, type, rulings
+// only, and an applies_to path or command.
 func treeSearch(ctx context.Context, ix *search.Index, a browseArgs) (string, error) {
 	scopes, err := treeScopes(ctx, &a)
 	if err != nil {
@@ -215,6 +207,9 @@ func treeSearch(ctx context.Context, ix *search.Index, a browseArgs) (string, er
 	}
 	a.Path = relPath(a.Path, a.Cwd)
 	limit := clampLimit(a.Limit, treeSearchLimit)
+	if strings.TrimSpace(a.Query) == "" {
+		limit = clampLimit(a.Limit, treeListLimit)
+	}
 	filtered := a.Scope != "" || a.Type != "" || a.RulingsOnly || a.Path != "" || a.Command != ""
 	var hits []search.Hit
 	if strings.TrimSpace(a.Query) == "" {
@@ -260,65 +255,55 @@ func treeSearch(ctx context.Context, ix *search.Index, a browseArgs) (string, er
 	return page(keep, max(0, a.Offset), limit), nil
 }
 
-// treeList is tacit_list: with no scope, the eligible scopes and how many
-// facts of each type they hold; with a scope (and a type), its facts in
-// kind order, paged.
-func treeList(ctx context.Context, ix *search.Index, a browseArgs) (string, error) {
-	scopes, err := treeScopes(ctx, &a)
+// scopeCounts is the tree answer's first block: for each of scopes that
+// holds live curated facts, how many of each type, a project's counting the
+// facts filed elsewhere that are tied to it (applies_to.repos), as the hooks
+// and tacit_search treat them. "" when none holds any.
+func scopeCounts(ctx context.Context, ix *search.Index, scopes []string) (string, error) {
+	counts, err := ix.Counts(ctx, scopes)
 	if err != nil {
 		return "", err
 	}
-	if a.Type != "" && !fact.Types[a.Type] {
-		return "", fmt.Errorf("unknown type %q", a.Type)
-	}
-	if a.Scope == "" && a.Type == "" {
-		counts, err := ix.Counts(ctx, scopes)
+	for _, sc := range scopes {
+		r, ok := strings.CutPrefix(sc, "projects/")
+		if !ok {
+			continue
+		}
+		tied, err := ix.Tied(ctx, []string{r})
 		if err != nil {
 			return "", err
 		}
-		for _, sc := range scopes {
-			if r, ok := strings.CutPrefix(sc, "projects/"); ok {
-				tied, err := ix.Tied(ctx, []string{r})
-				if err != nil {
-					return "", err
+		for _, h := range tied {
+			if h.Scope != sc {
+				if counts[sc] == nil {
+					counts[sc] = map[string]int{}
 				}
-				for _, h := range tied {
-					if h.Scope != sc {
-						if counts[sc] == nil {
-							counts[sc] = map[string]int{}
-						}
-						counts[sc][h.Type]++
-					}
-				}
+				counts[sc][h.Type]++
 			}
 		}
-		var b strings.Builder
-		b.WriteString("# scopes you can read here, facts by type; `tacit_list scope=<scope>` lists one\n")
-		for _, sc := range scopes {
-			c := counts[sc]
-			if len(c) == 0 {
-				continue
-			}
-			var types []string
-			total := 0
-			for t, n := range c {
-				types = append(types, fmt.Sprintf("%s %d", t, n))
-				total += n
-			}
-			sort.Strings(types)
-			fmt.Fprintf(&b, "- %s (%d): %s\n", sc, total, strings.Join(types, ", "))
+	}
+	var b strings.Builder
+	for _, sc := range scopes {
+		c := counts[sc]
+		if len(c) == 0 {
+			continue
 		}
-		return b.String(), nil
+		var types []string
+		total := 0
+		for t, n := range c {
+			types = append(types, fmt.Sprintf("%s %d", t, n))
+			total += n
+		}
+		sort.Strings(types)
+		fmt.Fprintf(&b, "- %s (%d): %s\n", sc, total, strings.Join(types, ", "))
 	}
-	hits, err := treeFacts(ctx, ix, scopes, a.Type, a.RulingsOnly, a.Inbox)
-	if err != nil {
-		return "", err
+	if b.Len() == 0 {
+		return "", nil
 	}
-	kindOrder(hits)
-	return page(hits, max(0, a.Offset), clampLimit(a.Limit, treeListLimit)), nil
+	return "# facts by scope and type (a project's include those tied to it from elsewhere); `tacit_search scope=<scope>` lists one\n" + b.String(), nil
 }
 
-// runIndexed runs one browse request against the store for the CLI.
+// runIndexed runs one search request against the store for the CLI.
 func runIndexed(do func(ctx context.Context, ix *search.Index, cwd string) (string, error)) int {
 	s, err := store.Default()
 	if err != nil || !s.Exists() {
@@ -341,17 +326,4 @@ func runIndexed(do func(ctx context.Context, ix *search.Index, cwd string) (stri
 	}
 	fmt.Print(strings.TrimRight(out, "\n") + "\n")
 	return 0
-}
-
-// runList implements `tacit list [--scope S] [--type T] [--limit N] [--offset K]`: tacit_list.
-func runList(args []string) int {
-	fs := flag.NewFlagSet("list", flag.ExitOnError)
-	scope := fs.String("scope", "", "one scope; none: the scopes this session can read, with counts by type")
-	typ := fs.String("type", "", "only facts of this type")
-	limit := fs.Int("limit", treeListLimit, "facts per page")
-	offset := fs.Int("offset", 0, "skip this many, for the next page")
-	fs.Parse(args)
-	return runIndexed(func(ctx context.Context, ix *search.Index, cwd string) (string, error) {
-		return treeList(ctx, ix, browseArgs{Cwd: cwd, Scope: *scope, Type: *typ, Limit: *limit, Offset: *offset})
-	})
 }

@@ -477,9 +477,16 @@ func runSearch(args []string) int {
 	offset := fs.Int("offset", 0, "skip this many, for the next page")
 	fs.Parse(args)
 	if *scope != "" || *typ != "" || *rulings || *path != "" || *command != "" || *offset > 0 {
-		// tacit_search's tree filters: the same answer the agent gets.
+		// tacit_search's filters: the same answer the agent gets, with its
+		// page sizes unless --limit is given.
+		n := 0
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "limit" {
+				n = *limit
+			}
+		})
 		return runIndexed(func(ctx context.Context, ix *search.Index, cwd string) (string, error) {
-			return treeSearch(ctx, ix, browseArgs{Query: strings.Join(fs.Args(), " "), Repo: *repo, Cwd: cwd, Scope: *scope, Type: *typ, RulingsOnly: *rulings, Path: *path, Command: *command, Inbox: *inbox, Limit: *limit, Offset: *offset})
+			return treeSearch(ctx, ix, browseArgs{Query: strings.Join(fs.Args(), " "), Repo: *repo, Cwd: cwd, Scope: *scope, Type: *typ, RulingsOnly: *rulings, Path: *path, Command: *command, Inbox: *inbox, Limit: n, Offset: *offset})
 		})
 	}
 	s, err := store.Default()
