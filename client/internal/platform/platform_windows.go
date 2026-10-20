@@ -58,8 +58,26 @@ func Prepare(cmd *exec.Cmd) {
 	}
 }
 
-// Detach makes cmd outlive the process that starts it: no console and its
-// own process group, so closing the harness's window does not end it.
-func Detach(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &windows.SysProcAttr{HideWindow: true, CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP}
+// StartDetached starts cmd so it outlives the process that starts it: no
+// console, its own process group, and out of the starter's job object
+// (CREATE_BREAKAWAY_FROM_JOB), so neither closing the harness's window nor
+// the harness ending its job ends it. A job that forbids breakaway makes
+// CreateProcess fail with access denied: then it starts again without the
+// flag, as a job member.
+func StartDetached(cmd *exec.Cmd) (*os.Process, error) {
+	flags := uint32(windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP)
+	cmd.SysProcAttr = &windows.SysProcAttr{HideWindow: true, CreationFlags: flags | windows.CREATE_BREAKAWAY_FROM_JOB}
+	err := cmd.Start()
+	if err == nil {
+		return cmd.Process, nil
+	}
+	if !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+		return nil, err
+	}
+	again := &exec.Cmd{Path: cmd.Path, Args: cmd.Args, Env: cmd.Env, Dir: cmd.Dir, Stdin: cmd.Stdin, Stdout: cmd.Stdout, Stderr: cmd.Stderr}
+	again.SysProcAttr = &windows.SysProcAttr{HideWindow: true, CreationFlags: flags}
+	if err := again.Start(); err != nil {
+		return nil, err
+	}
+	return again.Process, nil
 }

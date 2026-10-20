@@ -65,9 +65,8 @@ func preCompact(s *store.Store, in hookInput) {
 	defer log.Close()
 	cmd := exec.Command(exe, args...)
 	cmd.Stdout, cmd.Stderr = log, log
-	platform.Detach(cmd)
-	if cmd.Start() == nil {
-		cmd.Process.Release()
+	if p, err := platform.StartDetached(cmd); err == nil {
+		p.Release()
 	}
 }
 
