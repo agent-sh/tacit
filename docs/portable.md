@@ -75,7 +75,7 @@ Fallbacks run for provider capacity, temporary service failures, expired authent
 
 `commands` overrides executable paths, including Windows paths with spaces. `runner_args` adds an argument array without a shell, for provider or profile options. These are trusted operator settings: avoid options that replace Tacit's tool restrictions, output format or prompt source. Command flags take precedence over the job env file too.
 
-The integrations and model runners are separate. You can use Muse for memory and Codex for dreaming. `tacit install muse` prints a `mcpServers` entry for Muse's existing settings (preserve its `schema_version` and other keys). `tacit install agy` prints an `agy mcp add` command. Both expose `tacit_search`, `tacit_list`, `tacit_fact` and `tacit_add`; shared stores also need their writer keys enrolled.
+The integrations and model runners are separate. You can use Muse for memory and Codex for dreaming. `tacit install muse` prints a `mcpServers` entry for Muse's existing settings (preserve its `schema_version` and other keys). `tacit install agy` prints an `agy mcp add` command. Both expose `tacit_tree`, `tacit_search`, `tacit_fact` and `tacit_add`; shared stores also need their writer keys enrolled.
 
 Transcript mining and automatic owner-quote lookup currently read Claude Code and Codex histories. Muse, agy, Grok, pi and Hermes can read and write memory through their integrations; their transcripts are not yet mined. Owner contributions and decisions in the app remain available without Claude. Curation refuses an empty owner-evidence corpus rather than guessing whether an agent paraphrase is an owner ruling.
 
