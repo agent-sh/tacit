@@ -38,7 +38,7 @@ func usage() {
   tacit search [--repo R] [--limit N] [--inbox] [--json] <query...>
   tacit fact <name>                print one fact
   tacit add --harness H --desc "..." [--type T] [--scope S] [--kind K] <name>
-  tacit hook session-start [--compact]|prompt|pre-compact  Claude Code and Codex hooks (JSON on stdin, block on stdout; pre-compact starts a dream of the session and returns)
+  tacit hook session-start|prompt|pre-compact  Claude Code and Codex hooks (JSON on stdin, block on stdout; pre-compact starts a dream of the session and returns)
   tacit mcp [--harness H]          MCP stdio server: tacit_search, tacit_fact, tacit_add
   tacit install claude|codex|hermes|grok|pi|muse|agy|follow|dream|curate|app
   tacit install claude [--no-mcp]   hooks, and the tacit MCP server in Claude Code's user config (~/.claude.json); --no-mcp: hooks only

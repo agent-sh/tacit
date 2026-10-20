@@ -133,7 +133,7 @@ func runHook(args []string) int {
 		return 0
 	}
 	if args[0] == "pre-compact" {
-		preCompact(in)
+		preCompact(s, in)
 		return 0
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), queryBudget+syncBudget)
@@ -145,12 +145,10 @@ func runHook(args []string) int {
 
 	switch args[0] {
 	case "session-start":
-		// Only a real start: resume and clear re-fire this hook and the facts
-		// are already in the transcript. A start after compaction is the
-		// --compact entry's (matcher compact): the facts the session was not
-		// given yet, and its own fresh notes (compactStartHits).
-		compact := slices.Contains(args[1:], "--compact")
-		if compact && in.Source != "compact" || !compact && in.Source != "" && in.Source != "startup" {
+		// Only a real start: resume, clear and compact re-fire this hook and
+		// the facts are already in the transcript (after a compaction, in the
+		// summary the compaction wrote).
+		if in.Source != "" && in.Source != "startup" {
 			return 0
 		}
 		// Best effort sync, bounded. Facts load from whatever HEAD is. A
@@ -168,12 +166,7 @@ func runHook(args []string) int {
 			return 0
 		}
 		defer ix.Close()
-		var hits []search.Hit
-		if compact {
-			hits, err = compactStartHits(ctx, ix, sit, sessionNotes(ctx, s, in), delivered(in.SessionID))
-		} else {
-			hits, err = sessionStartHits(ctx, ix, sit)
-		}
+		hits, err := sessionStartHits(ctx, ix, sit)
 		if err != nil {
 			return 0
 		}
@@ -355,9 +348,9 @@ func promptSelection(hits, derived []search.Hit, seen map[string]bool, floor flo
 // startSelection orders the SessionStart block: owner rules first
 // (search.Hit.Rule), then their rulings given inside a task (still theirs,
 // and on 254 situations dropping them lost one the session needed), then
-// after a compaction the session's own notes (sessionNotes), then repo and
-// machine facts, then the rest; nothing under the score floor and nothing
-// derived (the block is for owner rulings and host facts).
+// repo and machine facts, then the rest; nothing under
+// the score floor and nothing derived (the block is for owner rulings and host
+// facts).
 func startSelection(hits []search.Hit, repo string, limit int) []search.Hit {
 	rank := func(h search.Hit) int {
 		switch {
@@ -365,28 +358,18 @@ func startSelection(hits []search.Hit, repo string, limit int) []search.Hit {
 			return 0
 		case h.Ruling:
 			return 1
-		case h.Session:
-			return 2
 		case strings.HasPrefix(h.Scope, "projects/"):
-			return 3
+			return 2
 		case strings.HasPrefix(h.Scope, "machines/"):
-			return 4
+			return 3
 		}
-		return 5
+		return 4
 	}
 	var keep []search.Hit
-	local, own := 0, 0
+	local := 0
 	for _, h := range hits {
 		if h.Score < startFloor || isDerived(h) {
 			continue
-		}
-		// The session's own notes are unreviewed too: as many as this
-		// machine's local notes.
-		if h.Session {
-			if own >= startLocalLimit {
-				continue
-			}
-			own++
 		}
 		// This machine's own notes (a read-only clone's overlay) are
 		// unreviewed: a few, so they never crowd out rulings and curated facts.
