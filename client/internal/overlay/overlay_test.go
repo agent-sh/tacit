@@ -186,6 +186,7 @@ func TestAddLoadFindStamp(t *testing.T) {
 // agent's note, a dreamer note and a curated fact that only claims the fields
 // never are. The review directory holds no facts and is not loaded or found.
 func TestLocalLayerFiles(t *testing.T) {
+	t.Setenv("TACIT_LOCAL_LAYER", "on")
 	root := t.TempDir()
 	store := filepath.Join(root, "store")
 	dir := filepath.Join(root, "local")
@@ -271,6 +272,7 @@ func TestLayerOn(t *testing.T) {
 // agent's writer directory) linked into the clone, or out of the overlay, is
 // refused and nothing reaches the target.
 func TestLayerWritesResolveTheFinalPath(t *testing.T) {
+	t.Setenv("TACIT_LOCAL_LAYER", "on")
 	root := t.TempDir()
 	store := filepath.Join(root, "store")
 	away := filepath.Join(root, "away")
@@ -312,5 +314,39 @@ func TestLayerWritesResolveTheFinalPath(t *testing.T) {
 	})
 	if len(found) != 0 {
 		t.Fatalf("written outside the overlay: %v", found)
+	}
+}
+
+// With the layer off the overlay is the agents' notes alone: the layer's
+// files are not loaded, found or stamped, so no index holds them.
+func TestLayerOffHidesTheLayersFiles(t *testing.T) {
+	root := t.TempDir()
+	store := filepath.Join(root, "store")
+	dir := filepath.Join(root, "local")
+	os.MkdirAll(store, 0o755)
+	t.Setenv("TACIT_LOCAL_LAYER", "on")
+	for _, rel := range []string{"curated/user/kept.md", "inbox/dreamer@h/dreamed.md"} {
+		b, _ := note(strings.TrimSuffix(filepath.Base(rel), ".md"), "a layer file", "b").Encode()
+		if err := Write(dir, store, rel, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Add(dir, store, "claude@host-b", note("agents", "an agent's note", "b"), func() string { return "s" }); err != nil {
+		t.Fatal(err)
+	}
+	on := Stamp(dir)
+	if facts, _ := Load(dir); len(facts) != 3 {
+		t.Fatalf("layer on: %d facts", len(facts))
+	}
+	t.Setenv("TACIT_LOCAL_LAYER", "")
+	facts, _ := Load(dir)
+	if len(facts) != 1 || facts[0].Meta.Name != "agents" {
+		t.Fatalf("layer off: %v", facts)
+	}
+	if _, ok := Find(dir, "kept"); ok {
+		t.Fatal("layer off: a curated fact is found")
+	}
+	if Stamp(dir) == on {
+		t.Fatal("layer off: the stamp still covers the layer's files")
 	}
 }
