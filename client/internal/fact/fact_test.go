@@ -118,3 +118,18 @@ func TestLinksShape(t *testing.T) {
 		t.Fatalf("links %q", got)
 	}
 }
+
+// A machine's overlay file is never one the owner wrote, whatever its
+// harness and directory: anything on the machine can write the overlay.
+func TestOverlayFilesAreNeverOwnerWritten(t *testing.T) {
+	for _, p := range []string{"local/curated/user/x.md", "local/inbox/human@host-b/x.md", "local/human@host-b/x.md"} {
+		f := &Fact{Path: p, AppNote: true, Meta: Meta{Source: Source{Harness: "human", Kind: "user"}}}
+		f.Audited = true
+		if OwnerWrote(f) || IsRuling(f) {
+			t.Errorf("%s counts as the owner's", p)
+		}
+	}
+	if !OwnerWrote(&Fact{Path: "user/x.md", Meta: Meta{Source: Source{Harness: "human"}}}) {
+		t.Fatal("the app's curated rule is no longer the owner's")
+	}
+}

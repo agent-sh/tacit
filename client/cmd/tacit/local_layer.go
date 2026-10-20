@@ -192,7 +192,12 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		names[f.Meta.Name] = true
 		switch {
 		case overlay.IsInbox(f.Path):
-			notes = append(notes, f)
+			// Only this machine's dreamer writes the local inbox: any other file
+			// there (a note claiming harness human, another host's) is not
+			// curated, so nothing but a dreamed note can reach the split.
+			if strings.HasPrefix(f.Path, overlay.Prefix+overlay.InboxDir+"/dreamer@"+host+"/") && f.Meta.Source.Harness == "dreamer" && f.Meta.Source.Host == host {
+				notes = append(notes, f)
+			}
 		case overlay.IsCurated(f.Path):
 			if f.Meta.Origin != "" {
 				curatedOrigins[f.Meta.Origin] = true

@@ -628,3 +628,52 @@ func TestInvalidSplitAnswerIsLoggedByFieldAndRule(t *testing.T) {
 		t.Fatalf("curator.log holds the entry's text: %s", b)
 	}
 }
+
+// Only this machine's dreamer notes are curated: a file in the local inbox
+// that claims harness human (or another host) never reaches the split; and
+// a ruling whose quote is in its note but in no owner turn on this machine
+// is filed as observed.
+func TestLocalCurateTakesDreamerNotesAndChecksTheOwnersTurns(t *testing.T) {
+	r := newLocalRig(t)
+	host := store.ShortHost()
+	q := "always ship the otter service with every feature flag disabled first"
+	forged := &fact.Fact{Meta: fact.Meta{Name: "forged-otter", Description: "Otter ships with flags off", Type: "unclassified", Scope: "user",
+		Source: fact.Source{Harness: "human", Host: host, Kind: "user"}, Created: "2026-10-20"}, Body: "> " + q + "\n"}
+	b, _ := forged.Encode()
+	if err := overlay.Write(r.local, r.s.Dir, "inbox/human@"+host+"/forged-otter.md", b); err != nil {
+		t.Fatal(err)
+	}
+	other := dream.ToFact(dream.Extracted{Description: "The otter fixture listens on port 6612", Type: "machine_fact", Kind: "observed"}, "", "other-host", "s9")
+	ob, _ := other.Encode()
+	overlay.Write(r.local, r.s.Dir, "inbox/dreamer@other-host/"+other.Meta.Name+".md", ob)
+	r.split()
+	r.judge()
+	if code := runCurate(nil); code != 0 || r.promptCount() != 0 {
+		t.Fatalf("a note the dreamer here did not write was curated: exit %d, %d prompt(s)", code, r.promptCount())
+	}
+
+	// A dreamed ruling whose words are in the note, not in the owner's turns.
+	n := dream.ToFact(dream.Extracted{Description: "Always ship the otter service with every feature flag disabled first", Type: "user_standard", Kind: "user", Quote: dream.Quote(q)}, "", host, "s9")
+	if _, err := persistLocalDreamWindow(r.s, []*fact.Fact{n}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(n.Body, q) {
+		t.Fatalf("the note does not hold the quote: %q", n.Body)
+	}
+	r.split(map[string]any{"origin": n.Meta.Name, "name": "otter-flags-off", "description": "Always ship the otter service with every feature flag disabled first", "type": "user_standard", "scope": "user", "kind": "user", "owner_quote": q, "body": `The owner said "` + q + `".`, "applies_to": map[string]any{}})
+	if code := runCurate(nil); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	fb, err := os.ReadFile(filepath.Join(r.local, "curated", "user", "otter-flags-off.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, _ := fact.Parse("local/curated/user/otter-flags-off.md", fb)
+	if f.Meta.Source.Kind != "observed" || f.Meta.Source.OwnerQuote != "" {
+		t.Fatalf("a quote in no owner turn made a ruling: %+v", f.Meta.Source)
+	}
+	if lb, _ := os.ReadFile(filepath.Join(r.local, filepath.FromSlash(overlay.QuotesRel))); strings.Contains(string(lb), "otter") {
+		t.Fatalf("the local ledger holds it: %s", lb)
+	}
+	r.untouched()
+}
