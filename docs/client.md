@@ -34,7 +34,8 @@ Choose a local store with `tacit init`, or a shared store with `tacit clone`. Lo
   `cd client && go build -tags desktop,production,webkit2_41 -o ~/.local/bin/tacit-app ./cmd/tacit` (Linux, needs `libgtk-3-dev` and `libwebkit2gtk-4.1-dev`), or `-tags desktop,production` on macOS (Xcode command line tools; add `CGO_LDFLAGS="-framework UniformTypeIdentifiers"` on SDKs that ask for it). Then `tacit-app install app` writes `~/.local/share/applications/tacit.desktop` and its icon on Linux, and `~/Applications/tacit.app` on macOS (see Mac). `tacit app --browser` serves the same page on 127.0.0.1:7450 behind a token, from any build. Rules: SPEC.md "App".
 - `tacit review apply VERDICTS.json...`: apply a verifier's marks in one commit.
 - `tacit resolve supersede <old> <new> | conflict <a> <b> | clear <name>`: the same answers from the command line.
-- `tacit lint`, `tacit index`, `tacit import claude|codex` for store maintenance.
+- `tacit lint`, `tacit index` (MEMORY.md and the folder indexes), `tacit import claude|codex` for store maintenance.
+- `tacit tree [--depth N] [path]` (and the MCP `tacit_tree`): the folder indexes from a folder down N levels, for this session's scopes.
 
 ## Mac
 

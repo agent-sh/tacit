@@ -9,6 +9,7 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/index"
+	"github.com/agent-sh/tacit/client/internal/tree"
 )
 
 func write(t *testing.T, root, rel, content string) {
@@ -114,5 +115,41 @@ func TestEachRuleFires(t *testing.T) {
 		if f.Rule == "L6" && strings.HasPrefix(f.Path, "inbox/") {
 			t.Errorf("inbox link flagged: %v", f)
 		}
+	}
+}
+
+// L16: once a store has its root index, every folder index must equal the
+// generated one; a store from before the tree is checked only for the index
+// files it holds.
+func TestFolderIndexesMatchTheFacts(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "machines/host-a/a.md", good("a", "machines/host-a"))
+	write(t, root, "projects/memra/b.md", good("b", "projects/memra"))
+	facts, _, _ := fact.Walk(root)
+	write(t, root, "MEMORY.md", index.Generate(facts))
+	if fs, _ := Run(root); len(fs) != 0 {
+		t.Fatalf("a store from before the tree: %v", fs)
+	}
+	gen := tree.Generate(facts, "")
+	for rel, c := range gen {
+		write(t, root, rel, c)
+	}
+	if fs, _ := Run(root); len(fs) != 0 {
+		t.Fatalf("generated indexes: %v", fs)
+	}
+	write(t, root, "projects/memra/_index.md", "edited by hand\n")
+	os.Remove(filepath.Join(root, "machines", "_index.md"))
+	write(t, root, "projects/gone/_index.md", "stale\n")
+	fs, _ := Run(root)
+	var got []string
+	for _, f := range fs {
+		if f.Rule != "L16" {
+			t.Errorf("unexpected %s", f)
+		}
+		got = append(got, f.Path)
+	}
+	sort.Strings(got)
+	if strings.Join(got, ",") != "machines/_index.md,projects/gone/_index.md,projects/memra/_index.md" {
+		t.Fatalf("L16 on %v", got)
 	}
 }

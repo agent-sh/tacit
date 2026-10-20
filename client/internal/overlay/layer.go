@@ -177,3 +177,17 @@ func curatedState(dir string) fact.StoreState {
 
 // QuotesRel is the local quote ledger's path in the overlay.
 var QuotesRel = CuratedDir + "/" + ledger.QuotesPath
+
+// Remove deletes the file at rel in the overlay (a stale generated folder
+// index), with the same path checks as Write. A file already gone is no
+// error.
+func Remove(dir, storeDir, rel string) error {
+	full, err := layerPath(dir, storeDir, rel)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(full); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}

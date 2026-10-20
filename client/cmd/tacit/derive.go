@@ -13,7 +13,6 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/derive"
 	"github.com/agent-sh/tacit/client/internal/fact"
-	"github.com/agent-sh/tacit/client/internal/index"
 	"github.com/agent-sh/tacit/client/internal/lint"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
@@ -229,7 +228,7 @@ func ownFindings(findings []lint.Finding, paths []string) []lint.Finding {
 	}
 	var out []lint.Finding
 	for _, f := range findings {
-		if mine[f.Path] {
+		if mine[f.Path] && !indexFinding(f) {
 			out = append(out, f)
 		}
 	}
@@ -320,7 +319,7 @@ func cleanGenerated(ctx context.Context, s *store.Store) {
 	if !cleaned {
 		return
 	}
-	_, _ = store.Git(ctx, s.Dir, "checkout", "--quiet", "HEAD", "--", "MEMORY.md")
+	restoreIndexes(ctx, s.Dir)
 	if head, err := s.Head(ctx); err == nil {
 		search.Invalidate(head)
 	}
@@ -417,8 +416,10 @@ func repoOf(path string) string {
 // working tree as it found it.
 func tryGroups(ctx context.Context, s *store.Store, rep *derive.Report, groups []derive.Group) (attempt, error) {
 	a := attempt{remaining: groups}
+	var paths []string // the last write's: the groups' files, MEMORY.md, the folder indexes
 	for {
-		paths, err := writeGroups(s, a.remaining)
+		var err error
+		paths, err = writeGroups(s, a.remaining)
 		if err != nil {
 			restoreTree(s, paths)
 			return a, err
@@ -459,8 +460,6 @@ func tryGroups(ctx context.Context, s *store.Store, rep *derive.Report, groups [
 		}
 	}
 
-	paths := groupPaths(a.remaining)
-	paths = append(paths, "MEMORY.md")
 	var repos []string
 	for _, g := range a.remaining {
 		repos = append(repos, g.Repo)
@@ -501,7 +500,8 @@ func groupPaths(groups []derive.Group) []string {
 	return out
 }
 
-// writeGroups applies the groups to the clone and regenerates MEMORY.md. It
+// writeGroups applies the groups to the clone and regenerates MEMORY.md and
+// the folder indexes. It
 // returns every path it may have touched, also on error, so the caller can
 // restore them.
 func writeGroups(s *store.Store, groups []derive.Group) ([]string, error) {
@@ -515,10 +515,10 @@ func writeGroups(s *store.Store, groups []derive.Group) ([]string, error) {
 	if err != nil {
 		return paths, err
 	}
-	if err := os.WriteFile(filepath.Join(s.Dir, "MEMORY.md"), []byte(index.Generate(all)), 0o644); err != nil {
-		return paths, err
-	}
-	return paths, nil
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	rels, err := regenIndexes(ctx, s.Dir, all, nil)
+	return dedupe(append(paths, rels...)), err
 }
 
 // restoreTree puts the paths back to HEAD, removes the empty directories the

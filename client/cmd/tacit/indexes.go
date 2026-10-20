@@ -1,0 +1,110 @@
+package main
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/index"
+	"github.com/agent-sh/tacit/client/internal/lint"
+	"github.com/agent-sh/tacit/client/internal/overlay"
+	"github.com/agent-sh/tacit/client/internal/store"
+	"github.com/agent-sh/tacit/client/internal/tree"
+)
+
+// regenIndexes writes the store's generated indexes for facts into the clone:
+// MEMORY.md and every folder's _index.md (internal/tree), removing index
+// files of folders that hold no facts any more. It returns the paths a commit
+// must name: MEMORY.md, every index file of the tree (unchanged ones commit
+// nothing, and one written earlier by `tacit index` is carried by this
+// commit), and each removed index file git tracks. snap, when not nil,
+// records the bytes of each path before it is changed, so a failure puts it
+// back. Every writer of curated facts calls it inside its locked write, so
+// the indexes never drift from the facts.
+func regenIndexes(ctx context.Context, dir string, facts []*fact.Fact, snap snapshot) ([]string, error) {
+	gen := tree.Generate(facts, "")
+	write, remove, err := tree.Plan(dir, gen)
+	if err != nil {
+		return nil, err
+	}
+	rels := []string{"MEMORY.md"}
+	for rel := range gen {
+		rels = append(rels, rel)
+	}
+	sort.Strings(rels[1:])
+	if snap != nil {
+		for _, rel := range append(append([]string{}, rels...), remove...) {
+			if _, ok := snap[rel]; !ok {
+				if b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel))); err == nil {
+					snap[rel] = b
+				} else {
+					snap[rel] = nil
+				}
+			}
+		}
+	}
+	if err := writeFileAtomic(dir, "MEMORY.md", []byte(index.Generate(facts))); err != nil {
+		return rels, err
+	}
+	if err := tree.Apply(dir, write, remove); err != nil {
+		return rels, err
+	}
+	for _, rel := range remove {
+		if out, err := store.Git(ctx, dir, "ls-files", "--", rel); err == nil && strings.TrimSpace(out) != "" {
+			rels = append(rels, rel)
+		}
+	}
+	return rels, nil
+}
+
+// indexFinding is lint L16, a folder index that differs from the facts in
+// the working tree. A write's gate passes it over, as it passes L10 for
+// MEMORY.md: the write regenerates every index from the facts its commit
+// holds (regenIndexes), which a working tree with someone else's uncommitted
+// facts does not show the linter.
+func indexFinding(f lint.Finding) bool { return f.Rule == "L16" }
+
+// restoreIndexes puts the tracked index files back to HEAD (a killed run may
+// have left them dirty); untracked ones are the next regeneration's to
+// remove.
+func restoreIndexes(ctx context.Context, dir string) {
+	_, _ = store.Git(ctx, dir, "checkout", "--quiet", "HEAD", "--", "MEMORY.md", ":(glob)"+tree.FileName, ":(glob)**/"+tree.FileName)
+}
+
+// regenLocalIndexes writes the folder indexes of the local layer's curated
+// facts (overlay curated/<scope>/) from the overlay's facts, through the
+// overlay's checked writes (never inside the clone, never out of the
+// overlay). The overlay is no git repository: there is nothing to commit.
+func regenLocalIndexes(dir, storeDir string, local []*fact.Fact) error {
+	var curated []*fact.Fact
+	for _, f := range local {
+		if overlay.IsCurated(f.Path) {
+			curated = append(curated, f)
+		}
+	}
+	root := filepath.Join(dir, filepath.FromSlash(overlay.CuratedDir))
+	gen := tree.Generate(curated, overlay.Prefix+overlay.CuratedDir+"/")
+	write, remove, err := tree.Plan(root, gen)
+	if err != nil {
+		return err
+	}
+	rels := make([]string, 0, len(write))
+	for rel := range write {
+		rels = append(rels, rel)
+	}
+	sort.Strings(rels)
+	for _, rel := range rels {
+		if err := overlay.Write(dir, storeDir, overlay.CuratedDir+"/"+rel, write[rel]); err != nil {
+			return err
+		}
+	}
+	for _, rel := range remove {
+		if err := overlay.Remove(dir, storeDir, overlay.CuratedDir+"/"+rel); err != nil {
+			return err
+		}
+	}
+	return nil
+}

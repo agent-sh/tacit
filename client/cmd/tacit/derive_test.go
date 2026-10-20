@@ -11,7 +11,6 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/derive"
 	"github.com/agent-sh/tacit/client/internal/fact"
-	"github.com/agent-sh/tacit/client/internal/index"
 	"github.com/agent-sh/tacit/client/internal/lint"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
@@ -107,7 +106,7 @@ func (r *rig) commitIndex(dir, msg string) {
 	}
 	os.WriteFile(filepath.Join(dir, ".gitattributes"), []byte(strings.Join(store.UnionFiles, "\n")+"\n"), 0o644)
 	facts, _, _ := fact.Walk(dir)
-	os.WriteFile(filepath.Join(dir, "MEMORY.md"), []byte(index.Generate(facts)), 0o644)
+	writeIndexesForTest(r.t, dir, facts)
 	gitIn(r.t, dir, "add", "-A")
 	gitIn(r.t, dir, "commit", "-q", "-m", msg)
 }
@@ -147,7 +146,7 @@ func (r *rig) serverFiles() []string {
 func (r *rig) serverDerived() string {
 	var out []string
 	for _, f := range r.serverFiles() {
-		if strings.HasPrefix(f, "derived/") {
+		if strings.HasPrefix(f, "derived/") && !fact.IsIndexFile(filepath.Base(f)) {
 			out = append(out, f)
 		}
 	}
@@ -238,8 +237,14 @@ func TestDeriveStepPushesLintCleanFactsOnce(t *testing.T) {
 	}
 	changed := strings.Fields(gitIn(t, r.bare, "diff", "--name-only", seedHead, "main"))
 	want := "MEMORY.md,derived/demo/demo-hot-spots.md,derived/demo/demo-module-map.md,derived/keepalive/keepalive-hot-spots.md,derived/keepalive/keepalive-module-map.md"
-	if strings.Join(changed, ",") != want {
+	if strings.Join(withoutIndexes(changed), ",") != want {
 		t.Fatalf("pushed files %v", changed)
+	}
+	// The folder indexes of the new folders ride in the same commit.
+	for _, ix := range []string{"derived/_index.md", "derived/demo/_index.md", "derived/keepalive/_index.md"} {
+		if !strings.Contains(strings.Join(changed, ","), ix) {
+			t.Fatalf("pushed files %v lack %s", changed, ix)
+		}
 	}
 	r.assertClean("after a push")
 	r.assertServerLintsClean()
@@ -323,7 +328,7 @@ func TestDirtDroppedByAKilledRunIsNotMistakenForProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	all, _, _ := fact.Walk(r.clone)
-	os.WriteFile(filepath.Join(r.clone, "MEMORY.md"), []byte(index.Generate(all)), 0o644)
+	writeIndexesForTest(t, r.clone, all)
 	if gitIn(t, r.clone, "status", "--porcelain") == "" {
 		t.Fatal("setup: the clone should be dirty")
 	}
@@ -383,7 +388,7 @@ func TestAnotherWriterPushingMeanwhileDoesNotBreakTheRun(t *testing.T) {
 	note := func(name string) {
 		writeFact(t, other, fact.Meta{Name: name, Description: "another writer's note " + name, Type: "machine_fact", Scope: "machines/host-a"}, "x")
 		facts, _, _ := fact.Walk(other)
-		os.WriteFile(filepath.Join(other, "MEMORY.md"), []byte(index.Generate(facts)), 0o644)
+		writeIndexesForTest(t, other, facts)
 		gitIn(t, other, "add", "-A")
 		gitIn(t, other, "commit", "-q", "-m", name)
 	}

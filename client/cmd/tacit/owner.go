@@ -15,7 +15,6 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/gitev"
-	"github.com/agent-sh/tacit/client/internal/index"
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/links"
 	"github.com/agent-sh/tacit/client/internal/lint"
@@ -658,7 +657,7 @@ func newFindings(before, after []lint.Finding) []string {
 	}
 	var out []string
 	for _, f := range after {
-		if f.Rule != "L10" && !had[lintKey(f)] {
+		if f.Rule != "L10" && !indexFinding(f) && !had[lintKey(f)] {
 			out = append(out, f.String())
 		}
 	}
@@ -762,7 +761,8 @@ func (rs *reviewServer) ownerWrite(ctx context.Context, plan func() (*ownerChang
 	return res, err
 }
 
-// applyChange writes and removes the planned files and regenerates MEMORY.md.
+// applyChange writes and removes the planned files and regenerates MEMORY.md
+// and the folder indexes.
 // It returns every path it touched, for the commit or for putting them back.
 func (rs *reviewServer) applyChange(ch *ownerChange) ([]string, error) {
 	var rels []string
@@ -797,14 +797,9 @@ func (rs *reviewServer) applyChange(ch *ownerChange) ([]string, error) {
 	if err != nil {
 		return rels, err
 	}
-	mp := filepath.Join(rs.s.Dir, "MEMORY.md")
-	if gen := index.Generate(all); func() bool { cur, _ := os.ReadFile(mp); return string(cur) != gen }() {
-		rels = append(rels, "MEMORY.md")
-		if err := writeFileAtomic(rs.s.Dir, "MEMORY.md", []byte(gen)); err != nil {
-			return rels, err
-		}
-	}
-	return rels, nil
+	ix, err := regenIndexes(context.Background(), rs.s.Dir, all, nil)
+	rels = append(rels, ix...)
+	return rels, err
 }
 
 // safeRel accepts a store-relative fact path the owner's writes may touch.

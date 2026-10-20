@@ -101,7 +101,7 @@ func TestShapes(t *testing.T) {
 func TestWalkSkips(t *testing.T) {
 	root := t.TempDir()
 	good := "---\nname: a\ndescription: d\ntype: machine_fact\nscope: machines/host-a\nsource:\n  harness: claude\n  host: host-a\n  kind: observed\ncreated: 2026-10-07\n---\n\nbody\n"
-	for _, p := range []string{"machines/host-a/a.md", "keys/k.md", ".git/x.md", "MEMORY.md", "README.md", "notes.txt"} {
+	for _, p := range []string{"machines/host-a/a.md", "keys/k.md", ".git/x.md", "MEMORY.md", "README.md", "notes.txt", "_index.md", "machines/host-a/_index.md", "machines/_index.md"} {
 		os.MkdirAll(filepath.Join(root, filepath.Dir(p)), 0o755)
 		os.WriteFile(filepath.Join(root, p), []byte(good), 0o644)
 	}
