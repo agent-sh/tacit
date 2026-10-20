@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -24,6 +25,10 @@ import (
 //     run missed while the Mac sleeps runs on wake). launchd has no
 //     EnvironmentFile, so the dreamer reads the file itself; no secret is in
 //     the plist.
+//   - ai.tacit.dream-idle: the idle job every 10 minutes, `tacit dream --idle
+//     20m`, then, when it succeeded, `tacit curate --quick --min-interval
+//     30m`, both with --env-file F, through /bin/sh (launchd runs one
+//     program).
 //
 // Both run with ProcessType Background (the system's throttled CPU and I/O
 // class), a nice value and low-priority I/O, and log to ~/Library/Logs/tacit/.
@@ -32,6 +37,8 @@ import (
 const (
 	launchdFollowLabel = "ai.tacit.follow"
 	launchdDreamLabel  = "ai.tacit.dream"
+	launchdIdleLabel   = "ai.tacit.dream-idle"
+	idleInterval       = 10 * 60     // seconds, the idle timer's OnUnitActiveSec=10min
 	dreamInterval      = 4 * 60 * 60 // seconds, the timer's OnUnitActiveSec=4h
 	followThrottle     = 5           // seconds, the unit's RestartSec=5
 )
@@ -192,6 +199,35 @@ func dreamPlist(exe, envFile, storeEnv, home, path string) string {
 	return p.String()
 }
 
+// idleArgs are the idle job's two steps (dreamIdleUnit): the dream of the
+// transcripts that went quiet or compacted, then the quick curate.
+var idleArgs = [2][]string{{"dream", "--idle", "20m"}, {"curate", "--quick", "--min-interval", "30m"}}
+
+// dreamIdlePlist is ~/Library/LaunchAgents/ai.tacit.dream-idle.plist.
+func dreamIdlePlist(exe, envFile, storeEnv, home, path string) string {
+	p := newPlist()
+	p.str("Label", launchdIdleLabel)
+	var steps []string
+	for _, a := range idleArgs {
+		words := []string{shellQuote(exe)}
+		for _, w := range append(slices.Clone(a), "--env-file", envFile) {
+			words = append(words, shellQuote(w))
+		}
+		steps = append(steps, strings.Join(words, " "))
+	}
+	p.array("ProgramArguments", "/bin/sh", "-c", strings.Join(steps, " && "))
+	p.dict("EnvironmentVariables", jobEnv(path, storeEnv)...)
+	p.integer("StartInterval", idleInterval)
+	p.boolean("RunAtLoad", false)
+	p.str("ProcessType", "Background")
+	p.integer("Nice", 19)
+	p.boolean("LowPriorityIO", true)
+	log := filepath.Join(launchdLogDir(home), "dream-idle.log")
+	p.str("StandardOutPath", log)
+	p.str("StandardErrorPath", log)
+	return p.String()
+}
+
 // writeFileMode writes data to path with mode, through a temporary file and a rename.
 func writeFileMode(path string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -267,6 +303,44 @@ Persistent=true
 WantedBy=timers.target
 `
 
+// dreamIdleUnit is the idle job's systemd user service: two ExecStart lines
+// of a oneshot run in order and the second only when the first succeeded,
+// as `tacit dream --idle 20m && tacit curate --quick --min-interval 30m`.
+// The lowest CPU and idle disk priority, like the curator's unit: it runs
+// every 10 minutes on a machine someone works on.
+func dreamIdleUnit(exec, envFile string) string {
+	extra := ""
+	for _, key := range []string{"TACIT_STORE", "TACIT_SETTINGS"} {
+		if value := os.Getenv(key); value != "" {
+			extra += "Environment=" + unitQuote(key+"="+value, true) + "\n"
+		}
+	}
+	return `[Unit]
+Description=tacit idle dreamer: quiet or compacted sessions to inbox facts, then a quick curate
+
+[Service]
+EnvironmentFile=` + envFile + `
+Type=oneshot
+Nice=19
+IOSchedulingClass=idle
+` + extra + `ExecStart=` + exec + ` ` + strings.Join(idleArgs[0], " ") + `
+ExecStart=` + exec + ` ` + strings.Join(idleArgs[1], " ") + `
+`
+}
+
+// dreamIdleTimer runs the idle job every 10 minutes. The 4-hour timer stays:
+// it dreams what is still being written.
+const dreamIdleTimer = `[Unit]
+Description=tacit idle dreamer every 10 minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target
+`
+
 // defaultDreamEnv is the KEY=VALUE file with what claude -p needs (provider
 // variables such as the Bedrock ones, and the TACIT_*_MODEL overrides):
 // ~/.config/tacit/env on every OS.
@@ -283,12 +357,15 @@ func systemdUserDir(home string) string {
 	return filepath.Join(cfg, "systemd", "user")
 }
 
-// installDreamSystemd writes tacit-dream.service and tacit-dream.timer.
+// installDreamSystemd writes tacit-dream.service and tacit-dream.timer, and
+// the idle job's tacit-dream-idle.service and tacit-dream-idle.timer.
 func installDreamSystemd(home, exe, envFile string) ([]string, error) {
 	dir := systemdUserDir(home)
 	files := []struct{ name, data string }{
 		{"tacit-dream.service", dreamUnit(unitQuote(exe, false), unitQuote(envFile, false))},
 		{"tacit-dream.timer", dreamTimer},
+		{"tacit-dream-idle.service", dreamIdleUnit(unitQuote(exe, false), unitQuote(envFile, false))},
+		{"tacit-dream-idle.timer", dreamIdleTimer},
 	}
 	var out []string
 	for _, f := range files {

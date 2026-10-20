@@ -80,6 +80,9 @@ type hookInput struct {
 	Prompt         string `json:"prompt"`
 	Source         string `json:"source"`
 	TranscriptPath string `json:"transcript_path"`
+	// HermesSession is the Hermes provider's session id for pre-compact
+	// (on_pre_compress): Hermes has no transcript file.
+	HermesSession string `json:"hermes_session_id"`
 }
 
 func openIndex(ctx context.Context, s *store.Store) (*search.Index, error) {
@@ -101,10 +104,11 @@ func startTitle(sit search.Situation, mcp bool) string {
 	return fmt.Sprintf("# tacit: facts for %s on %s (read before acting; %s)", sit.Repo, sit.Host, detail)
 }
 
-// runHook implements `tacit hook session-start|prompt`. It reads the hook
-// JSON on stdin, prints the fact block on stdout (Claude Code adds it as
-// context), and exits 0 on every failure: a missing store or a slow network
-// must never cost the user a turn.
+// runHook implements `tacit hook session-start|prompt|pre-compact`. It reads
+// the hook JSON on stdin, prints the fact block on stdout (Claude Code adds it
+// as context), and exits 0 on every failure: a missing store or a slow
+// network must never cost the user a turn. pre-compact prints nothing: it
+// starts a dream of the session and returns (preCompact).
 func runHook(args []string) int {
 	if os.Getenv("TACIT_MODEL_JOB") == "1" {
 		return 0
@@ -128,6 +132,10 @@ func runHook(args []string) int {
 	if err != nil || !s.Exists() {
 		return 0
 	}
+	if args[0] == "pre-compact" {
+		preCompact(in)
+		return 0
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), queryBudget+syncBudget)
 	defer cancel()
 	sit := search.Situation{Repo: store.RepoName(ctx, in.Cwd), Host: store.ShortHost()}
@@ -137,9 +145,12 @@ func runHook(args []string) int {
 
 	switch args[0] {
 	case "session-start":
-		// Only a real start: resume, clear and compact re-fire this hook and
-		// the facts are already in the transcript.
-		if in.Source != "" && in.Source != "startup" {
+		// Only a real start: resume and clear re-fire this hook and the facts
+		// are already in the transcript. A start after compaction is the
+		// --compact entry's (matcher compact): the facts the session was not
+		// given yet, and its own fresh notes (compactStartHits).
+		compact := slices.Contains(args[1:], "--compact")
+		if compact && in.Source != "compact" || !compact && in.Source != "" && in.Source != "startup" {
 			return 0
 		}
 		// Best effort sync, bounded. Facts load from whatever HEAD is. A
@@ -157,7 +168,12 @@ func runHook(args []string) int {
 			return 0
 		}
 		defer ix.Close()
-		hits, err := sessionStartHits(ctx, ix, sit)
+		var hits []search.Hit
+		if compact {
+			hits, err = compactStartHits(ctx, ix, sit, sessionNotes(ctx, s, in), delivered(in.SessionID))
+		} else {
+			hits, err = sessionStartHits(ctx, ix, sit)
+		}
 		if err != nil {
 			return 0
 		}
@@ -339,9 +355,9 @@ func promptSelection(hits, derived []search.Hit, seen map[string]bool, floor flo
 // startSelection orders the SessionStart block: owner rules first
 // (search.Hit.Rule), then their rulings given inside a task (still theirs,
 // and on 254 situations dropping them lost one the session needed), then
-// repo and machine facts, then the rest; nothing under
-// the score floor and nothing derived (the block is for owner rulings and host
-// facts).
+// after a compaction the session's own notes (sessionNotes), then repo and
+// machine facts, then the rest; nothing under the score floor and nothing
+// derived (the block is for owner rulings and host facts).
 func startSelection(hits []search.Hit, repo string, limit int) []search.Hit {
 	rank := func(h search.Hit) int {
 		switch {
@@ -349,18 +365,28 @@ func startSelection(hits []search.Hit, repo string, limit int) []search.Hit {
 			return 0
 		case h.Ruling:
 			return 1
-		case strings.HasPrefix(h.Scope, "projects/"):
+		case h.Session:
 			return 2
-		case strings.HasPrefix(h.Scope, "machines/"):
+		case strings.HasPrefix(h.Scope, "projects/"):
 			return 3
+		case strings.HasPrefix(h.Scope, "machines/"):
+			return 4
 		}
-		return 4
+		return 5
 	}
 	var keep []search.Hit
-	local := 0
+	local, own := 0, 0
 	for _, h := range hits {
 		if h.Score < startFloor || isDerived(h) {
 			continue
+		}
+		// The session's own notes are unreviewed too: as many as this
+		// machine's local notes.
+		if h.Session {
+			if own >= startLocalLimit {
+				continue
+			}
+			own++
 		}
 		// This machine's own notes (a read-only clone's overlay) are
 		// unreviewed: a few, so they never crowd out rulings and curated facts.

@@ -49,8 +49,48 @@ func TestInstallHooksMergesAndIsIdempotent(t *testing.T) {
 		t.Fatalf("prompt hook: %s", first)
 	}
 	ss := got.Hooks["SessionStart"]
-	if len(ss) != 1 || ss[0].Matcher != "startup" || ss[0].Hooks[0].Command != "/bin/tacit hook session-start" {
+	if len(ss) != 2 || ss[0].Matcher != "startup" || ss[0].Hooks[0].Command != "/bin/tacit hook session-start" {
 		t.Fatalf("start hook: %s", first)
+	}
+	if ss[1].Matcher != "compact" || ss[1].Hooks[0].Command != "/bin/tacit hook session-start --compact" {
+		t.Fatalf("start hook after compaction: %s", first)
+	}
+	pc := got.Hooks["PreCompact"]
+	if len(pc) != 1 || pc[0].Matcher != "" || pc[0].Hooks[0].Command != "/bin/tacit hook pre-compact" {
+		t.Fatalf("pre-compact hook: %s", first)
+	}
+}
+
+// An install from before the compaction hooks has one SessionStart entry
+// (startup) and an unrelated one after it. A new install keeps both where
+// they are, appends the compact entry, and a rerun replaces each of tacit's
+// two entries by its matcher instead of folding them into one.
+func TestInstallHooksAddsTheCompactEntryInPlace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hooks.json")
+	start := `{"hooks":{"SessionStart":[{"matcher":"startup","hooks":[{"type":"command","command":"/old/tacit hook session-start"}]},{"hooks":[{"type":"command","command":"later.sh"}]}]}}`
+	if err := os.WriteFile(path, []byte(start), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := installHooks(path, "/bin/tacit"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, _ := os.ReadFile(path)
+	var got struct {
+		Hooks map[string][]struct {
+			Matcher string
+			Hooks   []struct{ Command string } `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	ss := got.Hooks["SessionStart"]
+	if len(ss) != 3 || ss[0].Matcher != "startup" || ss[0].Hooks[0].Command != "/bin/tacit hook session-start" ||
+		ss[1].Hooks[0].Command != "later.sh" ||
+		ss[2].Matcher != "compact" || ss[2].Hooks[0].Command != "/bin/tacit hook session-start --compact" {
+		t.Fatalf("entries: %s", b)
 	}
 }
 
@@ -245,7 +285,7 @@ func TestInstallClaudeRegistersTheMCPServer(t *testing.T) {
 		t.Fatalf("--no-mcp:\n%s", off)
 	}
 	hooks, _ = os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
-	if strings.Contains(string(hooks), "--mcp") || strings.Count(string(hooks), "hook session-start") != 1 {
+	if strings.Contains(string(hooks), "--mcp") || strings.Count(string(hooks), "hook session-start") != 2 {
 		t.Fatalf("hooks after --no-mcp:\n%s", hooks)
 	}
 }

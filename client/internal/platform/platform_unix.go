@@ -32,3 +32,8 @@ func Prepare(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 }
+
+// Detach makes cmd outlive the process that starts it: its own session, so
+// the terminal or harness that ends the parent's process group does not end
+// it too.
+func Detach(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} }

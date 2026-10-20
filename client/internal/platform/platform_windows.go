@@ -57,3 +57,9 @@ func Prepare(cmd *exec.Cmd) {
 		return cmd.Process.Kill()
 	}
 }
+
+// Detach makes cmd outlive the process that starts it: no console and its
+// own process group, so closing the harness's window does not end it.
+func Detach(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &windows.SysProcAttr{HideWindow: true, CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP}
+}

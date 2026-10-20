@@ -240,12 +240,69 @@ func TestInstallDreamSystemdWritesBoth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 2 || paths[0] != filepath.Join(home, ".config", "systemd", "user", "tacit-dream.service") {
+	if len(paths) != 4 || paths[0] != filepath.Join(home, ".config", "systemd", "user", "tacit-dream.service") {
 		t.Fatalf("paths %v", paths)
 	}
 	b, _ := os.ReadFile(paths[0])
 	if !strings.Contains(string(b), `ExecStart="/opt/my tools/tacit" dream`+"\n") || !strings.Contains(string(b), "EnvironmentFile=/home/u/.config/tacit/env\n") {
 		t.Fatalf("unit:\n%s", b)
+	}
+	// The idle job: the quick curate only after the dream (a oneshot's
+	// ExecStart lines stop at the first that fails), lowest priority.
+	if paths[2] != filepath.Join(home, ".config", "systemd", "user", "tacit-dream-idle.service") || paths[3] != filepath.Join(home, ".config", "systemd", "user", "tacit-dream-idle.timer") {
+		t.Fatalf("paths %v", paths)
+	}
+	b, _ = os.ReadFile(paths[2])
+	for _, want := range []string{
+		"EnvironmentFile=/home/u/.config/tacit/env\n",
+		"Type=oneshot\n",
+		"Nice=19\n",
+		"IOSchedulingClass=idle\n",
+		`ExecStart="/opt/my tools/tacit" dream --idle 20m` + "\n" + `ExecStart="/opt/my tools/tacit" curate --quick --min-interval 30m` + "\n",
+	} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("idle unit lacks %q:\n%s", want, b)
+		}
+	}
+	if b, _ := os.ReadFile(paths[3]); !strings.Contains(string(b), "OnUnitActiveSec=10min\n") {
+		t.Fatalf("idle timer:\n%s", b)
+	}
+}
+
+// The idle job's unit and timer are the ones in deploy/.
+func TestDreamIdleUnitMatchesTheDeployCopy(t *testing.T) {
+	svc, err := os.ReadFile("../../deploy/systemd/tacit-dream-idle.service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dreamIdleUnit("%h/.local/bin/tacit", "%h/.config/tacit/env"); got != string(svc) {
+		t.Fatalf("deploy copy drifted from dreamIdleUnit:\n%s\n---\n%s", got, svc)
+	}
+	timer, err := os.ReadFile("../../deploy/systemd/tacit-dream-idle.timer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dreamIdleTimer != string(timer) {
+		t.Fatalf("deploy copy drifted from dreamIdleTimer:\n%s\n---\n%s", dreamIdleTimer, timer)
+	}
+}
+
+// launchd runs one program: the idle agent's two steps go through /bin/sh
+// with &&, each with the env file (launchd has no EnvironmentFile), every
+// 10 minutes at the dreamer's priority.
+func TestDreamIdlePlist(t *testing.T) {
+	text := dreamIdlePlist("/Applications/my tools/tacit", "/Users/someone/.config/tacit/env", "", macHome, "/usr/bin:/bin")
+	for _, want := range []string{
+		"<string>ai.tacit.dream-idle</string>",
+		"<string>/bin/sh</string>\n\t\t<string>-c</string>\n\t\t<string>&#39;/Applications/my tools/tacit&#39; dream --idle 20m --env-file /Users/someone/.config/tacit/env &amp;&amp; &#39;/Applications/my tools/tacit&#39; curate --quick --min-interval 30m --env-file /Users/someone/.config/tacit/env</string>",
+		"<key>StartInterval</key>\n\t<integer>600</integer>",
+		"<key>Nice</key>\n\t<integer>19</integer>",
+		"<key>LowPriorityIO</key>\n\t<true/>",
+		"dream-idle.log",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("plist lacks %q:\n%s", want, text)
+		}
 	}
 }
 

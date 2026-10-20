@@ -23,9 +23,9 @@ func TestWindowsHooksKeepSpacesAndReinstallWithoutDuplicates(t *testing.T) {
 	b, _ := os.ReadFile(p)
 	json.Unmarshal(b, &root)
 	hooks := root["hooks"].(map[string]any)
-	for _, event := range []string{"SessionStart", "UserPromptSubmit"} {
+	for event, want := range map[string]int{"SessionStart": 2, "UserPromptSubmit": 1, "PreCompact": 1} {
 		entries := hooks[event].([]any)
-		if len(entries) != 1 {
+		if len(entries) != want {
 			t.Fatalf("%s entries: %d", event, len(entries))
 		}
 		h := entries[0].(map[string]any)["hooks"].([]any)[0].(map[string]any)
@@ -44,7 +44,7 @@ func TestWindowsHooksKeepSpacesAndReinstallWithoutDuplicates(t *testing.T) {
 func TestWindowsTasksUseUserRegistrationAndPortableArguments(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("TACIT_STORE", `C:\Tacit Data\facts`)
-	for _, target := range []string{"follow", "dream", "curate"} {
+	for _, target := range []string{"follow", "dream", "curate", "dream-idle"} {
 		p, err := installWindowsJob(home, `C:\My Tools\tacit.exe`, target, `C:\Provider Env\config.env`)
 		if err != nil {
 			t.Fatal(err)
@@ -71,6 +71,10 @@ func TestWindowsTasksUseUserRegistrationAndPortableArguments(t *testing.T) {
 		}
 		if target == "curate" && !strings.Contains(script, "maintain --env-file") {
 			t.Fatal("curator does not run verification sequence")
+		}
+		if target == "dream-idle" && (!strings.Contains(string(b), "<Interval>PT10M</Interval>") ||
+			!strings.Contains(script, "dream --idle 20m --env-file 'C:\\Provider Env\\config.env'; if ($LASTEXITCODE -eq 0) { & 'C:\\My Tools\\tacit.exe' curate --quick --min-interval 30m --env-file 'C:\\Provider Env\\config.env' }; exit $LASTEXITCODE")) {
+			t.Fatalf("idle task: %s", script)
 		}
 	}
 }
@@ -104,7 +108,7 @@ func TestWindowsClaudeUsesExecutableArguments(t *testing.T) {
 	json.Unmarshal(b, &root)
 	hooks := root["hooks"].(map[string]any)
 	e := hooks["SessionStart"].([]any)
-	if len(e) != 1 {
+	if len(e) != 2 {
 		t.Fatal("duplicate Windows Claude hooks")
 	}
 	h := e[0].(map[string]any)["hooks"].([]any)[0].(map[string]any)
