@@ -460,7 +460,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		}
 		// The closest fact of the store or the overlay for each new fact (the
 		// index holds both), and the batch's own facts of one scope.
-		pairs, refs, err := conflictPairs(ctx, s, newFacts, host, true, nil)
+		pairs, refs, err := conflictPairs(ctx, s, newFacts, host, true, true, nil)
 		if err != nil {
 			rep.Errors++
 			rep.FailedBatches++

@@ -523,7 +523,7 @@ func runCurate(args []string) int {
 		// Conflict pairs: closest existing fact per new fact, and new facts of
 		// the same scope that share most of their terms. The index is opened
 		// here, after the split, at the HEAD the batch will be written on.
-		pairs, refs, err := conflictPairs(ctx, s, newFacts, host, true, nil)
+		pairs, refs, err := conflictPairs(ctx, s, newFacts, host, true, false, nil)
 		if err != nil {
 			// A fact written without its conflict check is what the check is
 			// for: the batch is not written, its notes stay pending, and the

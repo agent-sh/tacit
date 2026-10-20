@@ -90,13 +90,13 @@ func TestConflictPairsReopensOnceThenFailsLoud(t *testing.T) {
 	nf := &fact.Fact{Meta: fact.Meta{Name: "new", Scope: "machines/host-a", Description: "quokka scheduler zebra now runs on port 7790 behind the lantern proxy"}}
 
 	opens := withFlakyIndex(t, 1)
-	pairs, _, err := conflictPairs(context.Background(), s, []*fact.Fact{nf}, "host-a", true, nil)
+	pairs, _, err := conflictPairs(context.Background(), s, []*fact.Fact{nf}, "host-a", true, false, nil)
 	if err != nil || len(pairs) != 1 || pairs[0].ExistingName != "old-quokka" || *opens != 2 {
 		t.Fatalf("one failed query: pairs %v, err %v, opens %d", pairs, err, *opens)
 	}
 
 	withFlakyIndex(t, 2)
-	if _, _, err := conflictPairs(context.Background(), s, []*fact.Fact{nf}, "host-a", true, nil); err == nil {
+	if _, _, err := conflictPairs(context.Background(), s, []*fact.Fact{nf}, "host-a", true, false, nil); err == nil {
 		t.Fatal("a query that fails again after reopening returned no error")
 	}
 }
@@ -185,7 +185,7 @@ func TestConflictPairsUseFactHostAcrossMachines(t *testing.T) {
 		curatedFact(t, clone, "old-quokka", "quokka scheduler zebra listens on port 7781 behind the lantern proxy", "2026-10-01", "n0")
 	})
 	nf := &fact.Fact{Meta: fact.Meta{Name: "new", Scope: "machines/host-a", Description: "quokka scheduler zebra now runs on port 7790 behind the lantern proxy"}}
-	pairs, _, err := conflictPairs(context.Background(), s, []*fact.Fact{nf}, "host-b", false, nil)
+	pairs, _, err := conflictPairs(context.Background(), s, []*fact.Fact{nf}, "host-b", false, false, nil)
 	if err != nil || len(pairs) != 1 || pairs[0].ExistingName != "old-quokka" {
 		t.Fatalf("remote machine fact was not checked: %v %v", pairs, err)
 	}
