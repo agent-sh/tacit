@@ -758,3 +758,69 @@ func TestMCPTagsALocalDreamerNoteUnreviewed(t *testing.T) {
 		t.Fatalf("tag %q", got)
 	}
 }
+
+// A ruling whose quote the write's redaction changes is filed as observed
+// and its ledger line dropped, while another ruling of the batch keeps its
+// own line.
+func TestLocalRulingWhoseQuoteIsRedactedIsObserved(t *testing.T) {
+	r := newLocalRig(t)
+	host := store.ShortHost()
+	q := "never rotate the walrus token Zq7Vx9 without telling the oncall first"
+	f, _ := os.OpenFile(r.transcript, os.O_APPEND|os.O_WRONLY, 0)
+	f.WriteString(`{"type":"user","entrypoint":"cli","sessionId":"s9","message":{"content":"` + q + `"}}` + "\n")
+	f.Close()
+	// A note as written before redaction (the write's redaction is what is tested).
+	n := &fact.Fact{Meta: fact.Meta{Name: "walrus-rules", Description: "Owner rules about the walrus service", Type: "unclassified", Scope: "user",
+		Source: fact.Source{Harness: "dreamer", Host: host, Kind: "user", Session: "s9"}, Created: "2026-10-20"},
+		Body: `Quoted from the session: "` + q + `" and "never deploy the walrus service on fridays without a rollback plan"` + "\n"}
+	b, _ := n.Encode()
+	if err := overlay.Write(r.local, r.s.Dir, "inbox/dreamer@"+host+"/walrus-rules.md", b); err != nil {
+		t.Fatal(err)
+	}
+	r.split(
+		map[string]any{"origin": "walrus-rules", "name": "walrus-token-rotation", "description": "Never rotate the walrus token without telling the oncall first", "type": "user_standard", "scope": "user", "kind": "user", "owner_quote": q, "body": `The owner said "` + q + `".`, "applies_to": map[string]any{}},
+		map[string]any{"origin": "walrus-rules", "name": "no-friday-walrus-deploys", "description": "Never deploy the walrus service on fridays without a rollback plan", "type": "user_standard", "scope": "user", "kind": "user", "owner_quote": "never deploy the walrus service on fridays without a rollback plan", "body": `The owner said "never deploy the walrus service on fridays without a rollback plan".`, "applies_to": map[string]any{}},
+	)
+	r.judge()
+	if code := runCurate(nil); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	fb, err := os.ReadFile(filepath.Join(r.local, "curated", "user", "walrus-token-rotation.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := fact.Parse("local/curated/user/walrus-token-rotation.md", fb)
+	if strings.Contains(string(fb), "Zq7Vx9") || got.Meta.Source.Kind != "observed" || got.Meta.Source.OwnerQuote != "" {
+		t.Fatalf("a ruling whose quote was redacted:\n%s", fb)
+	}
+	lb, _ := os.ReadFile(filepath.Join(r.local, filepath.FromSlash(overlay.QuotesRel)))
+	if strings.Contains(string(lb), "walrus-token-rotation") || !strings.Contains(string(lb), `"no-friday-walrus-deploys"`) {
+		t.Fatalf("local ledger:\n%s", lb)
+	}
+	r.untouched()
+}
+
+// The local dream neither syncs the clone nor recovers notes for a push: a
+// server that moved leaves the clone where it was.
+func TestLocalDreamDoesNotSync(t *testing.T) {
+	r := newLocalRig(t)
+	seed := filepath.Join(r.root, "seed")
+	os.WriteFile(filepath.Join(seed, "user", "later.md"), []byte(factFile("later")), 0o644)
+	git(t, seed, "add", "-A")
+	git(t, seed, "commit", "-q", "-m", "later")
+	git(t, seed, "push", "-q", "origin", "HEAD:main")
+	previous := dreamRun
+	defer func() { dreamRun = previous }()
+	dreamRun = func(context.Context, string, string) (string, float64, int, error) {
+		return `[{"description":"The walrus fixture driver listens on port 7790","type":"machine_fact","kind":"observed","applies_to":{}}]`, .01, 10, nil
+	}
+	if code := runDream(nil); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if got := gitIn(t, r.s.Dir, "rev-parse", "HEAD"); got != r.cloneHead {
+		t.Fatal("the local dream synced the clone")
+	}
+	if refs := gitIn(t, r.s.Dir, "rev-parse", "origin/main"); refs != r.cloneHead {
+		t.Fatal("the local dream fetched")
+	}
+}
