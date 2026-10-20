@@ -79,27 +79,21 @@ func treeScopes(ctx context.Context, a *browseArgs) ([]string, error) {
 	}
 	var aliases []string
 	if a.Cwd != "" && a.Repo != "" && strings.EqualFold(a.Repo, store.RepoName(ctx, a.Cwd)) {
-		aliases = hookRepoAliases(ctx, a.Cwd)
+		aliases = hookRepoAliases(a.Cwd)
 	}
 	return eligibleScopes(a.Repo, aliases, store.ShortHost()), nil
 }
 
-// relPath is p relative to the checkout that holds cwd, when it is inside.
+// relPath is p relative to the checkout that holds cwd, when it is inside
+// (repoRel); otherwise p as given, with forward slashes.
 func relPath(p, cwd string) string {
 	p = strings.TrimSpace(p)
 	if p == "" {
 		return ""
 	}
-	root := gitRoot(cwd)
-	if !filepath.IsAbs(p) {
-		if root == "" {
-			return filepath.ToSlash(p)
-		}
-		p = filepath.Join(cwd, p)
-	}
-	if root != "" {
-		if r, err := filepath.Rel(root, filepath.Clean(p)); err == nil && !strings.HasPrefix(r, "..") {
-			return filepath.ToSlash(r)
+	if r, ok := sessionRepo(cwd); ok {
+		if rel, ok := repoRel(r, cwd, p); ok {
+			return rel
 		}
 	}
 	return filepath.ToSlash(p)

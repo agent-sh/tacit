@@ -51,6 +51,11 @@ type Repo struct {
 	// through, and the last part of the origin remote's URL. Lower case,
 	// without Name. They never name a scope.
 	Aliases []string
+	// Remotes are the repository names of every remote in the repository's
+	// config (origin's too: a fork's upstream, a mirror, the URL a renamed
+	// repository still has), lower case, without Name, sorted. Delivery may
+	// add them to Aliases (the repo-aliases setting); the catalog does not.
+	Remotes []string
 }
 
 // Slug is the project scope name of r: Name in lower case when that is a
@@ -282,8 +287,12 @@ func (c *Cache) rootAt(d string) (r Repo, isRoot, ok bool) {
 		return Repo{}, true, false
 	}
 	r = Repo{Name: name, Root: main, Worktree: d}
-	if origin := originName(common); origin != "" {
+	origin, remotes := remoteNames(common)
+	if origin != "" {
 		r.Aliases = addAlias(r.Aliases, name, origin)
+	}
+	for _, n := range remotes {
+		r.Remotes = addAlias(r.Remotes, name, n)
 	}
 	return r, true, true
 }
@@ -345,36 +354,57 @@ func commonDir(gitdir string) (string, bool) {
 	return gitdir, false
 }
 
-var urlRx = regexp.MustCompile(`^\s*url\s*=\s*(\S+)\s*$`)
+var (
+	urlRx     = regexp.MustCompile(`^\s*url\s*=\s*(\S+)\s*$`)
+	remoteSec = regexp.MustCompile(`^\[remote\s+"([^"]*)"\]$`)
+)
 
-// originName is the last part of the origin remote's URL in the repository's
-// config (without .git), lower case, or "".
-func originName(common string) string {
+// remoteNames reads the repository's config: origin is the repository name
+// of the origin remote's URL (URLName), all the same for every remote's
+// URL; "" and nil when there is none.
+func remoteNames(common string) (origin string, all []string) {
 	fh, err := os.Open(filepath.Join(common, "config"))
 	if err != nil {
-		return ""
+		return "", nil
 	}
 	defer fh.Close()
 	sc := bufio.NewScanner(fh)
-	in := false
+	remote, in := "", false
 	for sc.Scan() {
 		l := strings.TrimSpace(sc.Text())
 		if strings.HasPrefix(l, "[") {
-			in = l == `[remote "origin"]`
+			m := remoteSec.FindStringSubmatch(l)
+			in = m != nil
+			if in {
+				remote = m[1]
+			}
 			continue
 		}
 		if !in {
 			continue
 		}
 		if m := urlRx.FindStringSubmatch(l); m != nil {
-			u := strings.TrimSuffix(strings.TrimRight(m[1], "/"), ".git")
-			if i := strings.LastIndexAny(u, "/:"); i >= 0 {
-				u = u[i+1:]
+			n := URLName(m[1])
+			if n == "" {
+				continue
 			}
-			return strings.ToLower(u)
+			all = append(all, n)
+			if remote == "origin" && origin == "" {
+				origin = n
+			}
 		}
 	}
-	return ""
+	return origin, all
+}
+
+// URLName is the repository name of a remote URL or an owner/repo form: its
+// last path part without .git, lower case.
+func URLName(u string) string {
+	u = strings.TrimSuffix(strings.TrimRight(strings.TrimSpace(u), "/"), ".git")
+	if i := strings.LastIndexAny(u, "/:"); i >= 0 {
+		u = u[i+1:]
+	}
+	return strings.ToLower(u)
 }
 
 func addAlias(aliases []string, name, a string) []string {
