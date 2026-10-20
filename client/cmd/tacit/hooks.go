@@ -81,7 +81,8 @@ type hookInput struct {
 	Source         string `json:"source"`
 	TranscriptPath string `json:"transcript_path"`
 	// HermesSession is the Hermes provider's session id for pre-compact
-	// (on_pre_compress): Hermes has no transcript file.
+	// (on_pre_compress) and prompt (prefetch, for windowDream): Hermes has
+	// no transcript file.
 	HermesSession string `json:"hermes_session_id"`
 }
 
@@ -108,7 +109,8 @@ func startTitle(sit search.Situation, mcp bool) string {
 // the hook JSON on stdin, prints the fact block on stdout (Claude Code adds it
 // as context), and exits 0 on every failure: a missing store or a slow
 // network must never cost the user a turn. pre-compact prints nothing: it
-// starts a dream of the session and returns (preCompact).
+// starts a dream of the session and returns (preCompact); prompt also starts
+// one when the session's undreamed part reached a full window (windowDream).
 func runHook(args []string) int {
 	if os.Getenv("TACIT_MODEL_JOB") == "1" {
 		return 0
@@ -173,6 +175,9 @@ func runHook(args []string) int {
 		remember(in.SessionID, hits)
 		fmt.Print(search.Block(hits, startTitle(sit, slices.Contains(args[1:], "--mcp"))))
 	case "prompt":
+		// First, and whatever the prompt: a session whose undreamed part
+		// reached a full window starts its dream (windowDream).
+		windowDream(s, in)
 		p := strings.TrimSpace(in.Prompt)
 		if !promptWorthy(p) {
 			return 0

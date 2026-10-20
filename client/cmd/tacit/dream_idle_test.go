@@ -314,3 +314,34 @@ func TestDreamIdleRun(t *testing.T) {
 		t.Fatalf("meter %+v %v", meter, err)
 	}
 }
+
+// A session dream (the pre-compact and full-window one) of a transcript
+// already dreamed reads only what came after its cursor: the part before the
+// last compaction is never sent again, and a transcript the state holds is
+// never read from its start.
+func TestSessionDreamReadsFromTheCursor(t *testing.T) {
+	_, transcript, statePath := dreamHome(t)
+	previous := dreamRun
+	defer func() { dreamRun = previous }()
+	var prompts []string
+	dreamRun = func(_ context.Context, _ string, prompt string) (string, float64, int, error) {
+		prompts = append(prompts, prompt)
+		return `[]`, 0, 0, nil
+	}
+	if code := runDream([]string{"--session", transcript}); code != 0 || len(prompts) != 1 || !strings.Contains(prompts[0], "asynchronous reads") {
+		t.Fatalf("first: exit %d, %d prompt(s)", code, len(prompts))
+	}
+	st, _ := dream.LoadState(statePath)
+	cursor := st.Offsets[transcript]
+	f, _ := os.OpenFile(transcript, os.O_APPEND|os.O_WRONLY, 0o600)
+	f.WriteString(`{"type":"system","subtype":"compact_boundary","content":"Conversation compacted"}` + "\n" +
+		`{"type":"user","message":{"content":"Where does the fixture cache live now?"}}` + "\n" +
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"The fixture cache moved to /srv/fixture-cache."}]}}` + "\n" + strings.Repeat(" ", 5000) + "\n")
+	f.Close()
+	if code := runDream([]string{"--session", transcript}); code != 0 || len(prompts) != 2 {
+		t.Fatalf("second: exit %d, %d prompt(s)", code, len(prompts))
+	}
+	if !strings.Contains(prompts[1], "/srv/fixture-cache") || strings.Contains(prompts[1], "asynchronous reads") {
+		t.Fatalf("the second dream did not start at the cursor (%d):\n%s", cursor, prompts[1])
+	}
+}
