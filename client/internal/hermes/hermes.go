@@ -29,6 +29,11 @@ var OwnerSources = map[string]bool{"mobile": true, "telegram": true, "desktop": 
 // of a session is an agent's (a delegation, a subagent).
 var continued = map[string]bool{"compression": true, "session_reset": true}
 
+// Continued reports an end reason whose conversation goes on in a child
+// session (compression, session_reset): the agent there no longer holds the
+// parent's turns in its context.
+func Continued(endReason string) bool { return continued[endReason] }
+
 // fanOut is how close together, in seconds, sessions start when an agent
 // starts them: a delegation's subagents began within one second of each other.
 const fanOut = 2.0
@@ -205,6 +210,26 @@ func (d *DB) LastIDs(ctx context.Context) (map[string]int64, error) {
 			return nil, err
 		}
 		out[sid] = id
+	}
+	return out, rows.Err()
+}
+
+// LastTimes is every session's newest message time (Unix seconds): when the
+// session was last written.
+func (d *DB) LastTimes(ctx context.Context) (map[string]float64, error) {
+	rows, err := d.db.QueryContext(ctx, `select session_id, max(timestamp) from messages group by session_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]float64{}
+	for rows.Next() {
+		var sid string
+		var at sql.NullFloat64
+		if err := rows.Scan(&sid, &at); err != nil {
+			return nil, err
+		}
+		out[sid] = at.Float64
 	}
 	return out, rows.Err()
 }

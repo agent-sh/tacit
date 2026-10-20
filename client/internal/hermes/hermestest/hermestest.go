@@ -103,3 +103,12 @@ func (s *Store) Add(ms ...Message) {
 		}
 	}
 }
+
+// End sets a session's end reason, as Hermes does when it ends one
+// (compression, session_reset, ...).
+func (s *Store) End(id, reason string) {
+	s.t.Helper()
+	if _, err := s.db.Exec(`update sessions set end_reason = ? where id = ?`, reason, id); err != nil {
+		s.t.Fatal(err)
+	}
+}
