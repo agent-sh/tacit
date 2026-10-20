@@ -15,7 +15,12 @@ func TestWindowsCursorAndFreshStart(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "s1.jsonl")
 	line := func(s string) string { return s + "\n" }
-	initial := line(`{"type":"user","cwd":"/home/u/projects/api","message":{"content":"old turn that must never be replayed"}}`)
+	// The session works in a real checkout: its repo is the git root's name.
+	api := filepath.Join(dir, "projects", "api")
+	if err := os.MkdirAll(filepath.Join(api, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initial := line(`{"type":"user","cwd":"` + filepath.ToSlash(api) + `","message":{"content":"old turn that must never be replayed"}}`)
 	os.WriteFile(f, []byte(initial), 0o644)
 	src := []Source{{Glob: filepath.Join(dir, "*.jsonl"), Format: digest.Claude}}
 
@@ -27,7 +32,7 @@ func TestWindowsCursorAndFreshStart(t *testing.T) {
 
 	// Append a delta with an owner line, an error and assistant text; plus a
 	// trailing partial line that must not be consumed.
-	delta := line(`{"type":"user","cwd":"/home/u/projects/api","message":{"content":"commit it"}}`) +
+	delta := line(`{"type":"user","cwd":"`+filepath.ToSlash(api)+`","message":{"content":"commit it"}}`) +
 		line(`{"type":"assistant","message":{"content":[{"type":"text","text":"Committing."},{"type":"tool_use","name":"Bash","input":{"command":"git commit"}}]}}`) +
 		line(`{"type":"user","message":{"content":[{"type":"tool_result","is_error":true,"content":"tools/hooks/pre-push: eslint: not found"}]}}`)
 	delta += strings.Repeat(" ", minNewBytes) + "\n" // padding so the delta clears the minimum
@@ -90,37 +95,50 @@ func must(b []byte, err error) []byte {
 	return b
 }
 
+// The dreamer's repo of a cwd is repoid's: a real git root, a worktree for its
+// main repository; a folder's name never names one (the rule before
+// 2026-10-21 read the first folder under ~/projects and the base name of a
+// cwd outside home, which made projects/<scratch dir> scopes).
 func TestRepoOfCwd(t *testing.T) {
-	repos := map[string]bool{"/h/workplace/widget": true, "/h/projects/tacit": true, "/h/projects/agent-sh/agnix": true, "/h/projects/atlas": true, "/h/projects/atlas-worktrees/KV-1": true}
-	isRepo := func(d string) bool { return repos[d] }
+	h, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	git := func(d string) {
+		if err := os.MkdirAll(filepath.Join(h, d, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, d := range []string{"workplace/widget", "projects/tacit", "projects/agent-sh/agnix", "projects/atlas"} {
+		git(d)
+	}
+	for _, d := range []string{"projects/park-predictor", "projects/tacit/client", ".cache/run42/head", "workplace/notes", "srv/memra"} {
+		if err := os.MkdirAll(filepath.Join(h, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for cwd, want := range map[string]string{
-		"/h/projects/tacit":                                              "tacit",
-		"/h/projects/tacit/client":                                       "tacit",
-		"/h/projects/tacit/.claude/worktrees/agent-a8d2":                 "tacit",
-		"/h/projects/atlas/.local/runners/worker-05/worktrees/task-7-g1": "atlas",
-		"/h/projects/atlas-worktrees/KV-1":                               "atlas",
-		"/h/projects/agent-sh/agnix":                                     "agnix",
-		"/h/projects/agent-sh/agnix/crates/x":                            "agnix",
-		"/h":                                                             "",
-		"/h/projects":                                                    "",
-		"/h/.cache/run42/head":                                           "",
-		"/srv/memra":                                                     "memra",
-		"/h/workplace":                                                   "", // a folder of checkouts
-		"/h/workplace/widget/pkg":                                        "widget",
-		"/h/workplace/notes":                                             "",
+		"projects/tacit":                     "tacit",
+		"projects/tacit/client":              "tacit",
+		"projects/tacit/.claude/worktrees/x": "tacit", // gone since: its repo still holds the path
+		"projects/agent-sh/agnix":            "agnix",
+		"projects/agent-sh/agnix/crates/x":   "agnix",
+		"projects/agent-sh":                  "", // a folder of checkouts
+		"projects/park-predictor":            "", // under ~/projects but no git root
+		"":                                   "",
+		"projects":                           "",
+		".cache/run42/head":                  "",
+		"srv/memra":                          "", // a folder named like a repo
+		"workplace":                          "",
+		"workplace/widget/pkg":               "widget",
+		"workplace/notes":                    "",
 	} {
-		if got := RepoOfCwd(cwd, "/h", isRepo); got != want {
+		if got := RepoOfCwd(filepath.Join(h, cwd), h); got != want {
 			t.Errorf("%s: %q, want %q", cwd, got, want)
 		}
 	}
-	// Checkouts under $TACIT_PROJECTS instead of ~/projects.
-	t.Setenv("TACIT_PROJECTS", "/code")
-	repos["/code/atlas"] = true
-	if got := RepoOfCwd("/code/atlas/src", "/h", isRepo); got != "atlas" {
-		t.Errorf("TACIT_PROJECTS: %q, want atlas", got)
-	}
-	if got := RepoOfCwd("/code", "/h", isRepo); got != "" {
-		t.Errorf("TACIT_PROJECTS root: %q, want none", got)
+	if got := RepoOfCwd("/", h); got != "" {
+		t.Errorf("root: %q", got)
 	}
 }
 
@@ -128,15 +146,22 @@ func TestRepoOfCwdNamesAWorktreeAfterItsRepository(t *testing.T) {
 	home := t.TempDir()
 	widget := filepath.Join(home, "w", "widget")
 	fix := filepath.Join(home, "w", "widget-fix")
-	for _, d := range []string{filepath.Join(widget, ".git", "worktrees", "widget-fix"), filepath.Join(fix, "pkg")} {
+	admin := filepath.Join(widget, ".git", "worktrees", "widget-fix")
+	for _, d := range []string{admin, filepath.Join(fix, "pkg")} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(fix, ".git"), []byte("gitdir: "+widget+"/.git/worktrees/widget-fix\n"), 0o644); err != nil {
-		t.Fatal(err)
+	for path, body := range map[string]string{
+		filepath.Join(fix, ".git"):        "gitdir: " + admin + "\n",
+		filepath.Join(admin, "HEAD"):      "ref: refs/heads/fix\n",
+		filepath.Join(admin, "commondir"): "../..\n",
+	} {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if got := RepoOfCwd(filepath.Join(fix, "pkg"), home, isRepo); got != "widget" {
+	if got := RepoOfCwd(filepath.Join(fix, "pkg"), home); got != "widget" {
 		t.Errorf("worktree cwd: %q, want widget", got)
 	}
 }
@@ -239,7 +264,7 @@ func TestCwdPathReadsAFileURL(t *testing.T) {
 			t.Errorf("cwdPath(%q) = %q, want %q", in, got, want)
 		}
 	}
-	if got := RepoOfCwd(cwdPath("file:///h"), "/h", func(string) bool { return false }); got != "" {
+	if got := RepoOfCwd("file:///h", "/h"); got != "" {
 		t.Errorf("a file URL of home named %q", got)
 	}
 }

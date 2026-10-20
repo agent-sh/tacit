@@ -38,24 +38,35 @@ func TestNameFindsTheRepoAPathIsIn(t *testing.T) {
 	mkRepo(t, filepath.Join(w, "widget"))
 	mkdir(t, filepath.Join(w, "widget", "pkg", "api"))
 	mkRepo(t, filepath.Join(w, "ws", "src", "OrderService"))
-	write(t, filepath.Join(w, "ws", "packageInfo"), "")   // a Brazil workspace that still exists
+	write(t, filepath.Join(w, "ws", "packageInfo"), "")   // a Brazil workspace: a folder, not a git root
 	write(t, filepath.Join(w, "gone", "src", "x.go"), "") // no workspace marker
 	mkdir(t, filepath.Join(w, "notes"))
 	// A worktree whose .git is a file pointing at its repository.
 	mkRepo(t, filepath.Join(w, "api"))
-	write(t, filepath.Join(w, "api-fix", ".git"), "gitdir: "+filepath.Join(w, "api", ".git", "worktrees", "api-fix")+"\n")
-	// ~/projects/<repo>-worktrees/<task>
-	mkRepo(t, filepath.Join(home, "projects", "atlas-worktrees", "KV-1"))
+	admin := filepath.Join(w, "api", ".git", "worktrees", "api-fix")
+	write(t, filepath.Join(admin, "HEAD"), "ref: refs/heads/fix\n")
+	write(t, filepath.Join(admin, "commondir"), "../..\n")
+	write(t, filepath.Join(w, "api-fix", ".git"), "gitdir: "+admin+"\n")
+	// A worktree of atlas in ~/projects/atlas-worktrees/<task>, and a full
+	// clone there, which is its own repository (its folder's name is not
+	// read).
+	mkRepo(t, filepath.Join(home, "projects", "atlas"))
+	atlasAdmin := filepath.Join(home, "projects", "atlas", ".git", "worktrees", "KV-1")
+	write(t, filepath.Join(atlasAdmin, "HEAD"), "ref: refs/heads/kv\n")
+	write(t, filepath.Join(atlasAdmin, "commondir"), "../..\n")
+	write(t, filepath.Join(home, "projects", "atlas-worktrees", "KV-1", ".git"), "gitdir: "+atlasAdmin+"\n")
+	mkRepo(t, filepath.Join(home, "projects", "atlas-worktrees", "KV-2"))
 	for path, want := range map[string]string{
 		filepath.Join(w, "widget", "pkg", "api", "server.go"):             "widget",
 		filepath.Join(w, "widget"):                                        "widget",
 		"~/workplace/widget/README.md":                                    "widget",
 		filepath.Join(w, "widget", ".worktrees", "fix-1", "a"):            "widget",
 		filepath.Join(w, "ws", "src", "OrderService", "x"):                "OrderService",
-		filepath.Join(w, "ws", "src", "Billing", "src", "A.java"):         "Billing", // removed from a live workspace
-		filepath.Join(w, "gone", "src", "Billing", "a.java"):              "",        // no workspace: not a Brazil shape
+		filepath.Join(w, "ws", "src", "Billing", "src", "A.java"):         "", // removed from a live workspace: no git root
+		filepath.Join(w, "gone", "src", "Billing", "a.java"):              "", // no workspace: not a Brazil shape
 		filepath.Join(w, "api-fix", "main.go"):                            "api",
 		filepath.Join(home, "projects", "atlas-worktrees", "KV-1", "a"):   "atlas",
+		filepath.Join(home, "projects", "atlas-worktrees", "KV-2", "a"):   "KV-2",
 		filepath.Join(w, "notes", "todo.md"):                              "", // a folder, not a repo
 		w:                                                                 "",
 		home:                                                              "",
@@ -149,7 +160,7 @@ func TestResolverStopsWhenAskedOrFull(t *testing.T) {
 	for i := range 100 {
 		r.Name(filepath.Join(home, "a", "repo", fmt.Sprintf("f%d.go", i)))
 	}
-	if n := len(r.roots) + len(r.stats); n > r.MaxDirs {
+	if n := r.Stats(); n > r.MaxDirs {
 		t.Fatalf("%d stats past a cap of %d", n, r.MaxDirs)
 	}
 }

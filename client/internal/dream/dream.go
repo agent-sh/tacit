@@ -29,6 +29,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/hermes"
 	"github.com/agent-sh/tacit/client/internal/importer"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
+	"github.com/agent-sh/tacit/client/internal/repoid"
 	"github.com/agent-sh/tacit/client/internal/repoinfer"
 )
 
@@ -225,10 +226,12 @@ type Window struct {
 	File    string
 	Session string // the session id the facts name (source.session)
 	Repo    string
-	Lines   []string
-	Start   int64
-	End     int64
-	Part    int
+	// RepoRoot is the main checkout of Repo (repoid), "" when Repo is "".
+	RepoRoot string
+	Lines    []string
+	Start    int64
+	End      int64
+	Part     int
 	// Why is the reason a selecting run took the transcript: "idle" or
 	// "compacted" (Select.Idle), empty otherwise.
 	Why string
@@ -422,14 +425,15 @@ func WindowsFor(sources []Source, st *State, fresh bool, sel Select) ([]Window, 
 			// The cwd's repo, else the repo the window's own paths are in. Per
 			// window, not per delta: a long session moves between repos, and
 			// measured per delta, 10 of 40 inferred repos were wrong.
-			cwdRepo := repoOf(f, src.Format, head)
+			cwdRepo := repoOf(head, home)
 			resolver := repoinfer.NewResolver(home)
 			for part, c := range chunk(lines, maxWindowChars) {
-				repo := cwdRepo
+				repo, root := cwdRepo.Name, cwdRepo.Root
 				if repo == "" {
 					repo = windowRepo(c, resolver)
+					root = resolver.Root(repo)
 				}
-				ws = append(ws, Window{File: f, Session: session, Repo: repo, Lines: c, Start: off, End: end, Part: part, Why: why})
+				ws = append(ws, Window{File: f, Session: session, Repo: repo, RepoRoot: root, Lines: c, Start: off, End: end, Part: part, Why: why})
 			}
 		}
 	}
@@ -574,19 +578,20 @@ func hermesWindows(path string, st *State, fresh bool, exclude map[string]bool, 
 			st.Offsets[key] = end
 			continue
 		}
-		cwdRepo := ""
+		var cwdRepo repoid.Repo
 		for _, d := range []string{s.RepoRoot, s.Cwd} {
 			if d != "" {
-				cwdRepo = RepoOfCwd(d, home, isRepo)
+				cwdRepo, _ = repoid.Of(cwdPath(d), home)
 				break
 			}
 		}
 		for part, c := range chunk(lines, maxWindowChars) {
-			repo := cwdRepo
+			repo, root := cwdRepo.Name, cwdRepo.Root
 			if repo == "" {
 				repo = windowRepo(c, resolver)
+				root = resolver.Root(repo)
 			}
-			ws = append(ws, Window{File: key, Session: s.ID, Repo: repo, Lines: c, Start: after, End: end, Part: part, Why: why})
+			ws = append(ws, Window{File: key, Session: s.ID, Repo: repo, RepoRoot: root, Lines: c, Start: after, End: end, Part: part, Why: why})
 		}
 	}
 	return ws
@@ -652,32 +657,17 @@ func Exclude(ids ...string) error {
 
 var cwdRx = regexp.MustCompile(`"cwd":"([^"]+)"`)
 
-// repoOf guesses the repo from the first cwd in the delta (both formats carry one).
-func repoOf(file string, f digest.Format, raw []byte) string {
+// repoOf is the repository of the first cwd in the delta (both formats
+// carry one), as repoid names it: a real git root, a worktree for its main
+// repository. A transcript without a cwd gets none from here (the window's
+// paths decide, windowRepo): its folder's name is a lossy spelling of a
+// path, not a git root.
+func repoOf(raw []byte, home string) repoid.Repo {
 	if m := cwdRx.FindSubmatch(raw); m != nil {
-		home, _ := os.UserHomeDir()
-		return RepoOfCwd(cwdPath(string(m[1])), home, isRepo)
+		r, _ := repoid.Of(cwdPath(string(m[1])), home)
+		return r
 	}
-	// No cwd: the transcript folder's name says where the session started
-	// (-home-u-projects-memra). It names a repo only when that is a
-	// checkout under the projects directory; any other folder (home, a
-	// folder of checkouts) is not a project, and the window's paths decide
-	// (windowRepo). The folder name's last dash-separated part is the guess,
-	// so a repo with a dash in its name (my-repo) or one level down
-	// (projects/agent-sh/agnix) is not found here and gets no repo.
-	if f == digest.Claude {
-		parts := strings.Split(filepath.Base(filepath.Dir(file)), "-")
-		name := parts[len(parts)-1]
-		home, _ := os.UserHomeDir()
-		projects := filepath.Join(home, "projects")
-		if d := os.Getenv("TACIT_PROJECTS"); d != "" {
-			projects = filepath.Clean(d)
-		}
-		if name != "" && home != "" && isRepo(filepath.Join(projects, name)) {
-			return name
-		}
-	}
-	return ""
+	return repoid.Repo{}
 }
 
 // cwdPath is a recorded cwd as a path: Codex writes some as a file URL
@@ -700,67 +690,10 @@ func windowRepo(lines []string, r *repoinfer.Resolver) string {
 	return repoinfer.Dominant(r.Counts(lines, 1, nil), 3)
 }
 
-// RepoOfCwd is the repo a session's working directory belongs to. A
-// worktree is its repo's (<repo>/.claude/worktrees/x, <repo>/.local/runners/
-// w/worktrees/x, <repo>/.worktrees/x, ~/projects/<repo>-worktrees/x), a
-// subdirectory is its repo's (~/projects/tacit/client is tacit), a repo under
-// an organisation directory is its own (~/projects/agent-sh/agnix), and the
-// home directory and its dot directories (~/.cache, ~/.config) are no repo.
-// The basename of the directory was the rule before 2026-10-11: 21 percent
-// of the pending dreamer notes were filed under a worktree's name
-// (projects/<task>-g1) and 12 percent under projects/<user> or
-// projects/client.
-func RepoOfCwd(cwd, home string, isRepo func(dir string) bool) string {
-	p := filepath.Clean(cwd)
-	for _, m := range []string{"/.claude/worktrees/", "/.local/runners/", "/.worktrees/"} {
-		if i := strings.Index(p, m); i > 0 {
-			p = p[:i]
-		}
-	}
-	if home != "" {
-		projects := filepath.Join(home, "projects")
-		if d := os.Getenv("TACIT_PROJECTS"); d != "" {
-			projects = filepath.Clean(d)
-		}
-		if p == projects {
-			return ""
-		}
-		if rel, err := filepath.Rel(projects, p); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
-			parts := strings.Split(filepath.ToSlash(rel), "/")
-			if r, ok := strings.CutSuffix(parts[0], "-worktrees"); ok && r != "" {
-				return r
-			}
-			if len(parts) > 1 && !isRepo(filepath.Join(projects, parts[0])) && isRepo(filepath.Join(projects, parts[0], parts[1])) {
-				return parts[1]
-			}
-			return parts[0]
-		}
-		if p == home || strings.HasPrefix(p, home+string(filepath.Separator)+".") {
-			return ""
-		}
-		// Elsewhere in home: the repo that holds the directory, else none. A
-		// folder of checkouts (~/workplace) or of documents is not a project,
-		// and its name made pseudo-projects of where sessions started
-		// (projects/workplace). A worktree is its repository's.
-		if strings.HasPrefix(p, home+string(filepath.Separator)) {
-			for d := p; d != home && d != filepath.Dir(d); d = filepath.Dir(d) {
-				if isRepo(d) {
-					return filepath.Base(repoinfer.WorktreeRepo(d))
-				}
-			}
-			return ""
-		}
-	}
-	if p == "/" || p == "." {
-		return ""
-	}
-	return filepath.Base(p)
-}
-
-func isRepo(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, ".git"))
-	return err == nil
-}
+// RepoOfCwd is the repo a session's working directory belongs to, as
+// repoid names it ("" for none). A cwd recorded as a file:// URL is read as
+// its path.
+func RepoOfCwd(cwd, home string) string { return repoid.Name(cwdPath(cwd), home) }
 
 func chunk(lines []string, maxChars int) [][]string {
 	var out [][]string

@@ -227,6 +227,9 @@ func runDream(args []string) int {
 		fmt.Fprintln(os.Stderr, "dream:", err)
 		return 2
 	}
+	if !*dry {
+		recordWindowRepos(home, windows)
+	}
 	if fresh {
 		if !*dry {
 			st.LastRun = time.Now().Format(time.RFC3339)
