@@ -23,7 +23,7 @@ func TestWindowsHooksKeepSpacesAndReinstallWithoutDuplicates(t *testing.T) {
 	b, _ := os.ReadFile(p)
 	json.Unmarshal(b, &root)
 	hooks := root["hooks"].(map[string]any)
-	for event, want := range map[string]int{"SessionStart": 2, "UserPromptSubmit": 1, "PreCompact": 1} {
+	for event, want := range map[string]int{"SessionStart": 1, "UserPromptSubmit": 1, "PreCompact": 1} {
 		entries := hooks[event].([]any)
 		if len(entries) != want {
 			t.Fatalf("%s entries: %d", event, len(entries))
@@ -108,7 +108,7 @@ func TestWindowsClaudeUsesExecutableArguments(t *testing.T) {
 	json.Unmarshal(b, &root)
 	hooks := root["hooks"].(map[string]any)
 	e := hooks["SessionStart"].([]any)
-	if len(e) != 2 {
+	if len(e) != 1 {
 		t.Fatal("duplicate Windows Claude hooks")
 	}
 	h := e[0].(map[string]any)["hooks"].([]any)[0].(map[string]any)

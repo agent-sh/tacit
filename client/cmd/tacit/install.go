@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -65,7 +64,7 @@ func runInstall(args []string) int {
 			fmt.Fprintln(os.Stderr, "install:", err)
 			return 1
 		}
-		fmt.Println("installed SessionStart (startup, compact), UserPromptSubmit and PreCompact hooks in", path)
+		fmt.Println("installed SessionStart, UserPromptSubmit and PreCompact hooks in", path)
 		fmt.Println("Codex skips new hooks until you trust them: run /hooks in Codex once.")
 		fmt.Printf("MCP (~/.codex/config.toml):\n[mcp_servers.tacit]\ncommand = %q\nargs = %s\n", exe, mcpArguments("codex"))
 	case "hermes":
@@ -385,7 +384,7 @@ func installClaude(home, exe string, args []string) int {
 		fmt.Fprintln(os.Stderr, "install:", err)
 		return 1
 	}
-	fmt.Println("installed SessionStart (startup, compact), UserPromptSubmit and PreCompact hooks in", path)
+	fmt.Println("installed SessionStart, UserPromptSubmit and PreCompact hooks in", path)
 	switch {
 	case *noMCP && changed:
 		fmt.Println("removed the tacit MCP server from", cfg, "(the file as it was:", claudeConfigBackup(cfg)+")")
@@ -412,12 +411,13 @@ func installHooksFor(path, exe, goos string) error { return installHooksWith(pat
 // installHooksWith is installHooksFor with extra arguments for the
 // SessionStart hook (--mcp: the harness has tacit's MCP server).
 //
-// The entries: SessionStart for a real start (matcher startup) and, a
-// second entry, for the start after a compaction (matcher compact, the hook
-// with --compact, so a harness that ignored the matcher would still print
-// each block once); UserPromptSubmit; PreCompact, which starts the dream of
-// the session about to compact. Claude Code and Codex 0.162 take the same
-// events and input.
+// The entries: SessionStart for a real start (matcher startup: not on
+// resume, clear or compact; after a compaction the summary carries what the
+// session was given); UserPromptSubmit; PreCompact, which starts the dream
+// of the session about to compact, so its facts reach the store for other
+// and later sessions. Claude Code and Codex 0.162 take the same events and
+// input. A tacit entry under a matcher none of these has (the compact entry
+// an earlier build of this branch wrote) is removed.
 func installHooksWith(path, exe, goos string, startArgs []string) error {
 	settings := map[string]any{}
 	if b, err := os.ReadFile(path); err == nil {
@@ -434,7 +434,7 @@ func installHooksWith(path, exe, goos string, startArgs []string) error {
 		extra        []string
 	}
 	events := map[string][]spec{
-		"SessionStart":     {{"startup", "session-start", startArgs}, {"compact", "session-start", append(slices.Clone(startArgs), "--compact")}},
+		"SessionStart":     {{"startup", "session-start", startArgs}},
 		"UserPromptSubmit": {{"", "prompt", nil}},
 		"PreCompact":       {{"", "pre-compact", nil}},
 	}
@@ -455,8 +455,8 @@ func installHooksWith(path, exe, goos string, startArgs []string) error {
 			handlers[i] = handler
 		}
 		// Replace our entry where it is: Codex keys hook trust by position,
-		// so moving it would make every later hook ask for trust again. Two
-		// of our entries on one event are told apart by their matcher.
+		// so moving it would make every later hook ask for trust again. Our
+		// entries are told apart by their matcher.
 		var kept []any
 		placed := make([]bool, len(specs))
 		if list, ok := hooks[event].([]any); ok {

@@ -1,15 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/agent-sh/tacit/client/internal/fact"
-	"github.com/agent-sh/tacit/client/internal/store"
 )
 
 // The PreCompact hook starts `tacit dream --session <transcript>` detached
@@ -56,63 +55,69 @@ func TestPreCompactHookStartsTheDreamAndReturns(t *testing.T) {
 	}
 }
 
-// After a compaction the start block brings what the session was not given
-// yet, and the session's own dreamer notes no curator has split: labelled,
-// never a RULE line, at most three, each once. A note of another session, or
-// one the curator already split, is not among them; a plain start and a
-// compact start each answer only their own source.
-func TestCompactStartDeliversTheSessionsOwnNotes(t *testing.T) {
-	// Filler, so the repo's name is a rare term the start query ranks by.
-	r := newRig(t, rigOpts{repos: []string{"demo"}, filler: 200, rules: 1})
-	t.Setenv("TACIT_STORE", r.clone)
-	t.Setenv("HOME", filepath.Join(r.root, "home"))
-	t.Setenv("TACIT_STATE_DIR", "")
-	t.Setenv("TACIT_FOLLOW_STATE", filepath.Join(r.root, "no-follower.json"))
-	host := store.ShortHost()
-	note := func(name, session, kind, desc string) {
-		writeFactFile(t, r.clone, &fact.Fact{Path: "inbox/dreamer@" + host + "/" + name + ".md", Meta: fact.Meta{Name: name, Description: desc, Type: "machine_fact", Scope: "projects/demo",
-			Source: fact.Source{Harness: "dreamer", Host: host, Kind: kind, Session: session}, Created: "2026-10-20"}, Body: desc + "\n"})
+// The Hermes provider's on_pre_compress runs `tacit hook pre-compact` with
+// the session's Hermes id (the dreamer reads the session from state.db by
+// it), adds nothing to the summary prompt, follows a session switch, and
+// does nothing in a subagent or cron context. The provider is the installed
+// file, run by python3 against stand-ins for Hermes' modules.
+func TestHermesPreCompressRunsThePreCompactHook(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stand-in")
 	}
-	note("own-cache-path", "s1", "observed", "The demo fixture cache lives in /srv/demo-cache")
-	note("own-port", "s1", "observed", "The demo fixture server listens on port 7781")
-	note("own-owner-says", "s1", "user", "Owner: never push the demo fixture branch")
-	note("own-fourth", "s1", "observed", "The demo fixture build needs make 4.4")
-	note("own-curated", "s1", "observed", "The demo fixture logs go to /var/log/demo")
-	note("other-session", "s2", "observed", "The demo fixture uses the blue queue")
-	writeFact(t, r.clone, fact.Meta{Name: "demo-logs", Description: "The demo fixture logs go to /var/log/demo", Type: "machine_fact", Scope: "projects/demo", Origin: "own-curated"}, "x")
-	r.commitAs("fixture notes")
-	cwd := filepath.Join(r.projects, "demo")
-	payload := func(source string) string {
-		return `{"session_id":"s1","cwd":"` + cwd + `","transcript_path":"/nowhere/s1.jsonl","hook_event_name":"SessionStart","source":"` + source + `"}`
+	py, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 not installed")
 	}
-	start := hookOut(t, payload("startup"), "session-start")
-	if !strings.Contains(start, "demo-note") || strings.Contains(start, "own-") {
-		t.Fatalf("start block:\n%s", start)
+	root := t.TempDir()
+	calls := filepath.Join(root, "calls")
+	fake := filepath.Join(root, "tacit")
+	os.WriteFile(fake, []byte("#!/bin/sh\n{ printf '%s|' \"$*\"; cat; echo; } >> '"+calls+"'\n"), 0o700)
+	t.Setenv("TACIT_SETTINGS", "")
+	if err := installHermes(filepath.Join(root, "plugins", "tacit"), fake); err != nil {
+		t.Fatal(err)
 	}
-	if out := hookOut(t, payload("compact"), "session-start"); out != "" {
-		t.Fatalf("the startup entry answered a compaction:\n%s", out)
+	stubs := filepath.Join(root, "stubs")
+	os.MkdirAll(filepath.Join(stubs, "agent"), 0o755)
+	os.WriteFile(filepath.Join(stubs, "agent", "__init__.py"), nil, 0o644)
+	os.WriteFile(filepath.Join(stubs, "agent", "memory_provider.py"), []byte(`class MemoryProvider:
+    pass
+class RecallStatus:
+    def __init__(self, **kw):
+        pass
+def is_trivial_prompt(q):
+    return False
+`), 0o644)
+	driver := filepath.Join(root, "driver.py")
+	os.WriteFile(driver, []byte(`import sys
+import tacit
+cwd = sys.argv[1]
+sub = tacit.TacitProvider()
+sub.initialize("20261020_sub", cwd=cwd, agent_context="subagent")
+assert sub.on_pre_compress([{"role": "user", "content": "x"}]) == ""
+p = tacit.TacitProvider()
+p.initialize("20261020_abc", cwd=cwd)
+p.system_prompt_block()
+assert p.on_pre_compress([{"role": "user", "content": "x"}]) == ""
+p.on_session_switch("20261020_def", parent_session_id="20261020_abc")
+assert p.on_pre_compress([]) == ""
+`), 0o644)
+	cmd := exec.Command(py, driver, root)
+	cmd.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "plugins")+string(os.PathListSeparator)+stubs, "TACIT_BIN="+fake)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("driver: %v\n%s", err, out)
 	}
-	if out := hookOut(t, payload("startup"), "session-start", "--compact"); out != "" {
-		t.Fatalf("the compact entry answered a start:\n%s", out)
-	}
-	compact := hookOut(t, payload("compact"), "session-start", "--compact")
-	own := 0
-	for _, l := range strings.Split(compact, "\n") {
-		if strings.Contains(l, "(this session, not yet reviewed)") {
-			own++
-			if strings.HasPrefix(l, "- RULE") {
-				t.Fatalf("an unreviewed note became a rule: %s", l)
+	b, _ := os.ReadFile(calls)
+	var pre []string
+	for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if args, stdin, _ := strings.Cut(l, "|"); args == "hook pre-compact" {
+			var in hookInput
+			if err := json.Unmarshal([]byte(stdin), &in); err != nil {
+				t.Fatalf("payload %q: %v", stdin, err)
 			}
-		}
-		if name, _, ok := strings.Cut(strings.TrimPrefix(l, "- "), ":"); ok && strings.HasPrefix(l, "- ") && strings.Contains(start, "- "+name+":") {
-			t.Fatalf("delivered twice in one session: %s", l)
+			pre = append(pre, in.HermesSession)
 		}
 	}
-	if own != 3 || strings.Contains(compact, "other-session") || strings.Contains(compact, "own-curated") {
-		t.Fatalf("compact block (%d own):\n%s", own, compact)
-	}
-	again := hookOut(t, payload("compact"), "session-start", "--compact")
-	if strings.Count(again, "(this session, not yet reviewed)") != 1 {
-		t.Fatalf("the second compaction: the one note left, once:\n%s", again)
+	if strings.Join(pre, ",") != "20261020_abc,20261020_def" {
+		t.Fatalf("pre-compact calls for %v; all calls:\n%s", pre, b)
 	}
 }
