@@ -604,3 +604,27 @@ func TestPreCompactStartsALocalDream(t *testing.T) {
 	}
 	r.untouched()
 }
+
+// A split answer that fails validation is logged as its entry, field and
+// rule, in curator.log and on stderr, never with the entry's text.
+func TestInvalidSplitAnswerIsLoggedByFieldAndRule(t *testing.T) {
+	r := newLocalRig(t)
+	host := store.ShortHost()
+	n := dream.ToFact(dream.Extracted{Description: "The dingo fixture proxy uses port 4412 on this machine", Type: "machine_fact", Kind: "observed"}, "", host, "s9")
+	if _, err := persistLocalDreamWindow(r.s, []*fact.Fact{n}); err != nil {
+		t.Fatal(err)
+	}
+	r.split(map[string]any{"origin": n.Meta.Name, "name": "dingo-proxy-port", "description": "The dingo fixture proxy uses port 4412", "type": "machine_fact", "scope": "user", "kind": "observed", "body": "Port 4412.", "applies_to": map[string]any{"paths": []any{7}}})
+	r.judge()
+	if code := runCurate(nil); code != 1 {
+		t.Fatalf("exit %d, want 1 (the note failed)", code)
+	}
+	b, _ := os.ReadFile(filepath.Join(platform.StateDir(r.home), "curator.log"))
+	var rep curate.Report
+	if json.Unmarshal(b, &rep) != nil || strings.Join(rep.InvalidEntries, "|") != "split: entry 1: applies_to.paths: a value is not a string" {
+		t.Fatalf("curator.log: %s", b)
+	}
+	if strings.Contains(string(b), "dingo") {
+		t.Fatalf("curator.log holds the entry's text: %s", b)
+	}
+}

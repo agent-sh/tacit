@@ -392,6 +392,7 @@ func runCurate(args []string) int {
 		}
 		entries, err := curate.ParseChecked(res)
 		if err != nil {
+			logInvalid(&rep, "split", err)
 			if retry(batch, err, true) {
 				continue
 			}
@@ -424,7 +425,10 @@ func runCurate(args []string) int {
 			if rerr == nil {
 				// Only a malformed answer is split: a runner error says nothing
 				// about the notes.
-				if recoveredEntries, rerr = curate.ParseChecked(res2); rerr != nil && retry(batch, rerr, true) {
+				if recoveredEntries, rerr = curate.ParseChecked(res2); rerr != nil {
+					logInvalid(&rep, "rulings", rerr)
+				}
+				if rerr != nil && retry(batch, rerr, true) {
 					continue
 				}
 			}
@@ -683,6 +687,17 @@ func runCurate(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// logInvalid writes why a split or rulings answer failed validation, one
+// line per entry and field, to stderr and to the run's report (curator.log):
+// the field and the rule, never the entry's text.
+func logInvalid(rep *curate.Report, pass string, err error) {
+	for _, p := range curate.Problems(err) {
+		line := pass + ": " + p.String()
+		fmt.Fprintln(os.Stderr, "curate: invalid answer:", line)
+		rep.InvalidEntries = append(rep.InvalidEntries, line)
+	}
 }
 
 // curateLockWait bounds how long the full curate waits for a quick one that

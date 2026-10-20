@@ -38,3 +38,22 @@ func TestCheckedRejectsInvalidRoutingFields(t *testing.T) {
 		}
 	}
 }
+
+// A rejected answer names every entry and field that failed and the rule,
+// and never the entry's text.
+func TestCheckedNamesEachProblemWithoutTheText(t *testing.T) {
+	answer := `[{"origin":"n","name":"a","description":"secret-ish text one","body":"b","type":"machine_fact","scope":"system","kind":"observed"},` +
+		`{"origin":"n","name":"b","description":"secret-ish text two","body":"","type":"typo","scope":"projects/a_b","kind":"observed","applies_to":{"paths":[1]}}]`
+	_, err := ParseChecked(answer)
+	got := []string{}
+	for _, p := range Problems(err) {
+		got = append(got, p.String())
+	}
+	want := []string{"entry 2: body: empty", "entry 2: scope: the repo or host is not a slug (a-z, 0-9, -)", "entry 2: type: not a known type", "entry 2: applies_to.paths: a value is not a string"}
+	if strings.Join(got, "|") != strings.Join(want, "|") || !errors.Is(err, modelrun.ErrInvalidResult) {
+		t.Fatalf("problems %q, err %v", got, err)
+	}
+	if strings.Contains(err.Error(), "secret-ish") {
+		t.Fatalf("the error holds the entry's text: %v", err)
+	}
+}

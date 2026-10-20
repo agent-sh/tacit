@@ -345,6 +345,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		}
 		entries, err := curate.ParseChecked(res)
 		if err != nil {
+			logInvalid(&rep, "split", err)
 			if retry(batch, err, true) {
 				continue
 			}
@@ -368,7 +369,10 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 			rep.CostUSD += c3
 			var recoveredEntries []curate.Entry
 			if rerr == nil {
-				if recoveredEntries, rerr = curate.ParseChecked(res2); rerr != nil && retry(batch, rerr, true) {
+				if recoveredEntries, rerr = curate.ParseChecked(res2); rerr != nil {
+					logInvalid(&rep, "rulings", rerr)
+				}
+				if rerr != nil && retry(batch, rerr, true) {
 					continue
 				}
 			}
