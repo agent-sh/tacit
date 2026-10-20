@@ -72,3 +72,21 @@ func TestCheckedLowercasesAScopeInCapitals(t *testing.T) {
 		}
 	}
 }
+
+// An applies_to key is the model's text: a problem names only the known
+// keys. Scopes are lower-cased in ASCII only.
+func TestCheckedNamesOnlyKnownAppliesToKeys(t *testing.T) {
+	ans := `[{"origin":"n","name":"a","description":"d","body":"b","type":"machine_fact","scope":"user","kind":"observed","applies_to":{"the owner's secret plan text":[1],"repos":[2]}}]`
+	_, err := ParseChecked(ans)
+	var got []string
+	for _, p := range Problems(err) {
+		got = append(got, p.String())
+	}
+	if strings.Join(got, "|") != "entry 1: applies_to.repos: a value is not a string|entry 1: applies_to.<unknown key>: a value is not a string" || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("problems %q", got)
+	}
+	kelvin := `[{"origin":"n","name":"a","description":"d","body":"b","type":"machine_fact","scope":"projects/Kiwi","kind":"observed"}]`
+	if _, err := ParseChecked(kelvin); err == nil {
+		t.Fatal("a Unicode letter lower-cased into a slug")
+	}
+}

@@ -92,8 +92,8 @@ func ParseChecked(text string) ([]Entry, error) {
 		// scope no hook asks for. Normalized, not rejected: on the author's Mac
 		// every rejected split answer was one entry with a Brazil package name
 		// in its scope (eval/VALUE.md, "Local layer").
-		if !scopeRx.MatchString(entry.Scope) && scopeRx.MatchString(strings.ToLower(entry.Scope)) {
-			entry.Scope = strings.ToLower(entry.Scope)
+		if !scopeRx.MatchString(entry.Scope) && scopeRx.MatchString(asciiLower(entry.Scope)) {
+			entry.Scope = asciiLower(entry.Scope)
 		}
 		if rule := scopeRule(entry.Scope); rule != "" {
 			bad("scope", rule)
@@ -113,7 +113,12 @@ func ParseChecked(text string) ([]Entry, error) {
 		for _, key := range sortedKeys(entry.AppliesTo) {
 			for _, value := range entry.AppliesTo[key] {
 				if _, ok := value.(string); !ok {
-					bad("applies_to."+key, "a value is not a string")
+					// A key is the model's text: only the known ones are named.
+					field := "applies_to.<unknown key>"
+					if knownApplies[key] {
+						field = "applies_to." + key
+					}
+					bad(field, "a value is not a string")
 					break
 				}
 			}
@@ -134,7 +139,7 @@ func scopeRule(scope string) string {
 		return ""
 	case scope == "":
 		return "empty"
-	case scopeRx.MatchString(strings.ToLower(scope)):
+	case scopeRx.MatchString(asciiLower(scope)):
 		return "has upper-case letters"
 	case strings.HasPrefix(scope, "projects/") || strings.HasPrefix(scope, "machines/"):
 		return "the repo or host is not a slug (a-z, 0-9, -)"
@@ -142,6 +147,21 @@ func scopeRule(scope string) string {
 		return "derived/ is for generated facts only"
 	}
 	return "not user, system, projects/<slug> or machines/<slug>"
+}
+
+// knownApplies are the applies_to keys a fact has (fact.AppliesTo).
+var knownApplies = map[string]bool{"paths": true, "symbols": true, "repos": true, "hosts": true, "commands": true}
+
+// asciiLower lower-cases A-Z only: a Unicode letter that lower-cases to an
+// ASCII one (the Kelvin sign to k) must not turn into a valid slug.
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
 }
 
 func sortedKeys(m map[string][]any) []string {
