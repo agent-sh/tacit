@@ -1058,3 +1058,98 @@ A read-only machine can now dream and curate its own sessions into its overlay, 
 **Cost.** The stopped run wrote no report line, so its cost is estimated from the 5-note batch ($0.02 a note sent) and the about 136 notes its 16 split calls sent: about $2.80. With the dreams ($0.95) and the dry run ($0.10), the measurement spent about $3.85. On a working layer the per-note cost is the store curator's; the invalid answers about tripled it here.
 
 **The invalid answers.** With each rejected entry logged by field and rule, a dry run of 12 of the notes left (4 split answers rejected, 3 splits, $0.53) showed one cause: every rejected answer had exactly one entry whose scope named a Brazil package in capitals (`projects/<CamelCase>`), and nothing else wrong. Delivery and the dreamer lower-case the repo, so such a scope would also never be delivered. The curator now lower-cases it instead of rejecting the answer; replayed, all 4 rejected answers pass, so on this Mac's notes it removes every split (3 of 3 here; 10 of 16 answers in the stopped run had the same symptom). The workstation's curator split 14 times in its last two full runs (7 batches, 16 rejected entries), but none of its checkouts has a capital in its name and its v0.6.0 client did not yet log which field failed; this client does.
+
+## Repo-first delivery (2026-10-21)
+
+The question: what should reach an agent without its asking, so it gets the owner's rules for the work in front of it, without more context. The live act-bench (13 tasks in five repos, 21 items a task needs, two reps of tacit 0.7.1 with MCP) showed the hooks delivered 8 of the 21, and that agents almost never searched: the tools are deferred, and nothing told them when a search pays. Six changes, each behind its own setting (SPEC.md, Delivery), measured offline with the shipped binary.
+
+**Method.** `eval/delivery/repo_first.py` runs `tacit hook session-start --mcp`, `tacit hook prompt` and `tacit hook pre-tool` for each case, in a throwaway HOME and one session, against a copy of the store and its index, for each setting; every switch not named is off, so no switches is release 0.7.1 (replayed byte for byte: 8 items, 2,566 characters a task). No model, except a Sonnet 5.5 judge, cached per case and line ($4.53 in all): for the design set it grades each pushed line needed, useful or noise for the request; for the holdout it says whether a line states the truth fact (yes, partial, no) and grades its use.
+
+- **Design set**: the act-bench, 13 prompts in fresh clones of their repos (with their history and public remotes), 21 needed items with the store facts that carry each (full or partial), and the 26 cells' own tool calls for the PreToolUse hook. The changes were built and tuned on it.
+- **Holdout**: the older A/B bench, 9 tasks with real checkouts, and the 254 truth situations, 263 cases in all, one truth fact each. A situation's prompt is its intent, command and paths (its query for pull items), its cwd its session's checkout when it still exists, else a fresh `git init` named after the repo (no history, no remote); its command and paths are its tool calls. Nothing was tuned on it, except one parameter the design set could not tell apart (below).
+
+"Reached" counts items whose full carrier is in the SessionStart or prompt block (design), or cases where a pushed line states the truth fact (holdout); "+tool" those reached only at a tool call. Characters and lines are per case, the SessionStart and prompt blocks together. Noise is the judge's share of pushed lines graded noise.
+
+**Each change alone, on release 0.7.1.**
+
+| change | design reached (+tool) of 21 | chars/task | noise | holdout reached (+tool) of 263 | chars/case | noise |
+|---|---|---|---|---|---|---|
+| release 0.7.1 | 8 | 2,566 | 77% | 127 | 2,058 | 75% |
+| 1 SessionStart repo block | 13 | 1,748 | 57% | 125 | 1,351 | 67% |
+| 2 repo aliases + the curator's repo rule | 8 | 2,586 | 75% | 128 | 2,061 | 75% |
+| 3 prompt metadata line | 9 | 2,626 | 76% | 129 | 2,100 | 75% |
+| 4 prompt action line | 8 | 2,630 | 76% | 132 | 2,110 | 75% |
+| 5 instruction line | 8 | 2,680 | 77% | 127 | 2,141 | 75% |
+| 6 PreToolUse push | 8 (+3) | 2,566 | 77% | 127 (+4) | 2,058 | 75% |
+| prompt threshold 0.7, ceiling 5 | 9 | 2,754 | 77% | 137 | 2,185 | 73% |
+
+**Together.**
+
+| setting | design reached (+tool) | chars/task | lines/task | noise | holdout reached (+tool) | chars/case | lines/case | noise |
+|---|---|---|---|---|---|---|---|---|
+| release 0.7.1 | 8 | 2,566 | 12.4 | 77% | 127 | 2,058 | 9.8 | 75% |
+| 1-4 | 11 | 1,850 | 8.7 | 55% | 131 | 1,411 | 6.3 | 65% |
+| 1-6 | 11 (+2) | 1,964 | 8.7 | 55% | 131 (+2) | 1,480 | 6.3 | 65% |
+| **shipped: 1-6, prompt threshold 0.7, ceiling 5** | **12 (+2)** | **2,101** | **9.4** | **57%** | **140 (+2)** | **1,606** | **6.9** | **62%** |
+
+The shipped defaults reach 14 of the 21 design items (8 before) with 18% fewer characters, and 142 of the 263 holdout facts (127 before, +12%) with 22% fewer; the share of noise lines falls from 77% to 57% and from 75% to 62%. The PreToolUse push adds 15 lines over the 26 design cells (0.6 a session; the judge: 3 needed, 10 noise) and 33 over the 263 holdout cases (0.13 a case).
+
+**The SessionStart block (1).** The release block ranks every fact by how well its words match the repo name, so the lines went to facts that say the repo name most (host notes, account notes, one-off remarks). The new block takes the facts tied to the repo by metadata (`applies_to.repos` or the project scope), of two tiers: rules and standards, then decisions and past mistakes; history, references and host notes never. Inside a tier the order was measured four ways, all with the same filter and ceiling 6:
+
+| order inside a tier | design | holdout |
+|---|---|---|
+| BM25 of the repo's names against the fact (shipped) | 13 | 125 |
+| kind (rules, rulings in their task, standards; newest first) | 10 | 127 |
+| the words of the repo's last 50 commit messages | 7 | 127 |
+| the same, rules and standards first | 10 | 127 |
+
+and in the shipped combination: BM25 12 (+2) design and 140 holdout, kind 9 (+2) and 140, commit words 9 (+2) and 140; at ceiling 8: 13 (+1) and 144, 11 (+1) and 141, 11 (+1) and 141. On the holdout the four orders tie within 2 cases either way, and the block matters little there (it alone carries 9 of the release's 127 facts and 4 of the shipped 140; the rest come from the prompt, since a holdout prompt names its topic and most holdout cwds have no history), so the order rests on the design set. Read as what it measures inside the filter, the repo-name score puts a fact about the whole repo ("every commit here is signed off") before one about a part of it; the type filter, not the score, is what keeps host notes out. One-off owner requests stored as rulings (a docs section to add, a transfer to do) are rules to the hook: in one repo they take 2 of the 6 lines. That is the store's wording, not the hook's.
+
+**The ceilings and the prompt threshold (b).** Each count of the release is now a threshold with a hard ceiling, or a ceiling set by a sweep, on the combination 1-6:
+
+| SessionStart ceiling | design | chars/task | holdout | chars/case | holdout noise |
+|---|---|---|---|---|---|
+| 3 | 10 (+2) | 1,455 | 130 (+3) | 1,151 | 56% |
+| 4 | 10 (+2) | 1,628 | 130 (+3) | 1,270 | 60% |
+| **6** | **11 (+2)** | **1,964** | **131 (+2)** | **1,480** | **65%** |
+| 8 | 12 (+1) | 2,213 | 135 (+1) | 1,668 | 69% |
+| 10 | 13 | 2,414 | 136 (+1) | 1,834 | 72% |
+
+| prompt block | ceiling 3 | ceiling 5 |
+|---|---|---|
+| no threshold | 11 (+2), 1,964 / 131 (+2), 1,480 | |
+| a line needs 0.5 of the best score | 11 (+2), 1,964 / 131 (+2), 1,466 | 12 (+2), 2,262 / 141 (+2), 1,745 |
+| 0.6 | 11 (+2), 1,964 / 131 (+2), 1,450 | 12 (+2), 2,224 / 141 (+2), 1,696 |
+| **0.7** | 11 (+2), 1,916 / 130 (+2), 1,416 | **12 (+2), 2,101 / 140 (+2), 1,606** |
+| 0.8 | 11 (+2), 1,864 / 125 (+2), 1,379 | 12 (+2), 1,950 / 133 (+1), 1,502 |
+
+(design reached, chars/task / holdout reached, chars/case.) The SessionStart ceiling stays 6: 8 adds 3 holdout facts and 1 design item for 13% more characters on both sets and more noise, and 6 is where both sets stop losing items as the ceiling falls. The prompt block takes up to 5 lines that each score at least 0.7 of the best one. The design set cannot tell the thresholds apart (12 at every one with ceiling 5), so for this one parameter the holdout chose: 0.7 is the highest share that keeps the holdout's gain (140 of the 141 at 0.5 or 0.6) for 8% to 15% fewer characters, and the design set confirms it loses nothing (12, against 11 with the release's cap of 3). The threshold is relative, so it follows the scores of any store; the floors (15, 20) stay as they were. The metadata line's ceiling stays 1: 2 adds 1 design item and 2 holdout facts, and 70% more tool-call lines (0.22 a case against 0.13), and the owner's bound for the PreToolUse push is one.
+
+**Repo aliases (2).** A checkout answers to the names its own data gives it: every remote's repository name and its root manifest's package name, when that shares a word with a name it has. On the design set this finds the old name of one republished repo (its `package.json` name), whose general Linux rule was already delivered under the new name, so it adds nothing there; on the holdout, +1. The other rename in the design set, a reviewer repo republished under a new name, is not in either repo's data: the new repo's history starts fresh, its remotes and manifests never name the old repo, and the facts and the store's history hold no rename either (no fact moves scope, no supersession crosses the two). So the design item filed only under the old name (the owner's rejection of one clone filter) stays out of reach: the analysis reached it with a hand-written alias list, which a generic mechanism cannot reproduce. Recording, at dream time, the remote of the checkout a note came from would make such a rename visible from then on; not built.
+
+**The curator's repo rule (2).** Five curated facts were tied to the repo `memory`, a notes directory a session ran in, and so never delivered. The curator now drops a note's folder name from a fact's repos when the folder is not a known repository (a project scope of curated facts, or a checkout under `$TACIT_PROJECTS`), and gives the fact the known repos the note names instead; and it cuts `org/name` forms to `name`. The rule is the curator's for new facts; for this measurement it was applied to the store copy's curated facts as re-curation would write them (71 of them changed: 4 of the 5 `memory` facts gained their repo and one became repo-free, 47 lost a folder name such as a two-letter word or a URL and became repo-free, 13 had an `org/name` cut). It costs the design set nothing in all (the shipped setting reaches 14 either way): it ties five more facts to one repo, which take two SessionStart lines from its build facts, and those then arrive at the tool call that builds instead (12 + 2 against 14 + 0 on the store as it was). Holdout +1.
+
+**The metadata line (3)** reads the 2,329 facts that carry `applies_to.paths` or `commands`, which no hook read before: a fact of the repo whose paths cover a path the prompt names, or whose command the prompt names (the whole command, or its last word: "commit" for `git commit`). Design +1 (the commit sign-off standard, through `git commit`), holdout +2. It names no action: what a prompt can trigger is whatever commands the store's facts carry.
+
+**The action line (4)** cannot be generic with an action detector: telling "commit it" from "explain the commit" needs a list of verbs, or of actions, which the owner ruled out. What is generic is the line itself: when the prompt block holds none of the repo's rules, standards, decisions or past mistakes, the best one for the prompt by BM25, without the coherence gate (general rules rarely pass it against task words), at the rule slot's floor of 10. It fires on any request; the floor and the no-backfill rule keep it to one line. Alone it adds 5 holdout facts and none on the design set; in the combination it holds the design set's commit items. The analysis's version, a fixed list of actions (commit, release, dependencies, CI) each with a standing query, reached one more design item (the agents' package rule, through "dependency"); that item is not reached now.
+
+**The instruction line (5)**, one sentence in the SessionStart title and the MCP server's instructions: "tacit holds this owner's rules, decisions and past mistakes. Before an action that changes something, run one `mcp__tacit__tacit_search` for it." (144 characters; 130 in the server's instructions, which name the tool as the server does.) It costs 114 characters a task on the design set and delivers nothing by itself; whether agents follow it needs a live run.
+
+**The PreToolUse push (6).** At an edit or a shell command, at most one rule, standard, decision or past mistake of the repo whose `applies_to` paths cover the file or whose command starts the command line, once per session, within 400 ms. Alone, on the design cells it reaches three items at the moment they matter (the single tsup config at the Write of `tsup.config.ts`, the CJS output rule at the build, the sign-off at `git commit`), and 4 holdout facts; in the shipped combination the sign-off is already in the SessionStart block, and the push reaches the two build items. A version that pushes the next unseen match when the best one was already delivered reaches 1 more design item (needed lines 3 to 5), no more holdout facts, and 54% more tool-call lines on the holdout (0.20 a case); not shipped.
+
+**Against the analysis.** It estimated changes 1 to 4 at 13 of 21 with 23% fewer characters, and 15 with the push. The generic implementation reaches 11 with the release's prompt cap (28% fewer characters) and 12 with the measured threshold (18% fewer), and 14 with the push. The difference is the two hand-written parts the analysis used: an alias list (the reviewer repo's old name, and `memory` mapped to every repo) and a per-action vocabulary for the action line. The `memory` facts are reached now through the curator's rule.
+
+**Search and the store's tree.** `tacit_search` now takes filters (`scope`, `type`, `rulings_only`, `path`, `command`; the query is optional with one), `tacit_list` browses the scopes with counts by type and one scope's facts, and both answer one line per fact, paged (they returned descriptions and bodies, about 2.8k characters for 8 facts). What one such call at the agent's first edit (its file) or first commit (its command) would return, on the 26 design cells and, for the holdout, the situation's own path and command:
+
+| one call | design items | beyond the shipped hooks | chars/call | holdout facts | beyond the shipped hooks | chars/call |
+|---|---|---|---|---|---|---|
+| `tacit_search(scope=projects/<repo>, path=<file>)` | 4 | 2 | 813 | 11 | 2 | 933 |
+| `tacit_search(scope=projects/<repo>, command=<command>)` | 1 | 0 | 626 | 26 | 2 | 1,145 |
+| `tacit_search(path=<file>, command=<command>)` (eligible scopes) | 5 | 2 | 1,077 | 35 | 7 | 1,240 |
+| `tacit_list(scope=projects/<repo>, type=design_decision)` | 4 | 1 | 2,284 | 6 | 0 | 3,069 |
+| `tacit_list(scope=projects/<repo>, type=user_standard)` | 4 | 0 | 1,584 | 17 | 5 | 2,862 |
+| `tacit_search(<path> <the request's first sentence>)` | 7 | 0 | 1,676 | 107 | 12 | 1,698 |
+
+The design cells made 17 first edits and 2 commits. A path or command filter is the cheapest call that adds items the hooks did not push (2 on the design set, up to 7 on the holdout), at about 1k characters; a listing by type costs two to three times that and adds little. A word search with the request reaches the most holdout facts because the holdout prompt is the situation itself; beyond the hooks it adds 12.
+
+**Limits.** Both sets come from one owner's store and sessions; the design set is small and its carriers are one person's mapping, and the act-bench cells' tool calls were made with the old pushes, so an agent given the new lines might call other tools. The holdout's cwds mostly have no history or remotes, which underrates the SessionStart block and aliases there. The judge grades relevance, not whether an agent acts on a line. What agents do with the instruction line, and with the tree tools, needs a live run.

@@ -15,6 +15,7 @@ Your own inputs (`truth.jsonl`, `ab/tasks.json`, `ab/results/`, a corpus manifes
 | `mine/digest.py` | Writes compact per-session digests from Claude Code and Codex transcripts (secrets redacted). Input for mining a truth set and for `dream_recall.py`. | none |
 | `baseline/grep_baseline.py` | Grep over the memory files: is the stored fact in the top k? The baseline every ranker is measured against. Needs ripgrep. | none |
 | `delivery/delivery.py` | Offline: would the SessionStart block for the situation's repo and host carry the fact? | none |
+| `delivery/repo_first.py` | Offline replay of the shipped hooks (SessionStart, prompt, PreToolUse) for delivery settings on your cases: items or truth facts reached, characters and lines per case, the judge's noise share, tool-call lines. | the judge only, cached per case and line |
 | `delivery/embed_rank.py` | Dense retrieval (EmbeddingGemma 2) against idf and RRF on the same check. Needs numpy and sentence-transformers. | none (local embedder) |
 | `delivery/hindsight_rank.py` | Hindsight's recall against idf on the same check. Needs a running Hindsight API and `hindsight_client`. | none |
 | `ab/run.py` | Live A/B: the same task with no block, a ranked block, or the fact guaranteed (oracle). Tool calls, detours, tokens, cost. | `claude -p` per cell |

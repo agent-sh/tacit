@@ -2,7 +2,7 @@
 
 This is the build plan tacit was made by, kept as its design history: each decision with its date, each phase with the proof that closed it. Measurements are in `eval/VALUE.md`; the store contract is `SPEC.md`.
 
-Decisions (2026-10-07): the server runs on an always-on host on the tailnet, not on the workstation, which is not always on; a push mirror and backups of the store are the operator's choice; the curator runs daily with the configured model; the dreamer runs every few hours with its configured model and its cost is measured before it is accepted; Elixir for the server, Go for the client. Hooks fire at SessionStart and UserPromptSubmit only; no per-tool-call hooks until the Phase 6 metric shows a need.
+Decisions (2026-10-07): the server runs on an always-on host on the tailnet, not on the workstation, which is not always on; a push mirror and backups of the store are the operator's choice; the curator runs daily with the configured model; the dreamer runs every few hours with its configured model and its cost is measured before it is accepted; Elixir for the server, Go for the client. Hooks fired at SessionStart and UserPromptSubmit only, with no per-tool-call hooks until a metric showed a need; the 2026-10-21 replay did (eval/VALUE.md, "Repo-first delivery"), and a PreToolUse hook pushes at most one matching fact per edit or command.
 
 ## Scope (decision, 2026-10-09)
 
@@ -29,7 +29,7 @@ Steps, each with its proof:
 - **Dreamer** (per machine, every X hours, configured model): cursor per transcript file and per harness memory file; digests the delta deterministically (same code as `eval/mine/digest.py`), then one request per session delta under 100K tokens: review what Codex (native memories), Claude (auto-memory dir) and Hermes (skills) wrote, dedupe against the store, classify, fill `applies_to`, and extract facts nobody wrote. Output to `inbox/dreamer@<host>/`. Metered: tokens, cost, facts emitted, later promoted vs rejected.
 - **Curator** (daily, configured model): `tacit curate` in the Go client, run by a systemd user timer on a machine with model access (the server has no model credentials, which decided its location). Split, ruling preservation, contradiction and supersession checks against the index, `review/<date>.md`, `MEMORY.md`, lint, push as `curator@<host>`. The Elixir server stays the authority and transport.
 - **Index**: client-side SQLite FTS5 (`~/.local/state/tacit/index/index-<sha>.db`, built on first use after a sync, bm25 with name and description weighted 6:6:1 over body). No embeddings: dense retrieval measured below lexical on both the raw and the curated store (eval/VALUE.md section 5).
-- **Retrieval order**: scope first (the session's repo and host, plus system and user), then the prompt text as the query at UserPromptSubmit; at SessionStart the repo and host names are the query. `applies_to` as emitted by models is too generic to rank on (measured) and is kept as metadata only.
+- **Retrieval order**: scope first (the session's repo and host, plus system and user), then the prompt text as the query at UserPromptSubmit; at SessionStart the repo and host names are the query. `applies_to` as emitted by models is too generic to rank on (measured); its paths and commands are matched, not ranked, by the prompt hook's metadata line and the PreToolUse hook (2026-10-21).
 
 ## Layout
 
