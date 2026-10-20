@@ -210,13 +210,16 @@ func build(ctx context.Context, storeDir, localDir, path string) error {
 		applies, _ := json.Marshal(f.Meta.AppliesTo)
 		isLocal := i >= nStore
 		// A local note is an agent's, unreviewed: never a ruling and never
-		// their words, whatever kind its writer gave it.
-		ruling, words := fact.IsRuling(f), fact.OwnerWordsOf(f) != ""
+		// their words, whatever kind its writer gave it. Of the local layer
+		// (SPEC.md, "Local layer"), a dreamer note is an inbox note, and a fact
+		// of the local curator is a ruling here only when the local quote
+		// ledger backs its quote (overlay.IsRuling).
+		ruling, words, inbox := fact.IsRuling(f), fact.OwnerWordsOf(f) != "", f.InInbox()
 		if isLocal {
-			ruling, words = false, false
+			ruling, words, inbox = overlay.IsRuling(f), false, overlay.IsInbox(f.Path)
 		}
 		intask := ruling && inTaskRuling(f)
-		if _, err := ins.ExecContext(ctx, f.Path, f.Meta.Name, f.Meta.Scope, f.Meta.Type, f.Meta.Description, strings.TrimSpace(f.Body), b2i(f.InInbox()), b2i(f.Meta.SupersededBy != "" || f.Meta.Retired != ""), string(applies), f.Meta.Source.Kind, strings.Join(f.Meta.ConflictsWith, ","), b2i(ruling), b2i(intask), b2i(words), b2i(isLocal)); err != nil {
+		if _, err := ins.ExecContext(ctx, f.Path, f.Meta.Name, f.Meta.Scope, f.Meta.Type, f.Meta.Description, strings.TrimSpace(f.Body), b2i(inbox), b2i(f.Meta.SupersededBy != "" || f.Meta.Retired != ""), string(applies), f.Meta.Source.Kind, strings.Join(f.Meta.ConflictsWith, ","), b2i(ruling), b2i(intask), b2i(words), b2i(isLocal)); err != nil {
 			return err
 		}
 	}

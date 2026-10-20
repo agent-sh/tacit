@@ -179,3 +179,89 @@ func TestAddLoadFindStamp(t *testing.T) {
 		t.Fatal("Find took a non-slug name")
 	}
 }
+
+// The local layer's files: a dreamer note is an inbox note; a fact of the
+// local curator is a ruling only with its quote in the local ledger; an
+// agent's note, a dreamer note and a curated fact that only claims the fields
+// never are. The review directory holds no facts and is not loaded or found.
+func TestLocalLayerFiles(t *testing.T) {
+	root := t.TempDir()
+	store := filepath.Join(root, "store")
+	dir := filepath.Join(root, "local")
+	os.MkdirAll(store, 0o755)
+	claim := func(name, harness string) *fact.Fact {
+		f := note(name, "never deploy the walrus service on fridays without a plan", "body")
+		f.Meta.Type, f.Meta.Source.Harness, f.Meta.Source.Kind = "user_standard", harness, "user"
+		f.Meta.Source.OwnerQuote, f.Meta.Source.OwnerQuoteFrom = "never deploy the walrus service on fridays without a plan", "claude:s9"
+		return f
+	}
+	put := func(rel string, f *fact.Fact) {
+		t.Helper()
+		b, err := f.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := Write(dir, store, rel, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("curated/user/backed.md", claim("backed", "curator"))
+	put("curated/user/unbacked.md", claim("unbacked", "curator"))
+	put("curated/user/human.md", claim("human", "human"))
+	put("inbox/dreamer@host-b/dreamed.md", claim("dreamed", "dreamer"))
+	os.MkdirAll(filepath.Join(dir, "codex@host-b"), 0o700)
+	b, _ := claim("agents", "codex").Encode()
+	os.WriteFile(filepath.Join(dir, "codex@host-b", "agents.md"), b, 0o600)
+	line := func(name string) string {
+		return `{"name":"` + name + `","quote":"never deploy the walrus service on fridays without a plan","from":"claude:s9","turn_hash":"x","at":"2026-10-20"}` + "\n"
+	}
+	before := Stamp(dir)
+	for _, n := range []string{"backed", "human", "dreamed", "agents"} {
+		if err := Append(dir, store, QuotesRel, []byte(line(n))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if Stamp(dir) == before {
+		t.Fatal("the stamp ignores the local quote ledger")
+	}
+	if err := Append(dir, store, ReviewDir+"/2026-10-20.md", []byte("- supersedes? [[a]] may replace the store's [[b]]\n")); err != nil {
+		t.Fatal(err)
+	}
+	facts, errs := Load(dir)
+	if len(errs) != 0 || len(facts) != 5 {
+		t.Fatalf("Load: %d facts, %v", len(facts), errs)
+	}
+	for _, f := range facts {
+		want := f.Meta.Name == "backed"
+		if IsRuling(f) != want {
+			t.Errorf("%s (%s): IsRuling = %v, want %v", f.Meta.Name, f.Path, IsRuling(f), want)
+		}
+		if IsInbox(f.Path) != (f.Meta.Name == "dreamed") {
+			t.Errorf("%s: IsInbox = %v", f.Path, IsInbox(f.Path))
+		}
+	}
+	if _, ok := Find(dir, "2026-10-20"); ok {
+		t.Fatal("Find took a review file for a fact")
+	}
+	// Writes stay in the layer's directories and outside the clone.
+	for _, rel := range []string{"claude@host-b/x.md", "../x.md", "/etc/x.md", "curated/../../x.md", "x.md"} {
+		if err := Write(dir, store, rel, []byte("x")); err == nil {
+			t.Errorf("Write(%q) wrote outside the layer", rel)
+		}
+	}
+	if err := Write(filepath.Join(store, "local"), store, "inbox/dreamer@h/x.md", []byte("x")); !errors.Is(err, ErrInside) {
+		t.Fatalf("Write into the clone: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(store, "local")); !os.IsNotExist(err) {
+		t.Fatal("Write created a directory in the clone")
+	}
+}
+
+func TestLayerOn(t *testing.T) {
+	for v, want := range map[string]bool{"": false, "off": false, "false": false, "no": false, "on": true, "ON": true, "true": true, "1": true, "yes": true} {
+		t.Setenv("TACIT_LOCAL_LAYER", v)
+		if LayerOn() != want {
+			t.Errorf("TACIT_LOCAL_LAYER=%q: LayerOn = %v", v, !want)
+		}
+	}
+}

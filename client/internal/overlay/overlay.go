@@ -107,7 +107,12 @@ func resolveDepth(p string, depth int) (string, error) {
 }
 
 // Load reads every overlay fact. Path is Prefix + the file's path in the
-// overlay. A file that does not parse is skipped and returned in errs.
+// overlay. A file that does not parse is skipped and returned in errs. The
+// local layer's review directory (curated/review: the quote ledger and review
+// lines) holds no facts and is not read. A fact of the local curator is
+// judged by the local quote ledger (IsRuling); every overlay fact is read
+// under the evidence-based definition of a ruling, so a field alone never
+// makes one.
 func Load(dir string) (facts []*fact.Fact, errs []error) {
 	if dir == "" {
 		return nil, nil
@@ -117,7 +122,7 @@ func Load(dir string) (facts []*fact.Fact, errs []error) {
 			return nil
 		}
 		if d.IsDir() {
-			if p != dir && strings.HasPrefix(d.Name(), ".") {
+			if p != dir && strings.HasPrefix(d.Name(), ".") || isReviewDir(dir, p) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -140,7 +145,24 @@ func Load(dir string) (facts []*fact.Fact, errs []error) {
 		return nil
 	})
 	sort.Slice(facts, func(i, j int) bool { return facts[i].Path < facts[j].Path })
+	var st *fact.StoreState
+	for _, f := range facts {
+		if IsCurated(f.Path) {
+			if st == nil {
+				s := curatedState(dir)
+				st = &s
+			}
+			st.Apply(f)
+		}
+		f.Audited = true
+	}
 	return facts, errs
+}
+
+// isReviewDir reports the local layer's review directory.
+func isReviewDir(dir, p string) bool {
+	rel, err := filepath.Rel(dir, p)
+	return err == nil && filepath.ToSlash(rel) == ReviewDir
 }
 
 // Stamp is a short hash of the overlay's files (names, sizes, mtimes), or ""
@@ -154,14 +176,18 @@ func Stamp(dir string) string {
 	h := sha256.New()
 	n := 0
 	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".md") || d.Type()&os.ModeSymlink != 0 {
+		if err != nil || d.IsDir() || d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		rel, _ := filepath.Rel(dir, p)
+		// The local quote ledger decides which local facts are rulings.
+		if !strings.HasSuffix(d.Name(), ".md") && filepath.ToSlash(rel) != QuotesRel {
 			return nil
 		}
 		info, err := d.Info()
 		if err != nil {
 			return nil
 		}
-		rel, _ := filepath.Rel(dir, p)
 		fmt.Fprintf(h, "%s\x00%d\x00%d\n", rel, info.Size(), info.ModTime().UnixNano())
 		n++
 		return nil
@@ -179,6 +205,9 @@ func Find(dir, name string) (string, bool) {
 	}
 	var found string
 	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() && isReviewDir(dir, p) {
+			return filepath.SkipDir
+		}
 		if err == nil && !d.IsDir() && d.Name() == name+".md" && d.Type()&os.ModeSymlink == 0 {
 			found = p
 			return filepath.SkipAll
