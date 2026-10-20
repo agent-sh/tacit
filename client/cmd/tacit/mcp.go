@@ -57,7 +57,8 @@ func runMCP(args []string) int {
 func storeServer(s *store.Store, harness string) *mcp.Server {
 	// Instructions: the harness shows them while the tools are deferred (Claude
 	// Code lists a deferred tool by name only), so the one line that says
-	// when to search reaches the model either way.
+	// when to search reaches the model either way. With the instruction
+	// setting off the server has none.
 	var opts *mcp.ServerOptions
 	if deliveryOn("INSTRUCTION", true) {
 		opts = &mcp.ServerOptions{Instructions: mcpInstructions}
@@ -152,14 +153,7 @@ func runProbeMCP() int {
 		fmt.Fprintln(os.Stderr, "mcp: redaction needs scrump with the text profile:", err)
 		return 2
 	}
-	// Instructions: the harness shows them while the tools are deferred (Claude
-	// Code lists a deferred tool by name only), so the one line that says
-	// when to search reaches the model either way.
-	var opts *mcp.ServerOptions
-	if deliveryOn("INSTRUCTION", true) {
-		opts = &mcp.ServerOptions{Instructions: mcpInstructions}
-	}
-	server := mcp.NewServer(&mcp.Implementation{Name: "tacit", Version: "0.1.0"}, opts)
+	server := mcp.NewServer(&mcp.Implementation{Name: "tacit", Version: "0.1.0"}, nil)
 	type probeArgs struct {
 		Verb string   `json:"verb" jsonschema:"one of git-log git-show git-blame git-grep git-ls git-tags grep find ls gh unit units sys"`
 		Args []string `json:"args,omitempty" jsonschema:"the verb's arguments, one per element, as in: git-log <repo> -n 5 --grep fix -- README.md"`

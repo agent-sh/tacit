@@ -76,9 +76,11 @@ func instruction(mcp bool) string {
 	return "tacit holds this owner's rules, decisions and past mistakes. Before an action that changes something, run one " + tool + " for it."
 }
 
-// mcpInstructions is the MCP server's instructions: the instruction line
-// with the tool's bare name, as the server names it.
-const mcpInstructions = "tacit holds this owner's rules, decisions and past mistakes. Before an action that changes something, run one tacit_search for it."
+// mcpInstructions is the MCP server's instructions, its one string: the
+// instruction line with the tools' bare names, as the server names them,
+// and where to see what the store holds. Generic like the line: no list of
+// uses.
+const mcpInstructions = "tacit holds this owner's rules, decisions and past mistakes. Before an action that changes something, run one tacit_search for it; tacit_tree shows what it holds."
 
 // tier orders what changes how an agent acts in a repo: the owner's rules
 // and standards (0), then decisions and past mistakes (1); everything else

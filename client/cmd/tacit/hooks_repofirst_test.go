@@ -218,7 +218,7 @@ func TestMCPServerSendsTheInstruction(t *testing.T) {
 		return cs.InitializeResult().Instructions
 	}
 	got := instructions()
-	if got != mcpInstructions || len(got) > 200 || !strings.Contains(got, "tacit_search") {
+	if got != mcpInstructions || len(got) > 200 || !strings.Contains(got, "tacit_search") || !strings.Contains(got, "tacit_tree") {
 		t.Fatalf("instructions %q", got)
 	}
 	t.Setenv("TACIT_DELIVERY_INSTRUCTION", "off")
