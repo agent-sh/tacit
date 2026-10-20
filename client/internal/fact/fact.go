@@ -82,9 +82,11 @@ type Source struct {
 // with harness human in their inbox/human@<host>/ directory, but a field and a
 // directory are claims any writer can make: it counts only when the commit
 // that added it is one of the app's owner commits (AppNote, set from git by
-// the caller that loaded the store).
+// the caller that loaded the store). A file of a machine's local overlay
+// (path local/...) is never one: anything on that machine can write there,
+// and the app never does.
 func OwnerWrote(f *Fact) bool {
-	if f == nil || f.Meta.Source.Harness != "human" {
+	if f == nil || f.Meta.Source.Harness != "human" || strings.HasPrefix(f.Path, "local/") {
 		return false
 	}
 	if !f.InInbox() {
