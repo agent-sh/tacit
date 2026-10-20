@@ -133,6 +133,80 @@ func conflictPairs(ctx context.Context, s *store.Store, facts []*fact.Fact, host
 // existing fact when supersedeRoute allows it (written lists the files it
 // changed; nothing is changed with dry). Returns the review lines.
 func judgePairs(ctx context.Context, s *store.Store, pairs []curate.Pair, refs []judgedPair, facts []*fact.Fact, dry bool, rep *curate.Report) (review, written []string, err error) {
+	verdicts, unjudged, err := judgeVerdicts(ctx, pairs, rep)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Every call is checked before the first mutation, including later chunks.
+	for k, v := range verdicts {
+		pm := refs[k]
+		nf := facts[pm.newIdx]
+		if unjudged[k] {
+			rep.JudgeUnchecked++
+			review = append(review, uncheckedLine(nf, pm, facts))
+			continue
+		}
+		switch v {
+		case curate.Contradicts:
+			rep.Contradicts++
+			review = append(review, contradictionLine(nf, pm, facts, ""))
+		case curate.Supersedes:
+			rep.Supersedes++
+			if pm.existing == nil {
+				// Two new facts on one subject: keep both, flag for the owner.
+				review = append(review, fmt.Sprintf("- duplicate in one run: [[%s]] and [[%s]]", nf.Meta.Name, facts[pm.otherIdx].Meta.Name))
+				continue
+			}
+			if pm.sibling {
+				review = append(review, fmt.Sprintf("- duplicate in one run: [[%s]] and [[%s]]", nf.Meta.Name, pm.existing.Name))
+				continue
+			}
+			line, retire := supersedeRoute(s.Dir, nf, pm.existing)
+			if !retire {
+				review = append(review, line)
+				continue
+			}
+			if !dry {
+				if rel, ok := markSuperseded(s.Dir, pm.existing.Path, nf.Meta.Name); ok {
+					written = append(written, rel)
+				}
+			}
+			review = append(review, fmt.Sprintf("- supersedes: [[%s]] replaces [[%s]]", nf.Meta.Name, pm.existing.Name))
+		}
+	}
+	return review, written, nil
+}
+
+// uncheckedLine is the review line of a pair the judge gave no valid verdict
+// for: the contradiction-question format, so the review page and the app
+// show the pair as the owner's call (parseReviewFiles).
+func uncheckedLine(nf *fact.Fact, pm judgedPair, facts []*fact.Fact) string {
+	other := ""
+	if pm.existing != nil {
+		other = pm.existing.Name
+	} else {
+		other = facts[pm.otherIdx].Meta.Name
+	}
+	return fmt.Sprintf("- CONTRADICTION?: [[%s]] (%s) vs [[%s]]\n  unchecked: the conflict judge gave no valid verdict for this pair; compare them", nf.Meta.Name, nf.Meta.Scope, other)
+}
+
+// contradictionLine is the review line of a "contradicts" verdict. Review
+// only: a sampled judge precision of about 30 percent on "contradicts" is too
+// low to hide either fact at delivery; conflicts_with is set when the owner
+// confirms (tacit resolve). where, when set, says where the other fact is.
+func contradictionLine(nf *fact.Fact, pm judgedPair, facts []*fact.Fact, where string) string {
+	other, otherDesc := "", ""
+	if pm.existing != nil {
+		other, otherDesc = pm.existing.Name, pm.existing.Description
+	} else {
+		other, otherDesc = facts[pm.otherIdx].Meta.Name, facts[pm.otherIdx].Meta.Description
+	}
+	return fmt.Sprintf("- CONTRADICTION?: [[%s]] (%s) vs [[%s]]%s\n  new: %s\n  other: %s", nf.Meta.Name, nf.Meta.Scope, other, where, nf.Meta.Description, otherDesc)
+}
+
+// judgeVerdicts asks the judge about pairs, 25 per call, and returns one
+// verdict per pair and whether the pair went unjudged; it changes nothing.
+func judgeVerdicts(ctx context.Context, pairs []curate.Pair, rep *curate.Report) ([]curate.Verdict, []bool, error) {
 	// judge returns one verdict per pair. An invalid answer (the wrong number
 	// of verdicts, an unknown label) splits the chunk in two and asks again,
 	// so one pair the judge stumbles on no longer fails every pair of the
@@ -187,61 +261,7 @@ func judgePairs(ctx context.Context, s *store.Store, pairs []curate.Pair, refs [
 		verdicts = append(verdicts, v...)
 		unjudged = append(unjudged, u...)
 	}
-	// Every call is checked before the first mutation, including later chunks.
-	for k, v := range verdicts {
-		pm := refs[k]
-		nf := facts[pm.newIdx]
-		if unjudged[k] {
-			rep.JudgeUnchecked++
-			other := ""
-			if pm.existing != nil {
-				other = pm.existing.Name
-			} else {
-				other = facts[pm.otherIdx].Meta.Name
-			}
-			// The contradiction-question format, so the review page and the app
-			// show the pair as the owner's call (parseReviewFiles).
-			review = append(review, fmt.Sprintf("- CONTRADICTION?: [[%s]] (%s) vs [[%s]]\n  unchecked: the conflict judge gave no valid verdict for this pair; compare them", nf.Meta.Name, nf.Meta.Scope, other))
-			continue
-		}
-		switch v {
-		case curate.Contradicts:
-			rep.Contradicts++
-			other, otherDesc := "", ""
-			if pm.existing != nil {
-				other, otherDesc = pm.existing.Name, pm.existing.Description
-			} else {
-				other, otherDesc = facts[pm.otherIdx].Meta.Name, facts[pm.otherIdx].Meta.Description
-			}
-			// Review only: a sampled judge precision of about 30 percent on
-			// "contradicts" is too low to hide either fact at delivery.
-			// conflicts_with is set when the owner confirms (tacit resolve).
-			review = append(review, fmt.Sprintf("- CONTRADICTION?: [[%s]] (%s) vs [[%s]]\n  new: %s\n  other: %s", nf.Meta.Name, nf.Meta.Scope, other, nf.Meta.Description, otherDesc))
-		case curate.Supersedes:
-			rep.Supersedes++
-			if pm.existing == nil {
-				// Two new facts on one subject: keep both, flag for the owner.
-				review = append(review, fmt.Sprintf("- duplicate in one run: [[%s]] and [[%s]]", nf.Meta.Name, facts[pm.otherIdx].Meta.Name))
-				continue
-			}
-			if pm.sibling {
-				review = append(review, fmt.Sprintf("- duplicate in one run: [[%s]] and [[%s]]", nf.Meta.Name, pm.existing.Name))
-				continue
-			}
-			line, retire := supersedeRoute(s.Dir, nf, pm.existing)
-			if !retire {
-				review = append(review, line)
-				continue
-			}
-			if !dry {
-				if rel, ok := markSuperseded(s.Dir, pm.existing.Path, nf.Meta.Name); ok {
-					written = append(written, rel)
-				}
-			}
-			review = append(review, fmt.Sprintf("- supersedes: [[%s]] replaces [[%s]]", nf.Meta.Name, pm.existing.Name))
-		}
-	}
-	return review, written, nil
+	return verdicts, unjudged, nil
 }
 
 // recheckConflicts implements `tacit curate --recheck-conflicts --since D`:

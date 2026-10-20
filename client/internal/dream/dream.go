@@ -929,4 +929,7 @@ type Meter struct {
 	// Mode is how the run chose its transcripts: "idle" (--idle), "session"
 	// (--session), empty for every transcript with new content.
 	Mode string `json:"mode,omitempty"`
+	// Local is a run of the local layer: the notes went to this machine's
+	// overlay, not the store.
+	Local bool `json:"local,omitempty"`
 }

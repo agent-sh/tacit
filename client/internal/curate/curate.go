@@ -327,4 +327,5 @@ type Report struct {
 	DerivedFiles     int             `json:"derived_files,omitempty"`   // derived/ files written or retired by the git pass
 	Recheck          bool            `json:"recheck,omitempty"`         // a --recheck-conflicts run: Facts are the facts checked again
 	Quick            bool            `json:"quick,omitempty"`           // a --quick run: recent notes only, no derive, results, links or staleness step
+	Local            bool            `json:"local,omitempty"`           // a run of the local layer: this machine's overlay, nothing written to the store
 }
