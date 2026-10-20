@@ -38,7 +38,7 @@ func (p Problem) String() string { return fmt.Sprintf("entry %d: %s: %s", p.Entr
 type InvalidEntries struct{ Problems []Problem }
 
 func (e *InvalidEntries) Error() string {
-	msg := fmt.Sprintf("%v: invalid curator entry %s", modelrun.ErrInvalidResult, e.Problems[0])
+	msg := fmt.Sprintf("%v: invalid curator %s", modelrun.ErrInvalidResult, e.Problems[0])
 	if n := len(e.Problems) - 1; n > 0 {
 		msg += fmt.Sprintf(" (and %d more)", n)
 	}
@@ -86,6 +86,14 @@ func ParseChecked(text string) ([]Entry, error) {
 			if strings.TrimSpace(f.value) == "" {
 				bad(f.name, "empty")
 			}
+		}
+		// A repo or host in capitals is the same scope in lower case: the
+		// dreamer and delivery lower-case the repo, so projects/Foo would be a
+		// scope no hook asks for. Normalized, not rejected: on the author's Mac
+		// every rejected split answer was one entry with a Brazil package name
+		// in its scope (eval/VALUE.md, "Local layer").
+		if !scopeRx.MatchString(entry.Scope) && scopeRx.MatchString(strings.ToLower(entry.Scope)) {
+			entry.Scope = strings.ToLower(entry.Scope)
 		}
 		if rule := scopeRule(entry.Scope); rule != "" {
 			bad("scope", rule)

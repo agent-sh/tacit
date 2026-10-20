@@ -57,3 +57,18 @@ func TestCheckedNamesEachProblemWithoutTheText(t *testing.T) {
 		t.Fatalf("the error holds the entry's text: %v", err)
 	}
 }
+
+// A scope whose repo or host is in capitals is lower-cased, as the dreamer
+// and delivery do, not rejected; any other invalid scope still rejects.
+func TestCheckedLowercasesAScopeInCapitals(t *testing.T) {
+	answer := `[{"origin":"n","name":"a","description":"d","body":"b","type":"machine_fact","scope":"projects/ElmoRipData","kind":"observed"},{"origin":"n","name":"b","description":"d","body":"b","type":"machine_fact","scope":"machines/Dev-Box","kind":"observed"}]`
+	entries, err := ParseChecked(answer)
+	if err != nil || len(entries) != 2 || entries[0].Scope != "projects/elmoripdata" || entries[1].Scope != "machines/dev-box" {
+		t.Fatalf("entries %+v, err %v", entries, err)
+	}
+	for _, scope := range []string{"projects/Elmo_Rip", "derived/x", "projects/a/b"} {
+		if _, err := ParseChecked(strings.Replace(answer, "projects/ElmoRipData", scope, 1)); err == nil {
+			t.Errorf("accepted scope %q", scope)
+		}
+	}
+}
