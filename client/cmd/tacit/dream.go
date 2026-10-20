@@ -22,6 +22,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/dream"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
+	"github.com/agent-sh/tacit/client/internal/overlay"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
@@ -138,8 +139,20 @@ func runDream(args []string) int {
 
 	// Before any model call or cursor move: a read-only clone, or one without
 	// the dreamer's key, does nothing (its facts could never be pushed, and
-	// the moved cursors would skip them for good).
-	if !*dry {
+	// the moved cursors would skip them for good). A read-only clone with the
+	// local layer dreams into this machine's overlay instead (local_layer.go).
+	local := false
+	if ws, err := store.Default(); err == nil && ws.Exists() {
+		local = localLayer(context.Background(), ws)
+		if local && !overlay.Outside(overlay.Dir(), ws.Dir) {
+			if selecting {
+				return 0
+			}
+			fmt.Fprintln(os.Stderr, "dream: nothing done:", overlay.ErrInside)
+			return 2
+		}
+	}
+	if !*dry && !local {
 		ws, err := store.Default()
 		if err != nil || !ws.Exists() {
 			fmt.Fprintln(os.Stderr, "dream: no store")
@@ -157,6 +170,9 @@ func runDream(args []string) int {
 		}
 	}
 	recover := func() int {
+		if local {
+			return 0 // nothing is pushed from the local layer, so nothing waits for a push
+		}
 		s, _ := store.Default()
 		timeout, err := modelrun.Timeout("dream")
 		if err != nil {
@@ -290,7 +306,7 @@ func runDream(args []string) int {
 	ctx, cancel := dreamBatchContext(limit)
 	defer cancel()
 
-	meter := dream.Meter{At: time.Now().Format(time.RFC3339), Windows: len(windows)}
+	meter := dream.Meter{At: time.Now().Format(time.RFC3339), Windows: len(windows), Local: local}
 	switch {
 	case *session != "":
 		meter.Mode = "session"
@@ -369,7 +385,13 @@ func runDream(args []string) int {
 			facts = append(facts, f)
 		}
 		if !*dry {
-			paths, err := persistDreamWindow(ctx, s, facts)
+			var paths []string
+			var err error
+			if local {
+				paths, err = persistLocalDreamWindow(s, facts)
+			} else {
+				paths, err = persistDreamWindow(ctx, s, facts)
+			}
 			if err != nil {
 				if paused(err) {
 					break
@@ -424,6 +446,9 @@ func runDream(args []string) int {
 	}
 	if meter.PauseReason != "" {
 		fmt.Printf("dream: paused (%s); %d window(s) remain for the next run\n", meter.PauseReason, meter.RemainingWindows)
+	}
+	if local && !*dry {
+		fmt.Println("dream: local layer: notes go to this machine's overlay, " + filepath.Join(overlay.Dir(), overlay.InboxDir, "dreamer@"+host) + "; nothing is pushed")
 	}
 	fmt.Printf("dream: %d window(s), %d call(s), %d fact(s), %d written, %d in-tokens, %s, %d error(s)\n", meter.Windows, meter.Calls, meter.Facts, len(written), meter.InTokens, meter.ModelCalls.CostSummary(meter.CostUSD), meter.Errors)
 	if meter.Errors > 0 {

@@ -123,6 +123,15 @@ func runCurate(args []string) int {
 		fmt.Fprintln(os.Stderr, "curate: no store")
 		return 2
 	}
+	// A read-only clone with the local layer curates this machine's overlay
+	// (local_layer.go): no step of it writes the clone.
+	if localLayer(context.Background(), s) {
+		if *recheck {
+			fmt.Fprintln(os.Stderr, "curate: --recheck-conflicts checks the store's facts; the local layer has no such run")
+			return 2
+		}
+		return runCurateLocal(s, localCurate{model: *model, maxBatches: *maxBatches, budget: *budget, dry: *dry, quick: *quick, minInterval: *minInterval, retrySetAside: *retrySetAside})
+	}
 	// Before any work: a machine that cannot write as curator does nothing.
 	// The idle job runs the quick curate every 10 minutes on every machine
 	// that dreams; one without the curator key, or a read-only clone, ends
@@ -794,10 +803,16 @@ func markDone(cst *curatorState, note string, absorbed map[string]string) {
 // run retired a broad fact (several repos) with a narrower one about one of
 // them; a judge sees "same subject" too easily.
 func supersedeRoute(storeDir string, nf *fact.Fact, ex *search.Hit) (line string, retire bool) {
+	return supersedeRouteWith(nf, ex, func(rel, origin string) bool { return sameOrigin(storeDir, rel, origin) })
+}
+
+// supersedeRouteWith is supersedeRoute with the same-origin test given: the
+// local curator reads the existing fact from the overlay, not the clone.
+func supersedeRouteWith(nf *fact.Fact, ex *search.Hit, sameOrigin func(rel, origin string) bool) (line string, retire bool) {
 	if ex.Ruling {
 		return fmt.Sprintf("- RULING CHANGE? new [[%s]] may supersede owner ruling [[%s]]; owner decides\n  new: %s\n  ruling: %s", nf.Meta.Name, ex.Name, nf.Meta.Description, ex.Description), false
 	}
-	if ex.Words || nf.Meta.Origin == "" || ex.Name == "" || (overlap(nf.Meta.Description, ex.Description) < 0.6 && !sameOrigin(storeDir, ex.Path, nf.Meta.Origin)) {
+	if ex.Words || nf.Meta.Origin == "" || ex.Name == "" || (overlap(nf.Meta.Description, ex.Description) < 0.6 && !sameOrigin(ex.Path, nf.Meta.Origin)) {
 		return fmt.Sprintf("- supersedes? [[%s]] may replace [[%s]]; owner decides\n  new: %s\n  old: %s", nf.Meta.Name, ex.Name, nf.Meta.Description, ex.Description), false
 	}
 	return "", true

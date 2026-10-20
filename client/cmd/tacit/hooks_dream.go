@@ -66,7 +66,7 @@ var windowHermesBytes int64 = 120_000
 // dream holds dreamer.lock, for a transcript that failed within
 // dream.FailureBackoff (the full run retries it), for a cursor it already
 // started a dream at (dream-trigger.json), or on a machine that cannot write
-// as the dreamer. Every failure is silent.
+// as the dreamer and has no local layer (canDream). Every failure is silent.
 func windowDream(s *store.Store, in hookInput) {
 	home, _ := os.UserHomeDir()
 	dir := platform.StateDir(home)
@@ -130,7 +130,7 @@ func windowDream(s *store.Store, in hookInput) {
 	if at, ok := started[key]; ok && at == cursor {
 		return // a dream was started at this cursor; it ran or is running
 	}
-	if jobLockHeld(dir, "dreamer") || writerCheck(context.Background(), s, "dreamer") != nil {
+	if jobLockHeld(dir, "dreamer") || !canDream(context.Background(), s) {
 		return
 	}
 	if !startSessionDream(home, target) {
@@ -185,7 +185,8 @@ func jobLockHeld(stateDir, name string) bool {
 // silent (fail open); the idle dream finds the compaction marker later
 // anyway (dream.Select). On a read-only clone, or a machine without the
 // dreamer's key (a Mac that only reads), it starts nothing: the dream could
-// never push what it found.
+// never push what it found. A read-only clone with the local layer dreams
+// into its overlay (canDream).
 func preCompact(s *store.Store, in hookInput) {
 	target := in.TranscriptPath
 	if target == "" {
@@ -194,7 +195,7 @@ func preCompact(s *store.Store, in hookInput) {
 	if target == "" {
 		return
 	}
-	if writerCheck(context.Background(), s, "dreamer") != nil {
+	if !canDream(context.Background(), s) {
 		return
 	}
 	home, _ := os.UserHomeDir()
