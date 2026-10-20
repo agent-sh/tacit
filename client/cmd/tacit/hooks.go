@@ -378,7 +378,9 @@ func startSelection(hits []search.Hit, repo string, limit int) []search.Hit {
 		}
 		// This machine's own notes (a read-only clone's overlay) are
 		// unreviewed: a few, so they never crowd out rulings and curated facts.
-		if h.Local {
+		// The local curator's facts are curated (Local layer) and compete
+		// like the store's.
+		if h.Local && !overlay.IsCurated(h.Path) {
 			if local >= startLocalLimit {
 				continue
 			}

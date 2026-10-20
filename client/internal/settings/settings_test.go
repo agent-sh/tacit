@@ -351,3 +351,24 @@ func TestHermesStoreSetting(t *testing.T) {
 		t.Fatalf("hermes_db path: %q", os.Getenv("TACIT_HERMES_DB"))
 	}
 }
+
+// local_layer sets TACIT_LOCAL_LAYER, the environment wins, and a value
+// that is neither on nor off fails before any command work.
+func TestLocalLayerSetting(t *testing.T) {
+	clear(t, "TACIT_LOCAL_LAYER")
+	root := t.TempDir()
+	file := filepath.Join(root, "config.yaml")
+	os.WriteFile(file, []byte("local_layer: on\n"), 0o600)
+	if err := Load(file, true); err != nil || os.Getenv("TACIT_LOCAL_LAYER") != "on" {
+		t.Fatalf("local_layer: on gives %q, %v", os.Getenv("TACIT_LOCAL_LAYER"), err)
+	}
+	t.Setenv("TACIT_LOCAL_LAYER", "off")
+	if err := Load(file, true); err != nil || os.Getenv("TACIT_LOCAL_LAYER") != "off" {
+		t.Fatalf("the environment did not win: %q, %v", os.Getenv("TACIT_LOCAL_LAYER"), err)
+	}
+	clear(t, "TACIT_LOCAL_LAYER")
+	os.WriteFile(file, []byte("local_layer: sometimes\n"), 0o600)
+	if err := Load(file, true); err == nil || os.Getenv("TACIT_LOCAL_LAYER") != "" {
+		t.Fatalf("an unknown local_layer value loaded: %v", err)
+	}
+}
