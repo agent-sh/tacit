@@ -62,6 +62,7 @@ func quickHome(t *testing.T) (home string, prompts func() []string) {
 	}
 	t.Setenv("FIXTURE_OLD", answer("old-note", "The walrus fixture driver uses port 7781"))
 	t.Setenv("FIXTURE_FRESH", answer("fresh-note", "The quokka fixture driver uses port 7790"))
+	t.Setenv("FIXTURE_LATE", answer("late-note", "The numbat fixture driver uses port 7795"))
 	log := filepath.Join(home, "prompts")
 	t.Setenv("FIXTURE_PROMPTS", log)
 	fake := filepath.Join(home, "fake-cli")
@@ -69,6 +70,8 @@ func quickHome(t *testing.T) (home string, prompts func() []string) {
 in=$(cat)
 printf '%s\n\x1e\n' "$in" >> "$FIXTURE_PROMPTS"
 case "$in" in
+*"name=bad-note"*) printf '%s\n' '{"result":"not an answer","total_cost_usd":0.01}' ;;
+*"name=late-note"*) printf '%s\n' "$FIXTURE_LATE" ;;
 *"name=old-note"*) printf '%s\n' "$FIXTURE_OLD" ;;
 *) printf '%s\n' "$FIXTURE_FRESH" ;;
 esac
@@ -77,6 +80,7 @@ esac
 		t.Fatal(err)
 	}
 	t.Setenv("TACIT_CLAUDE_COMMAND", fake)
+	t.Cleanup(func(f func(string) bool) func() { return func() { hasKey = f } }(hasKey))
 	return home, func() []string {
 		b, _ := os.ReadFile(log)
 		var out []string
@@ -178,5 +182,93 @@ func TestQuickCurateSharesTheCurateLock(t *testing.T) {
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatal("the full run never took the lock")
+	}
+}
+
+// quickAdd adds a pending note to the quick fixture's store now.
+func quickAdd(t *testing.T, home, name, kind, desc string) {
+	t.Helper()
+	s := &store.Store{Dir: filepath.Join(home, "store")}
+	if _, err := addFact(context.Background(), s, "muse", fact.Meta{Name: name, Description: desc, Type: "machine_fact", Scope: "system", Source: fact.Source{Kind: kind}}, desc); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A quick run within --min-interval of the last one does nothing even with
+// fresh notes pending; past it, it takes them. Owner notes it must leave
+// pending (no owner history on this machine) are not a failure of the quick
+// run, every 10 minutes; the full run still exits 1 for them.
+func TestQuickCurateHonoursTheIntervalAndDefersOwnerNotesQuietly(t *testing.T) {
+	home, prompts := quickHome(t)
+	countSteps(t)
+	if code := runCurate([]string{"--quick"}); code != 0 || len(prompts()) != 1 {
+		t.Fatalf("first quick: exit %d, %d prompt(s)", code, len(prompts()))
+	}
+	quickAdd(t, home, "late-note", "observed", "The numbat fixture driver uses port 7795")
+	quickAdd(t, home, "owner-note", "user", "Owner: the numbat fixture never runs on Fridays")
+	if code := runCurate([]string{"--quick", "--min-interval", "1h"}); code != 0 || len(prompts()) != 1 {
+		t.Fatalf("within the interval, fresh notes pending: exit %d, %d prompt(s)", code, len(prompts()))
+	}
+	if code := runCurate([]string{"--quick", "--min-interval", "1ns"}); code != 0 {
+		t.Fatalf("past the interval, an owner note deferred: exit %d", code)
+	}
+	if ps := prompts(); len(ps) != 2 || !strings.Contains(ps[1], "name=late-note") || strings.Contains(ps[1], "owner-note") {
+		t.Fatalf("past the interval: %d prompt(s)", len(ps))
+	}
+	if code := runCurate(nil); code != 1 {
+		t.Fatalf("full run with an owner note deferred: exit %d", code)
+	}
+}
+
+// A note that fails alone counts a strike toward maxNoteFailures only in a
+// full run: the quick run, every 10 minutes, would otherwise set it aside
+// within the hour.
+func TestQuickCurateCountsNoStrike(t *testing.T) {
+	home, _ := quickHome(t)
+	countSteps(t)
+	quickAdd(t, home, "bad-note", "observed", "The dingo fixture driver uses port 7799")
+	statePath := filepath.Join(platform.StateDir(home), "curator.json")
+	runCurate([]string{"--quick"})
+	if cst := loadCuratorState(statePath); cst.Failed["bad-note"] != 0 {
+		t.Fatalf("the quick run counted a strike: %v", cst.Failed)
+	}
+	if _, ok := findFact(filepath.Join(home, "store"), "fresh-note-fact"); !ok {
+		t.Fatal("the note beside the failing one was not curated (no valid batch: nothing would count)")
+	}
+	runCurate(nil)
+	if cst := loadCuratorState(statePath); cst.Failed["bad-note"] != 1 {
+		t.Fatalf("the full run counted no strike: %v", cst.Failed)
+	}
+}
+
+// On a read-only clone, or a clone of the server without the curator's key,
+// the quick curate (the idle job's, every 10 minutes) exits 0 with no model
+// call and no stderr line; the full curate still refuses with exit 2.
+func TestQuickCurateDoesNothingQuietlyWhereItCannotWrite(t *testing.T) {
+	home, prompts := quickHome(t)
+	countSteps(t)
+	dir := filepath.Join(home, "store")
+	for _, c := range []struct {
+		name  string
+		setup func()
+	}{
+		{"read-only clone", func() { git(t, dir, "config", "tacit.readonly", "true") }},
+		{"no curator key", func() {
+			git(t, dir, "config", "--unset", "tacit.readonly")
+			git(t, dir, "remote", "add", "origin", "https://tacit.invalid/git")
+			hasKey = func(h string) bool { return h != "curator" }
+		}},
+	} {
+		c.setup()
+		code := 0
+		if errs := captureStderr(t, func() { code = runCurate([]string{"--quick"}) }); code != 0 || errs != "" || len(prompts()) != 0 {
+			t.Fatalf("%s: quick: exit %d, stderr %q, %d prompt(s)", c.name, code, errs, len(prompts()))
+		}
+		if errs := captureStderr(t, func() { code = runCurate(nil) }); code != 2 || !strings.Contains(errs, "nothing done") || len(prompts()) != 0 {
+			t.Fatalf("%s: full: exit %d, stderr %q", c.name, code, errs)
+		}
+	}
+	if _, ok := lastQuickRun(filepath.Join(platform.StateDir(home), "curate-quick.json")); ok {
+		t.Fatal("a refused quick run stamped the interval")
 	}
 }
