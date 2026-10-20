@@ -79,9 +79,9 @@ Open **Inbox** to inspect the note and its source. After curation, installed int
 
 ## How it works
 
-1. **Collect.** Agents write short inbox notes. Imports bring in existing memory files. An optional dreamer extracts candidates from redacted transcript deltas: every 4 hours, and every 10 minutes for the sessions that went quiet or compacted. It saves each successful window before the next call and recovers pending notes after interrupted runs.
+1. **Collect.** Agents write short inbox notes. Imports bring in existing memory files. An optional dreamer extracts candidates from redacted transcript deltas: from the prompt hook once a session's undreamed part fills a dream window, before a compaction, every 10 minutes for the sessions that went quiet, and every 4 hours as a backstop. It saves each successful window before the next call and recovers pending notes after interrupted runs.
 2. **Curate.** Notes become individual facts with sources and scopes. Contradictions and uncertain changes become review items. A quick run after the idle dream curates the last day's notes, so a session's fact reaches other sessions within about an hour.
-3. **Deliver.** A local SQLite FTS5 index matches facts to the repo, host and prompt. Hooks supply up to 10 facts at session start and 3 curated facts per prompt, with a separate match for a computed fact. After a compaction the start block also brings the session's own notes the dreamer just took from the dropped turns, marked as not yet reviewed. Explicit search can return the full text.
+3. **Deliver.** A local SQLite FTS5 index matches facts to the repo, host and prompt. Hooks supply up to 10 facts at session start and 3 curated facts per prompt, with a separate match for a computed fact. Explicit search can return the full text.
 4. **Check.** A verifier reads code, git, docs and permitted machine sources. It records evidence for its decisions and leaves unresolved questions for you.
 
 Git also supplies hot spots, module maps, committed measurements and deletion-based staleness checks. Those steps need no model. The app brings facts, sources, history and review decisions together.
