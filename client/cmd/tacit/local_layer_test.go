@@ -748,3 +748,13 @@ func TestStoreCuratorNeverPairsWithTheOverlay(t *testing.T) {
 		t.Fatal("the server holds this machine's local fact")
 	}
 }
+
+// tacit_search marks a local dreamer note as unreviewed and as this machine's.
+func TestMCPTagsALocalDreamerNoteUnreviewed(t *testing.T) {
+	if got := mcpTag(search.Hit{Inbox: true, Local: true}); got != " [unreviewed] (this machine)" {
+		t.Fatalf("tag %q", got)
+	}
+	if got := mcpTag(search.Hit{Local: true}); got != " (this machine)" {
+		t.Fatalf("tag %q", got)
+	}
+}
