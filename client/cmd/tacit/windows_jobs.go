@@ -74,8 +74,8 @@ func installWindowsJob(home, exe, target, envFile string) (string, error) {
 		trigger = "<TimeTrigger><Repetition><Interval>PT4H</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition><StartBoundary>" + boundary + "</StartBoundary><Enabled>true</Enabled></TimeTrigger>"
 		args = "dream --env-file " + psQuote(envFile)
 	case "dream-idle":
-		// The idle job (dreamIdleUnit): the quick curate only after the dream
-		// succeeded.
+		// The idle job (dreamIdleUnit): the quick curate after the dream,
+		// whatever its exit code.
 		trigger = "<TimeTrigger><Repetition><Interval>PT10M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition><StartBoundary>" + boundary + "</StartBoundary><Enabled>true</Enabled></TimeTrigger>"
 		args = strings.Join(idleArgs[0], " ") + " --env-file " + psQuote(envFile)
 		then = strings.Join(idleArgs[1], " ") + " --env-file " + psQuote(envFile)
@@ -93,7 +93,7 @@ func installWindowsJob(home, exe, target, envFile string) (string, error) {
 	}
 	script += "& " + psQuote(exe) + " " + args
 	if then != "" {
-		script += "; if ($LASTEXITCODE -eq 0) { & " + psQuote(exe) + " " + then + " }"
+		script += "; & " + psQuote(exe) + " " + then
 	}
 	script += "; exit $LASTEXITCODE"
 	escape := func(s string) string { var b strings.Builder; xml.EscapeText(&b, []byte(s)); return b.String() }

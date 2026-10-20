@@ -6,5 +6,5 @@ EnvironmentFile=%h/.config/tacit/env
 Type=oneshot
 Nice=19
 IOSchedulingClass=idle
-ExecStart=%h/.local/bin/tacit dream --idle 20m
+ExecStart=-%h/.local/bin/tacit dream --idle 20m
 ExecStart=%h/.local/bin/tacit curate --quick --min-interval 30m

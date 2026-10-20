@@ -26,9 +26,9 @@ import (
 //     EnvironmentFile, so the dreamer reads the file itself; no secret is in
 //     the plist.
 //   - ai.tacit.dream-idle: the idle job every 10 minutes, `tacit dream --idle
-//     20m`, then, when it succeeded, `tacit curate --quick --min-interval
-//     30m`, both with --env-file F, through /bin/sh (launchd runs one
-//     program).
+//     20m`, then `tacit curate --quick --min-interval 30m` whatever the
+//     dream's exit code, both with --env-file F, through /bin/sh (launchd
+//     runs one program).
 //
 // Both run with ProcessType Background (the system's throttled CPU and I/O
 // class), a nice value and low-priority I/O, and log to ~/Library/Logs/tacit/.
@@ -200,7 +200,9 @@ func dreamPlist(exe, envFile, storeEnv, home, path string) string {
 }
 
 // idleArgs are the idle job's two steps (dreamIdleUnit): the dream of the
-// transcripts that went quiet or compacted, then the quick curate.
+// transcripts that went quiet or compacted, then the quick curate. The
+// curate runs whatever the dream's exit code: a failed window must not keep
+// the notes other runs added from being curated.
 var idleArgs = [2][]string{{"dream", "--idle", "20m"}, {"curate", "--quick", "--min-interval", "30m"}}
 
 // dreamIdlePlist is ~/Library/LaunchAgents/ai.tacit.dream-idle.plist.
@@ -215,7 +217,7 @@ func dreamIdlePlist(exe, envFile, storeEnv, home, path string) string {
 		}
 		steps = append(steps, strings.Join(words, " "))
 	}
-	p.array("ProgramArguments", "/bin/sh", "-c", strings.Join(steps, " && "))
+	p.array("ProgramArguments", "/bin/sh", "-c", strings.Join(steps, "; "))
 	p.dict("EnvironmentVariables", jobEnv(path, storeEnv)...)
 	p.integer("StartInterval", idleInterval)
 	p.boolean("RunAtLoad", false)
@@ -304,8 +306,9 @@ WantedBy=timers.target
 `
 
 // dreamIdleUnit is the idle job's systemd user service: two ExecStart lines
-// of a oneshot run in order and the second only when the first succeeded,
-// as `tacit dream --idle 20m && tacit curate --quick --min-interval 30m`.
+// of a oneshot, run in order; the dream's has the "-" prefix (its failure
+// does not stop the unit), so the quick curate runs whatever the dream's exit
+// code, as in the curator's unit.
 // The lowest CPU and idle disk priority, like the curator's unit: it runs
 // every 10 minutes on a machine someone works on.
 func dreamIdleUnit(exec, envFile string) string {
@@ -323,7 +326,7 @@ EnvironmentFile=` + envFile + `
 Type=oneshot
 Nice=19
 IOSchedulingClass=idle
-` + extra + `ExecStart=` + exec + ` ` + strings.Join(idleArgs[0], " ") + `
+` + extra + `ExecStart=-` + exec + ` ` + strings.Join(idleArgs[0], " ") + `
 ExecStart=` + exec + ` ` + strings.Join(idleArgs[1], " ") + `
 `
 }

@@ -73,7 +73,7 @@ func TestWindowsTasksUseUserRegistrationAndPortableArguments(t *testing.T) {
 			t.Fatal("curator does not run verification sequence")
 		}
 		if target == "dream-idle" && (!strings.Contains(string(b), "<Interval>PT10M</Interval>") ||
-			!strings.Contains(script, "dream --idle 20m --env-file 'C:\\Provider Env\\config.env'; if ($LASTEXITCODE -eq 0) { & 'C:\\My Tools\\tacit.exe' curate --quick --min-interval 30m --env-file 'C:\\Provider Env\\config.env' }; exit $LASTEXITCODE")) {
+			!strings.Contains(script, "dream --idle 20m --env-file 'C:\\Provider Env\\config.env'; & 'C:\\My Tools\\tacit.exe' curate --quick --min-interval 30m --env-file 'C:\\Provider Env\\config.env'; exit $LASTEXITCODE")) {
 			t.Fatalf("idle task: %s", script)
 		}
 	}
