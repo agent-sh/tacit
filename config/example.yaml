@@ -5,6 +5,8 @@ projects: ~/projects
 index: ~/.local/state/tacit/index
 keys: ~/.config/tacit
 local_overlay: ~/.local/share/tacit/local
+# on: a read-only clone dreams and curates its own sessions into the local overlay, never pushed.
+local_layer: off
 owner_names: []
 # Hermes session store (read-only); default ~/.hermes/state.db when it exists, off for none.
 # hermes_db: off

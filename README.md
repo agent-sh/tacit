@@ -136,6 +136,7 @@ Every YAML option is listed here:
 | `index` | `TACIT_INDEX` | Local search index; `~/.local/state/tacit/index` |
 | `keys` | `TACIT_CONFIG` | Writer-key directory; `~/.config/tacit` |
 | `local_overlay` | `TACIT_LOCAL` | Local notes for a read-only clone; `~/.local/share/tacit/local` |
+| `local_layer` | `TACIT_LOCAL_LAYER` | `on`: a read-only clone dreams and curates its own sessions into its local overlay, which never leaves the machine; `off` (default) |
 | `owner_names` | `TACIT_OWNER_NAMES` | Owner name aliases; YAML list, comma-separated environment value |
 | `hermes_db` | `TACIT_HERMES_DB` | Hermes session store the dreamer and the owner's words read; `~/.hermes/state.db` when it exists, `off` for none |
 | `verify_roots` | `TACIT_VERIFY_ROOTS` | Extra permitted source directories; YAML list, `PATH` separator in environment; every directory must exist |

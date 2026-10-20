@@ -24,6 +24,7 @@ projects: ~/projects
 index: ~/.local/state/tacit/index
 keys: ~/.config/tacit
 local_overlay: ~/.local/share/tacit/local
+local_layer: off
 owner_names: [dana]
 verify_roots: []
 # Model routes belong in your private config; see config/example.yaml.
@@ -117,6 +118,7 @@ The audit directory is optional. It contains private daily JSONL files with reda
 | `TACIT_INDEX` | `$TACIT_STATE_DIR/index` | FTS5 index files |
 | `TACIT_STATE_DIR` | `~/.local/state/tacit` | per-machine state: dreamer and curator cursors, stale and verify state, session marks, logs; a second store on one machine (a shadow rebuild) takes its own without changing `HOME` |
 | `TACIT_LOCAL` | `~/.local/share/tacit/local` | local overlay of a read-only clone |
+| `TACIT_LOCAL_LAYER` | `off` | `on`: a read-only clone dreams and curates its own sessions into the local overlay (SPEC.md "Local layer") |
 | `TACIT_FOLLOW_STATE` | `~/.local/state/tacit/follow.json` | follower heartbeat |
 | `TACIT_PROJECTS` | `~/projects` | where repo checkouts live: derive, results, stale, the timeline, the verifier, the dreamer and import |
 | `TACIT_DERIVE_CONFIG` | `~/.config/tacit/derive.yaml` | `branches:` the branch to read per repo (`tacit derive --set-branch repo=branch`); `ordinary_names:` repo names that are also plain words, so a bare mention is not evidence a fact is about that repo |
