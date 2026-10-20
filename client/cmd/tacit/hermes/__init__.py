@@ -7,6 +7,9 @@ Codex use, so every harness gets the same facts by the same rules:
   this host, at most 10 lines), computed once per session in the background.
 - prefetch: `tacit hook prompt` with the user's message (at most 3 facts above
   the match floor, each fact once per session).
+- on_pre_compress: `tacit hook pre-compact`, which starts a dream of this
+  session in the background and returns at once, so what the compaction is
+  about to drop from the context is in the inbox soon after.
 - on_memory_write: Hermes' own memory writes go to the tacit inbox as
   hermes@<host> notes, through `tacit add` (which redacts with scrump), so the
   curator sees them like any other harness's notes.
@@ -76,6 +79,7 @@ def _scan(block: str) -> str:
 class TacitProvider(MemoryProvider):
     def __init__(self) -> None:
         self._session = ""
+        self._session_id = ""
         self._cwd = ""
         self._context = "primary"
         self._block = ""
@@ -97,6 +101,7 @@ class TacitProvider(MemoryProvider):
 
     def initialize(self, session_id: str, **kwargs) -> None:
         self._session = _session_key(session_id)
+        self._session_id = str(session_id)
         # Hermes passes the session directory as cwd; agent_workspace is a name.
         cwd = str(kwargs.get("cwd") or "")
         self._cwd = cwd if os.path.isabs(cwd) and os.path.isdir(cwd) else os.getcwd()
@@ -146,8 +151,19 @@ class TacitProvider(MemoryProvider):
                           rewound: bool = False, **kwargs) -> None:
         with self._lock:
             self._session = _session_key(new_session_id)
+            self._session_id = str(new_session_id)
         if reset and self._context == "primary":
             self._load_start()
+
+    def on_pre_compress(self, messages) -> str:
+        # The dreamer reads the session from state.db by its id; the hook
+        # only starts it. Nothing goes into the summary prompt.
+        if self._context == "primary":
+            with self._lock:
+                payload = {"hermes_session_id": self._session_id, "cwd": self._cwd}
+            if payload["hermes_session_id"]:
+                _run(["hook", "pre-compact"], payload, _PROMPT_WAIT)
+        return ""
 
     def on_memory_write(self, action: str, target: str, content: str,
                         metadata: Optional[Dict[str, Any]] = None) -> None:

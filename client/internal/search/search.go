@@ -44,7 +44,10 @@ type Hit struct {
 	// Local is a note in this machine's overlay (internal/overlay): written
 	// by a harness here on a read-only clone, never pushed, never reviewed.
 	Local bool
-	Score float64
+	// Session is the session's own dreamer note, delivered at its start after
+	// a compaction before any curator saw it: never a ruling.
+	Session bool `json:",omitempty"`
+	Score   float64
 	// MatchedTerms records distinct name/description FTS matches for prompt evaluation.
 	MatchedTerms []string           `json:",omitempty"`
 	Evidence     *RetrievalEvidence `json:",omitempty"`
@@ -682,11 +685,14 @@ func Block(hits []Hit, title string) string {
 	for _, h := range hits {
 		desc := strings.Join(strings.Fields(h.Description), " ")
 		line := "- " + h.Name
-		if h.Rule() {
+		if h.Rule() && !h.Session {
 			line = "- RULE " + h.Name
 			desc = asRule(desc)
 		}
-		if h.Inbox {
+		switch {
+		case h.Session:
+			line += " (this session, not yet reviewed)"
+		case h.Inbox:
 			line += " (unreviewed)"
 		}
 		if h.Local {

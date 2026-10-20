@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -36,7 +37,9 @@ import (
 //     the commands; it never loads or starts it.
 //   - dream: the dreamer every 4 h, the same way (a service and a timer on
 //     Linux, a launchd agent on macOS), with --env-file naming the file with
-//     the selected runner’s provider variables. Prints the commands; starts nothing.
+//     the selected runner’s provider variables; and the idle job every 10
+//     minutes (dream --idle 20m, then curate --quick). Prints the commands;
+//     starts nothing.
 //   - grok, pi, mcp: Grok ignores what start and prompt hooks print, so these
 //     get the MCP server only; the snippet is printed.
 func runInstall(args []string) int {
@@ -62,7 +65,7 @@ func runInstall(args []string) int {
 			fmt.Fprintln(os.Stderr, "install:", err)
 			return 1
 		}
-		fmt.Println("installed SessionStart and UserPromptSubmit hooks in", path)
+		fmt.Println("installed SessionStart (startup, compact), UserPromptSubmit and PreCompact hooks in", path)
 		fmt.Println("Codex skips new hooks until you trust them: run /hooks in Codex once.")
 		fmt.Printf("MCP (~/.codex/config.toml):\n[mcp_servers.tacit]\ncommand = %q\nargs = %s\n", exe, mcpArguments("codex"))
 	case "hermes":
@@ -220,13 +223,25 @@ func installDream(goos, home, exe string, args []string) int {
 	}
 	var paths []string
 	if goos == "windows" {
-		var p string
-		p, err = installWindowsJob(home, exe, "dream", env)
-		paths = []string{p}
+		for _, job := range []string{"dream", "dream-idle"} {
+			var p string
+			if p, err = installWindowsJob(home, exe, job, env); err != nil {
+				break
+			}
+			paths = append(paths, p)
+		}
 	} else if goos == "darwin" {
-		var p string
-		p, err = installLaunchAgent(home, launchdDreamLabel, dreamPlist(exe, env, os.Getenv("TACIT_STORE"), home, servicePATH(home, exe, lookPath)))
-		paths = []string{p}
+		path := servicePATH(home, exe, lookPath)
+		for _, job := range []struct{ label, text string }{
+			{launchdDreamLabel, dreamPlist(exe, env, os.Getenv("TACIT_STORE"), home, path)},
+			{launchdIdleLabel, dreamIdlePlist(exe, env, os.Getenv("TACIT_STORE"), home, path)},
+		} {
+			var p string
+			if p, err = installLaunchAgent(home, job.label, job.text); err != nil {
+				break
+			}
+			paths = append(paths, p)
+		}
 	} else {
 		paths, err = installDreamSystemd(home, exe, env)
 	}
@@ -244,15 +259,19 @@ func installDream(goos, home, exe string, args []string) int {
 	}
 	if goos == "windows" {
 		printWindowsJob(paths[0], "dream")
+		printWindowsJob(paths[1], "dream-idle")
 	} else if goos == "darwin" {
-		fmt.Println("start it (and after every reinstall):")
-		for _, l := range launchctlLines(launchdDreamLabel, paths[0]) {
-			fmt.Println("  " + l)
+		fmt.Println("start them (and after every reinstall):")
+		for i, label := range []string{launchdDreamLabel, launchdIdleLabel} {
+			for _, l := range launchctlLines(label, paths[i]) {
+				fmt.Println("  " + l)
+			}
 		}
-		fmt.Println("log:", filepath.Join(launchdLogDir(home), "dream.log"))
+		fmt.Println("logs:", filepath.Join(launchdLogDir(home), "dream.log"), filepath.Join(launchdLogDir(home), "dream-idle.log"))
 	} else {
-		fmt.Println("start it: systemctl --user daemon-reload && systemctl --user enable --now tacit-dream.timer")
+		fmt.Println("start them: systemctl --user daemon-reload && systemctl --user enable --now tacit-dream.timer tacit-dream-idle.timer")
 	}
+	fmt.Println("the idle job dreams every 10 minutes the sessions quiet for 20 minutes or just compacted, then runs a quick curate (on the machine with the curator key; elsewhere it does nothing).")
 	local := false
 	if st, err := store.Default(); err == nil && st.Exists() {
 		local = st.Local(context.Background())
@@ -366,7 +385,7 @@ func installClaude(home, exe string, args []string) int {
 		fmt.Fprintln(os.Stderr, "install:", err)
 		return 1
 	}
-	fmt.Println("installed SessionStart and UserPromptSubmit hooks in", path)
+	fmt.Println("installed SessionStart (startup, compact), UserPromptSubmit and PreCompact hooks in", path)
 	switch {
 	case *noMCP && changed:
 		fmt.Println("removed the tacit MCP server from", cfg, "(the file as it was:", claudeConfigBackup(cfg)+")")
@@ -392,6 +411,13 @@ func installHooksFor(path, exe, goos string) error { return installHooksWith(pat
 
 // installHooksWith is installHooksFor with extra arguments for the
 // SessionStart hook (--mcp: the harness has tacit's MCP server).
+//
+// The entries: SessionStart for a real start (matcher startup) and, a
+// second entry, for the start after a compaction (matcher compact, the hook
+// with --compact, so a harness that ignored the matcher would still print
+// each block once); UserPromptSubmit; PreCompact, which starts the dream of
+// the session about to compact. Claude Code and Codex 0.162 take the same
+// events and input.
 func installHooksWith(path, exe, goos string, startArgs []string) error {
 	settings := map[string]any{}
 	if b, err := os.ReadFile(path); err == nil {
@@ -403,30 +429,36 @@ func installHooksWith(path, exe, goos string, startArgs []string) error {
 	if hooks == nil {
 		hooks = map[string]any{}
 	}
-	for event, sub := range map[string]string{"SessionStart": "session-start", "UserPromptSubmit": "prompt"} {
-		var extra []string
-		if sub == "session-start" {
-			extra = startArgs
-		}
-		handler := map[string]any{"type": "command", "command": hookCommand(exe, sub, goos, extra...), "timeout": 15}
-		if goos == "windows" && filepath.Base(path) == "settings.json" {
-			args := []string{}
-			if cfg := os.Getenv("TACIT_SETTINGS"); cfg != "" {
-				args = append(args, "--config", cfg)
+	type spec struct {
+		matcher, sub string
+		extra        []string
+	}
+	events := map[string][]spec{
+		"SessionStart":     {{"startup", "session-start", startArgs}, {"compact", "session-start", append(slices.Clone(startArgs), "--compact")}},
+		"UserPromptSubmit": {{"", "prompt", nil}},
+		"PreCompact":       {{"", "pre-compact", nil}},
+	}
+	for event, specs := range events {
+		handlers := make([]map[string]any, len(specs))
+		for i, sp := range specs {
+			handler := map[string]any{"type": "command", "command": hookCommand(exe, sp.sub, goos, sp.extra...), "timeout": 15}
+			if goos == "windows" && filepath.Base(path) == "settings.json" {
+				args := []string{}
+				if cfg := os.Getenv("TACIT_SETTINGS"); cfg != "" {
+					args = append(args, "--config", cfg)
+				}
+				args = append(args, "hook", sp.sub)
+				args = append(args, sp.extra...)
+				handler["command"] = exe
+				handler["args"] = args
 			}
-			args = append(args, "hook", sub)
-			args = append(args, extra...)
-			handler["command"] = exe
-			handler["args"] = args
-		}
-		entry := map[string]any{"hooks": []any{handler}}
-		if event == "SessionStart" {
-			entry["matcher"] = "startup" // not on resume, clear or compact
+			handlers[i] = handler
 		}
 		// Replace our entry where it is: Codex keys hook trust by position,
-		// so moving it would make every later hook ask for trust again.
+		// so moving it would make every later hook ask for trust again. Two
+		// of our entries on one event are told apart by their matcher.
 		var kept []any
-		placed := false
+		placed := make([]bool, len(specs))
 		if list, ok := hooks[event].([]any); ok {
 			for _, e := range list {
 				m, ok := e.(map[string]any)
@@ -439,13 +471,19 @@ func installHooksWith(path, exe, goos string, startArgs []string) error {
 					kept = append(kept, e)
 					continue
 				}
+				matcher, _ := m["matcher"].(string)
 				var remaining []any
 				for _, child := range children {
 					if !mentionsTacit(map[string]any{"hooks": []any{child}}) {
 						remaining = append(remaining, child)
-					} else if !placed {
-						remaining = append(remaining, handler)
-						placed = true
+						continue
+					}
+					for i, sp := range specs {
+						if !placed[i] && sp.matcher == matcher {
+							remaining = append(remaining, handlers[i])
+							placed[i] = true
+							break
+						}
 					}
 				}
 				if len(remaining) > 0 {
@@ -454,7 +492,14 @@ func installHooksWith(path, exe, goos string, startArgs []string) error {
 				}
 			}
 		}
-		if !placed {
+		for i, sp := range specs {
+			if placed[i] {
+				continue
+			}
+			entry := map[string]any{"hooks": []any{handlers[i]}}
+			if sp.matcher != "" {
+				entry["matcher"] = sp.matcher
+			}
 			kept = append(kept, entry)
 		}
 		hooks[event] = kept

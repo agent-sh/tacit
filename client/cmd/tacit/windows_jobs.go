@@ -64,7 +64,7 @@ func installWindowsJob(home, exe, target, envFile string) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	var trigger, args string
+	var trigger, args, then string
 	boundary := time.Now().Format("2006-01-02") + "T05:30:00"
 	switch target {
 	case "follow":
@@ -73,6 +73,12 @@ func installWindowsJob(home, exe, target, envFile string) (string, error) {
 	case "dream":
 		trigger = "<TimeTrigger><Repetition><Interval>PT4H</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition><StartBoundary>" + boundary + "</StartBoundary><Enabled>true</Enabled></TimeTrigger>"
 		args = "dream --env-file " + psQuote(envFile)
+	case "dream-idle":
+		// The idle job (dreamIdleUnit): the quick curate only after the dream
+		// succeeded.
+		trigger = "<TimeTrigger><Repetition><Interval>PT10M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition><StartBoundary>" + boundary + "</StartBoundary><Enabled>true</Enabled></TimeTrigger>"
+		args = strings.Join(idleArgs[0], " ") + " --env-file " + psQuote(envFile)
+		then = strings.Join(idleArgs[1], " ") + " --env-file " + psQuote(envFile)
 	case "curate":
 		trigger = "<CalendarTrigger><StartBoundary>" + boundary + "</StartBoundary><Enabled>true</Enabled><ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay></CalendarTrigger>"
 		args = "maintain --env-file " + psQuote(envFile)
@@ -85,7 +91,11 @@ func installWindowsJob(home, exe, target, envFile string) (string, error) {
 			script += "$env:" + k + "=" + psQuote(v) + "; "
 		}
 	}
-	script += "& " + psQuote(exe) + " " + args + "; exit $LASTEXITCODE"
+	script += "& " + psQuote(exe) + " " + args
+	if then != "" {
+		script += "; if ($LASTEXITCODE -eq 0) { & " + psQuote(exe) + " " + then + " }"
+	}
+	script += "; exit $LASTEXITCODE"
 	escape := func(s string) string { var b strings.Builder; xml.EscapeText(&b, []byte(s)); return b.String() }
 	data := `<?xml version="1.0"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">

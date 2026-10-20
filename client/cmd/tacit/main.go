@@ -38,13 +38,14 @@ func usage() {
   tacit search [--repo R] [--limit N] [--inbox] [--json] <query...>
   tacit fact <name>                print one fact
   tacit add --harness H --desc "..." [--type T] [--scope S] [--kind K] <name>
-  tacit hook session-start|prompt  Claude Code hooks (JSON on stdin, block on stdout)
+  tacit hook session-start [--compact]|prompt|pre-compact  Claude Code and Codex hooks (JSON on stdin, block on stdout; pre-compact starts a dream of the session and returns)
   tacit mcp [--harness H]          MCP stdio server: tacit_search, tacit_fact, tacit_add
   tacit install claude|codex|hermes|grok|pi|muse|agy|follow|dream|curate|app
   tacit install claude [--no-mcp]   hooks, and the tacit MCP server in Claude Code's user config (~/.claude.json); --no-mcp: hooks only
-  tacit install dream [--env-file F]   the dreamer every 4 h (a systemd timer on Linux, a launchd agent on macOS)
-  tacit dream [--model M] [--dry-run] [--max-calls N] [--env-file F]   transcript deltas -> facts in inbox/dreamer@<host>/
+  tacit install dream [--env-file F]   the dreamer every 4 h, and the idle job every 10 min (dream --idle 20m, then curate --quick) (systemd timers on Linux, launchd agents on macOS)
+  tacit dream [--model M] [--dry-run] [--max-calls N] [--env-file F] [--idle D] [--session T]   transcript deltas -> facts in inbox/dreamer@<host>/; --idle: only sessions quiet for D (alone: 20m) or just compacted; --session: one transcript
   tacit curate [--model M] [--dry-run] [--max-batches N] [--budget D] [--recheck-conflicts --since D] inbox notes -> curated one-fact entries, conflict check, index, push; then the derive step
+  tacit curate --quick [--min-interval D] [--env-file F]   the last day's notes only, no derive, results, links or staleness step; nothing within D (30m) of the last quick run
   tacit derive [--dry-run] [--out DIR] [--repo R] [--force] [--take-over] [--no-fetch] [--projects DIR] [-v]   hot spots, co-change and module map from git -> derived/<repo>/ (no model)
   tacit derive --set-branch <repo>=<branch>   read that repo at a branch other than the remote default (empty branch removes it)
   tacit results [--dry-run] [--out DIR] [--repo R] [--take-over] [--projects DIR] [-v]   measured results committed to repos -> derived/<repo>/ result facts with their commit; saved facts quoting a replaced value -> review/<date>-results.md (no model)
