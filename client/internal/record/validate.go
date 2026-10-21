@@ -247,8 +247,12 @@ func Validate(old, rec *Record, by string, env Env) []Problem {
 					known++
 				}
 			}
-			if known == 0 {
-				add("was[0].why", "cites no session or note code can find", "cite the session ids (claude:<id>, codex:<id>) or note:<name> the decision rests on; a git date alone is no reason")
+			// A folder no session ever touched (code's evidence shows none) has
+			// no session to cite: a status that says so, and claims no work,
+			// rests on that evidence itself.
+			quietOK := noSessions(rec) && (rec.Status == StatusDead || rec.Status == StatusDormant || rec.Status == StatusNeedsReview)
+			if known == 0 && !quietOK {
+				add("was[0].why", "cites no session or note code can find", "cite the session ids (claude:<id>, codex:<id>) or note:<name> the decision rests on; a git date alone is no reason; a folder whose evidence shows no session at all may only be dead, dormant or needs-review")
 			}
 		}
 		if fresh.Quote != "" && !ownerQuote(fresh) && fresh.By == ByOwner && by == ByOpus {
@@ -388,6 +392,17 @@ func Validate(old, rec *Record, by string, env Env) []Problem {
 		add("evidence", fmt.Sprintf("an area or topic the curator creates rests on at least %d distinct sessions", MinAreaSessions), fmt.Sprintf("it cites %d", len(sessions)))
 	}
 	return out
+}
+
+// noSessions reports a record whose evidence (code's) shows no session at
+// all: none worked there, none filed a note there, none proposed it.
+func noSessions(r *Record) bool {
+	for _, e := range r.Evidence {
+		if e.WorkSessions > 0 || e.FactSessions > 0 || len(e.Sessions) > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // ownerMade reports a record the owner created or whose current status is theirs.

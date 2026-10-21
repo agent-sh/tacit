@@ -312,3 +312,20 @@ func TestCites(t *testing.T) {
 		t.Fatal("WholeWord")
 	}
 }
+
+// A folder no session ever touched needs no citation for a status that
+// claims no work; any status that does still needs one.
+func TestValidateNoSessionFolder(t *testing.T) {
+	r := repoRec("widget")
+	r.Was[0].Why = "no session touched it; an upstream clone"
+	r.Evidence = []Evidence{{Host: "box", Gathered: today, GitRoot: true}}
+	for _, st := range []string{StatusDead, StatusDormant, StatusNeedsReview} {
+		r.Status, r.Was[0].Status = st, st
+		expect(t, Validate(nil, r, ByOpus, env()), "")
+	}
+	r.Status, r.Was[0].Status = StatusActive, StatusActive
+	expect(t, Validate(nil, r, ByOpus, env()), "cites no session")
+	r.Status, r.Was[0].Status = StatusDead, StatusDead
+	r.Evidence[0].WorkSessions = 1
+	expect(t, Validate(nil, r, ByOpus, env()), "cites no session")
+}
