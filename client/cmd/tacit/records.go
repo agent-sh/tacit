@@ -7,9 +7,10 @@ import (
 	"strings"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
-
 	"github.com/agent-sh/tacit/client/internal/overlay"
 	"github.com/agent-sh/tacit/client/internal/record"
+	"github.com/agent-sh/tacit/client/internal/repoid"
+	"github.com/agent-sh/tacit/client/internal/search"
 )
 
 // storeRecords are the folder records of the store at dir and, with the
@@ -116,4 +117,56 @@ func factText(storeDir, name string) (string, bool, error) {
 		return string(b), true, nil
 	}
 	return fmt.Sprintf("%s was superseded by %s; the newer fact first, then the old one.\n\n%s\n--- the old fact, %s ---\n%s", name, cur.Meta.Name, curBytes, name, b), true, nil
+}
+
+// rootFolder is the project folder of kind folder (no git repository) whose
+// record says it lives on host at a path that holds cwd, the longest such
+// root, "" for none: a session there reads that folder's facts as a
+// repository's. Only a live folder that is not quiet counts; a path "~/..."
+// is under home; paths are compared with symlinks resolved.
+func rootFolder(recs map[string]*record.Record, host, home, cwd string) string {
+	if cwd == "" || len(recs) == 0 {
+		return ""
+	}
+	c := repoid.RealPath(filepath.Clean(cwd))
+	sep := string(filepath.Separator)
+	best, bestLen := "", -1
+	for f, r := range recs {
+		if r.Kind != record.KindFolder || !r.Live() || r.Quiet() || !strings.HasPrefix(f, "projects/") {
+			continue
+		}
+		for _, rt := range r.Roots {
+			if !strings.EqualFold(rt.Host, host) {
+				continue
+			}
+			p := rt.Path
+			if p == "~" || strings.HasPrefix(p, "~/") {
+				if home == "" {
+					continue
+				}
+				p = filepath.Join(home, filepath.FromSlash(strings.TrimPrefix(p[1:], "/")))
+			}
+			if !filepath.IsAbs(p) {
+				continue
+			}
+			p = repoid.RealPath(filepath.Clean(p))
+			if (c == p || strings.HasPrefix(c, p+sep)) && len(p) > bestLen {
+				best, bestLen = r.Name, len(p)
+			}
+		}
+	}
+	return best
+}
+
+// withRootFolder is sit with the project folder cwd is in as its
+// repository (rootFolder), when no git repository holds cwd.
+func withRootFolder(sit search.Situation, recs map[string]*record.Record, cwd string) search.Situation {
+	if sit.Repo != "" {
+		return sit
+	}
+	home, _ := os.UserHomeDir()
+	if n := rootFolder(recs, sit.Host, home, cwd); n != "" {
+		sit.Repo, sit.RepoAliases = n, nil
+	}
+	return sit
 }

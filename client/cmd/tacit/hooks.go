@@ -192,7 +192,8 @@ func runHook(args []string) int {
 			return 0
 		}
 		defer ix.Close()
-		sit = withRecordAliases(sit, hookRecords(ctx, ix))
+		recs := hookRecords(ctx, ix)
+		sit = withRecordAliases(withRootFolder(sit, recs, in.Cwd), recs)
 		hits, err := sessionStartHits(ctx, ix, sit)
 		if err != nil {
 			return 0
@@ -209,18 +210,20 @@ func runHook(args []string) int {
 		if !promptWorthy(p) {
 			return 0
 		}
-		if sit.Repo == "" {
-			// Started outside a repo (home, a folder of checkouts): the repo
-			// the prompt and the session's recent tool calls point at.
-			home, _ := os.UserHomeDir()
-			sit.Repo = activityRepo(ctx, in, home)
-		}
 		ix, err := openHookIndex(ctx, s)
 		if err != nil {
 			return 0
 		}
 		defer ix.Close()
 		recs := hookRecords(ctx, ix)
+		// Outside a repo: a project folder whose record names the place, else
+		// the repo the prompt and the session's recent tool calls point at
+		// (started in home, a folder of checkouts).
+		sit = withRootFolder(sit, recs, in.Cwd)
+		if sit.Repo == "" {
+			home, _ := os.UserHomeDir()
+			sit.Repo = activityRepo(ctx, in, home)
+		}
 		sit = withRecordAliases(sit, recs)
 		if deliveryOn("TOPICS", true) {
 			sit.ExtraScopes = topicScopes(recs, p)
