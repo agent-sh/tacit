@@ -233,6 +233,7 @@ func runDream(args []string) int {
 	acceptPendingRepos(home, windows, !*dry)
 	if !*dry {
 		recordWindowRepos(home, windows)
+		recordToolUsage(home, windows)
 	}
 	if fresh {
 		if !*dry {

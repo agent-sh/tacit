@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // CatalogFile is a machine's repository catalog as the store carries it,
@@ -29,9 +30,18 @@ type SharedRepo struct {
 	Name    string   `json:"name"`
 	Aliases []string `json:"aliases,omitempty"`
 	URLs    []string `json:"urls,omitempty"`
-	// WorkSessions is, for a checkout outside home or in a temp directory,
-	// how many sessions worked in it: the evidence it is in the catalog on.
-	WorkSessions int `json:"work_sessions,omitempty"`
+	// WorkSessions is how many sessions worked in the checkout (edits or
+	// commits there), with the first and last day: for a checkout outside
+	// home or in a temp directory, the evidence it is in the catalog on;
+	// for every checkout, what an assessment of the project reads.
+	WorkSessions int    `json:"work_sessions,omitempty"`
+	FirstWork    string `json:"first_work,omitempty"`
+	LastWork     string `json:"last_work,omitempty"`
+	// OwnCommits are the commits under the machine's git identity, with the
+	// first and last commit day (Commits); absent when git could not say.
+	OwnCommits  *int   `json:"own_commits,omitempty"`
+	FirstCommit string `json:"first_commit,omitempty"`
+	LastCommit  string `json:"last_commit,omitempty"`
 }
 
 type sharedFile struct {
@@ -44,7 +54,11 @@ const sharedNote = "by tacit from this machine's checkouts; never edited by hand
 // Shared is the catalog's own repositories (those with a checkout on this
 // machine, not those another machine's catalog added) as CatalogFile's
 // bytes, sorted, so an unchanged catalog writes the same bytes.
-func (c *Catalog) Shared() []byte {
+func (c *Catalog) Shared() []byte { return c.SharedWith(nil) }
+
+// SharedWith is Shared with each checkout's commit evidence from commits
+// (nil: none; a false ok leaves it out).
+func (c *Catalog) SharedWith(commits func(root string) (Commits, bool)) []byte {
 	f := sharedFile{Generated: sharedNote, Repos: []SharedRepo{}}
 	for _, slug := range c.Names() {
 		r := c.repos[slug]
@@ -57,8 +71,12 @@ func (c *Catalog) Shared() []byte {
 				e.Aliases = append(e.Aliases, a)
 			}
 		}
-		if Elsewhere(r.Root, c.home, c.mains) {
-			e.WorkSessions = WorkSessions(c.work[r.Root])
+		e.WorkSessions, e.FirstWork, e.LastWork = WorkSummary(c.work[r.Root])
+		if commits != nil {
+			if cm, ok := commits(r.Root); ok {
+				n := cm.Own
+				e.OwnCommits, e.FirstCommit, e.LastCommit = &n, cm.First, cm.Last
+			}
 		}
 		f.Repos = append(f.Repos, e)
 	}
@@ -113,4 +131,41 @@ func (c *Catalog) AddStoreCatalogs(dir string) {
 	for _, p := range paths {
 		c.AddSharedFile(p)
 	}
+}
+
+// HostRepo is one machine's entry for a repository in the store's shared
+// catalogs: the writing machine (its inbox folder's host) and what its
+// catalog says.
+type HostRepo struct {
+	Host string
+	SharedRepo
+}
+
+// StoreEvidence reads every machine's shared catalog in the store at dir
+// (inbox/<writer>@<host>/CatalogFile): repository name -> each machine's
+// entry, in host order.
+func StoreEvidence(dir string) map[string][]HostRepo {
+	out := map[string][]HostRepo{}
+	if dir == "" {
+		return out
+	}
+	paths, _ := filepath.Glob(filepath.Join(dir, "inbox", "*", CatalogFile))
+	sort.Strings(paths)
+	for _, p := range paths {
+		_, host, _ := strings.Cut(filepath.Base(filepath.Dir(p)), "@")
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var f sharedFile
+		if json.NewDecoder(bytes.NewReader(b)).Decode(&f) != nil {
+			continue
+		}
+		for _, e := range f.Repos {
+			if s := Slug(e.Name); s != "" {
+				out[s] = append(out[s], HostRepo{Host: host, SharedRepo: e})
+			}
+		}
+	}
+	return out
 }

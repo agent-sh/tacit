@@ -237,10 +237,17 @@ type Window struct {
 	Pending  repoid.Repo
 	Fallback string
 	Work     string
-	Lines    []string
-	Start    int64
-	End      int64
-	Part     int
+	// WorkRoot is the checkout Work is evidence about: Pending's root, or
+	// the cwd's repository's (every root's work is kept: the assessment of a
+	// project reads it). WorkFolder is, for a cwd in no repository, the
+	// folder of the projects directory it is in, and Work then is the
+	// evidence of work in that folder ("" for none).
+	WorkRoot   string
+	WorkFolder string
+	Lines      []string
+	Start      int64
+	End        int64
+	Part       int
 	// Why is the reason a selecting run took the transcript: "idle" or
 	// "compacted" (Select.Idle), empty otherwise.
 	Why string
@@ -692,6 +699,10 @@ func windowsOf(lines []string, cwdRepo repoid.Repo, cwd, home string, mains *rep
 	if cwdRepo.Root != "" && repoid.Elsewhere(cwdRepo.Root, home, mains) {
 		pending, cwdRepo = cwdRepo, repoid.Repo{}
 	}
+	folder := ""
+	if cwdRepo.Root == "" && pending.Root == "" {
+		folder = ProjectFolder(cwdPath(cwd), home)
+	}
 	var out []Window
 	for part, c := range chunk(lines, maxWindowChars) {
 		w := mk(part, c)
@@ -700,13 +711,39 @@ func windowsOf(lines []string, cwdRepo repoid.Repo, cwd, home string, mains *rep
 			w.Repo = windowRepo(c, resolver)
 			w.RepoRoot = resolver.Root(w.Repo)
 		}
-		if pending.Root != "" {
+		switch {
+		case pending.Root != "":
 			w.Pending, w.Fallback = pending, w.Repo
-			w.Work = WorkIn(c, pending.Worktree, cwd, home)
+			w.Work, w.WorkRoot = WorkIn(c, pending.Worktree, cwd, home), pending.Root
+		case cwdRepo.Root != "":
+			w.Work, w.WorkRoot = WorkIn(c, cwdRepo.Worktree, cwd, home), cwdRepo.Root
+		case folder != "":
+			w.Work, w.WorkFolder = WorkIn(c, folder, cwd, home), folder
 		}
 		out = append(out, w)
 	}
 	return out
+}
+
+// ProjectFolder is the folder of the projects directory (repoid.ProjectsDir)
+// that cwd is in, when cwd is in no repository: the projects directory's
+// child on the way, not a dot directory; "" otherwise. A non-git project
+// folder's evidence of work is kept by it.
+func ProjectFolder(cwd, home string) string {
+	if cwd == "" || home == "" {
+		return ""
+	}
+	proj := repoid.RealPath(repoid.ProjectsDir(home))
+	c := repoid.RealPath(cwd)
+	rel, err := filepath.Rel(proj, c)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	first := strings.Split(rel, string(filepath.Separator))[0]
+	if first == "" || strings.HasPrefix(first, ".") {
+		return ""
+	}
+	return filepath.Join(proj, first)
 }
 
 // AcceptPending names each window's repository for its Pending checkout
