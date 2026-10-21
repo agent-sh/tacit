@@ -23,6 +23,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
+	"github.com/agent-sh/tacit/client/internal/validate"
 )
 
 // curatorState remembers inbox notes the split produced nothing for, so
@@ -38,6 +39,50 @@ type curatorState struct {
 	// the curator's answer for a batch of just that note was malformed or
 	// invalid. A note held here maxNoteFailures times is set aside.
 	Failed map[string]int `json:"failed,omitempty"`
+	// DeferredRepo holds the notes whose scope names a repository no
+	// catalog knows yet: note -> the date it was first held back
+	// (deferUnknownRepos).
+	DeferredRepo map[string]string `json:"deferred_repo,omitempty"`
+}
+
+// maxRepoDefer is how long a note whose scope names a repository no catalog
+// knows waits for one (the machine that has the checkout dreams and pushes
+// its catalog) before it is curated like any other note: its entries then
+// face the checks, the model's one retry and the failure strikes.
+const maxRepoDefer = 14 * 24 * time.Hour
+
+// deferUnknownRepos takes out of pending the notes whose own scope names a
+// repository the checks do not know (validate.Env.UnknownRepo), for up to
+// maxRepoDefer from the first run that held each one back (recorded in
+// cst), and returns the rest and how many wait. A note whose repository is
+// known now, or that waited its time, goes on and leaves cst. changed
+// reports a change to cst.
+func deferUnknownRepos(pending []*fact.Fact, env validate.Env, cst *curatorState, now time.Time) (kept []*fact.Fact, deferred int, changed bool) {
+	today := now.Format("2006-01-02")
+	for _, n := range pending {
+		name := n.Meta.Name
+		if !env.UnknownRepo(n.Meta.Scope) {
+			if _, ok := cst.DeferredRepo[name]; ok {
+				delete(cst.DeferredRepo, name)
+				changed = true
+			}
+			kept = append(kept, n)
+			continue
+		}
+		first, ok := cst.DeferredRepo[name]
+		if !ok {
+			if cst.DeferredRepo == nil {
+				cst.DeferredRepo = map[string]string{}
+			}
+			cst.DeferredRepo[name], first, changed = today, today, true
+		}
+		if since, err := time.ParseInLocation("2006-01-02", first, now.Location()); err == nil && now.Sub(since) < maxRepoDefer {
+			deferred++
+			continue
+		}
+		kept = append(kept, n) // waited its time: the normal path
+	}
+	return kept, deferred, changed
 }
 
 // maxNoteFailures is how often a note may fail alone before it is set aside.
@@ -276,6 +321,16 @@ func runCurate(args []string) int {
 			fmt.Fprintf(os.Stderr, "curate: no owner history; observations can be curated, %d owner note(s) stay pending\n", deferredOwner)
 		}
 	}
+	// A note about a repository no catalog knows yet waits for the machine
+	// that has it to push its catalog, instead of being refused (after the
+	// owner history is read: a run that cannot read it fails closed first).
+	pending, deferredRepo, deferChanged := deferUnknownRepos(pending, env, cst, time.Now())
+	if deferredRepo > 0 {
+		fmt.Fprintf(os.Stderr, "curate: %d note(s) name a repository no catalog knows yet; each waits up to %d days for one (curator.json \"deferred_repo\")\n", deferredRepo, int(maxRepoDefer.Hours()/24))
+	}
+	if deferChanged && !*dry {
+		saveCuratorState(filepath.Join(stateDir, "curator.json"), cst)
+	}
 	// Notes that only restate a curated fact or an earlier note go before the
 	// split (no model): 23 of the 2,108 pending notes (1.1 percent) on 2026-10-11.
 	var curated []*fact.Fact
@@ -302,7 +357,7 @@ func runCurate(args []string) int {
 	// A fact of the split that only restates a curated fact (or one an earlier
 	// batch of this run wrote) is not written a second time (no model).
 	absorber := curate.NewAbsorber(curated)
-	rep := curate.Report{At: time.Now().Format(time.RFC3339), Notes: len(pending), Restated: len(restated), DeferredOwner: deferredOwner, Quick: *quick}
+	rep := curate.Report{At: time.Now().Format(time.RFC3339), Notes: len(pending), Restated: len(restated), DeferredOwner: deferredOwner, DeferredRepo: deferredRepo, Quick: *quick}
 	rep.ModelCalls = &modelrun.Trace{}
 	ctx = modelrun.WithTrace(ctx, rep.ModelCalls)
 	batches := curate.Batches(pending)
