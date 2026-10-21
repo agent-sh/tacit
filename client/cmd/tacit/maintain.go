@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/agent-sh/tacit/client/internal/curate"
 	"github.com/agent-sh/tacit/client/internal/dream"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
+	"github.com/agent-sh/tacit/client/internal/store"
 )
 
 func refreshModels() {
@@ -18,7 +21,8 @@ func refreshModels() {
 	verifyFallbackModel = modelrun.Model("verify_fallback", "sonnet")
 }
 
-// maintain is the same daily sequence as the curator unit, on every OS.
+// maintain is the same daily sequence as the curator unit, on every OS:
+// curate, the rotation (rotation.go), verify.
 func runMaintain(args []string) int {
 	fs := flag.NewFlagSet("maintain", flag.ContinueOnError)
 	env := fs.String("env-file", "", "optional provider KEY=VALUE file")
@@ -33,9 +37,20 @@ func runMaintain(args []string) int {
 	}
 	refreshModels()
 	curated := runCurate(nil)
+	rotated := 0
+	if s, err := store.Default(); err == nil && s.Exists() {
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
+		if maintainRotation(ctx, s) > 0 {
+			rotated = 1
+		}
+		cancel()
+	}
 	verified := runVerify(nil)
 	if curated != 0 {
 		return curated
+	}
+	if rotated != 0 {
+		return rotated
 	}
 	return verified
 }

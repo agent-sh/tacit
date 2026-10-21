@@ -816,7 +816,7 @@ func curatorWrite(ctx context.Context, s *store.Store, plan func() (map[string][
 			}
 			rels := make([]string, 0, len(files)+1)
 			for rel := range files {
-				if !safeRel(rel) && rel != ledger.QuotesPath && rel != ledger.MarkerPath && rel != ledger.FormatPath && rel != ledger.FoldersPath {
+				if !safeRel(rel) && rel != ledger.QuotesPath && rel != ledger.MarkerPath && rel != ledger.FormatPath && rel != ledger.FoldersPath && rel != ledger.DecisionsPath && !reviewFileRel(rel) {
 					return fmt.Errorf("refusing path %s", rel)
 				}
 				rels = append(rels, rel)
@@ -885,4 +885,11 @@ func curatorWrite(ctx context.Context, s *store.Store, plan func() (map[string][
 		return errors.New("the store kept changing on the server; nothing written")
 	})
 	return pushed, err
+}
+
+// reviewFileRel reports a review file a curator step writes: review/<x>.md,
+// one level, no other path.
+func reviewFileRel(rel string) bool {
+	name, ok := strings.CutPrefix(rel, "review/")
+	return ok && strings.HasSuffix(name, ".md") && !strings.ContainsAny(name, "/\\") && !strings.Contains(name, "..") && len(name) > 3
 }
