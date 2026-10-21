@@ -4,13 +4,16 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/agent-sh/tacit/client/internal/assess"
+	"github.com/agent-sh/tacit/client/internal/curate"
 	"github.com/agent-sh/tacit/client/internal/dream"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/ledger"
+	"github.com/agent-sh/tacit/client/internal/modelrun"
 	"github.com/agent-sh/tacit/client/internal/overlay"
 	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/record"
@@ -31,6 +34,7 @@ func TestMacReadOnlyCloneSendsNothing(t *testing.T) {
 	os.MkdirAll(filepath.Join(seed, "review"), 0o755)
 	os.WriteFile(filepath.Join(seed, filepath.FromSlash(ledger.FormatPath)), ledger.Format{Version: ledger.FormatVersion, At: "x"}.Encode(), 0o644)
 	other := testRec(record.KindRepo, "projects/numbat")
+	other.CreatedBy, other.Was[0].By = record.ByOpus, record.ByOpus // another machine's curator decided it
 	putRecordFile(t, seed, other)
 	gitIn(t, seed, "add", "-A")
 	gitIn(t, seed, "commit", "-q", "-m", "format and a record")
@@ -81,7 +85,19 @@ func TestMacReadOnlyCloneSendsNothing(t *testing.T) {
 	gitIn(t, gizmo, "add", "main.go")
 	gitIn(t, gizmo, "commit", "-q", "-m", "c")
 	f := toolSession(t, r.home, gizmo, "m1", "DELTA the gizmo build uses the tracker", "mcp__tracker__TicketRead", filepath.Join(gizmo, "main.go"))
-	dream.SaveState(r.statePath, &dream.State{Offsets: map[string]int64{r.transcript: 0, f: 0}})
+	// A checkout of numbat, the folder the store has a record of, and a
+	// session there: this machine has its own view of it.
+	numbat := filepath.Join(r.root, "projects", "numbat")
+	os.MkdirAll(numbat, 0o755)
+	gitIn(t, numbat, "init", "-q", "-b", "main")
+	os.WriteFile(filepath.Join(numbat, "n.go"), []byte("x"), 0o644)
+	gitIn(t, numbat, "add", "n.go")
+	gitIn(t, numbat, "commit", "-q", "-m", "c")
+	// (Two sessions: a checkout in a temporary folder is a repository only
+	// after work from two.)
+	f2 := toolSession(t, r.home, numbat, "m2", "EPSILON a look at numbat", "Read", filepath.Join(numbat, "n.go"))
+	f3 := toolSession(t, r.home, numbat, "m3", "EPSILON another look at numbat", "Read", filepath.Join(numbat, "n.go"))
+	dream.SaveState(r.statePath, &dream.State{Offsets: map[string]int64{r.transcript: 0, f: 0, f2: 0, f3: 0}})
 	prev := dreamRun
 	t.Cleanup(func() { dreamRun = prev })
 	dreamRun = func(_ context.Context, _, prompt string) (string, float64, int, error) {
@@ -106,14 +122,55 @@ func TestMacReadOnlyCloneSendsNothing(t *testing.T) {
 	}
 	r.split(entry(note.Meta.Name, "gizmo-build-tracker", "The gizmo build reads tickets from the tracker", "design_decision", "projects/gizmo"))
 	r.judge()
-	fa := &fakeAssessor{first: map[string]assess.Decision{"projects/gizmo": aDecision("projects/gizmo", "repo", "active", "edited in session:m1")}}
+	fa := &fakeAssessor{first: map[string]assess.Decision{
+		"projects/gizmo":  aDecision("projects/gizmo", "repo", "active", "edited in session:m1"),
+		"projects/numbat": aDecision("projects/numbat", "repo", "dormant", "only looked at in session:m2, no work"),
+	}}
 	fa.install(t)
+	// The rotation runs in the local layer's curate (its daily job runs
+	// curate, not maintain).
+	prevRot := rotationRun
+	t.Cleanup(func() { rotationRun = prevRot })
+	var rotated []string
+	rotationRun = func(_ context.Context, _, prompt string) (string, float64, error) {
+		var out []string
+		for _, m := range regexp.MustCompile(`"name":"([a-z0-9-]+)"`).FindAllStringSubmatch(prompt, -1) {
+			rotated = append(rotated, m[1])
+			out = append(out, `{"name":"`+m[1]+`","outcome":"still"}`)
+		}
+		return "[" + strings.Join(out, ",") + "]", 0.01, nil
+	}
 	if code := runCurate(nil); code != 0 {
 		t.Fatalf("local curate %d", code)
 	}
 	check("curate")
-	if len(fa.prompts) == 0 || strings.Contains(fa.prompts[0], "folder=projects/numbat") {
-		t.Fatalf("the local assessment: %d prompt(s); the store's own record was asked again", len(fa.prompts))
+	if strings.Join(rotated, ",") != "gizmo-build-tracker" {
+		t.Fatalf("the local curate's rotation judged %v", rotated)
+	}
+	if len(fa.prompts) == 0 || !strings.Contains(fa.prompts[0], "folder=projects/numbat") {
+		t.Fatalf("the local assessment: %d prompt(s); the store's record was not checked against this machine's work", len(fa.prompts))
+	}
+	// The store's record, consolidated with this machine's view: its status
+	// here is the overlay's, everything else the store's; the store's file
+	// is untouched (check), and a second look is not asked for.
+	ov, err := os.ReadFile(filepath.Join(r.local, overlay.CuratedDir, "projects", "numbat", record.FileName))
+	if err != nil {
+		t.Fatalf("no local view of the store's record: %v", err)
+	}
+	if lr, err := record.Parse("projects/numbat", ov); err != nil || lr.Status != record.StatusDormant || lr.Description != other.Description || lr.CreatedBy != record.ByOpus || len(lr.Was) != 2 {
+		t.Fatalf("the local view: %+v %v", lr, err)
+	}
+	if m := storeRecords(r.s.Dir)["projects/numbat"]; m == nil || m.Status != record.StatusDormant || !m.LocalStatus {
+		t.Fatalf("this machine reads %+v", m)
+	}
+	if ix, err := openIndex(ctx, r.s); err != nil {
+		t.Fatal(err)
+	} else {
+		recs, _ := ix.Records(ctx)
+		ix.Close()
+		if recs["projects/numbat"] == nil || recs["projects/numbat"].Status != record.StatusDormant {
+			t.Fatalf("the index reads %+v", recs["projects/numbat"])
+		}
 	}
 	rec := filepath.Join(r.local, overlay.CuratedDir, "projects", "gizmo", record.FileName)
 	if _, err := os.Stat(rec); err != nil {
@@ -134,6 +191,40 @@ func TestMacReadOnlyCloneSendsNothing(t *testing.T) {
 			t.Fatalf("migrate %d", code)
 		}
 		check("migrate")
+	}
+	// The rotation checks this machine's own facts and stamps them in the
+	// overlay; an overview of its own folder goes there too.
+	for _, n := range []string{"gizmo-runs-tests", "gizmo-ships-weekly"} {
+		lf := rotFile(n, "projects/gizmo", "design_decision", "the "+n+" fact", "the "+n+" fact", "2026-09-01", "")
+		if err := overlay.Write(r.local, r.s.Dir, overlay.CuratedDir+"/projects/gizmo/"+n+".md", []byte(lf)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rotated = nil
+	if code := runRotation(nil); code != 0 {
+		t.Fatalf("rotation %d", code)
+	}
+	check("rotation")
+	if len(rotated) != 2 {
+		t.Fatalf("the rotation judged %v, want this machine's two new facts (the curate's rotation checked the first)", rotated)
+	}
+	local, _ := overlay.Load(r.local)
+	for _, lf := range local {
+		if overlay.IsCurated(lf.Path) && lf.Meta.LastChecked == "" {
+			t.Errorf("%s not stamped in the overlay", lf.Path)
+		}
+	}
+	prevOv := overviewRun
+	t.Cleanup(func() { overviewRun = prevOv })
+	overviewRun = func(_ context.Context, _, prompt string) (string, float64, error) {
+		return "The gizmo build [[gizmo-build-tracker]] [[gizmo-runs-tests]] [[gizmo-ships-weekly]].", 0.01, nil
+	}
+	if n, errs := overviewStep(ctx, r.s, "m", 5, false, &curate.Report{ModelCalls: &modelrun.Trace{}}); n != 1 || errs != 0 {
+		t.Fatalf("local overview: %d written, %d errors", n, errs)
+	}
+	check("overview")
+	if _, err := os.Stat(filepath.Join(r.local, overlay.CuratedDir, "projects", "gizmo", "_overview.md")); err != nil {
+		t.Fatalf("no local overview: %v", err)
 	}
 	// The store's writers refuse on the read-only clone.
 	if code := runFormat([]string{"--set"}); code != 2 {

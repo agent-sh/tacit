@@ -138,6 +138,9 @@ type Record struct {
 	// Body the free text after the frontmatter. Neither is frontmatter.
 	Folder string `yaml:"-"`
 	Body   string `yaml:"-"`
+	// LocalStatus: the status and history are this machine's local layer's,
+	// over the store's record (MergeLocal); never written.
+	LocalStatus bool `yaml:"-"`
 }
 
 // Rel is the store-relative path of folder's record.

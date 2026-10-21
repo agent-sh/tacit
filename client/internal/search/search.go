@@ -452,21 +452,16 @@ func build(ctx context.Context, storeDir, localDir, path, base string) error {
 	if err != nil {
 		return err
 	}
-	for i, set := range []map[string]*record.Record{recs, localRecs} {
-		for _, f := range sortedFolders(set) {
-			r := set[f]
-			j := func(xs []string) string { b, _ := json.Marshal(xs); return string(b) }
-			if _, err := insRec.ExecContext(ctx, f, r.Kind, r.Name, r.Status, r.SuppressedBy, j(r.Aliases), j(r.Tools), j(r.Commands), j(r.Repos), r.Description, i); err != nil {
-				return err
-			}
+	// What this machine reads: the store's records, the local layer's own
+	// folders, and the layer's status over a store folder's (MergeLocal).
+	all := record.MergeLocal(recs, localRecs)
+	for _, f := range sortedFolders(all) {
+		r := all[f]
+		j := func(xs []string) string { b, _ := json.Marshal(xs); return string(b) }
+		isLocal := b2i(recs[f] == nil || r.LocalStatus)
+		if _, err := insRec.ExecContext(ctx, f, r.Kind, r.Name, r.Status, r.SuppressedBy, j(r.Aliases), j(r.Tools), j(r.Commands), j(r.Repos), r.Description, isLocal); err != nil {
+			return err
 		}
-	}
-	all := map[string]*record.Record{}
-	for f, r := range localRecs {
-		all[f] = r
-	}
-	for f, r := range recs {
-		all[f] = r
 	}
 	for i, f := range facts {
 		applies, _ := json.Marshal(f.Meta.AppliesTo)

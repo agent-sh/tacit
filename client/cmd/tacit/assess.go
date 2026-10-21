@@ -119,6 +119,7 @@ type assessor struct {
 	facts                  []*fact.Fact
 	recs                   map[string]*record.Record // the store's (and the layer's) records
 	storeRecs              map[string]*record.Record // the store's alone
+	localRecs              map[string]*record.Record // the local layer's alone (local runs)
 	reg                    string
 	commits                *repoid.CommitCache
 	shared                 map[string][]repoid.HostRepo
@@ -146,6 +147,9 @@ func newAssessor(ctx context.Context, s *store.Store, local bool) (*assessor, er
 	a.catalog = knownCatalog(home, s.Dir, local)
 	a.storeRecs, _ = record.Walk(s.Dir)
 	a.recs = storeRecords(s.Dir)
+	if local {
+		a.localRecs = localRecords()
+	}
 	state := platform.StateDir(home)
 	a.reg = filepath.Join(state, repoid.RegistryFile)
 	a.commits = repoid.LoadCommitCache(filepath.Join(state, repoid.CommitCacheFile))
@@ -236,11 +240,11 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 		if seen[folder] || !record.IsFolder(folder) || (only != nil && !only[folder]) {
 			return
 		}
-		seen[folder] = true
 		name := strings.TrimPrefix(folder, "projects/")
 		if a.recs[folder] != nil || record.RepoOwner(a.recs, name) != "" {
-			return
+			return // a folder with a record: the records' turn below
 		}
+		seen[folder] = true
 		ev, git, ctxLines := a.evidence(folder)
 		out = append(out, assess.Candidate{Folder: folder, Reason: reason, GitRoot: git, Evidence: ev, Context: ctxLines})
 	}
@@ -262,10 +266,23 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 		if seen[f] || (only != nil && !only[f]) || r.Kind != record.KindRepo && r.Kind != record.KindFolder {
 			continue
 		}
-		if a.local && a.storeRecs[f] != nil {
-			continue // the store's record: this machine does not override it here
-		}
 		ev, git, ctxLines := a.evidence(f)
+		if a.local && a.storeRecs[f] != nil {
+			// The store's record, read in: this machine checks it against its
+			// own work once, then again on a material change of that work,
+			// and keeps its answer in the overlay (record.AsOverride).
+			why := ""
+			if lr := a.localRecs[f]; lr != nil {
+				why = materialChange(lr, ev, a.host)
+			} else if hostWorked(ev, a.host) {
+				why = "the store's record, not yet checked against this machine's work"
+			}
+			if why != "" {
+				seen[f] = true
+				out = append(out, assess.Candidate{Folder: f, Reason: why, Old: r, GitRoot: git, Evidence: ev, Context: ctxLines})
+			}
+			continue
+		}
 		if why := materialChange(r, ev, a.host); why != "" {
 			seen[f] = true
 			out = append(out, assess.Candidate{Folder: f, Reason: why, Old: r, GitRoot: git, Evidence: ev, Context: ctxLines})
@@ -278,6 +295,17 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 		out = out[:max]
 	}
 	return out
+}
+
+// hostWorked reports evidence that host has the folder as a checkout or
+// worked in it.
+func hostWorked(ev []record.Evidence, host string) bool {
+	for _, e := range ev {
+		if e.Host == host && (e.GitRoot || e.WorkSessions > 0) {
+			return true
+		}
+	}
+	return false
 }
 
 // materialChange says why a record's decision is worth asking again: this
@@ -1184,10 +1212,15 @@ func (a *assessor) writeLocal(s *store.Store, ds []decided) (int, error) {
 		for _, c := range d.closes {
 			log = append(log, c.line()...)
 		}
-		if d.rec == nil || a.storeRecs[d.rec.Folder] != nil {
+		if d.rec == nil {
 			continue
 		}
-		b, err := d.rec.Encode()
+		rec := d.rec
+		if sr := a.storeRecs[rec.Folder]; sr != nil {
+			// A store folder: this machine's status for it, nothing else.
+			rec = record.AsOverride(sr, rec)
+		}
+		b, err := rec.Encode()
 		if err != nil {
 			return n, err
 		}
