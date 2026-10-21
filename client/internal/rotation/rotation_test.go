@@ -3,6 +3,8 @@ package rotation
 import (
 	"strings"
 	"testing"
+
+	"github.com/agent-sh/tacit/client/internal/check"
 )
 
 func testItem() Item {
@@ -85,5 +87,34 @@ func TestParseAndRender(t *testing.T) {
 	rp := RetryPrompt("P", "A", map[string][]string{"pin": {"x"}}, []string{"pin", "other"})
 	if !strings.Contains(rp, "- pin: x") || strings.Contains(rp, "- other") {
 		t.Fatalf("%s", rp)
+	}
+}
+
+// A fix whose new value code's check refutes is refused with the check's
+// output; one the check confirms, or no dry value, passes.
+func TestCheckRefusesAFixTheChecksRefute(t *testing.T) {
+	it := Item{Name: "widget-port", Scope: "projects/widget", Body: "Edit `cmd/serve/main.go` to change the port.", Proof: []Proof{{ID: "p1", Kind: "check", Text: "checked: path cmd/serve/main.go exists in widget: holds"}}}
+	env := Env{Today: "2026-10-22", Fact: func(string) (Live, bool) { return Live{}, false }, Taken: func(string) bool { return false },
+		CheckValue: func(_ Item, was, now string) (check.Result, bool) {
+			switch now {
+			case "cmd/old/main.go":
+				return check.Result{Kind: check.KindPath, Claim: "path cmd/old/main.go exists in widget", Source: "git:HEAD", Output: "at abc: no tracked path is or ends in cmd/old/main.go", Verdict: check.Fails}, true
+			case "cmd/api/main.go":
+				return check.Result{Kind: check.KindPath, Claim: "path cmd/api/main.go exists in widget", Source: "git:HEAD", Output: "tracked", Verdict: check.Holds}, true
+			}
+			return check.Result{}, false
+		}}
+	v := Verdict{Name: "widget-port", Outcome: Fix, Cites: []string{"p1"}, Evidence: "moved", Was: "cmd/serve/main.go", Now: "cmd/old/main.go"}
+	ps := Check(v, it, env)
+	if len(ps) != 1 || !strings.Contains(ps[0], "code's check refutes it") || !strings.Contains(ps[0], "no tracked path") {
+		t.Fatalf("refuted fix: %v", ps)
+	}
+	v.Now = "cmd/api/main.go"
+	if ps := Check(v, it, env); len(ps) != 0 {
+		t.Fatalf("confirmed fix refused: %v", ps)
+	}
+	v.Now = "the api command"
+	if ps := Check(v, it, env); len(ps) != 0 {
+		t.Fatalf("no dry value refused: %v", ps)
 	}
 }

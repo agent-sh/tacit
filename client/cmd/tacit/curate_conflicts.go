@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agent-sh/tacit/client/internal/check"
 	"github.com/agent-sh/tacit/client/internal/curate"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/lint"
@@ -33,6 +34,9 @@ type judgedPair struct {
 	existing *search.Hit
 	otherIdx int
 	sibling  bool
+	// newChecks, otherChecks: code's checks of the two facts' dry
+	// references (check.Refutes guards a supersedes verdict with them).
+	newChecks, otherChecks []check.Result
 }
 
 // conflictIndex is what the check needs of the index; tests substitute it.
@@ -79,6 +83,33 @@ func conflictPairs(ctx context.Context, s *store.Store, facts []*fact.Fact, host
 	var pairs []curate.Pair
 	var refs []judgedPair
 	seen := map[[2]string]bool{}
+	// Code's checks of each fact's dry references, shown with the pair and
+	// guarding a supersedes verdict.
+	ch := storeChecker(ctx, s.Dir, withLocal)
+	defer func() { _ = ch.Forge.Save() }()
+	checked := map[string][]check.Result{}
+	checksOf := func(f *fact.Fact) []check.Result {
+		if f == nil {
+			return nil
+		}
+		if r, ok := checked[f.Path]; ok {
+			return r
+		}
+		r := factChecks(ctx, ch, f)
+		checked[f.Path] = r
+		return r
+	}
+	hitFact := func(h search.Hit) *fact.Fact {
+		b, err := os.ReadFile(filepath.Join(s.Dir, filepath.FromSlash(h.Path)))
+		if err != nil {
+			return nil
+		}
+		f, err := fact.Parse(h.Path, b)
+		if err != nil {
+			return nil
+		}
+		return f
+	}
 	for i, f := range facts {
 		sit := search.Situation{Host: host, Query: f.Meta.Description}
 		if strings.HasPrefix(f.Meta.Scope, "projects/") {
@@ -111,8 +142,9 @@ func conflictPairs(ctx context.Context, s *store.Store, facts []*fact.Fact, host
 			if h.Score >= 8 && !seen[key] {
 				seen[key] = true
 				h := h
-				pairs = append(pairs, curate.Pair{ExistingName: h.Name, ExistingDesc: h.Description, NewName: f.Meta.Name, NewDesc: f.Meta.Description})
-				refs = append(refs, judgedPair{newIdx: i, existing: &h, otherIdx: -1})
+				nc, oc := checksOf(f), checksOf(hitFact(h))
+				pairs = append(pairs, curate.Pair{ExistingName: h.Name, ExistingDesc: h.Description, NewName: f.Meta.Name, NewDesc: f.Meta.Description, ExistingChecks: check.Lines(oc), NewChecks: check.Lines(nc)})
+				refs = append(refs, judgedPair{newIdx: i, existing: &h, otherIdx: -1, newChecks: nc, otherChecks: oc})
 			}
 			break // the closest fact that is not this one
 		}
@@ -122,8 +154,9 @@ func conflictPairs(ctx context.Context, s *store.Store, facts []*fact.Fact, host
 		for j := i + 1; j < len(facts); j++ {
 			g := facts[j]
 			if g.Meta.Scope == f.Meta.Scope && overlap(f.Meta.Description, g.Meta.Description) >= 0.5 {
-				pairs = append(pairs, curate.Pair{ExistingName: f.Meta.Name, ExistingDesc: f.Meta.Description, NewName: g.Meta.Name, NewDesc: g.Meta.Description})
-				refs = append(refs, judgedPair{newIdx: j, otherIdx: i})
+				nc, oc := checksOf(g), checksOf(f)
+				pairs = append(pairs, curate.Pair{ExistingName: f.Meta.Name, ExistingDesc: f.Meta.Description, NewName: g.Meta.Name, NewDesc: g.Meta.Description, ExistingChecks: check.Lines(oc), NewChecks: check.Lines(nc)})
+				refs = append(refs, judgedPair{newIdx: j, otherIdx: i, newChecks: nc, otherChecks: oc})
 			}
 		}
 	}
@@ -139,6 +172,42 @@ func judgePairs(ctx context.Context, s *store.Store, pairs []curate.Pair, refs [
 	if err != nil {
 		return nil, nil, err
 	}
+	// A supersedes verdict code's checks refute (the new fact's dry
+	// references fail where the existing fact's hold) goes back to the judge
+	// once with the checks; a second one is a review line, never a
+	// retirement.
+	refuted := map[int][]check.Result{}
+	var again []int
+	for k, v := range verdicts {
+		if v != curate.Supersedes || unjudged[k] {
+			continue
+		}
+		if ok, rs := check.Refutes(refs[k].newChecks, refs[k].otherChecks); ok {
+			refuted[k] = rs
+			again = append(again, k)
+		}
+	}
+	if len(again) > 0 {
+		rep.CheckRefused += len(again)
+		ps := make([]curate.Pair, len(again))
+		for i, k := range again {
+			ps[i] = pairs[k]
+		}
+		prompt := fmt.Sprintf(curate.ConflictPrompt, curate.RenderPairs(ps)) + "\nCODE REFUSED YOUR \"supersedes\" FOR EACH OF THESE PAIRS: code's checks refute the NEW fact's references where the EXISTING fact's hold (the \"checked:\" lines). Answer again for these pairs only.\n"
+		ans, c2, jerr := judgeRun(ctx, curate.JudgeModel, prompt)
+		rep.JudgeCalls++
+		rep.CostUSD += c2
+		if jerr == nil {
+			if vs, perr := curate.ParseVerdictsChecked(ans, len(again)); perr == nil {
+				for i, k := range again {
+					verdicts[k] = vs[i]
+					if vs[i] != curate.Supersedes {
+						delete(refuted, k)
+					}
+				}
+			}
+		}
+	}
 	// Every call is checked before the first mutation, including later chunks.
 	for k, v := range verdicts {
 		pm := refs[k]
@@ -151,7 +220,15 @@ func judgePairs(ctx context.Context, s *store.Store, pairs []curate.Pair, refs [
 		switch v {
 		case curate.Contradicts:
 			rep.Contradicts++
-			review = append(review, contradictionLine(nf, pm, facts, ""))
+			line := contradictionLine(nf, pm, facts, "")
+			// A contradiction code's checks settle says so: the source of
+			// truth, not a judgement, for the owner's review.
+			if ok, rs := check.Refutes(pm.newChecks, pm.otherChecks); ok {
+				line += "\n  checked: the new fact's references fail where the other's hold: " + strings.Join(check.Lines(rs), " | ")
+			} else if ok, rs := check.Refutes(pm.otherChecks, pm.newChecks); ok {
+				line += "\n  checked: the other fact's references fail where the new one's hold: " + strings.Join(check.Lines(rs), " | ")
+			}
+			review = append(review, line)
 		case curate.Supersedes:
 			rep.Supersedes++
 			if pm.existing == nil {
@@ -161,6 +238,10 @@ func judgePairs(ctx context.Context, s *store.Store, pairs []curate.Pair, refs [
 			}
 			if pm.sibling {
 				review = append(review, fmt.Sprintf("- duplicate in one run: [[%s]] and [[%s]]", nf.Meta.Name, pm.existing.Name))
+				continue
+			}
+			if rs, ok := refuted[k]; ok {
+				review = append(review, fmt.Sprintf("- CHECKED: the judge said [[%s]] replaces [[%s]] twice, but code's checks refute it; both stay\n  %s", nf.Meta.Name, pm.existing.Name, strings.Join(check.Lines(rs), "\n  ")))
 				continue
 			}
 			line, retire := supersedeRoute(s.Dir, nf, pm.existing)

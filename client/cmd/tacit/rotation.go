@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agent-sh/tacit/client/internal/check"
 	"github.com/agent-sh/tacit/client/internal/curate"
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/fact"
@@ -149,6 +150,7 @@ type rotator struct {
 	scopes      []string
 	tl          *gitev.Builder
 	rs          *reviewServer
+	ch          *check.Checker
 	open        map[string]bool     // facts with an open finding: the verifier's first
 	findings    map[string][]string // earlier stale findings of a fact, as lines
 }
@@ -183,6 +185,7 @@ func rotationStep(ctx context.Context, s *store.Store, o rotationOpts, rep *cura
 		return st, 1
 	}
 	defer r.ix.Close()
+	defer func() { _ = r.ch.Forge.Save() }()
 	due := r.due(o)
 	st.Due = len(due)
 	size := o.batch
@@ -287,6 +290,7 @@ func newRotator(ctx context.Context, s *store.Store, local bool) (*rotator, erro
 		}
 	}
 	r.recs = storeRecords(s.Dir)
+	r.ch = storeChecker(ctx, s.Dir, local)
 	head, err := s.Head(ctx)
 	if err != nil {
 		return nil, err
@@ -539,6 +543,11 @@ func (r *rotator) item(ctx context.Context, f *fact.Fact) (rotation.Item, error)
 	for _, l := range r.findings[f.Meta.Name] {
 		add(rotation.Proof{Kind: "finding", Text: l})
 	}
+	// Code's checks of its dry references: the source of truth, not a
+	// judgement (a fix whose new value a check refutes is refused).
+	for _, cr := range factChecks(ctx, r.ch, f) {
+		add(rotation.Proof{Kind: "check", Text: "checked: " + cr.Line()})
+	}
 	texts := []string{it.Description, it.Body}
 	for _, p := range ps {
 		texts = append(texts, p.Text)
@@ -555,11 +564,45 @@ func (r *rotator) item(ctx context.Context, f *fact.Fact) (rotation.Item, error)
 	return it, nil
 }
 
+// checkValue is code's check of a fix's new value, when it is a dry value
+// code can check: a forge repository URL, a version (v1.2.3) or a path of
+// the fact's repository, or a repository name replacing one (was names a
+// repository the catalogs or the forge know). ok is false for any other.
+func (r *rotator) checkValue(it rotation.Item, was, now string) (check.Result, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	now = strings.TrimSpace(now)
+	if refs := check.Refs(now); len(refs) == 1 {
+		f := r.byName[it.Name]
+		repo, root := "", ""
+		if f != nil {
+			repo, root = factRepo(r.ch.Catalog, f)
+		}
+		switch ref := refs[0]; {
+		case ref.Kind == check.KindRepo:
+			return r.ch.ForgeRepo(ctx, ref.Owner, ref.Value), true
+		case ref.Kind == check.KindVersion && root != "" && strings.Trim(now, "`") == ref.Value:
+			return r.ch.Version(ctx, repo, root, ref.Value), true
+		}
+	}
+	p := strings.Trim(now, "`")
+	if f := r.byName[it.Name]; f != nil && strings.Contains(p, "/") && !strings.ContainsAny(p, " \t") && !strings.Contains(p, "://") {
+		if repo, root := factRepo(r.ch.Catalog, f); root != "" && len(check.Refs("`"+p+"`")) == 1 {
+			return r.ch.Path(ctx, repo, root, p), true
+		}
+	}
+	if fact.IsSlug(strings.ToLower(was)) && fact.IsSlug(strings.ToLower(now)) && r.ch.Repo(ctx, strings.ToLower(was)).Verdict != check.Unknown && (r.ch.Catalog.Has(strings.ToLower(was)) || record.RepoOwner(r.recs, strings.ToLower(was)) != "") {
+		return r.ch.Repo(ctx, strings.ToLower(now)).Summary(), true
+	}
+	return check.Result{}, false
+}
+
 // env is what rotation.Check reads of the store.
 func (r *rotator) env() rotation.Env {
 	return rotation.Env{
-		Today: r.today,
-		Taken: func(n string) bool { return r.taken[n] },
+		Today:      r.today,
+		CheckValue: r.checkValue,
+		Taken:      func(n string) bool { return r.taken[n] },
 		Fact: func(n string) (rotation.Live, bool) {
 			f := r.byName[n]
 			if f == nil || f.Meta.SupersededBy != "" || f.Meta.Retired != "" {

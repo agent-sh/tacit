@@ -343,7 +343,13 @@ outer:
 // they are written: a fact that only restates a curated one (restatesFact)
 // is not written a second time, and its note is recorded as absorbed by that
 // fact, as Restated does for a whole note.
-type Absorber struct{ p pool }
+type Absorber struct {
+	p pool
+	// Refuted reports that code's checks refute the absorbing fact's dry
+	// references where the new fact's hold (check.Refutes): the new fact is
+	// then not absorbed. Nil: no checks.
+	Refuted func(kept, f *fact.Fact) bool
+}
 
 // NewAbsorber indexes the live curated facts.
 func NewAbsorber(curated []*fact.Fact) *Absorber {
@@ -378,7 +384,7 @@ func (a *Absorber) Restates(f *fact.Fact, ruling bool) string {
 	if len(e.terms) == 0 {
 		return ""
 	}
-	if o := closestInScope(&a.p, e); o != nil && restatesFact(e, o) {
+	if o := closestInScope(&a.p, e); o != nil && restatesFact(e, o) && (a.Refuted == nil || !a.Refuted(o.f, f)) {
 		return o.f.Meta.Name
 	}
 	return ""

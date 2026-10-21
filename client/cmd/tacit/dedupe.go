@@ -87,7 +87,11 @@ func dedupePlan(dir string) ([]curate.Copies, error) {
 		}
 	}
 	g.Answered = func(a, b string) bool { return answered[[2]string{a, b}] }
-	return curate.Duplicates(facts, g), nil
+	ch := storeChecker(context.Background(), dir, false)
+	g.Refuted = refuter(context.Background(), ch)
+	cs := curate.Duplicates(facts, g)
+	_ = ch.Forge.Save()
+	return cs, nil
 }
 
 // dedupeFiles is each copy with superseded_by the fact kept and updated
@@ -111,7 +115,41 @@ func dedupeFiles(dir string, cs []curate.Copies, now time.Time) (map[string][]by
 			lines = append(lines, x.Meta.Name+" -> "+c.Kept.Meta.Name)
 		}
 	}
-	msg := fmt.Sprintf("curator: dedupe: %d near-duplicate fact(s) superseded by the fact they restate, in %d cluster(s)\n\n%s", len(files), len(cs), strings.Join(lines, "\n"))
+	// A fact that already pointed at a copy points at the fact kept now:
+	// a chain of replacements ends at the live fact in one step.
+	kept := map[string]string{}
+	for _, c := range cs {
+		for _, x := range c.Copies {
+			kept[x.Meta.Name] = c.Kept.Meta.Name
+		}
+	}
+	repointed := 0
+	if facts, _, err := fact.Walk(dir); err == nil {
+		for _, f := range facts {
+			to, ok := kept[f.Meta.SupersededBy]
+			if !ok || f.InInbox() || files[f.Path] != nil || to == f.Meta.Name {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(f.Path)))
+			if err != nil {
+				return nil, "", err
+			}
+			y := *f
+			y.Meta.SupersededBy, y.Meta.Updated = to, now.Format("2006-01-02")
+			nb, err := fact.PatchRelations(data, &y)
+			if err != nil {
+				return nil, "", fmt.Errorf("%s: %w", f.Path, err)
+			}
+			files[f.Path] = nb
+			lines = append(lines, f.Meta.Name+" -> "+to+" (was -> "+f.Meta.SupersededBy+")")
+			repointed++
+		}
+	}
+	msg := fmt.Sprintf("curator: dedupe: %d near-duplicate fact(s) superseded by the fact they restate, in %d cluster(s)", len(files)-repointed, len(cs))
+	if repointed > 0 {
+		msg += fmt.Sprintf("; %d older fact(s) that pointed at a copy point at the kept fact", repointed)
+	}
+	msg += "\n\n" + strings.Join(lines, "\n")
 	return files, msg, nil
 }
 
