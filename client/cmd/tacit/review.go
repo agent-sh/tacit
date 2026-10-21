@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
@@ -12,13 +11,11 @@ import (
 	"flag"
 	"fmt"
 	"github.com/agent-sh/tacit/client/internal/platform"
-	"io/fs"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -1121,9 +1118,7 @@ func runReview(args []string) int {
 		fmt.Fprintln(os.Stderr, "review: sync failed, showing local state:", err)
 	}
 	cancel()
-	var tb [16]byte
-	rand.Read(tb[:])
-	rs := &reviewServer{s: s, token: hex.EncodeToString(tb[:]), tl: newTimelineBuilder(s, time.Time{})}
+	rs := &reviewServer{s: s, token: newToken(), tl: newTimelineBuilder(s, time.Time{})}
 	rs.viewOnly = viewOnlyReason(context.Background(), s)
 	if *sample != "" {
 		b, err := os.ReadFile(*sample)
@@ -1150,43 +1145,6 @@ func runReview(args []string) int {
 	}
 	rs.loadFacts()
 
-	ui, _ := fs.Sub(reviewUI, "reviewui")
-	page, _ := fs.ReadFile(ui, "index.html")
-	page = []byte(strings.Replace(string(page), "{{TOKEN}}", rs.token, 1))
-	mux := http.NewServeMux()
-	loopbackOnly := func(h http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			hh, _, _ := net.SplitHostPort(r.Host)
-			if hh != "127.0.0.1" && hh != "localhost" && hh != "[::1]" && hh != "::1" {
-				http.Error(w, "loopback only", http.StatusForbidden)
-				return
-			}
-			h(w, r)
-		}
-	}
-	mux.HandleFunc("/", loopbackOnly(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		w.Write(page)
-	}))
-	assets := http.FileServer(http.FS(ui))
-	for _, p := range []string{"/fonts/", "/app.css", "/app.js", "/theme.js"} {
-		mux.HandleFunc(p, loopbackOnly(assets.ServeHTTP))
-	}
-	mux.HandleFunc("/api/items", loopbackOnly(func(w http.ResponseWriter, r *http.Request) {
-		rs.mu.Lock()
-		rs.loadFacts() // another tool or machine may have changed the store
-		items := rs.allItems()
-		rs.mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"items": items, "host": store.ShortHost(), "labelling": rs.labelling(), "view_only": rs.viewOnly})
-	}))
-	mux.HandleFunc("/api/decide", loopbackOnly(rs.handleDecide))
-	mux.HandleFunc("/api/timeline", loopbackOnly(rs.handleTimeline))
 	// Pull what other machines decided, every two minutes, under the store lock.
 	go func() {
 		if rs.labelling() {
@@ -1202,34 +1160,43 @@ func runReview(args []string) int {
 			cancel()
 		}
 	}()
-	secured := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
-		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Referrer-Policy", "no-referrer")
-		mux.ServeHTTP(w, r)
+	return serveOwner("review", *addr, rs.token, *noOpen, rs.handler())
+}
+
+// handler is what tacit review serves. Outside label mode it is the owner's
+// page, the one the desktop window shows (App, uiHandler): what waits on
+// them, every fact with edit, retire, restore and undo, new rules and the
+// Folders page, all through the methods the window binds, so every release
+// carries the owner's channel without the desktop build. In label mode it
+// is the review page alone, whose marks go to the label file and never to
+// the store. Either way the page needs the run's token on its URL and every
+// call needs it in X-Tacit-Token.
+func (rs *reviewServer) handler() http.Handler {
+	if !rs.labelling() {
+		return newApp(rs).uiHandler(rs.token)
+	}
+	return pageHandler("index.html", rs.token, []string{"/fonts/", "/app.css", "/app.js", "/theme.js"}, func(mux *http.ServeMux) {
+		mux.HandleFunc("/api/items", func(w http.ResponseWriter, r *http.Request) {
+			if !tokenOK(r.Header.Get("X-Tacit-Token"), rs.token) {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			rs.mu.Lock()
+			rs.loadFacts() // another tool or machine may have changed the store
+			items := rs.allItems()
+			rs.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"items": items, "host": store.ShortHost(), "labelling": rs.labelling(), "view_only": rs.viewOnly})
+		})
+		mux.HandleFunc("/api/decide", rs.handleDecide)
+		mux.HandleFunc("/api/timeline", rs.handleTimeline)
 	})
-	ln, err := net.Listen("tcp", *addr)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "review:", err)
-		return 2
-	}
-	url := "http://" + ln.Addr().String() + "/"
-	fmt.Println("tacit review:", url, "(Ctrl-C to stop)")
-	if !*noOpen {
-		openURL(runtime.GOOS, url)
-	}
-	if err := http.Serve(ln, secured); err != nil {
-		fmt.Fprintln(os.Stderr, "review:", err)
-		return 1
-	}
-	return 0
 }
 
 // handleDecide serves POST /api/decide: one mark from the page. OwnerOnly
 // matters only in label mode.
 func (rs *reviewServer) handleDecide(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost || r.Header.Get("X-Tacit-Token") != rs.token {
+	if r.Method != http.MethodPost || !tokenOK(r.Header.Get("X-Tacit-Token"), rs.token) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}

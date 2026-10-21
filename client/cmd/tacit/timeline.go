@@ -187,7 +187,7 @@ type tlMemo struct {
 // its build.
 func (rs *reviewServer) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	if r.Method != http.MethodGet || rs.token == "" || r.Header.Get("X-Tacit-Token") != rs.token {
+	if r.Method != http.MethodGet || !tokenOK(r.Header.Get("X-Tacit-Token"), rs.token) {
 		w.WriteHeader(http.StatusForbidden)
 		json.NewEncoder(w).Encode(map[string]string{"error": "forbidden"})
 		return

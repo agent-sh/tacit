@@ -211,7 +211,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 async function load(keepId, focusMark) {
-  const data = CALL ? await CALL("Queue") : await (await fetch("/api/items", { cache: "no-store" })).json();
+  const data = CALL ? await CALL("Queue") : await (await fetch("/api/items", { cache: "no-store", headers: { "X-Tacit-Token": TOKEN } })).json();
   items = data.items || [];
   // A one-fact finding is its own other half for the filters.
   for (const it of items) if (it.single && !it.b) it.b = it.a;
