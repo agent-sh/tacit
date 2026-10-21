@@ -176,3 +176,27 @@ func TestDuplicatesKeepsSystemPreAuditEndorsedAndCode(t *testing.T) {
 		t.Fatalf("Duplicates = %v, want %v", got, want)
 	}
 }
+
+// A copy whose checked references hold is never retired into a fact whose
+// references the checks refute (DedupeGuard.Refuted); the absorber the same.
+func TestDuplicatesAndAbsorberHonourTheChecks(t *testing.T) {
+	const ws = "machines/ws"
+	a := cf(ws, "cwd-resets-a", "2026-10-01", "The Bash tool resets cwd to /Users/u/work after every call; start every command with cd")
+	b := cf(ws, "cwd-resets-b", "2026-10-03", "Bash tool resets the cwd to /Users/u/work after each call, so start every command with cd")
+	if got := copiesOf(Duplicates([]*fact.Fact{a, b}, DedupeGuard{})); len(got) != 1 {
+		t.Fatalf("without checks: %v", got)
+	}
+	refuted := func(kept, copy *fact.Fact) bool { return kept.Meta.Name == "cwd-resets-b" }
+	if got := copiesOf(Duplicates([]*fact.Fact{a, b}, DedupeGuard{Refuted: refuted})); len(got) != 0 {
+		t.Fatalf("a copy retired into a refuted fact: %v", got)
+	}
+	ab := NewAbsorber([]*fact.Fact{b})
+	c := cf(ws, "", "2026-10-04", "The Bash tool resets cwd to /Users/u/work after every call; start every command with cd")
+	if ab.Restates(c, false) != "cwd-resets-b" {
+		t.Fatal("without checks the absorber absorbs")
+	}
+	ab.Refuted = refuted
+	if by := ab.Restates(c, false); by != "" {
+		t.Fatalf("absorbed into a refuted fact: %s", by)
+	}
+}

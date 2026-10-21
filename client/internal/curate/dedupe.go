@@ -23,6 +23,10 @@ type Copies struct {
 type DedupeGuard struct {
 	Kept     map[string]bool
 	Answered func(a, b string) bool
+	// Refuted reports that code's checks refute kept's dry references where
+	// copy's hold (check.Refutes): the copy is not retired into it. Nil: no
+	// checks.
+	Refuted func(kept, copy *fact.Fact) bool
 }
 
 // Duplicates finds the curated facts that only restate another live curated
@@ -40,7 +44,9 @@ type DedupeGuard struct {
 // Never a copy: a ruling, a fact with owner evidence or words of theirs
 // (only the owner changes those), a system fact, a fact with conflicts_with
 // (an open finding), a fact the owner kept in a decision, and a fact whose
-// pair with the closest kept fact the owner already answered.
+// pair with the closest kept fact the owner already answered, and a fact
+// whose checked references hold where the kept fact's are refuted
+// (DedupeGuard.Refuted).
 func Duplicates(facts []*fact.Fact, g DedupeGuard) []Copies {
 	type cand struct {
 		f      *fact.Fact
@@ -75,7 +81,7 @@ func Duplicates(facts []*fact.Fact, g DedupeGuard) []Copies {
 	for _, c := range cs {
 		e := newStatement(c.f, c.ruling, true)
 		if copyable(c.f, c.ruling, g) && len(e.terms) > 0 {
-			if o := closestInScope(&p, e); o != nil && restatesFact(e, o) && (g.Answered == nil || !g.Answered(c.f.Meta.Name, o.f.Meta.Name)) {
+			if o := closestInScope(&p, e); o != nil && restatesFact(e, o) && (g.Answered == nil || !g.Answered(c.f.Meta.Name, o.f.Meta.Name)) && (g.Refuted == nil || !g.Refuted(o.f, c.f)) {
 				k := o.f.Meta.Name
 				if by[k] == nil {
 					by[k] = &Copies{Kept: o.f}

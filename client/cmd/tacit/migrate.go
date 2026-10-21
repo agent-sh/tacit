@@ -30,12 +30,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agent-sh/tacit/client/internal/assess"
 	"github.com/agent-sh/tacit/client/internal/curate"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/importer"
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/overlay"
+	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/record"
+	"github.com/agent-sh/tacit/client/internal/repoid"
 	"github.com/agent-sh/tacit/client/internal/store"
 	"github.com/agent-sh/tacit/client/internal/validate"
 )
@@ -88,6 +91,15 @@ func planMoves(dir, prefix string, facts []*fact.Fact, items []moveItem, quotes 
 		}
 	}
 	absorber := curate.NewAbsorber(curated)
+	// A copy is not absorbed into a fact whose dry references code's checks
+	// refute where the copy's hold.
+	chDir := dir
+	if prefix != "" {
+		chDir = "" // the overlay: this machine's catalogs, no store's
+	}
+	ch := storeChecker(context.Background(), chDir, prefix != "")
+	absorber.Refuted = refuter(context.Background(), ch)
+	defer func() { _ = ch.Forge.Save() }()
 	ql := ledger.Quotes(quotes)
 	liveIn := func(scope string) map[string]*fact.Fact {
 		out := map[string]*fact.Fact{}
@@ -274,8 +286,121 @@ func renameRepos(repos []string, renames map[string]string) []string {
 }
 
 // migrationItems are the live facts of every suppressed folder, largest
+// folder first, each with the scope of the live folder that replaces it;
+// then the live facts of folders that are no project (assess's "not a
+// project") that refile places by their own evidence (nil: none).
+func migrationItems(facts []*fact.Fact, recs map[string]*record.Record, refile func(*fact.Fact) string) []moveItem {
+	out := suppressedItems(facts, recs)
+	if refile == nil {
+		return out
+	}
+	byFolder := map[string][]moveItem{}
+	var folders []string
+	for _, f := range facts {
+		if f.InInbox() || overlay.IsInbox(f.Path) || f.Meta.SupersededBy != "" || f.Meta.Retired != "" {
+			continue
+		}
+		r := recs[f.Meta.Scope]
+		if !notProject(r) {
+			continue
+		}
+		to := refile(f)
+		if to == "" || to == f.Meta.Scope {
+			continue
+		}
+		renames := map[string]string{}
+		for _, n := range r.Names() {
+			renames[strings.ToLower(n)] = path.Base(to)
+		}
+		if byFolder[f.Meta.Scope] == nil {
+			folders = append(folders, f.Meta.Scope)
+		}
+		byFolder[f.Meta.Scope] = append(byFolder[f.Meta.Scope], moveItem{Name: f.Meta.Name, Path: f.Path, To: to, Renames: renames, Folder: f.Meta.Scope})
+	}
+	sort.Strings(folders)
+	for _, folder := range folders {
+		items := byFolder[folder]
+		sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+		out = append(out, items...)
+	}
+	return out
+}
+
+// notProject reports a live record whose folder is no project of the
+// owner's (assess's "none": dead, why starting with assess.NotProject).
+func notProject(r *record.Record) bool {
+	return r != nil && r.Live() && r.Status == record.StatusDead && len(r.Was) > 0 && strings.HasPrefix(r.Was[0].Why, assess.NotProject)
+}
+
+// refiler places a fact of a folder that is no project by its own
+// evidence: the checkouts the absolute paths it names are in (repoid), else
+// the checkouts the session that wrote it worked in (the dreamer's
+// registry). Exactly one repository, whose folder is a live project folder
+// that is not quiet and is a project, is the fact's folder; anything else
+// leaves it where it is (quiet).
+type refiler struct {
+	recs     map[string]*record.Record
+	cache    *repoid.Cache
+	sessions map[string]map[string]bool // session -> repositories it worked in
+}
+
+func newRefiler(home string, catalog *repoid.Catalog, recs map[string]*record.Record) *refiler {
+	r := &refiler{recs: recs, cache: repoid.NewCache(home), sessions: map[string]map[string]bool{}}
+	r.cache.Mains = catalog.Mains()
+	for root, ws := range repoid.LoadRegistryWork(filepath.Join(platform.StateDir(home), repoid.RegistryFile)) {
+		rp, ok := catalog.Of(root)
+		if !ok || rp.Slug() == "" {
+			continue
+		}
+		for _, w := range ws {
+			if r.sessions[w.Session] == nil {
+				r.sessions[w.Session] = map[string]bool{}
+			}
+			r.sessions[w.Session][rp.Slug()] = true
+		}
+	}
+	return r
+}
+
+func (r *refiler) target(f *fact.Fact) string {
+	text := f.Meta.Description + "\n" + f.Body + "\n" + strings.Join(f.Meta.AppliesTo.Paths, "\n") + "\n" + strings.Join(f.Meta.AppliesTo.Commands, "\n")
+	paths := map[string]bool{}
+	for _, m := range machinePathRx.FindAllStringSubmatch(text, 20) {
+		p := strings.TrimRight(m[1], ".,;:)")
+		if rp, ok := r.cache.Of(p); ok && rp.Slug() != "" {
+			paths[rp.Slug()] = true
+		}
+	}
+	pick := func(set map[string]bool) string {
+		if len(set) != 1 {
+			return ""
+		}
+		for n := range set {
+			folder := record.RepoOwner(r.recs, n)
+			if folder == "" {
+				folder = "projects/" + n
+			}
+			w, _, err := record.Resolve(r.recs, folder)
+			if err != nil {
+				return ""
+			}
+			rec := r.recs[w]
+			if rec == nil || !rec.Live() || rec.Quiet() || record.Broad(rec.Kind) != "project" || notProject(rec) {
+				return ""
+			}
+			return w
+		}
+		return ""
+	}
+	if len(paths) > 0 {
+		return pick(paths)
+	}
+	return pick(r.sessions[f.Meta.Source.Session])
+}
+
+// suppressedItems are the live facts of every suppressed folder, largest
 // folder first, each with the scope of the live folder that replaces it.
-func migrationItems(facts []*fact.Fact, recs map[string]*record.Record) []moveItem {
+func suppressedItems(facts []*fact.Fact, recs map[string]*record.Record) []moveItem {
 	byFolder := map[string][]*fact.Fact{}
 	for _, f := range facts {
 		if f.InInbox() || overlay.IsInbox(f.Path) || f.Meta.SupersededBy != "" || f.Meta.Retired != "" {
@@ -423,7 +548,8 @@ func migratePlan(dir string, max int, plan []moveItem) moveResult {
 	items := plan
 	if items == nil {
 		recs, _ := record.Walk(dir)
-		items = migrationItems(facts, recs)
+		home, _ := os.UserHomeDir()
+		items = migrationItems(facts, recs, newRefiler(home, knownCatalog(home, dir, false), recs).target)
 	}
 	quotes, _ := os.ReadFile(filepath.Join(dir, filepath.FromSlash(ledger.QuotesPath)))
 	open := map[string]bool{}
@@ -518,7 +644,9 @@ func migrateLocal(s *store.Store, max int, dry bool, plan []moveItem) (moveResul
 	}
 	items := plan
 	if items == nil {
-		items = migrationItems(facts, storeRecords(s.Dir))
+		recs := storeRecords(s.Dir)
+		home, _ := os.UserHomeDir()
+		items = migrationItems(facts, recs, newRefiler(home, knownCatalog(home, s.Dir, true), recs).target)
 	}
 	curated := filepath.Join(dir, filepath.FromSlash(overlay.CuratedDir))
 	quotes, _ := os.ReadFile(filepath.Join(dir, filepath.FromSlash(overlay.QuotesRel)))
