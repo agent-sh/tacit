@@ -165,8 +165,8 @@ func repoStartHits(ctx context.Context, ix *search.Index, sit search.Situation) 
 	var keep []search.Hit
 	local := 0
 	for _, h := range tied {
-		if tier(h) > 1 {
-			continue
+		if tier(h) > 1 || h.Quiet {
+			continue // a dead or shipped folder's facts are quiet in hooks
 		}
 		if h.Local && !overlay.IsCurated(h.Path) {
 			if local >= startLocalLimit {

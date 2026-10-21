@@ -410,3 +410,42 @@ func TestSessionStartNamesTheMCPToolWhenInstalled(t *testing.T) {
 		t.Fatalf("instruction off: %q", off)
 	}
 }
+
+// An entry an earlier release wrote under the narrower PreToolUse matcher is
+// widened in place (Codex keys hook trust by position); one it shares with
+// another hook is left with that hook, and ours moves to its own entry.
+func TestInstallWidensTheOldPreToolMatcherInPlace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	old := `{"hooks":{"PreToolUse":[{"matcher":"Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch","hooks":[{"type":"command","command":"/bin/tacit hook pre-tool"}]},{"matcher":"Bash","hooks":[{"type":"command","command":"guard.py"}]}]}}`
+	os.WriteFile(path, []byte(old), 0o644)
+	if err := installHooksFor(path, "/bin/tacit", "linux"); err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Hooks map[string][]struct {
+			Matcher string `json:"matcher"`
+			Hooks   []struct {
+				Command string `json:"command"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	b, _ := os.ReadFile(path)
+	json.Unmarshal(b, &got)
+	ptu := got.Hooks["PreToolUse"]
+	if len(ptu) != 2 || ptu[0].Matcher != toolPushTools || ptu[0].Hooks[0].Command != "/bin/tacit hook pre-tool" || ptu[1].Hooks[0].Command != "guard.py" {
+		t.Fatalf("not widened in place: %s", b)
+	}
+	shared := `{"hooks":{"PreToolUse":[{"matcher":"Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch","hooks":[{"type":"command","command":"guard.py"},{"type":"command","command":"/bin/tacit hook pre-tool"}]}]}}`
+	os.WriteFile(path, []byte(shared), 0o644)
+	if err := installHooksFor(path, "/bin/tacit", "linux"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(path)
+	got.Hooks = nil
+	json.Unmarshal(b, &got)
+	ptu = got.Hooks["PreToolUse"]
+	if len(ptu) != 2 || ptu[0].Matcher != "Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch" || len(ptu[0].Hooks) != 1 || ptu[0].Hooks[0].Command != "guard.py" || ptu[1].Matcher != toolPushTools {
+		t.Fatalf("a shared entry: %s", b)
+	}
+}
