@@ -128,7 +128,7 @@ func addTreeTool(server *mcp.Server, s *store.Store) {
 	}
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "tacit_tree",
-		Description: "What the store holds for this session, folder by folder: how many facts of each type its scopes hold, each folder's facts (name, type, one line) and its subfolders with counts. Another repository's or machine's folder only when named as the path. A scope's full list is tacit_search scope=<scope>; a fact in full, tacit_fact.",
+		Description: "What the store holds for this session, folder by folder: how many facts of each type its scopes hold, each folder's facts (name, type, one line) and its subfolders with counts. At depth 0 a project, area or topic folder also shows its overview, every line citing its facts. Another repository's or machine's folder only when named as the path. A scope's full list is tacit_search scope=<scope>; a fact in full, tacit_fact.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a treeArgs) (*mcp.CallToolResult, any, error) {
 		return text(treeToolText(s, a.Path, a.Depth)), nil, nil
 	})

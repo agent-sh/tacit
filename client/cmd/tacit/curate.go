@@ -734,6 +734,8 @@ func runCurate(args []string) int {
 		rep.Errors += curateAssessStep(ctx, s, *model, *dry, &rep)
 		// The suppressed folders' facts move to their winners (migrate.go).
 		rep.Errors += curateMigrateStep(ctx, s, *dry)
+		// The folders' cited overviews, on a material change (overview.go).
+		rep.Errors += curateOverviewStep(ctx, s, *model, *dry, &rep)
 		curateUpkeep(ctx, s, host, *dry, &rep)
 	} else if !*dry && rep.Facts > 0 {
 		// The hooks read the index at the new HEAD: build it now, not in the

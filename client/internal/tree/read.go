@@ -127,11 +127,19 @@ var folderLine = regexp.MustCompile(`^- \[([a-z0-9][a-z0-9-]*)/\]\(`)
 
 // readIndex reads the index file of folder p under root, refusing any path
 // that resolves outside root (a symlink on the way).
-func readIndex(root, p string) (string, bool, error) {
+func readIndex(root, p string) (string, bool, error) { return readStoreFile(root, Rel(p)) }
+
+// OverviewFile is a folder's cited overview (internal/overview), shown by
+// Read at depth 0 under the folder's index.
+const OverviewFile = "_overview.md"
+
+// readStoreFile reads rel under root, refusing any path that resolves
+// outside root.
+func readStoreFile(root, rel string) (string, bool, error) {
 	if root == "" {
 		return "", false, nil
 	}
-	full := filepath.Join(root, filepath.FromSlash(Rel(p)))
+	full := filepath.Join(root, filepath.FromSlash(rel))
 	real, err := filepath.EvalSymlinks(full)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", false, nil
@@ -143,8 +151,8 @@ func readIndex(root, p string) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
-	if rel, err := filepath.Rel(rr, real); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", false, fmt.Errorf("%s resolves outside the store", Rel(p))
+	if r, err := filepath.Rel(rr, real); err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+		return "", false, fmt.Errorf("%s resolves outside the store", rel)
 	}
 	b, err := os.ReadFile(real)
 	if err != nil {
@@ -280,6 +288,27 @@ func Read(o ReadOptions, p string, depth int) (string, error) {
 	}
 	if err := visit(p, 0); err != nil {
 		return "", err
+	}
+	// At depth 0 the folder's cited overview follows its index: what it
+	// holds and what matters most, every line citing its facts. Deeper reads
+	// list indexes only, so the answer bound holds.
+	if depth == 0 && p != "" && !cut {
+		for _, src := range []struct{ root, label string }{{o.Store, ""}, {o.Local, " (this machine's local layer)"}} {
+			content, ok, err := readStoreFile(src.root, p+"/"+OverviewFile)
+			if err != nil || !ok {
+				continue
+			}
+			found = true
+			if _, body, ok := strings.Cut(content, "\n---\n"); ok {
+				content = strings.TrimLeft(body, "\r\n")
+			}
+			block := fmt.Sprintf("=== overview of %s%s: %s/%s ===\n%s\n", p, src.label, p, OverviewFile, strings.TrimRight(content, "\n")+"\n")
+			if b.Len()+len(block) > maxOutput {
+				fmt.Fprintf(&b, "... the overview is cut: it would pass %d KB.\n", maxOutput>>10)
+				break
+			}
+			b.WriteString(block)
+		}
 	}
 	if !found {
 		name := p

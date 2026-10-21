@@ -1,6 +1,8 @@
 package tree
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -142,5 +144,26 @@ func TestReadFollowsSuppressionAndReadsAreasAndTopics(t *testing.T) {
 	}
 	if sc, err := Scope("areas/ops/topics/q4"); err != nil || sc != "areas/ops/topics/q4" {
 		t.Errorf("Scope: %q %v", sc, err)
+	}
+}
+
+// The folder's overview follows its index at depth 0 only.
+func TestReadShowsTheOverviewAtDepthZero(t *testing.T) {
+	facts, recs := recordTree()
+	dir := writeTree(t, facts, recs)
+	ov := "---\nfolder: projects/widget\nwritten: 2026-10-21\nfacts: 1\nbasis: x\nrulings: y\nby: opus\n---\n\nThe widget server listens on 7781 [[widget-port]].\n"
+	if err := os.WriteFile(filepath.Join(dir, "projects", "widget", OverviewFile), []byte(ov), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	o := ReadOptions{Store: dir, Session: Session{Repos: []string{"widget"}, Host: "box", Records: recs}}
+	out, err := Read(o, "projects/widget", 0)
+	if err != nil || !strings.Contains(out, "=== overview of projects/widget: projects/widget/_overview.md ===\nThe widget server listens on 7781 [[widget-port]].") || strings.Contains(out, "basis: x") {
+		t.Fatalf("depth 0: %v\n%s", err, out)
+	}
+	if out, _ := Read(o, "projects/widget", 1); strings.Contains(out, "overview of") {
+		t.Fatalf("depth 1 shows the overview:\n%s", out)
+	}
+	if out, _ := Read(o, "projects", 0); strings.Contains(out, "overview of") {
+		t.Fatalf("the parent shows a child's overview:\n%s", out)
 	}
 }

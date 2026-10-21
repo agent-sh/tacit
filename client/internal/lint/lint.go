@@ -1,4 +1,4 @@
-// Package lint checks a store tree against the rules in SPEC.md (L1 to L18).
+// Package lint checks a store tree against the rules in SPEC.md (L1 to L19).
 package lint
 
 import (
@@ -12,6 +12,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/index"
 	"github.com/agent-sh/tacit/client/internal/ledger"
+	"github.com/agent-sh/tacit/client/internal/overview"
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
 	"github.com/agent-sh/tacit/client/internal/record"
 	"github.com/agent-sh/tacit/client/internal/tree"
@@ -47,6 +48,7 @@ func Run(root string) ([]Finding, error) {
 		out = append(out, ownerEvidence(f, ev)...)
 	}
 	out = append(out, records(root, facts)...)
+	out = append(out, overviews(root, names)...)
 	// L10: committed index must equal the generated one.
 	if b, rerr := os.ReadFile(filepath.Join(root, "MEMORY.md")); rerr == nil {
 		if want := index.Generate(facts); string(b) != want {
@@ -340,5 +342,45 @@ func records(root string, facts []*fact.Fact) []Finding {
 			add(f.Meta.Scope, "a folder with facts and no record (the format marker says records are complete)")
 		}
 	}
+	return out
+}
+
+// overviews is L19: every folder overview (_overview.md) parses, names its
+// own folder, stays within its bound, and every paragraph and bullet cites
+// facts the store has. That a cited fact is still live is the overview
+// step's check (a retired one makes the overview due again), not lint's: a
+// retirement elsewhere must not turn every write red.
+func overviews(root string, names map[string]bool) []Finding {
+	var out []Finding
+	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() && d.Name() == ".git" {
+			return filepath.SkipDir
+		}
+		if d.IsDir() || d.Name() != overview.File {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, p)
+		rel = filepath.ToSlash(rel)
+		folder := strings.TrimSuffix(rel, "/"+overview.File)
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		o, err := overview.Parse(b)
+		if err != nil {
+			out = append(out, Finding{"L19", rel, err.Error()})
+			return nil
+		}
+		if o.Meta.Folder != folder {
+			out = append(out, Finding{"L19", rel, fmt.Sprintf("folder is %q, the file is in %q", o.Meta.Folder, folder)})
+		}
+		for _, m := range overview.Form(o.Body, func(n string) bool { return names[n] }) {
+			out = append(out, Finding{"L19", rel, m})
+		}
+		return nil
+	})
 	return out
 }
