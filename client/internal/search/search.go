@@ -48,6 +48,9 @@ type Hit struct {
 	// Local is a note in this machine's overlay (internal/overlay): written
 	// by a harness here on a read-only clone, never pushed, never reviewed.
 	Local bool
+	// Quiet is a fact of a dead or shipped folder: no hook delivers it
+	// (set by the scans of tied.go; Query leaves such facts out for hooks).
+	Quiet bool `json:",omitempty"`
 	// Applies is the fact's applies_to and Created its created date, for
 	// the hooks' repo, metadata and tool-call selection.
 	Applies fact.AppliesTo `json:",omitempty"`
@@ -733,6 +736,9 @@ type Situation struct {
 	// Scopes, when set, replace the scopes the situation can use: an
 	// explicit search names the scopes it reads (the MCP tool's scope).
 	Scopes []string
+	// ExtraScopes join the situation's own scopes (not Scopes): the
+	// topics a prompt names (the prompt hook).
+	ExtraScopes []string
 	// Type keeps only facts of that type; RulingsOnly only owner rulings.
 	Type        string
 	RulingsOnly bool
@@ -896,6 +902,8 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	}
 	if len(sit.Scopes) > 0 {
 		scopes = append([]string(nil), sit.Scopes...)
+	} else if !sit.OnlyDerived {
+		scopes = append(scopes, sit.ExtraScopes...)
 	}
 	// FTS5 OR query; bm25 weights: name 6, description 6, body 1 (descriptions
 	// state the fact; bodies carry context that dilutes).

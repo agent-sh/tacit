@@ -192,6 +192,7 @@ func runHook(args []string) int {
 			return 0
 		}
 		defer ix.Close()
+		sit = withRecordAliases(sit, hookRecords(ctx, ix))
 		hits, err := sessionStartHits(ctx, ix, sit)
 		if err != nil {
 			return 0
@@ -219,6 +220,11 @@ func runHook(args []string) int {
 			return 0
 		}
 		defer ix.Close()
+		recs := hookRecords(ctx, ix)
+		sit = withRecordAliases(sit, recs)
+		if deliveryOn("TOPICS", true) {
+			sit.ExtraScopes = topicScopes(recs, p)
+		}
 		strong, err := promptHits(ctx, ix, sit, p, delivered(in.SessionID))
 		if err != nil {
 			return 0
@@ -466,8 +472,18 @@ func delivered(id string) map[string]bool {
 }
 
 func remember(id string, hits []search.Hit) {
+	names := make([]string, len(hits))
+	for i, h := range hits {
+		names[i] = h.Name
+	}
+	rememberNames(id, names)
+}
+
+// rememberNames adds lines to the session's delivered set: fact names, and
+// the areas pushed (areaSeen).
+func rememberNames(id string, names []string) {
 	p := sessionFile(id)
-	if p == "" || len(hits) == 0 {
+	if p == "" || len(names) == 0 {
 		return
 	}
 	os.MkdirAll(filepath.Dir(p), 0o700)
@@ -476,8 +492,8 @@ func remember(id string, hits []search.Hit) {
 		return
 	}
 	defer f.Close()
-	for _, h := range hits {
-		fmt.Fprintln(f, h.Name)
+	for _, n := range names {
+		fmt.Fprintln(f, n)
 	}
 	// Opportunistic cleanup of old sessions.
 	if entries, err := os.ReadDir(filepath.Dir(p)); err == nil && len(entries) > 200 {

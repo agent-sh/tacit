@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -517,9 +518,12 @@ func installHooksWith(path, exe, goos string, startArgs []string) error {
 						continue
 					}
 					for i, sp := range specs {
-						if !placed[i] && sp.matcher == matcher {
+						if !placed[i] && (sp.matcher == matcher || (sp.sub == "pre-tool" && len(children) == 1 && slices.Contains(legacyToolPushTools, matcher))) {
 							remaining = append(remaining, handlers[i])
 							placed[i] = true
+							if sp.matcher != matcher {
+								m["matcher"] = sp.matcher // an earlier release's matcher, widened in place (an entry of ours alone)
+							}
 							break
 						}
 					}

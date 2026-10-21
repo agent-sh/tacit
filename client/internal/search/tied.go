@@ -8,7 +8,7 @@ import (
 )
 
 // liveColumns is the column list the scans below read, in Hit order.
-const liveColumns = `path, name, scope, type, description, body, inbox, kind, conflicts, ruling, intask, words, local, coalesce(applies, ''), coalesce(created, '')`
+const liveColumns = `path, name, scope, type, description, body, inbox, kind, conflicts, ruling, intask, words, local, coalesce(applies, ''), coalesce(created, ''), coalesce(quiet, 0)`
 
 // Tied returns every live curated fact tied to one of the repo names: its
 // scope is projects/<name> (and its applies_to.repos, when set, names one of
@@ -64,13 +64,13 @@ func (ix *Index) scan(ctx context.Context, q string, named map[string]any) ([]Hi
 	var out []Hit
 	for rows.Next() {
 		var h Hit
-		var inbox, ruling, intask, words, local int
+		var inbox, ruling, intask, words, local, quiet int
 		var conflicts, applies string
-		if err := rows.Scan(&h.Path, &h.Name, &h.Scope, &h.Type, &h.Description, &h.Body, &inbox, &h.Kind, &conflicts, &ruling, &intask, &words, &local, &applies, &h.Created); err != nil {
+		if err := rows.Scan(&h.Path, &h.Name, &h.Scope, &h.Type, &h.Description, &h.Body, &inbox, &h.Kind, &conflicts, &ruling, &intask, &words, &local, &applies, &h.Created, &quiet); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(applies), &h.Applies)
-		h.Inbox, h.Ruling, h.InTask, h.Words, h.Local = inbox == 1, ruling == 1, intask == 1, words == 1, local == 1
+		h.Inbox, h.Ruling, h.InTask, h.Words, h.Local, h.Quiet = inbox == 1, ruling == 1, intask == 1, words == 1, local == 1, quiet == 1
 		if conflicts != "" {
 			h.Conflicts = strings.Split(conflicts, ",")
 		}
