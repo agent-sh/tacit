@@ -162,7 +162,7 @@ func TestAssessDecidesFoldersOnCodesEvidence(t *testing.T) {
 		t.Fatalf("report %+v", rep)
 	}
 	p := fa.prompts[0]
-	for _, want := range []string{"### folder=projects/widget\n", "git_root true; checkout main", "own_commits 3", "work_sessions 2", "### folder=projects/upstream", "own_commits 0", "upstream_clone", "repoid says widget-old is another name of the checkout widget", "sessions whose notes are filed here (newest first): session:s-one", "paths ~/projects/notes"} {
+	for _, want := range []string{"### folder=projects/widget\n", "git_root true; checkout main", "own_commits 3", "work_sessions 2", "### folder=projects/upstream", "own_commits 0", "upstream_clone", "repoid says widget-old is another name of the checkout widget", "sessions whose notes are filed here (newest first): session:s-one", "those sessions worked in (the dreamer's registry): widget (1 of 1)", "paths ~/projects/notes"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("prompt lacks %q", want)
 		}
