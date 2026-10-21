@@ -280,7 +280,7 @@ func linksLocked(ctx context.Context, s *store.Store, now func() time.Time) (*li
 			for rel := range t.ownDirt {
 				ps = append(ps, rel)
 			}
-			ps = dedupe(append(append(ps, "MEMORY.md"), indexRels...))
+			ps = dedupe(append(append(ps, memoryPaths(ctx, s.Dir)...), indexRels...))
 			sort.Strings(ps)
 			return ps
 		}

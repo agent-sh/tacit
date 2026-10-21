@@ -301,3 +301,67 @@ func TestAddRefusesWhatItCannotCheck(t *testing.T) {
 		t.Errorf("a machine's absolute path refused: %v", err)
 	}
 }
+
+// With memory_md off a curated write stops generating MEMORY.md and its
+// commit removes the store's copy once; later writes name it no more, lint
+// stays clean, tacit index --check agrees, and turning it back on brings it
+// back. A fresh store with it off starts without one.
+func TestMemoryMDOffStopsAndRemovesIt(t *testing.T) {
+	home, s, _ := treeHome(t)
+	ctx := context.Background()
+	if _, err := os.Stat(filepath.Join(s.Dir, "MEMORY.md")); err != nil {
+		t.Fatalf("the default store has no MEMORY.md: %v", err)
+	}
+	t.Setenv("TACIT_MEMORY_MD", "off")
+	write := func(name string) {
+		t.Helper()
+		f := &fact.Fact{Path: "user/" + name + ".md", Meta: fact.Meta{Name: name, Description: "standard " + name, Type: "user_standard", Scope: "user", Source: fact.Source{Harness: "curator", Host: "box", Kind: "observed"}, Created: "2026-10-21"}, Body: "Standard " + name + ".\n"}
+		writeFactFile(t, s.Dir, f)
+		all, _, _ := fact.Walk(s.Dir)
+		rels, err := regenIndexes(ctx, s.Dir, all, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.CommitPush(ctx, append(rels, f.Path), "curator: "+name, "curator"); err != nil {
+			t.Fatalf("commit %s: %v (paths %v)", name, err, rels)
+		}
+	}
+	write("first")
+	if tracked, _ := store.Git(ctx, s.Dir, "ls-files", "--", "MEMORY.md"); strings.TrimSpace(tracked) != "" {
+		t.Fatal("MEMORY.md is still tracked after a write with memory_md off")
+	}
+	write("second") // nothing to remove: the commit names no MEMORY.md
+	if _, err := os.Stat(filepath.Join(s.Dir, "MEMORY.md")); err == nil {
+		t.Fatal("MEMORY.md came back with memory_md off")
+	}
+	if findings, err := lint.Run(s.Dir); err != nil || len(findings) != 0 {
+		t.Errorf("lint: %v %v", findings, err)
+	}
+	if code := runIndex([]string{"--store", s.Dir, "--check"}); code != 0 {
+		t.Errorf("index --check with memory_md off: %d", code)
+	}
+	os.WriteFile(filepath.Join(s.Dir, "MEMORY.md"), []byte("stale\n"), 0o644)
+	if code := runIndex([]string{"--store", s.Dir, "--check"}); code != 1 {
+		t.Errorf("index --check missed a MEMORY.md with memory_md off: %d", code)
+	}
+	if code := runIndex([]string{"--store", s.Dir}); code != 0 {
+		t.Fatal(code)
+	}
+	if _, err := os.Stat(filepath.Join(s.Dir, "MEMORY.md")); err == nil {
+		t.Fatal("tacit index kept MEMORY.md with memory_md off")
+	}
+	t.Setenv("TACIT_MEMORY_MD", "on")
+	write("third")
+	if tracked, _ := store.Git(ctx, s.Dir, "ls-files", "--", "MEMORY.md"); strings.TrimSpace(tracked) == "" {
+		t.Fatal("MEMORY.md did not come back with memory_md on")
+	}
+	// A fresh store with it off starts without one.
+	t.Setenv("TACIT_MEMORY_MD", "off")
+	fresh := &store.Store{Dir: filepath.Join(home, "fresh")}
+	if err := fresh.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(fresh.Dir, "MEMORY.md")); err == nil {
+		t.Fatal("a fresh store with memory_md off has a MEMORY.md")
+	}
+}

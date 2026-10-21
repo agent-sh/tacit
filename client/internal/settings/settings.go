@@ -84,6 +84,7 @@ type Config struct {
 	LocalLayer  string   `yaml:"local_layer"` // TACIT_LOCAL_LAYER, on or off (default): a read-only clone dreams and curates into its overlay
 	OwnerNames  []string `yaml:"owner_names"`
 	HermesDB    string   `yaml:"hermes_db"` // TACIT_HERMES_DB; "off" reads no Hermes store
+	MemoryMD    string   `yaml:"memory_md"` // TACIT_MEMORY_MD, on (default) or off: a bridge for older clients, to be dropped (index.On)
 	VerifyRoots []string `yaml:"verify_roots"`
 	Models      Models   `yaml:"models"`
 }
@@ -168,6 +169,11 @@ func Load(path string, required bool) error {
 	default:
 		return fmt.Errorf("local_layer must be on or off")
 	}
+	switch strings.ToLower(c.MemoryMD) {
+	case "", "on", "off", "true", "false":
+	default:
+		return fmt.Errorf("memory_md must be on or off")
+	}
 	for key, v := range map[string]string{"repo_start": c.Delivery.RepoStart, "repo_aliases": c.Delivery.RepoAliases, "prompt_metadata": c.Delivery.PromptMetadata, "prompt_action": c.Delivery.PromptAction, "instruction": c.Delivery.Instruction, "tool_push": c.Delivery.ToolPush} {
 		switch strings.ToLower(v) {
 		case "", "on", "off", "true", "false":
@@ -183,7 +189,7 @@ func Load(path string, required bool) error {
 	if v := c.Delivery.PromptRelative; v != nil && (math.IsNaN(*v) || *v < 0 || *v > 1) {
 		return fmt.Errorf("delivery.prompt_relative must be in [0,1]")
 	}
-	values := map[string]string{"TACIT_LOCAL_LAYER": strings.ToLower(c.LocalLayer), "TACIT_STORE": resolve(c.Store), "TACIT_PROJECTS": resolve(c.Projects), "TACIT_INDEX": resolve(c.Index), "TACIT_CONFIG": resolve(c.Keys), "TACIT_LOCAL": resolve(c.Local), "TACIT_OWNER_NAMES": strings.Join(c.OwnerNames, ","), "TACIT_CURATE_MODEL": c.Models.Curate, "TACIT_JUDGE_MODEL": c.Models.Judge, "TACIT_DREAM_MODEL": c.Models.Dream, "TACIT_VERIFY_MODEL": c.Models.Verify, "TACIT_VERIFY_FALLBACK_MODEL": c.Models.Fallback}
+	values := map[string]string{"TACIT_LOCAL_LAYER": strings.ToLower(c.LocalLayer), "TACIT_MEMORY_MD": strings.ToLower(c.MemoryMD), "TACIT_STORE": resolve(c.Store), "TACIT_PROJECTS": resolve(c.Projects), "TACIT_INDEX": resolve(c.Index), "TACIT_CONFIG": resolve(c.Keys), "TACIT_LOCAL": resolve(c.Local), "TACIT_OWNER_NAMES": strings.Join(c.OwnerNames, ","), "TACIT_CURATE_MODEL": c.Models.Curate, "TACIT_JUDGE_MODEL": c.Models.Judge, "TACIT_DREAM_MODEL": c.Models.Dream, "TACIT_VERIFY_MODEL": c.Models.Verify, "TACIT_VERIFY_FALLBACK_MODEL": c.Models.Fallback}
 	switch c.Utility.Provider {
 	case "", "jev":
 		if c.Utility.Model != "" || c.Utility.Endpoint != "" || c.Utility.Region != "" {

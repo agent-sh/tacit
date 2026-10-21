@@ -505,7 +505,9 @@ func groupPaths(groups []derive.Group) []string {
 // returns every path it may have touched, also on error, so the caller can
 // restore them.
 func writeGroups(s *store.Store, groups []derive.Group) ([]string, error) {
-	paths := append(groupPaths(groups), "MEMORY.md")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	paths := append(groupPaths(groups), memoryPaths(ctx, s.Dir)...)
 	for _, g := range groups {
 		if err := g.Apply(s.Dir); err != nil {
 			return paths, err
@@ -515,8 +517,6 @@ func writeGroups(s *store.Store, groups []derive.Group) ([]string, error) {
 	if err != nil {
 		return paths, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
 	rels, err := regenIndexes(ctx, s.Dir, all, nil)
 	return dedupe(append(paths, rels...)), err
 }

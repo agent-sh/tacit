@@ -235,10 +235,14 @@ func runIndex(args []string) int {
 	want := index.Generate(facts)
 	gen := tree.Generate(facts, "")
 	dst := filepath.Join(*store, "MEMORY.md")
+	on := index.On() // the memory_md setting: off, MEMORY.md is not generated and is removed
 	if *check {
 		stale := false
-		if have, _ := os.ReadFile(dst); string(have) != want {
+		if have, err := os.ReadFile(dst); on && string(have) != want {
 			fmt.Fprintln(os.Stderr, "MEMORY.md is stale")
+			stale = true
+		} else if !on && err == nil {
+			fmt.Fprintln(os.Stderr, "MEMORY.md is generated no more (memory_md off); tacit index removes it")
 			stale = true
 		}
 		write, remove, err := tree.Plan(*store, gen)
@@ -264,14 +268,21 @@ func runIndex(args []string) int {
 		}
 		return 0
 	}
-	tmp := dst + ".tmp"
-	if err := os.WriteFile(tmp, []byte(want), 0o644); err != nil {
-		fmt.Fprintln(os.Stderr, "index:", err)
-		return 1
-	}
-	if err := os.Rename(tmp, dst); err != nil {
-		fmt.Fprintln(os.Stderr, "index:", err)
-		return 1
+	if !on {
+		if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintln(os.Stderr, "index:", err)
+			return 1
+		}
+	} else {
+		tmp := dst + ".tmp"
+		if err := os.WriteFile(tmp, []byte(want), 0o644); err != nil {
+			fmt.Fprintln(os.Stderr, "index:", err)
+			return 1
+		}
+		if err := os.Rename(tmp, dst); err != nil {
+			fmt.Fprintln(os.Stderr, "index:", err)
+			return 1
+		}
 	}
 	// The folder indexes (tacit tree, tacit_tree). A curated write commits
 	// them with its facts; this rebuilds them in the clone, and the next
