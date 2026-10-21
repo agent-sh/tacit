@@ -136,3 +136,37 @@ func TestRecordsBrokenFixturesFail(t *testing.T) {
 		t.Fatalf("interim: %v", l17(fs))
 	}
 }
+
+// L19: an overview parses, names its folder and cites facts the store has
+// in every paragraph and bullet; a cited fact that was retired is no
+// finding (the overview step renews it).
+func TestOverviewRule(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "machines/host-a/a.md", good("a", "machines/host-a"))
+	write(t, root, "machines/host-a/r.md", strings.Replace(good("r", "machines/host-a"), "created:", "retired: 2026-10-09\ncreated:", 1))
+	ov := func(folder, body string) string {
+		return "---\nfolder: " + folder + "\nwritten: 2026-10-21\nfacts: 1\nbasis: x\nrulings: y\nby: opus\n---\n\n" + body + "\n"
+	}
+	write(t, root, "projects/ok/_overview.md", ov("projects/ok", "It holds a [[a]] and a retired one [[r]]."))
+	write(t, root, "projects/bad/_overview.md", ov("projects/other", "No citation here.\n\n- one to a ghost [[ghost]]"))
+	write(t, root, "projects/broken/_overview.md", "no frontmatter\n")
+	fs, err := Run(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range fs {
+		if f.Rule == "L19" {
+			got = append(got, f.Path+": "+f.Msg)
+		}
+	}
+	all := strings.Join(got, "\n")
+	for _, want := range []string{"projects/bad/_overview.md: folder is", "projects/bad/_overview.md: a paragraph or bullet cites no fact", "projects/bad/_overview.md: [[ghost]] names no fact", "projects/broken/_overview.md: no frontmatter"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("missing %q in\n%s", want, all)
+		}
+	}
+	if strings.Contains(all, "projects/ok/") {
+		t.Errorf("a good overview flagged:\n%s", all)
+	}
+}
