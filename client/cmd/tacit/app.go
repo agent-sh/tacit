@@ -244,7 +244,7 @@ func (a *App) call(name string, raw []byte) (any, error) {
 }
 
 // appAssets are the files of the page besides the page itself.
-var appAssets = []string{"/fonts/", "/app.css", "/desk.css", "/app.js", "/api.js", "/desk.js", "/theme.js", "/icon.svg"}
+var appAssets = []string{"/fonts/", "/app.css", "/desk.css", "/app.js", "/api.js", "/desk.js", "/folders.js", "/theme.js", "/icon.svg"}
 
 // uiHandler serves the app page and its files. With a token it also answers
 // /api/call/<Method> (browser mode); the desktop window calls the bindings.
