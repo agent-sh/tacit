@@ -1,7 +1,6 @@
 Tacit keeps memory for coding agents in Markdown and git. Use a local store or share one across machines.
 
-- **Better search.** Two-letter words such as "pi" or "PR" now count in `tacit_search`, and the session's own repo facts weigh more, so machine notes no longer crowd them out. Each answer ends with the `tacit_tree` call for the repo's folder.
-- **A pointer to the rest.** When the session-start block shows only part of the repo's facts, a last line gives the count and the tree call (`delivery.tree_pointer`, on by default).
-- **Command pushes after a runner.** A fact tied to a command now also matches when the command runs through a runner, e.g. `npx vitest` or `sudo make lint`.
+- **Hooks stay fast while the local layer changes.** A change to the machine's local layer no longer rebuilds the whole search index: the store's index is kept per commit and the local notes are added to a copy, in well under a second. Hooks never rebuild while you wait; they answer from the closest existing index and start one build in the background, so a new local note shows up a prompt or two later. Only one process builds a given index at a time.
+- **Sync and follow** build the index under their own longer budget, the store part first.
 
 Builds for Linux, macOS and Windows on amd64 and arm64 include the CLI, the browser app and a compatible scrump redactor. Git 2.29+ is required. [Setup and platform validation](https://github.com/agent-sh/tacit/blob/main/docs/portable.md).
