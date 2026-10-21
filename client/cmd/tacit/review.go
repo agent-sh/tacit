@@ -113,6 +113,9 @@ type decision struct {
 	// Comment is the owner's note in their own words (redacted), sent with an
 	// answer, or alone in a "note" record that leaves the finding open.
 	Comment string `json:"comment,omitempty"`
+	// Note is the in-place note an agent's fix wrote into the fact
+	// (fact.AppendNote); a fix with a note is applied.
+	Note string `json:"note,omitempty"`
 }
 
 type reviewItem struct {
@@ -585,7 +588,11 @@ type op struct {
 	Comment                          string // the owner's note sent with their mark
 	Model                            string // the verifier model that produced the verdict, recorded with it
 	A, B                             string // when set, the finding must still name these facts
-	proposed                         string
+	// FixWas and FixNow: an agent's fix, the detail the fact says and the
+	// one the sources say; applyStaleOp writes them as an in-place note when
+	// the fact holds FixWas word for word.
+	FixWas, FixNow string
+	proposed       string
 }
 
 // decide applies one mark for the page. See applyOps. In label mode the mark

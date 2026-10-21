@@ -13,6 +13,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/gitev"
 	"github.com/agent-sh/tacit/client/internal/index"
+	"github.com/agent-sh/tacit/client/internal/lint"
 	"github.com/agent-sh/tacit/client/internal/stale"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
@@ -698,5 +699,54 @@ func TestStaleWorkersFromTheEnvironment(t *testing.T) {
 		if got := staleWorkers(); got != want {
 			t.Errorf("TACIT_STALE_WORKERS=%q: %d, want %d", v, got, want)
 		}
+	}
+}
+
+// An agent's fix that names the replaced detail as the fact writes it lands
+// as an in-place note: the old text stays byte for byte, one note line is
+// appended, updated is today, and the finding is applied. A fix whose old
+// detail the fact does not hold waits for the owner, as before.
+func TestAgentStaleFixLandsAsAnInPlaceNote(t *testing.T) {
+	fx := newStaleFixture(t)
+	fx.change(t, "2026-10-06")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if _, err := staleStep(ctx, fx.rs.s, fx.opts()); err != nil {
+		t.Fatal(err)
+	}
+	fx.rs.loadFacts()
+	var id, sha string
+	for _, it := range fx.rs.staleItems() {
+		if it.A.Name == "engine-retries" {
+			id, sha = it.ID, it.Flag.Sha
+		}
+	}
+	path := filepath.Join(fx.rs.s.Dir, "projects", "x", "engine-retries.md")
+	orig := mustRead(t, path)
+	apply := func(o op) error {
+		_, errs, err := fx.rs.applyOps(ctx, []op{o})
+		if err != nil {
+			return err
+		}
+		return errs[0]
+	}
+	if err := apply(op{ID: id, A: "engine-retries", B: sha, Mark: "fix", By: "agent", Evidence: "abc made it five. Fix needed: five", FixWas: "times, three,", FixNow: "times, five,"}); err != nil {
+		t.Fatal(err)
+	}
+	got := string(mustRead(t, path))
+	_, origBody, _ := fact.Split(orig)
+	_, body, _ := fact.Split([]byte(got))
+	today := time.Now().Format("2006-01-02")
+	if !strings.HasPrefix(string(body), strings.TrimRight(string(origBody), "\n")) || !strings.HasSuffix(got, "> superseded "+today+": times, three, -> times, five,\n") || !strings.Contains(got, "updated: "+today) {
+		t.Fatalf("not a note:\n%s", got)
+	}
+	fx.rs.loadFacts()
+	for _, it := range fx.rs.staleItems() {
+		if it.ID == id && (!it.Applied || it.NeedsOwner || it.Decision.Note == "") {
+			t.Fatalf("the noted fix is not applied: %+v", it)
+		}
+	}
+	if fs, _ := lint.Run(fx.rs.s.Dir); len(fs) > 0 {
+		t.Fatalf("lint: %v", fs)
 	}
 }

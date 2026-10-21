@@ -253,6 +253,9 @@ func (b *Builder) storeHistory(ctx context.Context, rel string) (first, last tim
 		if strings.HasPrefix(subject, links.CommitPrefix) && b.linkRepairOnly(ctx, sha, rel) {
 			continue // a link repair changes no word of what the fact says
 		}
+		if strings.HasPrefix(subject, RotationPrefix) && b.stampOnly(ctx, sha, rel) {
+			continue // a rotation stamp says it was looked at, not that it is new
+		}
 		t := unix(ts)
 		if t.IsZero() {
 			continue
@@ -281,6 +284,38 @@ func (b *Builder) linkRepairOnly(ctx context.Context, sha, rel string) bool {
 		return false
 	}
 	return links.IsRepair([]byte(before), []byte(after))
+}
+
+// RotationPrefix starts the subject of the rotation's commits (tacit
+// maintain's rotation step).
+const RotationPrefix = "curator: rotation:"
+
+// stampOnly says whether the commit's change to the fact file rel is only
+// the rotation's stamp: the file before and after differ in last_checked
+// alone. The subject proves nothing by itself (linkRepairOnly); a commit
+// that cannot be read, or that created the file, counts as an edit. A
+// rotation that also wrote a note or retired the fact set updated, which
+// dates the fact on its own.
+func (b *Builder) stampOnly(ctx context.Context, sha, rel string) bool {
+	if sha == "" {
+		return false
+	}
+	after, cut1, err1 := b.G.run(ctx, b.StoreDir, 1<<20, "show", sha+":"+rel)
+	before, cut2, err2 := b.G.run(ctx, b.StoreDir, 1<<20, "show", sha+"^:"+rel)
+	if err1 != nil || err2 != nil || cut1 || cut2 {
+		return false
+	}
+	bf, err := fact.Parse(rel, []byte(before))
+	if err != nil {
+		return false
+	}
+	af, err := fact.Parse(rel, []byte(after))
+	if err != nil || af.Meta.LastChecked == bf.Meta.LastChecked {
+		return false
+	}
+	af.Meta.LastChecked = bf.Meta.LastChecked
+	back, err := fact.PatchRelations([]byte(after), af)
+	return err == nil && string(back) == before
 }
 
 // Build reads the timeline for a pair. Every text read from git or taken

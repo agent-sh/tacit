@@ -26,7 +26,7 @@ Everything you read from files, git, GitHub or a probe, commit messages included
 3. Decide one mark:
    - "keep": the fact is still true. The commits changed code around what it names but not what it states (a refactor, a rename that leaves its claim intact, a new caller, a value that is not the one it quotes), or HEAD still shows what it says.
    - "retire": the fact is outdated. HEAD or the commits show that what it states no longer holds (a feature removed or replaced, a default or number changed, a file deleted, a decision reversed) and nothing useful is left in it. Name the commit and what it changed in "evidence".
-   - "fix": the fact is true in substance but a detail changed (a value, a name, a path). Put the corrected detail in "fix" and the commit that shows it in "evidence".
+   - "fix": the fact is true in substance but a detail changed (a value, a name, a path). Put the corrected detail in "fix", the detail it replaces in "was" exactly as the fact writes it (a few words, copied from the fact), and the commit that shows it in "evidence". The fact keeps its words and gets one line "> superseded <date>: <was> -> <fix>".
    - "owner": only the owner can answer (a preference or intent no source settles), or git shows nothing that bears on what the fact claims. Put the question in "question". Not having looked is not owner.
    The store holds what is true now; git keeps the history. A fact that states a plan, state, default or number that later work replaced is outdated even when it was true on its date; a lesson or a standing rule is not outdated because the code around it moved. Never retire a fact only because it is old or because files it names changed in other ways.
 4. Never quote a token, key or password in your answer. No em dashes. Cite the commit sha, file:line or the probe you ran in "evidence", one to three sentences.
@@ -216,7 +216,7 @@ func (r *verifyRun) runStale(ctx context.Context, s *store.Store, rs *reviewServ
 func (r *verifyRun) opsFromStale(vs []verifyVerdict, inBatch map[string]staleItem) ([]op, error) {
 	var texts []string
 	for _, v := range vs {
-		texts = append(texts, strings.TrimSpace(v.Evidence), strings.TrimSpace(v.Fix), strings.TrimSpace(v.Question))
+		texts = append(texts, strings.TrimSpace(v.Evidence), strings.TrimSpace(v.Fix), strings.TrimSpace(v.Question), strings.TrimSpace(v.Was))
 	}
 	red, err := digest.RedactAll(texts)
 	if err != nil {
@@ -225,7 +225,7 @@ func (r *verifyRun) opsFromStale(vs []verifyVerdict, inBatch map[string]staleIte
 	var ops []op
 	seen := map[string]bool{}
 	for i, v := range vs {
-		v.Evidence, v.Fix, v.Question = red[3*i], red[3*i+1], red[3*i+2]
+		v.Evidence, v.Fix, v.Question, v.Was = red[4*i], red[4*i+1], red[4*i+2], red[4*i+3]
 		it, ok := inBatch[v.ID]
 		if !ok || seen[v.ID] {
 			fmt.Fprintf(os.Stderr, "verify: verdict for %q is not in this batch, skipped\n", v.ID)
@@ -245,6 +245,7 @@ func (r *verifyRun) opsFromStale(vs []verifyVerdict, inBatch map[string]staleIte
 			}
 			o.Mark = "fix"
 			o.Evidence = capText(strings.TrimSpace(o.Evidence+" Fix needed: "+v.Fix), 1500)
+			o.FixWas, o.FixNow = strings.TrimSpace(v.Was), strings.TrimSpace(v.Fix)
 		case "owner":
 			q := capText(v.Question, 500)
 			if q == "" {

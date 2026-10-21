@@ -156,7 +156,9 @@ func (rs *reviewServer) staleItems() []staleItem {
 		if d := it.Decision; d != nil {
 			it.Mark = d.Action
 			it.Stale = d.Action == "retire" && it.State != "retired"
-			if d.By == "agent" && d.Action == "fix" {
+			if d.By == "agent" && d.Action == "fix" && d.Note != "" {
+				it.Applied, it.AppliedAt = true, d.At // written as an in-place note with the mark
+			} else if d.By == "agent" && d.Action == "fix" {
 				// A fix is closed when the fact is edited after the verdict: the
 				// owner (or the curator) applied it.
 				if at, err := time.Parse(time.RFC3339, d.At); err == nil {
@@ -333,12 +335,22 @@ func (rs *reviewServer) applyStaleOp(o *op, it *staleItem) (string, []string, er
 	d := decision{ID: o.ID, Action: mark, A: name, B: it.Flag.Sha, At: time.Now().Format(time.RFC3339), By: o.By, Evidence: o.Evidence, Question: o.Question, Model: o.Model}
 	var note string
 	var touched []*fact.Fact
+	files := map[string][]byte{}
 	switch mark {
 	case "retire":
 		f := *rs.facts[name]
 		d.Before = map[string]snap{name: snapOf(&f)}
 		f.Meta.Retired, f.Meta.Updated = today, today
 		touched = append(touched, &f)
+	case "fix":
+		// An agent's fix lands as an in-place note when the fact says the
+		// replaced detail word for word; otherwise it waits for the owner.
+		if o.By == "agent" && o.FixWas != "" && o.FixNow != "" {
+			if line, data, ok := rs.fixNote(name, o.FixWas, o.FixNow, today); ok {
+				files[rs.facts[name].Path] = data
+				d.Note = line
+			}
+		}
 	case "reopen":
 		prev := it.Decision
 		if prev == nil {
@@ -361,7 +373,6 @@ func (rs *reviewServer) applyStaleOp(o *op, it *staleItem) (string, []string, er
 			}
 		}
 	}
-	files := map[string][]byte{}
 	for _, f := range touched {
 		old, err := os.ReadFile(filepath.Join(rs.s.Dir, f.Path))
 		if err != nil {
@@ -385,4 +396,33 @@ func (rs *reviewServer) applyStaleOp(o *op, it *staleItem) (string, []string, er
 	}
 	rs.appendDecision(files, d)
 	return writeFiles(rs.s.Dir, note, files)
+}
+
+// fixNote is an agent's fix as the fact's in-place note: the line and the
+// file with it appended and updated set to today, when the fact is live,
+// not a ruling (an agent writes into none), holds was word for word in its
+// body and the note is well formed.
+func (rs *reviewServer) fixNote(name, was, now, today string) (string, []byte, bool) {
+	f := rs.facts[name]
+	if f == nil || isRuling(f) || f.Meta.Retired != "" || f.Meta.SupersededBy != "" || !strings.Contains(f.Body, was) {
+		return "", nil, false
+	}
+	line, err := fact.NoteLine(today, was, now)
+	if err != nil {
+		return "", nil, false
+	}
+	old, err := os.ReadFile(filepath.Join(rs.s.Dir, f.Path))
+	if err != nil {
+		return "", nil, false
+	}
+	data, err := fact.AppendNote(old, line)
+	if err != nil {
+		return "", nil, false
+	}
+	c := *f
+	c.Meta.Updated = today
+	if data, err = fact.PatchRelations(data, &c); err != nil {
+		return "", nil, false
+	}
+	return line, data, true
 }

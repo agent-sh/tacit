@@ -89,6 +89,9 @@ func TestEachRuleFires(t *testing.T) {
 	// L11 long description, empty body
 	write(t, root, "machines/host-a/l11.md", strings.Replace(good("l11", "machines/host-a"), "description: d", "description: "+strings.Repeat("x", 201), 1))
 	write(t, root, "machines/host-a/l11b.md", strings.Replace(good("l11b", "machines/host-a"), "\nbody\n", "\n", 1))
+	// L18 a malformed in-place note (a good one is clean)
+	write(t, root, "machines/host-a/l18.md", strings.Replace(good("l18", "machines/host-a"), "\nbody\n", "\nbody\n\n> superseded 2026-10-21: v1 ->\n", 1))
+	write(t, root, "machines/host-a/l18ok.md", strings.Replace(good("l18ok", "machines/host-a"), "\nbody\n", "\nbody\n\n> superseded 2026-10-21: v1 -> v2\n", 1))
 	// L12 enums
 	write(t, root, "machines/host-a/l12.md", strings.Replace(good("l12", "machines/host-a"), "harness: claude", "harness: vim", 1))
 	// L10 stale index
@@ -98,13 +101,13 @@ func TestEachRuleFires(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"L1", "L10", "L11", "L12", "L14", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9"}
+	want := []string{"L1", "L10", "L11", "L12", "L14", "L18", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9"}
 	got := rules(fs)
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("rules fired %v, want %v\n%v", got, want, fs)
 	}
 	for _, f := range fs {
-		if strings.HasSuffix(f.Path, "ok.md") {
+		if strings.HasSuffix(f.Path, "ok.md") || (f.Rule == "L18" && !strings.HasSuffix(f.Path, "/l18.md")) {
 			t.Errorf("clean file flagged: %v", f)
 		}
 	}
