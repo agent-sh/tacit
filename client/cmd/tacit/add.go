@@ -86,7 +86,9 @@ func addFact(ctx context.Context, s *store.Store, harness string, m fact.Meta, b
 		m.Scope = l
 	}
 	m.Source = fact.Source{Harness: harness, Host: host, Kind: firstNonEmpty(m.Source.Kind, "observed"), Session: m.Source.Session}
-	if err := validate.Error(addEnv(s).Meta(m, body, true, false)); err != nil {
+	env := addEnv(s)
+	env.RepoPaths(&m) // a path inside this machine's checkout of the repo, made relative
+	if err := validate.Error(env.Meta(m, body, true, false)); err != nil {
 		return "", err
 	}
 	m.Created = time.Now().Format("2006-01-02")

@@ -418,6 +418,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 				break
 			}
 			f := curate.ToFact(e, host, batchNames)
+			env.RepoPaths(&f.Meta) // as the check saw it (entryCheck)
 			f.Path = overlay.Prefix + overlay.CuratedDir + "/" + f.Meta.Scope + "/" + f.Meta.Name + ".md"
 			q, ruling := curate.ApplyEvidence(f, e, noteByName[e.Origin], where)
 			if !ruling && e.Kind == "user" {

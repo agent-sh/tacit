@@ -245,25 +245,35 @@ var (
 	schemeRx = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
 )
 
+// absolute reports a path that names a place on a machine, not in a
+// repository: a leading /, ~, drive letter or UNC prefix.
+func absolute(p string) bool {
+	return strings.HasPrefix(p, "/") || strings.HasPrefix(p, "~") || driveRx.MatchString(p) || strings.HasPrefix(p, `\\`)
+}
+
 // Paths checks applies_to.paths: each a repo-relative path or glob (SPEC.md,
-// Frontmatter), not an absolute or home path (a machine's paths go in the
-// fact's text), no "..", no URL, a glob that parses.
-func Paths(paths []string) []Problem {
+// Frontmatter), no "..", no URL, a glob that parses. machine: the fact is
+// about a machine (a machines/<host> scope), whose paths are that machine's
+// and may be absolute; any other fact's absolute or home path is refused
+// (RepoPaths has already made one inside the repository's checkout here
+// relative).
+func Paths(paths []string, machine bool) []Problem {
 	var out []Problem
 	bad := func(p, rule string) {
-		out = append(out, Problem{Field: "applies_to.paths", Rule: rule, Hint: fmt.Sprintf("got %q; applies_to.paths are paths inside the repository, like src/main.go or docs/*.md; a machine's absolute paths belong in the fact's text", p)})
+		out = append(out, Problem{Field: "applies_to.paths", Rule: rule, Hint: fmt.Sprintf("got %q; applies_to.paths are paths inside the repository, like src/main.go or docs/*.md (an absolute path inside this machine's checkout of the fact's repository is made relative by code); a machine's absolute paths belong in a machines/<host> fact or in the fact's text", p)})
 	}
 	for _, p := range paths {
+		abs := absolute(p)
 		switch {
 		case strings.TrimSpace(p) == "":
 			bad(p, "empty")
 		case p != strings.TrimSpace(p) || strings.IndexFunc(p, unicode.IsControl) >= 0:
 			bad(p, "has surrounding spaces or control characters")
-		case strings.HasPrefix(p, "/") || strings.HasPrefix(p, "~") || driveRx.MatchString(p) || strings.HasPrefix(p, `\\`):
+		case abs && !machine:
 			bad(p, "is absolute, not relative to the repository")
 		case schemeRx.MatchString(p):
 			bad(p, "is a URL, not a path")
-		case strings.Contains(p, `\`):
+		case strings.Contains(p, `\`) && !(machine && abs):
 			bad(p, "uses backslashes; paths use /")
 		case hasDotDot(p):
 			bad(p, "climbs out with ..")
@@ -274,6 +284,65 @@ func Paths(paths []string) []Problem {
 		}
 	}
 	return out
+}
+
+// RepoPaths makes each absolute or ~ path in m's applies_to.paths that lies
+// inside this machine's checkout of the fact's repository relative to that
+// checkout, which is what applies_to.paths hold. The repository is the
+// fact's projects/<repo> scope, else its one applies_to.repos name; the
+// checkout is repoid's for the path (the nearest git root, symlinks resolved
+// on both sides, a worktree or a separate clone of the repository counting
+// as its checkout). A path anywhere else, a fact with no one repository and
+// a machine's fact (whose absolute paths stand) are left as they are, for
+// Paths to judge. m's slice is replaced, never written in place.
+func (e Env) RepoPaths(m *fact.Meta) {
+	if e.Catalog == nil || len(m.AppliesTo.Paths) == 0 || strings.HasPrefix(m.Scope, "machines/") {
+		return
+	}
+	repo := ""
+	if r, ok := strings.CutPrefix(m.Scope, "projects/"); ok {
+		repo = strings.ToLower(r)
+	} else if len(m.AppliesTo.Repos) == 1 {
+		repo = strings.ToLower(strings.TrimSpace(m.AppliesTo.Repos[0]))
+	}
+	if repo == "" {
+		return
+	}
+	ids := repoid.NewCache(e.Catalog.Home())
+	ids.Mains = e.Catalog.Mains()
+	out := append([]string(nil), m.AppliesTo.Paths...)
+	for i, p := range out {
+		if !absolute(p) || p != strings.TrimSpace(p) {
+			continue
+		}
+		x := ids.Expand(p)
+		if x == "" {
+			continue
+		}
+		r, ok := ids.Of(x)
+		if !ok || !names(r, repo) {
+			continue
+		}
+		rel, err := filepath.Rel(r.Worktree, repoid.RealPath(x))
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		out[i] = filepath.ToSlash(rel)
+	}
+	m.AppliesTo.Paths = out
+}
+
+// names reports whether repo is r's name or one of its aliases.
+func names(r repoid.Repo, repo string) bool {
+	if r.Slug() == repo {
+		return true
+	}
+	for _, a := range r.Aliases {
+		if a == repo {
+			return true
+		}
+	}
+	return false
 }
 
 func hasDotDot(p string) bool {
@@ -317,7 +386,7 @@ func (e Env) Meta(m fact.Meta, body string, inbox, ruling bool) []Problem {
 	add(Type(m.Type, m.Scope, inbox))
 	add(Kind(m.Source.Kind))
 	out = append(out, e.Repos(m.AppliesTo.Repos)...)
-	out = append(out, Paths(m.AppliesTo.Paths)...)
+	out = append(out, Paths(m.AppliesTo.Paths, strings.HasPrefix(m.Scope, "machines/"))...)
 	add(Attribution(m.Description, body, ruling || (inbox && m.Source.Kind == "user")))
 	return out
 }
