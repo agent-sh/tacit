@@ -52,7 +52,7 @@ func usage() {
   tacit curate [--model M] [--dry-run] [--max-batches N] [--budget D] [--recheck-conflicts --since D] inbox notes -> curated one-fact entries, conflict check, index, push; then the derive step
   tacit curate --quick [--min-interval D] [--env-file F]   the last day's notes only, no derive, results, links or staleness step; nothing within D (30m) of the last quick run
   tacit assess [--model M] [--max N] [--dry-run]   folders with no record (repositories, project folders) and records whose evidence changed -> the curator's model decides kind and status, code checks, records written (a step of curate)
-  tacit folder create|status|alias|suppress|tools --folder F [--kind K] [--desc D] [--status S] [--why W] [--alias A] [--into F] [--tools a,b] [--commands c,d]   an agent's change to a folder record, as the curator (by opus; the owner's channel is tacit app)
+  tacit folder create|status|alias|suppress|tools --folder F [--kind K] [--desc D] [--status S] [--why W] [--alias A] [--into F] [--tools a,b] [--commands c,d]   an agent's change to a folder record, as the curator (by opus; the owner's channel is tacit review)
   tacit migrate [--dry-run] [--max N] [--commits N]   the facts of suppressed folders -> copies in the folder that replaces each (or absorbed by a fact there), the old ones superseded; a ruling moves with its quote, held for the owner only with a reason (a step of curate; no model)
   tacit rescope --plan FILE [--dry-run] [--max N]   move the facts a plan names (JSON lines: name or path, and to) the same way
   tacit derive [--dry-run] [--out DIR] [--repo R] [--force] [--take-over] [--no-fetch] [--projects DIR] [-v]   hot spots, co-change and module map from git -> derived/<repo>/ (no model)
@@ -63,10 +63,10 @@ func usage() {
   tacit stale [--dry-run] [--max N] [--fact NAME] [--as-of T] [--json] [-v]   curated facts whose subject changed in git after their date -> stale? findings in review/<date>.md (no model; flags, never retires)
   tacit rulings audit [--dry-run] [--strict] [--recheck] [--digests DIR] [--digests-only] [--sample N] [--seed N] [--json FILE]   keep a ruling only with the owner's own words as evidence (a verified quote, their decision, written by them); the rest -> source.kind observed (no model)
   tacit resolve supersede <old> <new> | conflict <a> <b> | clear <name>   the owner's answer to a review item
-  tacit review [--addr 127.0.0.1:7448] [--no-open]   local page to triage review items
+  tacit review [--addr 127.0.0.1:7448] [--no-open]   the owner's page in a browser (every build): what needs you, every fact, edit, retire, restore, undo, new rules, folders; loopback only, its link carries a one-run token printed only to a terminal
   tacit review --label SAMPLE.json [--labels OUT.jsonl]   label mode: the owner's ground truth for a sample, written outside the store
   tacit app                        the desktop window: what needs you, every fact, edit, retire, new rulings (a build with -tags desktop)
-  tacit app --browser [--addr 127.0.0.1:7450] [--no-open]   the same page in a browser tab
+  tacit app --browser [--addr 127.0.0.1:7450] [--no-open]   the same page as tacit review, on its own port
   tacit review apply VERDICTS.json...   apply a verifier's checked marks (with evidence) in one commit
   tacit verify [--model M] [--max N] [--batch N] [--budget USD] [--ids SAMPLE.json] [--dry-run]   settle open findings against their sources; leave the owner only real questions
   tacit timeline [--as-of T] [--json] [--ids SAMPLE.json] [ID...]   the git timeline of review findings: fact dates, commits on their subject, what HEAD shows; no model

@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -247,29 +249,19 @@ func (a *App) call(name string, raw []byte) (any, error) {
 var appAssets = []string{"/fonts/", "/app.css", "/desk.css", "/app.js", "/api.js", "/desk.js", "/folders.js", "/theme.js", "/icon.svg"}
 
 // uiHandler serves the app page and its files. With a token it also answers
-// /api/call/<Method> (browser mode); the desktop window calls the bindings.
+// /api/call/<Method> (tacit review, tacit app --browser); the desktop window
+// calls the bindings. With a token the page itself is served only to the URL
+// that carries it (ownerURL), so the token never reaches a client that was
+// not handed that URL: an agent that can reach the port cannot read the
+// token from the page.
 func (a *App) uiHandler(token string) http.Handler {
-	ui, _ := fs.Sub(reviewUI, "reviewui")
-	page, _ := fs.ReadFile(ui, "app.html")
-	page = []byte(strings.Replace(string(page), "{{TOKEN}}", token, 1))
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" && r.URL.Path != "/index.html" {
-			http.NotFound(w, r)
+	return pageHandler("app.html", token, appAssets, func(mux *http.ServeMux) {
+		if token == "" {
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		w.Write(page)
-	})
-	assets := http.FileServer(http.FS(ui))
-	for _, p := range appAssets {
-		mux.Handle(p, assets)
-	}
-	if token != "" {
 		mux.HandleFunc("/api/call/", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			if r.Method != http.MethodPost || r.Header.Get("X-Tacit-Token") != token {
+			if r.Method != http.MethodPost || !tokenOK(r.Header.Get("X-Tacit-Token"), token) {
 				w.WriteHeader(http.StatusForbidden)
 				json.NewEncoder(w).Encode(map[string]string{"error": "forbidden"})
 				return
@@ -289,8 +281,112 @@ func (a *App) uiHandler(token string) http.Handler {
 			}
 			json.NewEncoder(w).Encode(map[string]any{"result": res})
 		})
+	})
+}
+
+// tokenQuery is the query parameter of the owner page's URL that carries
+// its token.
+const tokenQuery = "t"
+
+// tokenOK compares a presented token with the run's, in constant time; an
+// empty run token (the desktop window) never matches.
+func tokenOK(got, token string) bool {
+	return token != "" && subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1
+}
+
+// pageHandler serves page (with the token in its tacit-token meta) at / and
+// the assets beside it, plus what api registers. With a token, / needs
+// ?t=<token>: anything else gets a short refusal, never the page.
+func pageHandler(page, token string, assets []string, api func(*http.ServeMux)) http.Handler {
+	ui, _ := fs.Sub(reviewUI, "reviewui")
+	body, _ := fs.ReadFile(ui, page)
+	body = []byte(strings.Replace(string(body), "{{TOKEN}}", token, 1))
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" && r.URL.Path != "/index.html" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		if token != "" && !tokenOK(r.URL.Query().Get(tokenQuery), token) {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusForbidden)
+			io.WriteString(w, "This page opens only from the link tacit printed or opened when it started. Run it again to get a new link.\n")
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(body)
+	})
+	files := http.FileServer(http.FS(ui))
+	for _, p := range assets {
+		mux.Handle(p, files)
+	}
+	if api != nil {
+		api(mux)
 	}
 	return mux
+}
+
+// newToken is one run's token: 16 random bytes, hex.
+func newToken() string {
+	var tb [16]byte
+	rand.Read(tb[:])
+	return hex.EncodeToString(tb[:])
+}
+
+// ownerURL is the URL that opens the owner's page: the token rides on it.
+func ownerURL(addr, token string) string {
+	return "http://" + addr + "/?" + tokenQuery + "=" + token
+}
+
+// stdoutIsTerminal reports whether this process prints to a terminal. An
+// agent's shell tool reads a pipe, so the owner page's link (which carries
+// the token) is printed only to a terminal, where the owner sits.
+var stdoutIsTerminal = func() bool {
+	fi, err := os.Stdout.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// openBrowser opens the owner page's URL (a variable for tests).
+var openBrowser = openURL
+
+// announceOwner prints the line that says where the owner's page is and
+// returns its URL with the token. The token is printed only to a terminal.
+func announceOwner(w io.Writer, name, addr, token string, tty bool) string {
+	url := ownerURL(addr, token)
+	if tty {
+		fmt.Fprintf(w, "tacit %s: %s (Ctrl-C to stop)\n", name, url)
+	} else {
+		fmt.Fprintf(w, "tacit %s: http://%s/ opened in your browser; the link with its token is shown only on a terminal (Ctrl-C to stop)\n", name, addr)
+	}
+	return url
+}
+
+// serveOwner listens on addr (loopback only) and serves h, the owner's page
+// (tacit review, tacit app --browser). The URL with the run's token goes to
+// the browser it opens, and is printed only on a terminal: an agent running
+// the command through a pipe sees the address without the token, and the
+// page and its API refuse it. With --no-open and no terminal there is no
+// one to give the link to, so it refuses to start.
+func serveOwner(name, addr, token string, noOpen bool, h http.Handler) int {
+	if noOpen && !stdoutIsTerminal() {
+		fmt.Fprintf(os.Stderr, "%s: --no-open needs a terminal to print the page's link to (the link carries the page's token, which is never printed where an agent reads it)\n", name)
+		return 2
+	}
+	ln, err := listenLoopback(addr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+		return 2
+	}
+	url := announceOwner(os.Stdout, name, ln.Addr().String(), token, stdoutIsTerminal())
+	if !noOpen {
+		openBrowser(runtime.GOOS, url)
+	}
+	if err := http.Serve(ln, browserHandler(h)); err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+		return 1
+	}
+	return 0
 }
 
 // runApp implements `tacit app [--browser [--addr 127.0.0.1:7450] [--no-open]]`.
@@ -324,6 +420,7 @@ func runApp(args []string) int {
 	rs.viewOnly = viewOnlyReason(context.Background(), s)
 	rs.loadFacts()
 	app := newApp(rs)
+	token := newToken()
 	// Pull what other machines wrote, every two minutes, under the store lock.
 	go func() {
 		for range time.Tick(2 * time.Minute) {
@@ -343,24 +440,7 @@ func runApp(args []string) int {
 		}
 		return 0
 	}
-	var tb [16]byte
-	rand.Read(tb[:])
-	secured := browserHandler(app.uiHandler(hex.EncodeToString(tb[:])))
-	ln, err := listenLoopback(*addr)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "app:", err)
-		return 2
-	}
-	url := "http://" + ln.Addr().String() + "/"
-	fmt.Println("tacit app:", url, "(Ctrl-C to stop)")
-	if !*noOpen {
-		openURL(runtime.GOOS, url)
-	}
-	if err := http.Serve(ln, secured); err != nil {
-		fmt.Fprintln(os.Stderr, "app:", err)
-		return 1
-	}
-	return 0
+	return serveOwner("app", *addr, token, *noOpen, app.uiHandler(token))
 }
 
 // listenLoopback listens on addr only when it is a loopback address.

@@ -556,7 +556,10 @@ func TestAppHTTPCallsTheBoundMethods(t *testing.T) {
 	if code, out := call("Fact", "tok", `[]`); code != http.StatusConflict || !strings.Contains(out["error"].(string), "takes 1 argument") {
 		t.Errorf("wrong arity: %d %v", code, out)
 	}
-	resp, err := http.Get(srv.URL + "/")
+	if resp, err := http.Get(srv.URL + "/"); err != nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("the page without its token: %v %v", resp, err)
+	}
+	resp, err := http.Get(srv.URL + "/?t=tok")
 	if err != nil {
 		t.Fatal(err)
 	}
