@@ -227,6 +227,10 @@ func runDream(args []string) int {
 		fmt.Fprintln(os.Stderr, "dream:", err)
 		return 2
 	}
+	// A cwd checkout outside home or in a temp directory names its windows'
+	// repository once sessions worked there; the registry keeps the
+	// evidence (a dry run reads it and records nothing).
+	acceptPendingRepos(home, windows, !*dry)
 	if !*dry {
 		recordWindowRepos(home, windows)
 	}
@@ -480,8 +484,15 @@ func idleDefault(args []string) []string {
 
 // Content and chunk position identify durable progress even when a transcript
 // grows between runs. Changed chunks are processed again instead of skipped.
+// A window with a pending checkout is keyed by the repository it has
+// without it (Fallback), so accepting the checkout later does not make a
+// window already dreamed look new.
 func dreamWindowKey(w dream.Window) string {
-	return fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%d:%d:%s\n%s", w.Start, w.Part, w.Repo, strings.Join(w.Lines, "\n")))))
+	repo := w.Repo
+	if w.Pending.Root != "" {
+		repo = w.Fallback
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%d:%d:%s\n%s", w.Start, w.Part, repo, strings.Join(w.Lines, "\n")))))
 }
 
 // loadEnvFile sets the variables of a systemd-style environment file in this

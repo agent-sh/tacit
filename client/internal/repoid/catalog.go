@@ -28,6 +28,7 @@ type Catalog struct {
 	aliases map[string]string // alias -> slug of the repo it names
 	home    string
 	mains   *Mains
+	work    map[string][]Work // root -> evidence (the registry's)
 }
 
 // RegistryFile is the registry's name in the state directory.
@@ -35,6 +36,19 @@ const RegistryFile = "repos.json"
 
 type registry struct {
 	Repos map[string]regEntry `json:"repos"`
+	// Work is the evidence of real work in checkouts outside home or in a
+	// temp directory (Elsewhere), by root: the sessions that edited files or
+	// committed there (RecordWork).
+	Work map[string][]Work `json:"work,omitempty"`
+}
+
+// Work is one session's evidence of real work in a checkout: By is "edit"
+// (a write or edit tool call on a file in it) or "commit" (a git commit
+// run in it).
+type Work struct {
+	Session string `json:"session"`
+	By      string `json:"by"`
+	Seen    string `json:"seen"`
 }
 
 type regEntry struct {
@@ -75,6 +89,39 @@ func Record(path string, repos ...Repo) error {
 	if !changed {
 		return nil
 	}
+	return writeRegistry(path, reg)
+}
+
+// maxWork caps the sessions kept per root: acceptance needs MinWorkSessions.
+const maxWork = 4
+
+// RecordWork adds a session's evidence of work in the checkout root to the
+// registry at path; a session already recorded for root is not added again.
+func RecordWork(path, root, session, by string) error {
+	if root == "" || session == "" || by == "" {
+		return nil
+	}
+	reg := readRegistry(path)
+	ws := reg.Work[root]
+	for _, w := range ws {
+		if w.Session == session {
+			return nil
+		}
+	}
+	if len(ws) >= maxWork {
+		return nil
+	}
+	if reg.Work == nil {
+		reg.Work = map[string][]Work{}
+	}
+	reg.Work[root] = append(ws, Work{Session: session, By: by, Seen: time.Now().Format("2006-01-02")})
+	return writeRegistry(path, reg)
+}
+
+// WorkFor is the evidence the registry at path holds for the checkout root.
+func WorkFor(path, root string) []Work { return readRegistry(path).Work[root] }
+
+func writeRegistry(path string, reg registry) error {
 	b, err := json.MarshalIndent(reg, "", " ")
 	if err != nil {
 		return err
@@ -125,7 +172,7 @@ func readRegistry(path string) registry {
 // LoadCatalog builds the catalog for home from the registry at registryPath
 // ("" for none) and the projects directory projects ("" for none).
 func LoadCatalog(home, registryPath, projects string) *Catalog {
-	c := &Catalog{repos: map[string]Repo{}, aliases: map[string]string{}, home: home, mains: LoadMains(home, projects)}
+	c := &Catalog{repos: map[string]Repo{}, aliases: map[string]string{}, home: home, mains: LoadMains(home, projects), work: map[string][]Work{}}
 	for _, r := range c.mains.All() {
 		c.add(r)
 	}
@@ -133,10 +180,12 @@ func LoadCatalog(home, registryPath, projects string) *Catalog {
 	cache.Mains = c.mains
 	if registryPath != "" {
 		reg := readRegistry(registryPath)
+		c.work = reg.Work
 		for _, slug := range sortedKeys(reg.Repos) {
 			e := reg.Repos[slug]
-			// Still a checkout, and still the same repository.
-			if r, ok := cache.Of(e.Root); ok && r.Slug() == slug && r.Root == e.Root {
+			// Still a checkout, and still the same repository; one outside
+			// home or in a temp directory only with evidence of work in it.
+			if r, ok := cache.Of(e.Root); ok && r.Slug() == slug && r.Root == e.Root && c.Accepted(r) {
 				for _, a := range e.Aliases {
 					r.Aliases = addAlias(r.Aliases, r.Name, a)
 				}
@@ -145,6 +194,24 @@ func LoadCatalog(home, registryPath, projects string) *Catalog {
 		}
 	}
 	return c
+}
+
+// Accepted reports whether r counts as a repository of this machine: any
+// checkout under home outside its temp directories, a main checkout, or one
+// elsewhere (Elsewhere) with work in it from MinWorkSessions sessions.
+func (c *Catalog) Accepted(r Repo) bool {
+	if c == nil || !Elsewhere(r.Root, c.home, c.mains) {
+		return true
+	}
+	return WorkSessions(c.work[r.Root]) >= MinWorkSessions
+}
+
+// Work is the evidence the catalog's registry holds for the checkout root.
+func (c *Catalog) Work(root string) []Work {
+	if c == nil {
+		return nil
+	}
+	return c.work[root]
 }
 
 // Home is the home directory the catalog was loaded for.

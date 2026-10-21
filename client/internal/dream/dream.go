@@ -228,6 +228,15 @@ type Window struct {
 	Repo    string
 	// RepoRoot is the main checkout of Repo (repoid), "" when Repo is "".
 	RepoRoot string
+	// Pending is the checkout the session's cwd is in when that is outside
+	// home or in a temp directory (repoid.Elsewhere): it names the window's
+	// repository only once enough sessions worked there (the caller counts
+	// the evidence, AcceptPending). Until then Repo is what the window's
+	// paths say (Fallback). Work is this window's evidence of work in
+	// Pending (WorkIn): "edit", "commit" or "".
+	Pending  repoid.Repo
+	Fallback string
+	Work     string
 	Lines    []string
 	Start    int64
 	End      int64
@@ -428,16 +437,11 @@ func WindowsFor(sources []Source, st *State, fresh bool, sel Select) ([]Window, 
 			// The cwd's repo, else the repo the window's own paths are in. Per
 			// window, not per delta: a long session moves between repos, and
 			// measured per delta, 10 of 40 inferred repos were wrong.
-			cwdRepo := repoOf(head, home, mains)
+			cwdRepo, cwd := repoOf(head, home, mains)
 			resolver := repoinfer.NewResolver(home).WithMains(mains)
-			for part, c := range chunk(lines, maxWindowChars) {
-				repo, root := cwdRepo.Name, cwdRepo.Root
-				if repo == "" {
-					repo = windowRepo(c, resolver)
-					root = resolver.Root(repo)
-				}
-				ws = append(ws, Window{File: f, Session: session, Repo: repo, RepoRoot: root, Lines: c, Start: off, End: end, Part: part, Why: why})
-			}
+			ws = append(ws, windowsOf(lines, cwdRepo, cwd, home, mains, resolver, func(part int, c []string) Window {
+				return Window{File: f, Session: session, Lines: c, Start: off, End: end, Part: part, Why: why}
+			})...)
 		}
 	}
 	return ws, nil
@@ -582,6 +586,7 @@ func hermesWindows(path string, st *State, fresh bool, exclude map[string]bool, 
 			continue
 		}
 		var cwdRepo repoid.Repo
+		cwd := ""
 		for _, d := range []string{s.RepoRoot, s.Cwd} {
 			if d != "" {
 				ids := repoid.NewCache(home)
@@ -590,14 +595,12 @@ func hermesWindows(path string, st *State, fresh bool, exclude map[string]bool, 
 				break
 			}
 		}
-		for part, c := range chunk(lines, maxWindowChars) {
-			repo, root := cwdRepo.Name, cwdRepo.Root
-			if repo == "" {
-				repo = windowRepo(c, resolver)
-				root = resolver.Root(repo)
-			}
-			ws = append(ws, Window{File: key, Session: s.ID, Repo: repo, RepoRoot: root, Lines: c, Start: after, End: end, Part: part, Why: why})
+		if s.Cwd != "" {
+			cwd = cwdPath(s.Cwd)
 		}
+		ws = append(ws, windowsOf(lines, cwdRepo, cwd, home, mains, resolver, func(part int, c []string) Window {
+			return Window{File: key, Session: s.ID, Lines: c, Start: after, End: end, Part: part, Why: why}
+		})...)
 	}
 	return ws
 }
@@ -667,15 +670,62 @@ var cwdRx = regexp.MustCompile(`"cwd":"([^"]+)"`)
 // repository. A transcript without a cwd gets none from here (the window's
 // paths decide, windowRepo): its folder's name is a lossy spelling of a
 // path, not a git root. A separate clone of a main checkout (mains) is
-// that checkout's repository.
-func repoOf(raw []byte, home string, mains *repoid.Mains) repoid.Repo {
+// that checkout's repository. cwd is the cwd read.
+func repoOf(raw []byte, home string, mains *repoid.Mains) (r repoid.Repo, cwd string) {
 	if m := cwdRx.FindSubmatch(raw); m != nil {
 		ids := repoid.NewCache(home)
 		ids.Mains = mains
-		r, _ := ids.Of(cwdPath(string(m[1])))
-		return r
+		cwd = cwdPath(string(m[1]))
+		r, _ = ids.Of(cwd)
+		return r, cwd
 	}
-	return repoid.Repo{}
+	return repoid.Repo{}, ""
+}
+
+// windowsOf chunks a delta's lines into windows (mk fills each one's
+// transcript fields) and names each window's repository: the cwd's
+// checkout, else what the window's paths say. A cwd checkout outside home or
+// in a temp directory is only Pending, with this window's evidence of work
+// in it, until the caller accepts it (AcceptPending).
+func windowsOf(lines []string, cwdRepo repoid.Repo, cwd, home string, mains *repoid.Mains, resolver *repoinfer.Resolver, mk func(part int, c []string) Window) []Window {
+	var pending repoid.Repo
+	if cwdRepo.Root != "" && repoid.Elsewhere(cwdRepo.Root, home, mains) {
+		pending, cwdRepo = cwdRepo, repoid.Repo{}
+	}
+	var out []Window
+	for part, c := range chunk(lines, maxWindowChars) {
+		w := mk(part, c)
+		w.Repo, w.RepoRoot = cwdRepo.Name, cwdRepo.Root
+		if w.Repo == "" {
+			w.Repo = windowRepo(c, resolver)
+			w.RepoRoot = resolver.Root(w.Repo)
+		}
+		if pending.Root != "" {
+			w.Pending, w.Fallback = pending, w.Repo
+			w.Work = WorkIn(c, pending.Worktree, cwd, home)
+		}
+		out = append(out, w)
+	}
+	return out
+}
+
+// AcceptPending names each window's repository for its Pending checkout
+// when work counts that checkout's sessions (by root) at
+// repoid.MinWorkSessions or more; the windows of this run count too.
+func AcceptPending(ws []Window, work map[string]map[string]bool) {
+	for _, w := range ws {
+		if w.Pending.Root != "" && w.Work != "" {
+			if work[w.Pending.Root] == nil {
+				work[w.Pending.Root] = map[string]bool{}
+			}
+			work[w.Pending.Root][w.Session] = true
+		}
+	}
+	for i, w := range ws {
+		if w.Pending.Root != "" && len(work[w.Pending.Root]) >= repoid.MinWorkSessions {
+			ws[i].Repo, ws[i].RepoRoot = w.Pending.Name, w.Pending.Root
+		}
+	}
 }
 
 // cwdPath is a recorded cwd as a path: Codex writes some as a file URL
