@@ -61,7 +61,7 @@ func runTree(args []string) int {
 // out when the index cannot be opened), then the folder indexes.
 func treeView(s *store.Store, p string, depth int, repo, host string) (string, error) {
 	cwd, _ := os.Getwd()
-	ro := tree.ReadOptions{Store: s.Dir, Session: readSession(cwd, repo, host)}
+	ro := tree.ReadOptions{Store: s.Dir, Session: readSession(storeRecords(s.Dir), cwd, repo, host)}
 	if overlay.LayerOn() && overlay.Outside(overlay.Dir(), s.Dir) {
 		ro.Local = filepath.Join(overlay.Dir(), filepath.FromSlash(overlay.CuratedDir))
 	}

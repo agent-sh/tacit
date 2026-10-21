@@ -56,7 +56,8 @@ func Run(root string) ([]Finding, error) {
 	// L16: the folder indexes equal the generated ones (once the store has
 	// its root index; a store from before the tree is checked only for the
 	// index files it holds).
-	stale, terr := tree.Check(root, tree.Generate(facts, ""))
+	recs, _ := record.Walk(root)
+	stale, terr := tree.Check(root, tree.GenerateWith(facts, recs, ""))
 	if terr != nil {
 		return nil, terr
 	}

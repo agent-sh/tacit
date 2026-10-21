@@ -18,6 +18,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/index"
 	"github.com/agent-sh/tacit/client/internal/lint"
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
+	"github.com/agent-sh/tacit/client/internal/record"
 	"github.com/agent-sh/tacit/client/internal/settings"
 	tstore "github.com/agent-sh/tacit/client/internal/store"
 	"github.com/agent-sh/tacit/client/internal/tree"
@@ -236,7 +237,8 @@ func runIndex(args []string) int {
 		return 1
 	}
 	want := index.Generate(facts)
-	gen := tree.Generate(facts, "")
+	recs, _ := record.Walk(*store)
+	gen := tree.GenerateWith(facts, recs, "")
 	dst := filepath.Join(*store, "MEMORY.md")
 	on := index.On() // the memory_md setting: off, MEMORY.md is not generated and is removed
 	if *check {
