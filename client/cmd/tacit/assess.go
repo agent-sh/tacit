@@ -581,7 +581,9 @@ func (a *assessor) check(cands []assess.Candidate, ds []assess.Decision, pending
 			known = known || c.Folder == f
 		}
 		if !known {
-			refused = append(refused, assess.Refusal{Folder: f, Problems: []string{"names no folder of this batch"}})
+			if pending[f] == nil { // a folder decided earlier in the run is no refusal
+				refused = append(refused, assess.Refusal{Folder: f, Problems: []string{"names no folder of this batch"}})
+			}
 			continue
 		}
 		byFolder[f] = d
