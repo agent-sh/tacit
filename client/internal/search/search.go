@@ -28,6 +28,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/overlay"
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
+	"github.com/agent-sh/tacit/client/internal/record"
 )
 
 // Hit is one ranked fact.
@@ -87,8 +88,9 @@ const (
 // schemaVersion is part of the index file name, so a schema change rebuilds
 // instead of failing on a column that an older build does not have. 7: the
 // FTS tokenizer stems (porter). 8: the intask column (Hit.InTask). 9: the
-// created column (Hit.Created).
-const schemaVersion = 9
+// created column (Hit.Created). 10: the records table (Index.Records) and
+// the quiet column (a dead or shipped folder's facts, which hooks pass over).
+const schemaVersion = 10
 
 // Open returns the index for the store at head, building it when missing:
 // the exact index, for callers that must not read an older one (the
@@ -378,6 +380,16 @@ func build(ctx context.Context, storeDir, localDir, path, base string) error {
 	nStore := len(facts)
 	facts = append(facts, local...)
 	baseRows := 0 // the store's facts in base, ids 1..baseRows
+	// The store's folder records: from its files, or with base from base's
+	// records table, which holds the store's alone (a store-only file).
+	var recs map[string]*record.Record
+	if base == "" {
+		recs, _ = record.Walk(storeDir)
+	}
+	localRecs := map[string]*record.Record{}
+	if localDir != "" && overlay.LayerOn() {
+		localRecs, _ = record.Walk(filepath.Join(localDir, filepath.FromSlash(overlay.CuratedDir)))
+	}
 	tmp := fmt.Sprintf("%s.%d.tmp", path, os.Getpid())
 	os.Remove(tmp)
 	defer os.Remove(tmp)
@@ -395,9 +407,15 @@ func build(ctx context.Context, storeDir, localDir, path, base string) error {
 		if err := db.QueryRowContext(ctx, `SELECT coalesce(max(id), 0) FROM facts`).Scan(&baseRows); err != nil {
 			return err
 		}
+		if recs, err = readRecords(ctx, db); err != nil {
+			return err
+		}
 	}
 	stmts := []string{
-		`CREATE TABLE facts(id INTEGER PRIMARY KEY, path TEXT, name TEXT, scope TEXT, type TEXT, description TEXT, body TEXT, inbox INT, superseded INT, applies TEXT, kind TEXT, conflicts TEXT, ruling INT, intask INT, words INT, local INT, created TEXT)`,
+		`CREATE TABLE facts(id INTEGER PRIMARY KEY, path TEXT, name TEXT, scope TEXT, type TEXT, description TEXT, body TEXT, inbox INT, superseded INT, applies TEXT, kind TEXT, conflicts TEXT, ruling INT, intask INT, words INT, local INT, created TEXT, quiet INT)`,
+		// The folder records (internal/record), so a reader needs no file
+		// beyond the index: kinds, statuses, suppression, an area's tools.
+		`CREATE TABLE records(folder TEXT PRIMARY KEY, kind TEXT, name TEXT, status TEXT, suppressed_by TEXT, aliases TEXT, tools TEXT, commands TEXT, repos TEXT, description TEXT, local INT)`,
 		`CREATE VIRTUAL TABLE fts USING fts5(name, description, body, content='facts', content_rowid='id', tokenize='porter unicode61 remove_diacritics 2')`,
 		// Rank's prefix search needs the words as written: porter stems a
 		// half-typed prefix too ("deploy"* becomes "deploi"*, which no stem
@@ -416,9 +434,36 @@ func build(ctx context.Context, storeDir, localDir, path, base string) error {
 	if err != nil {
 		return err
 	}
-	ins, err := tx.PrepareContext(ctx, `INSERT INTO facts(path, name, scope, type, description, body, inbox, superseded, applies, kind, conflicts, ruling, intask, words, local, created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+	ins, err := tx.PrepareContext(ctx, `INSERT INTO facts(path, name, scope, type, description, body, inbox, superseded, applies, kind, conflicts, ruling, intask, words, local, created, quiet) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return err
+	}
+	if base != "" {
+		// The records are written again whole, the local layer's among the
+		// store's, in the order a build from nothing writes them.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM records`); err != nil {
+			return err
+		}
+	}
+	insRec, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO records(folder, kind, name, status, suppressed_by, aliases, tools, commands, repos, description, local) VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
+	if err != nil {
+		return err
+	}
+	for i, set := range []map[string]*record.Record{recs, localRecs} {
+		for _, f := range sortedFolders(set) {
+			r := set[f]
+			j := func(xs []string) string { b, _ := json.Marshal(xs); return string(b) }
+			if _, err := insRec.ExecContext(ctx, f, r.Kind, r.Name, r.Status, r.SuppressedBy, j(r.Aliases), j(r.Tools), j(r.Commands), j(r.Repos), r.Description, i); err != nil {
+				return err
+			}
+		}
+	}
+	all := map[string]*record.Record{}
+	for f, r := range localRecs {
+		all[f] = r
+	}
+	for f, r := range recs {
+		all[f] = r
 	}
 	for i, f := range facts {
 		applies, _ := json.Marshal(f.Meta.AppliesTo)
@@ -433,7 +478,15 @@ func build(ctx context.Context, storeDir, localDir, path, base string) error {
 			ruling, words, inbox = overlay.IsRuling(f), false, overlay.IsInbox(f.Path)
 		}
 		intask := ruling && inTaskRuling(f)
-		if _, err := ins.ExecContext(ctx, f.Path, f.Meta.Name, f.Meta.Scope, f.Meta.Type, f.Meta.Description, strings.TrimSpace(f.Body), b2i(inbox), b2i(f.Meta.SupersededBy != "" || f.Meta.Retired != ""), string(applies), f.Meta.Source.Kind, strings.Join(f.Meta.ConflictsWith, ","), b2i(ruling), b2i(intask), b2i(words), b2i(isLocal), f.Meta.Created); err != nil {
+		if _, err := ins.ExecContext(ctx, f.Path, f.Meta.Name, f.Meta.Scope, f.Meta.Type, f.Meta.Description, strings.TrimSpace(f.Body), b2i(inbox), b2i(f.Meta.SupersededBy != "" || f.Meta.Retired != ""), string(applies), f.Meta.Source.Kind, strings.Join(f.Meta.ConflictsWith, ","), b2i(ruling), b2i(intask), b2i(words), b2i(isLocal), f.Meta.Created, b2i(quietScope(all, f.Meta.Scope))); err != nil {
+			return err
+		}
+	}
+	if base != "" {
+		// A store fact's quiet mark depends on the local layer's records
+		// too (a folder only this machine has a record for, a status only
+		// this machine reads): marked again from the merged records.
+		if err := markQuiet(ctx, tx, all, baseRows); err != nil {
 			return err
 		}
 	}
@@ -493,6 +546,103 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return out.Close()
+}
+
+// quietScope reports a scope in a dead or shipped folder (record.Quiet), or
+// a topic of such an area: hooks deliver nothing from it, search and the
+// tree still find it (the owner's rule for folders that are done).
+func quietScope(recs map[string]*record.Record, scope string) bool {
+	if len(recs) == 0 {
+		return false
+	}
+	if r := recs[scope]; r.Quiet() {
+		return true
+	}
+	if segs := strings.Split(scope, "/"); len(segs) == 4 && segs[0] == "areas" {
+		return recs[segs[0]+"/"+segs[1]].Quiet()
+	}
+	return false
+}
+
+// markQuiet sets the quiet mark of the facts with ids 1..upto from recs,
+// where it differs from the mark they were indexed with.
+func markQuiet(ctx context.Context, tx *sql.Tx, recs map[string]*record.Record, upto int) error {
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT scope, quiet FROM facts WHERE id <= ?`, upto)
+	if err != nil {
+		return err
+	}
+	type change struct {
+		scope string
+		quiet bool
+	}
+	var changes []change
+	for rows.Next() {
+		var scope string
+		var quiet int
+		if err := rows.Scan(&scope, &quiet); err != nil {
+			rows.Close()
+			return err
+		}
+		if q := quietScope(recs, scope); q != (quiet == 1) {
+			changes = append(changes, change{scope, q})
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, c := range changes {
+		if _, err := tx.ExecContext(ctx, `UPDATE facts SET quiet = ? WHERE id <= ? AND scope = ?`, b2i(c.quiet), upto, c.scope); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sortedFolders(m map[string]*record.Record) []string {
+	out := make([]string, 0, len(m))
+	for f := range m {
+		out = append(out, f)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// readRecords reads every row of an index's records table: of a
+// store-only file, the store's records.
+func readRecords(ctx context.Context, db interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}) (map[string]*record.Record, error) {
+	rows, err := db.QueryContext(ctx, `SELECT folder, kind, name, status, suppressed_by, aliases, tools, commands, repos, description FROM records ORDER BY local, folder`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]*record.Record{}
+	for rows.Next() {
+		r := &record.Record{}
+		var aliases, tools, commands, repos string
+		if err := rows.Scan(&r.Folder, &r.Kind, &r.Name, &r.Status, &r.SuppressedBy, &aliases, &tools, &commands, &repos, &r.Description); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(aliases), &r.Aliases)
+		_ = json.Unmarshal([]byte(tools), &r.Tools)
+		_ = json.Unmarshal([]byte(commands), &r.Commands)
+		_ = json.Unmarshal([]byte(repos), &r.Repos)
+		if out[r.Folder] == nil {
+			out[r.Folder] = r
+		}
+	}
+	return out, rows.Err()
+}
+
+// Records returns the folder records the index was built with (the store's,
+// and the local layer's where the store has none), folder -> record with
+// the fields readers need: kind, name, status, suppression, aliases, an
+// area's tools and commands, a topic's repos, the description. The history
+// and evidence are in the files.
+func (ix *Index) Records(ctx context.Context) (map[string]*record.Record, error) {
+	return readRecords(ctx, ix.db)
 }
 
 // inTaskRuling reports a ruling proved by a quote of theirs that is an
@@ -768,6 +918,9 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	}
 	if sit.Printable {
 		inboxClause += " AND f.type != 'result_ref'"
+	}
+	if sit.RestrictRepos {
+		inboxClause += " AND f.quiet = 0" // hook delivery: nothing from a dead or shipped folder
 	}
 	if sit.Type != "" {
 		inboxClause += " AND f.type = :onlyType"

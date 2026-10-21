@@ -41,11 +41,11 @@ func (ix *Index) Tied(ctx context.Context, names []string) ([]Hit, error) {
 
 // MetaFacts returns every live curated fact whose applies_to names paths or
 // commands, for matching against the paths and commands of a prompt or a
-// tool call. Derived facts, inbox notes and superseded or retired facts are
-// left out.
+// tool call. Derived facts, inbox notes, superseded or retired facts and
+// the facts of a dead or shipped folder (quiet: hooks only) are left out.
 func (ix *Index) MetaFacts(ctx context.Context) ([]Hit, error) {
 	q := `SELECT ` + liveColumns + ` FROM facts f
-		WHERE f.superseded = 0 AND f.inbox = 0 AND f.type != 'result_ref' AND f.scope NOT LIKE 'derived/%'
+		WHERE f.superseded = 0 AND f.inbox = 0 AND f.type != 'result_ref' AND f.scope NOT LIKE 'derived/%' AND f.quiet = 0
 		AND (coalesce(json_array_length(f.applies, '$.Paths'), 0) > 0 OR coalesce(json_array_length(f.applies, '$.Commands'), 0) > 0)
 		ORDER BY f.path`
 	return ix.scan(ctx, q, nil)

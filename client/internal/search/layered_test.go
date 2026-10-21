@@ -9,7 +9,12 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/agent-sh/tacit/client/internal/overlay"
+	"github.com/agent-sh/tacit/client/internal/record"
 )
+
+var quietFixtureScopes = []string{"projects/api", "projects/web", "projects/done", "projects/gone", "projects/old", "areas/ops", "areas/ops/topics/old", "areas/lab/topics/x"}
 
 var fixtureWords = strings.Fields("deploy pipeline valkey cluster shard failover replica snapshot backup restore homebrew prefix " +
 	"pgrep pkill shell exit golang module vendor lint format test flaky timeout retry network proxy dns latency " +
@@ -33,7 +38,8 @@ func layeredFixture(t *testing.T, seed int64, nStore, nLocal int) (root, local s
 	base := t.TempDir()
 	root, local = filepath.Join(base, "store"), filepath.Join(base, "local")
 	r := rand.New(rand.NewSource(seed))
-	scopes := []string{"user", "system", "machines/host-a", "machines/host-b", "projects/api", "projects/web", "derived/api"}
+	scopes := []string{"user", "system", "machines/host-a", "machines/host-b", "projects/api", "projects/web", "derived/api",
+		"projects/done", "projects/gone", "projects/old", "areas/ops/topics/old", "areas/lab/topics/x", "areas/ops"}
 	for i := 0; i < nStore; i++ {
 		sc := scopes[r.Intn(len(scopes))]
 		name := fmt.Sprintf("fact-%d", i)
@@ -59,7 +65,32 @@ func layeredFixture(t *testing.T, seed int64, nStore, nLocal int) (root, local s
 		}
 		write(t, local, rel, name, sc, phrase(r, 4+r.Intn(6)), phrase(r, 10+r.Intn(30)), "")
 	}
+	layeredRecords(t, root, local)
 	return root, local
+}
+
+// layeredRecords writes folder records into the store and the overlay's
+// local layer: live, shipped, dead and suppressed folders of the store, a
+// dead area whose topic holds facts, folders only the local layer has a
+// record for (dead, so the store's facts there are quiet on this machine
+// alone), and local statuses over store folders (one quiets a live store
+// folder, one wakes a shipped one).
+func layeredRecords(t *testing.T, root, local string) {
+	t.Helper()
+	curated := filepath.Join(local, filepath.FromSlash(overlay.CuratedDir))
+	api := srec("repo", "projects/api", "active")
+	api.Aliases = []string{"api-svc"}
+	old := srec("repo", "projects/old", "dead")
+	old.SuppressedBy = "projects/api"
+	ops := srec("area", "areas/ops", "dead")
+	ops.Tools = []string{"mcp__ops__.*"}
+	for _, rec := range []*record.Record{api, srec("repo", "projects/web", "active"), srec("repo", "projects/done", "shipped"), old, ops, srec("topic", "areas/ops/topics/old", "active")} {
+		putRec(t, root, rec)
+	}
+	for _, rec := range []*record.Record{srec("repo", "projects/gone", "dead"), srec("area", "areas/lab", "dead"), srec("topic", "areas/lab/topics/x", "active"),
+		srec("repo", "projects/web", "dead"), srec("repo", "projects/done", "active")} {
+		putRec(t, curated, rec)
+	}
 }
 
 // The layered index (the store-only file copied, the overlay's notes added)
@@ -86,6 +117,7 @@ func TestLayeredIndexAnswersAsAFullBuild(t *testing.T) {
 				t.Fatal(err)
 			}
 			compareIndexes(t, full, layered, fixtureWords)
+			checkQuietMarks(t, full)
 		})
 	}
 }
@@ -112,6 +144,12 @@ func compareIndexes(t *testing.T, a, b string, words []string) {
 		}
 	}
 	same("facts", `SELECT * FROM facts ORDER BY id`)
+	same("records", `SELECT rowid, * FROM records ORDER BY rowid`)
+	ra, erra := ia.Records(ctx)
+	rb, errb := ib.Records(ctx)
+	if erra != nil || errb != nil || !reflect.DeepEqual(ra, rb) {
+		t.Fatalf("Records differ: %v %v\nfull:    %+v\nlayered: %+v", erra, errb, ra, rb)
+	}
 	same("evidence", `SELECT * FROM evidence ORDER BY id`)
 	same("evidence_postings", `SELECT * FROM evidence_postings ORDER BY kind, token, id`)
 	for _, w := range words {
@@ -124,6 +162,9 @@ func compareIndexes(t *testing.T, a, b string, words []string) {
 		{Host: "host-a", Repo: "web", Query: "owner ruling quote review curator", PromptRelevance: true},
 		{Host: "host-a", Query: "sqlite fts index stale lock", PromptRelevance: true, Printable: true},
 		{Host: "host-a", Repo: "api", Paths: []string{"cmd/deploy/main.go"}, Command: "pkill -f shell"},
+		// Hook delivery over the folders with records: the quiet marks.
+		{Host: "host-a", Query: "deploy pipeline valkey cluster shard owner ruling", RestrictRepos: true, Scopes: quietFixtureScopes},
+		{Host: "host-a", Query: "deploy pipeline valkey cluster shard owner ruling", Scopes: quietFixtureScopes},
 	}
 	hits, locals := 0, 0
 	for _, sit := range sits {
@@ -177,4 +218,27 @@ func dump(t *testing.T, db *sql.DB, q string, args ...any) [][]any {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// checkQuietMarks fails t unless the fixture's store facts carry the quiet
+// marks the merged records give them: so the comparison covered marks that
+// only the local layer's records decide.
+func checkQuietMarks(t *testing.T, path string) {
+	t.Helper()
+	ix, err := openFile(context.Background(), path, "h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ix.Close()
+	got := map[string]int{}
+	rows := dump(t, ix.db, `SELECT scope, max(quiet) FROM facts WHERE local = 0 GROUP BY scope`)
+	for _, r := range rows {
+		got[r[0].(string)] = int(r[1].(int64))
+	}
+	want := map[string]int{"projects/api": 0, "projects/done": 1, "projects/gone": 1, "areas/ops/topics/old": 1, "areas/lab/topics/x": 1, "areas/ops": 1}
+	for sc, q := range want {
+		if got[sc] != q {
+			t.Errorf("store facts of %s: quiet %d, want %d (all %v)", sc, got[sc], q, got)
+		}
+	}
 }
