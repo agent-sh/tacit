@@ -10,6 +10,7 @@
 <script src="/api.js" defer></script>
 <script src="/app.js" defer></script>
 <script src="/desk.js" defer></script>
+<script src="/folders.js" defer></script>
 <meta name="tacit-token" content="{{TOKEN}}">
 <link rel="icon" href="/icon.svg">
 </head>
@@ -23,6 +24,7 @@
     <button type="button" class="place" data-view="believed" aria-pressed="false">What agents believe you prefer</button>
     <button type="button" class="place" data-view="facts" aria-pressed="false">All facts</button>
     <button type="button" class="place" data-view="inbox" aria-pressed="false">Inbox</button>
+    <button type="button" class="place" data-view="folders" aria-pressed="false">Folders</button>
   </nav>
   <div class="top-actions">
     <button type="button" class="btn ghost" id="new-ruling" data-icon="plus"><span class="label">New rule</span><kbd>n</kbd></button>
@@ -49,6 +51,9 @@
       </div>
     </div>
     <div class="sheet-inner" id="sheet-inner"><div class="done"><p>Reading the store.</p></div></div>
+  </section>
+  <section class="folders" id="folders" aria-label="Folders" hidden>
+    <div class="sheet-inner" id="folders-inner"><div class="done"><p>Reading the store.</p></div></div>
   </section>
   <section class="browse" id="browse" aria-label="Facts" hidden>
     <aside class="list-pane">

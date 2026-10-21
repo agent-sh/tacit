@@ -53,9 +53,11 @@ function setView(v, opts = {}) {
   desk.view = v;
   document.body.dataset.view = v;
   for (const b of document.querySelectorAll(".place")) b.setAttribute("aria-pressed", String(b.dataset.view === v));
-  const needs = v === "needs";
-  $("needs").hidden = !needs; $("browse").hidden = needs;
+  const needs = v === "needs", folders = v === "folders";
+  $("needs").hidden = !needs; $("browse").hidden = needs || folders;
+  if ($("folders")) $("folders").hidden = !folders;
   $("sheet").scrollTop = 0;
+  if (folders) { if (globalThis.tacitFolders) globalThis.tacitFolders.show(); return; }
   if (needs) { const it = view[cur]; load(it && it.id); return; }
   paintFilters();
   if (!opts.noList) browse(opts.then);
@@ -680,7 +682,7 @@ document.addEventListener("click", (e) => {
   e.preventDefault();
   jumpTo(b.dataset.fact, { facts: true });
 });
-const PLACES = { 1: "needs", 2: "rules", 3: "believed", 4: "facts", 5: "inbox" };
+const PLACES = { 1: "needs", 2: "rules", 3: "believed", 4: "facts", 5: "inbox", 6: "folders" };
 document.addEventListener("keydown", (e) => {
   const t = e.target instanceof Element ? e.target : document.body;
   const typing = t.matches("input, select, textarea");

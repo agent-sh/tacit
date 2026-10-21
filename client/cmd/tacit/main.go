@@ -52,6 +52,7 @@ func usage() {
   tacit curate [--model M] [--dry-run] [--max-batches N] [--budget D] [--recheck-conflicts --since D] inbox notes -> curated one-fact entries, conflict check, index, push; then the derive step
   tacit curate --quick [--min-interval D] [--env-file F]   the last day's notes only, no derive, results, links or staleness step; nothing within D (30m) of the last quick run
   tacit assess [--model M] [--max N] [--dry-run]   folders with no record (repositories, project folders) and records whose evidence changed -> the curator's model decides kind and status, code checks, records written (a step of curate)
+  tacit folder create|status|alias|suppress|tools --folder F [--kind K] [--desc D] [--status S] [--why W] [--alias A] [--into F] [--tools a,b] [--commands c,d]   an agent's change to a folder record, as the curator (by opus; the owner's channel is tacit app)
   tacit derive [--dry-run] [--out DIR] [--repo R] [--force] [--take-over] [--no-fetch] [--projects DIR] [-v]   hot spots, co-change and module map from git -> derived/<repo>/ (no model)
   tacit derive --set-branch <repo>=<branch>   read that repo at a branch other than the remote default (empty branch removes it)
   tacit results [--dry-run] [--out DIR] [--repo R] [--take-over] [--projects DIR] [-v]   measured results committed to repos -> derived/<repo>/ result facts with their commit; saved facts quoting a replaced value -> review/<date>-results.md (no model)
@@ -143,6 +144,8 @@ func main() {
 		os.Exit(runFormat(os.Args[2:]))
 	case "assess":
 		os.Exit(runAssess(os.Args[2:]))
+	case "folder":
+		os.Exit(runFolder(os.Args[2:]))
 	case "tree":
 		os.Exit(runTree(os.Args[2:]))
 	case "index":
