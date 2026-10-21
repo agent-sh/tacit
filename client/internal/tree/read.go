@@ -39,8 +39,9 @@ type ReadOptions struct {
 	Local string
 	// Session is what the tool may read (Session.Reads).
 	Session
-	// named is the scope the caller asked for by name (Named), set by Read.
-	named string
+	// named is the scope the caller asked for by name (Named), set by Read;
+	// also the folder a suppressed one asked for points at.
+	named, also string
 }
 
 var segRx = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
@@ -67,14 +68,24 @@ func Clean(p string) (string, error) {
 
 // Eligible reports whether folder p is in the session's scope
 // (Session.Reads), with the scope the caller named.
-func (o ReadOptions) Eligible(p string) bool { return o.Reads(p, o.named) }
+func (o ReadOptions) Eligible(p string) bool {
+	return o.Reads(p, o.named) || (o.also != "" && o.Reads(p, o.also))
+}
 
 // known are the in-scope children of p whether or not p's index lists them
 // (a long folder list is cut at MaxFolders).
 func (o ReadOptions) known(p string) []string {
 	switch p {
 	case "":
-		return []string{"system", "user", "projects", "machines", "derived"}
+		return []string{"system", "user", "projects", "areas", "topics", "machines", "derived"}
+	case "areas", "topics":
+		var out []string
+		for _, f := range o.folders() {
+			if strings.Count(f, "/") == 1 && strings.HasPrefix(f, p+"/") {
+				out = append(out, f)
+			}
+		}
+		return out
 	case "projects", "derived":
 		var out []string
 		for r := range o.repoSet() {
@@ -87,6 +98,18 @@ func (o ReadOptions) known(p string) []string {
 		if h := strings.ToLower(o.Host); segRx.MatchString(h) {
 			return []string{"machines/" + h}
 		}
+	}
+	if segs := strings.Split(p, "/"); segs[0] == "areas" && (len(segs) == 2 || len(segs) == 3 && segs[2] == "topics") {
+		var out []string
+		for _, f := range o.folders() {
+			if strings.HasPrefix(f, p+"/") {
+				if len(segs) == 2 {
+					return []string{p + "/topics"}
+				}
+				out = append(out, f)
+			}
+		}
+		return out
 	}
 	return nil
 }
@@ -130,6 +153,25 @@ func readIndex(root, p string) (string, bool, error) {
 	return string(b), true, nil
 }
 
+// suppressedBy is the folder p's own index (the store's, else the local
+// layer's) names as replacing it (SuppressedLine), "" for none.
+func (o ReadOptions) suppressedBy(p string) string {
+	for _, root := range []string{o.Store, o.Local} {
+		content, ok, err := readIndex(root, p)
+		if err != nil || !ok {
+			continue
+		}
+		for _, l := range strings.Split(content, "\n") {
+			if w, ok := strings.CutPrefix(l, SuppressedLine); ok {
+				if c, err := Clean(strings.TrimSpace(w)); err == nil && c != "" {
+					return c
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // filter drops the folder lines of content for folders out of scope and
 // returns the in-scope children it lists.
 func (o ReadOptions) filter(p, content string) (string, []string) {
@@ -143,6 +185,12 @@ func (o ReadOptions) filter(p, content string) (string, []string) {
 				child = p + "/" + m[1]
 			}
 			if !o.Eligible(child) {
+				// An area or topic not read by default (dormant, dead,
+				// shipped) is listed, not read: findable when named.
+				if r, _, _ := strings.Cut(child, "/"); r == "areas" || r == "topics" {
+					out = append(out, l)
+					continue
+				}
 				hidden++
 				continue
 			}
@@ -172,9 +220,20 @@ func Read(o ReadOptions, p string, depth int) (string, error) {
 	}
 	o.named = Named(p)
 	if !o.Eligible(p) {
-		return "", fmt.Errorf("%s is not a folder of the store's tree: system, user, projects/<repo>, machines/<host> and derived/<repo> are", p)
+		return "", fmt.Errorf("%s is not a folder of the store's tree: system, user, projects/<repo>, machines/<host>, derived/<repo>, areas/<area> and topics/<topic> are", p)
 	}
 	var b strings.Builder
+	// A suppressed folder is read as the folder that replaces it, then what
+	// is left in it until the curator's migration has moved everything.
+	if w := o.suppressedBy(p); w != "" && w != p {
+		o.also = Named(w)
+		fmt.Fprintf(&b, "%s is suppressed by %s: its facts move there. Showing %s first, then what is left in %s.\n\n", p, w, w, p)
+		out, err := Read(ReadOptions{Store: o.Store, Local: o.Local, Session: o.Session}, w, depth)
+		if err == nil {
+			b.WriteString(out)
+		}
+		depth = 0
+	}
 	cut := false
 	seen := map[string]bool{}
 	found := false

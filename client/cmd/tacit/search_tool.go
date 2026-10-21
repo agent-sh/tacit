@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/record"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
 	"github.com/agent-sh/tacit/client/internal/tree"
@@ -32,6 +33,8 @@ type browseArgs struct {
 	Inbox       bool
 	Limit       int
 	Offset      int
+	// Records are the store's folder records (storeRecords), nil for none.
+	Records map[string]*record.Record
 }
 
 const (
@@ -47,14 +50,17 @@ const (
 // readSession is the session a read of the store answers for (tree.Session,
 // the one rule of tacit_tree and tacit_search): the repository of cwd
 // (repoid) under every name delivery knows it by (repoAliases), unless repo
-// names another (that name alone), and host.
-func readSession(cwd, repo, host string) tree.Session {
-	sess := tree.Session{Host: host}
+// names another (that name alone), with the folders suppression joins it
+// with (suppressionNames), and host; recs are the store's folder records
+// (which areas and topics it reads).
+func readSession(recs map[string]*record.Record, cwd, repo, host string) tree.Session {
+	sess := tree.Session{Host: host, Records: recs}
 	if r, ok := sessionRepo(cwd); ok && cwd != "" && (repo == "" || strings.EqualFold(repo, r.Name)) {
 		sess.Repos = repoAliases(r)
 	} else if repo != "" {
 		sess.Repos = []string{repo}
 	}
+	sess.Repos = suppressionNames(recs, sess.Repos)
 	return sess
 }
 
@@ -72,7 +78,7 @@ func treeScopes(ctx context.Context, a *browseArgs) ([]string, error) {
 		}
 		return []string{sc}, nil
 	}
-	return readSession(a.Cwd, a.Repo, store.ShortHost()).Scopes(), nil
+	return readSession(a.Records, a.Cwd, a.Repo, store.ShortHost()).Scopes(), nil
 }
 
 // relPath is p relative to the checkout that holds cwd, when it is inside
@@ -241,7 +247,7 @@ func treeSearch(ctx context.Context, ix *search.Index, a browseArgs) (string, er
 		}
 		hits, err = ix.Query(ctx, search.Situation{Repo: a.Repo, Host: store.ShortHost(), Query: a.Query, Derived: true, Scopes: qs, Type: a.Type, RulingsOnly: a.RulingsOnly, ShortTerms: true}, pool, a.Inbox)
 		if ranked && err == nil {
-			repos := readSession(a.Cwd, a.Repo, store.ShortHost()).Repos
+			repos := readSession(a.Records, a.Cwd, a.Repo, store.ShortHost()).Repos
 			hits = sessionRepoFirst(hits, repos)
 			footer = repoTreeLine(ctx, ix, repos, "`tacit_tree")
 		}

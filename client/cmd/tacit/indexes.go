@@ -11,6 +11,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/index"
 	"github.com/agent-sh/tacit/client/internal/lint"
 	"github.com/agent-sh/tacit/client/internal/overlay"
+	"github.com/agent-sh/tacit/client/internal/record"
 	"github.com/agent-sh/tacit/client/internal/store"
 	"github.com/agent-sh/tacit/client/internal/tree"
 )
@@ -29,7 +30,8 @@ import (
 // copy in the working tree is removed, and named for the commit only while
 // git tracks it, so the commit records its removal once.
 func regenIndexes(ctx context.Context, dir string, facts []*fact.Fact, snap snapshot) ([]string, error) {
-	gen := tree.Generate(facts, "")
+	recs, _ := record.Walk(dir)
+	gen := tree.GenerateWith(facts, recs, "")
 	write, remove, err := tree.Plan(dir, gen)
 	if err != nil {
 		return nil, err
@@ -109,7 +111,8 @@ func regenLocalIndexes(dir, storeDir string, local []*fact.Fact) error {
 		}
 	}
 	root := filepath.Join(dir, filepath.FromSlash(overlay.CuratedDir))
-	gen := tree.Generate(curated, overlay.Prefix+overlay.CuratedDir+"/")
+	recs, _ := record.Walk(root)
+	gen := tree.GenerateWith(curated, recs, overlay.Prefix+overlay.CuratedDir+"/")
 	write, remove, err := tree.Plan(root, gen)
 	if err != nil {
 		return err
