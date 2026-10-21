@@ -212,6 +212,7 @@ func treeSearch(ctx context.Context, ix *search.Index, a browseArgs) (string, er
 	}
 	filtered := a.Scope != "" || a.Type != "" || a.RulingsOnly || a.Path != "" || a.Command != ""
 	var hits []search.Hit
+	footer := ""
 	if strings.TrimSpace(a.Query) == "" {
 		if !filtered {
 			return "", fmt.Errorf("give a query or a filter (scope, type, rulings_only, path, command)")
@@ -232,7 +233,18 @@ func treeSearch(ctx context.Context, ix *search.Index, a browseArgs) (string, er
 				return "", err
 			}
 		}
-		hits, err = ix.Query(ctx, search.Situation{Repo: a.Repo, Host: store.ShortHost(), Query: a.Query, Derived: true, Scopes: qs, Type: a.Type, RulingsOnly: a.RulingsOnly}, pool, a.Inbox)
+		// With no filter the session's repository's facts weigh more
+		// (sessionRepoBoost), over every candidate, not only a page's worth.
+		ranked := a.Scope == "" && a.Path == "" && a.Command == ""
+		if ranked {
+			pool = treePool
+		}
+		hits, err = ix.Query(ctx, search.Situation{Repo: a.Repo, Host: store.ShortHost(), Query: a.Query, Derived: true, Scopes: qs, Type: a.Type, RulingsOnly: a.RulingsOnly, ShortTerms: true}, pool, a.Inbox)
+		if ranked && err == nil {
+			repos := readSession(a.Cwd, a.Repo, store.ShortHost()).Repos
+			hits = sessionRepoFirst(hits, repos)
+			footer = repoTreeLine(ctx, ix, repos, "`tacit_tree")
+		}
 		if a.Scope != "" {
 			var in []search.Hit
 			for _, h := range hits {
@@ -252,7 +264,73 @@ func treeSearch(ctx context.Context, ix *search.Index, a browseArgs) (string, er
 			keep = append(keep, h)
 		}
 	}
-	return page(keep, max(0, a.Offset), limit), nil
+	out := page(keep, max(0, a.Offset), limit)
+	if footer != "" && len(keep) > 0 {
+		out += footer
+	}
+	return out, nil
+}
+
+// sessionRepoBoost is how much more a fact of the session's repository
+// (repoTied: its project scope or its applies_to.repos) weighs in a word
+// search than one of the user, system or machine scopes. Measured on the
+// held-out replay's 263 situations (their requests as queries) and the
+// act-bench: the held-out facts found stay level from 1 to 2 and fall from
+// 2.5, the act-bench's grow up to 1.5 to 2; 1.5 is the middle of the level
+// range. eval/VALUE.md, "Search, the push and the tree".
+const sessionRepoBoost = 1.5
+
+// sessionRepoFirst weighs the facts of the session's repository by
+// sessionRepoBoost and orders hits by score again.
+func sessionRepoFirst(hits []search.Hit, repos []string) []search.Hit {
+	if len(repos) == 0 {
+		return hits
+	}
+	for i := range hits {
+		if repoTied(hits[i], repos) {
+			hits[i].Score *= sessionRepoBoost
+		}
+	}
+	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
+	return hits
+}
+
+// repoTreeLine points from a search or the SessionStart block to the
+// session's repository folder in the tree: how many facts are tied to the
+// repository (Index.Tied) and the tree call that lists them, tool being how
+// the reader names the tree ("`tacit_tree", "`mcp__tacit__tacit_tree",
+// "`tacit tree"). The folder is the first of repos that is a project scope
+// of those facts. "" when the repository has none.
+func repoTreeLine(ctx context.Context, ix *search.Index, repos []string, tool string) string {
+	n, folder := repoFacts(ctx, ix, repos)
+	return treeLine(n, folder, tool)
+}
+
+func treeLine(n int, folder, tool string) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("# this repo's %d facts by folder: %s %s`\n", n, tool, folder)
+}
+
+// repoFacts counts the facts tied to repos and names their project folder.
+func repoFacts(ctx context.Context, ix *search.Index, repos []string) (int, string) {
+	tied, err := ix.Tied(ctx, repos)
+	if err != nil || len(tied) == 0 {
+		return 0, ""
+	}
+	scopes := map[string]bool{}
+	for _, h := range tied {
+		scopes[h.Scope] = true
+	}
+	folder := "projects/" + strings.ToLower(repos[0])
+	for _, r := range repos {
+		if sc := "projects/" + strings.ToLower(r); scopes[sc] {
+			folder = sc
+			break
+		}
+	}
+	return len(tied), folder
 }
 
 // scopeCounts is the tree answer's first block: for each of scopes that
