@@ -85,7 +85,8 @@ func TestSplit(t *testing.T) {
 }
 
 func TestShapes(t *testing.T) {
-	for s, want := range map[string]bool{"system": true, "user": true, "projects/api": true, "machines/host-a": true, "derived/x": true, "projects": false, "projects/a/b": false, "system/x": false, "inbox/x": false} {
+	for s, want := range map[string]bool{"system": true, "user": true, "projects/api": true, "machines/host-a": true, "derived/x": true, "projects": false, "projects/a/b": false, "system/x": false, "inbox/x": false,
+		"areas/ops": true, "areas/ops/topics/q4": true, "topics/q4": true, "areas": false, "areas/ops/q4": false, "areas/ops/topics": false, "areas/ops/topics/q4/x": false, "topics/q4/x": false, "topics/Q4": false, "areas/ops/topics/Q": false} {
 		if ValidScope(s) != want {
 			t.Errorf("ValidScope(%q)=%v", s, !want)
 		}

@@ -220,7 +220,7 @@ func Parse(result string) []Entry {
 	return out
 }
 
-var scopeRx = regexp.MustCompile(`^(user|system|projects/[a-z0-9-]+|machines/[a-z0-9-]+)$`)
+var scopeRx = regexp.MustCompile(`^(user|system|projects/[a-z0-9-]+|machines/[a-z0-9-]+|areas/[a-z0-9][a-z0-9-]*(/topics/[a-z0-9][a-z0-9-]*)?|topics/[a-z0-9][a-z0-9-]*)$`)
 
 // ToFact turns an entry into a curated fact; taken dedupes names.
 func ToFact(e Entry, host string, taken map[string]bool) *fact.Fact {
@@ -331,6 +331,7 @@ type Report struct {
 	Recheck          bool            `json:"recheck,omitempty"`            // a --recheck-conflicts run: Facts are the facts checked again
 	Quick            bool            `json:"quick,omitempty"`              // a --quick run: recent notes only, no derive, results, links or staleness step
 	Local            bool            `json:"local,omitempty"`              // a run of the local layer: this machine's overlay, nothing written to the store
+	Redirected       int             `json:"redirected,omitempty"`         // entries whose scope was a suppressed folder, written to the folder that replaces it
 	InvalidEntries   []string        `json:"invalid_entries,omitempty"`    // why split and rulings answers failed validation: "split: entry N: field: rule", never the entry's text
 	Retries          int             `json:"validation_retries,omitempty"` // answers refused by the checks and sent back to the model once (curate.SplitChecked)
 }

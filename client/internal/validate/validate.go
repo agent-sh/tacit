@@ -20,7 +20,17 @@
 //     with the repository's own name in the message;
 //   - a machine (machines/<host>) is this one, one that wrote to the store
 //     (a key in keys/, an inbox directory) or one whose
-//     folder already holds facts.
+//     folder already holds facts;
+//   - a project with a folder record (internal/record) is known by its
+//     name, and a repository record by its aliases too; once the store's
+//     format marker says every folder has a record (records_complete), a
+//     project folder that holds facts is no longer known for that alone;
+//   - an area or topic (areas/<a>, areas/<a>/topics/<t>, topics/<t>) is
+//     known only by its record, and only in a store with the format marker.
+//
+// A scope inside a suppressed folder is redirected to the folder that
+// replaces it (Redirect): the pointer is a checked decision of the owner's
+// or the curator's, so code may follow it.
 package validate
 
 import (
@@ -34,6 +44,7 @@ import (
 	"unicode"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/record"
 	"github.com/agent-sh/tacit/client/internal/repoid"
 )
 
@@ -65,6 +76,14 @@ type Env struct {
 	StoreRepos map[string]bool
 	// Hosts are the machines a machines/<host> scope may name.
 	Hosts map[string]bool
+	// Records are the folder records of the store and, with the local
+	// layer, of its curated directory (a store record wins), folder ->
+	// record.
+	Records map[string]*record.Record
+	// Format: the store holds a format marker this binary writes (new
+	// roots and records may be written); RecordsComplete: every fact
+	// folder has a record, so the interim rule is off.
+	Format, RecordsComplete bool
 }
 
 // NewEnv builds the checks' knowledge from the folders of the store at
@@ -73,9 +92,23 @@ type Env struct {
 // store's writers (keys/<harness>@<host>.pub, inbox/<harness>@<host>/), this
 // host and the machine's catalog. It reads directories, not facts.
 func NewEnv(storeDir, layer string, catalog *repoid.Catalog, host string) Env {
-	e := Env{Catalog: catalog, StoreRepos: map[string]bool{}, Hosts: map[string]bool{}}
+	e := Env{Catalog: catalog, StoreRepos: map[string]bool{}, Hosts: map[string]bool{}, Records: map[string]*record.Record{}}
 	if h := strings.ToLower(host); fact.IsSlug(h) {
 		e.Hosts[h] = true
+	}
+	if storeDir != "" {
+		e.Format, _ = fact.FormatWrites(storeDir)
+		if st, err := fact.LoadState(storeDir); err == nil {
+			e.RecordsComplete = e.Format && st.Format.RecordsComplete
+		}
+	}
+	for _, root := range []string{storeDir, layer} {
+		recs, _ := record.Walk(root)
+		for f, r := range recs {
+			if _, have := e.Records[f]; !have {
+				e.Records[f] = r
+			}
+		}
 	}
 	for _, root := range []string{storeDir, layer} {
 		if root == "" {
@@ -134,10 +167,46 @@ func factFolders(dir string) []string {
 }
 
 // KnownRepo reports a repository name the store or this machine knows by
-// its own name.
+// its own name: a checkout's, a repository record's name or alias, or
+// (until records are complete) a project folder that holds facts.
 func (e Env) KnownRepo(name string) bool {
 	n := strings.ToLower(name)
-	return e.Catalog.Has(n) || e.StoreRepos[n]
+	if e.Catalog.Has(n) || (!e.RecordsComplete && e.StoreRepos[n]) {
+		return true
+	}
+	if f := record.RepoOwner(e.Records, n); f != "" && e.Records[f].Kind == record.KindRepo {
+		return true
+	}
+	return false
+}
+
+// Redirect is the folder that holds a suppressed scope's content now (the
+// suppression pointers followed), and true when scope is in a suppressed
+// folder; scope itself and false otherwise.
+func (e Env) Redirect(scope string) (string, bool) {
+	if len(e.Records) == 0 {
+		return scope, false
+	}
+	w, chain, err := record.Resolve(e.Records, scope)
+	if err != nil || len(chain) == 0 || e.Records[w] == nil {
+		return scope, false
+	}
+	return w, true
+}
+
+// RedirectFact moves f (a new fact or note, not yet written) to the folder
+// that replaces its scope's, path and scope both, and reports whether it
+// did.
+func (e Env) RedirectFact(f *fact.Fact) bool {
+	w, ok := e.Redirect(f.Meta.Scope)
+	if !ok {
+		return false
+	}
+	f.Meta.Scope = w
+	if !f.InInbox() {
+		f.Path = w + "/" + f.Meta.Name + ".md"
+	}
+	return true
 }
 
 // RepoNames lists the repositories a project scope may name, sorted.
@@ -146,8 +215,15 @@ func (e Env) RepoNames() []string {
 	for _, n := range e.Catalog.Names() {
 		set[n] = true
 	}
-	for n := range e.StoreRepos {
-		set[n] = true
+	if !e.RecordsComplete {
+		for n := range e.StoreRepos {
+			set[n] = true
+		}
+	}
+	for f, r := range e.Records {
+		if r.Kind == record.KindRepo && r.Live() {
+			set[strings.TrimPrefix(f, "projects/")] = true
+		}
 	}
 	return sorted(set)
 }
@@ -174,10 +250,26 @@ func (e Env) Scope(scope string) *Problem {
 		return &Problem{Field: "scope", Rule: "derived/ is for facts code generates from git", Hint: "use projects/" + rest + " for a fact about that repository"}
 	}
 	if !fact.ValidScope(scope) || ((root == "projects" || root == "machines") && !fact.IsSlug(rest)) {
-		return &Problem{Field: "scope", Rule: "not user, system, projects/<repo> or machines/<host> (lower-case letters, digits and dashes)", Hint: fmt.Sprintf("got %q", scope)}
+		return &Problem{Field: "scope", Rule: "not user, system, projects/<repo>, machines/<host>, areas/<area>, areas/<area>/topics/<topic> or topics/<topic> (lower-case letters, digits and dashes)", Hint: fmt.Sprintf("got %q", scope)}
 	}
 	switch root {
+	case "areas", "topics":
+		if !e.Format {
+			return &Problem{Field: "scope", Rule: "areas and topics are written only once the store holds the format marker", Hint: fmt.Sprintf("%s; use the project, user or machines/<host> scope", scope)}
+		}
+		r := e.Records[scope]
+		want := record.KindArea
+		if root == "topics" || strings.Contains(rest, "/") {
+			want = record.KindTopic
+		}
+		if r == nil || r.Kind != want {
+			return &Problem{Field: "scope", Rule: "names no " + want + " with a record", Hint: fmt.Sprintf("%s; an %s is created by the curator from two sessions' evidence or by the owner; use a listed one, or the project, user or machines/<host> scope", scope, want)}
+		}
+		return nil
 	case "projects":
+		if r := e.Records[scope]; r != nil {
+			return nil // a recorded folder; one suppressed is redirected (Redirect)
+		}
 		if e.KnownRepo(rest) {
 			return nil
 		}
@@ -201,7 +293,7 @@ func (e Env) Scope(scope string) *Problem {
 // checks) instead of refusing.
 func (e Env) UnknownRepo(scope string) bool {
 	root, rest, _ := strings.Cut(strings.ToLower(scope), "/")
-	return root == "projects" && fact.IsSlug(rest) && !e.KnownRepo(rest) && e.Catalog.AliasOf(rest) == ""
+	return root == "projects" && fact.IsSlug(rest) && e.Records[root+"/"+rest] == nil && !e.KnownRepo(rest) && e.Catalog.AliasOf(rest) == ""
 }
 
 // Type checks a type a model or an agent gave, for a fact in scope (inbox:

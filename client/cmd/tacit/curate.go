@@ -522,7 +522,10 @@ func runCurate(args []string) int {
 				break
 			}
 			f := curate.ToFact(e, host, batchNames)
-			env.RepoPaths(&f.Meta) // as the check saw it (entryCheck)
+			if env.RedirectFact(f) { // as the check saw it (entryCheck)
+				rep.Redirected++
+			}
+			env.RepoPaths(&f.Meta)
 			// A ruling is the owner's own words: kind user stays only with their
 			// quote found in the note and in their turns or notes.
 			q, ruling := curate.ApplyEvidence(f, e, noteByName[e.Origin], where)

@@ -1,4 +1,4 @@
-// Package lint checks a store tree against the rules in SPEC.md (L1 to L16).
+// Package lint checks a store tree against the rules in SPEC.md (L1 to L17).
 package lint
 
 import (
@@ -6,12 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/index"
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
+	"github.com/agent-sh/tacit/client/internal/record"
 	"github.com/agent-sh/tacit/client/internal/tree"
 )
 
@@ -44,6 +46,7 @@ func Run(root string) ([]Finding, error) {
 		out = append(out, check(f, names)...)
 		out = append(out, ownerEvidence(f, ev)...)
 	}
+	out = append(out, records(root, facts)...)
 	// L10: committed index must equal the generated one.
 	if b, rerr := os.ReadFile(filepath.Join(root, "MEMORY.md")); rerr == nil {
 		if want := index.Generate(facts); string(b) != want {
@@ -263,6 +266,73 @@ func ownerEvidence(f *fact.Fact, ev evidence) []Finding {
 	}
 	if s.Kind == "user" && !f.InInbox() && f.Audited && !fact.HasEvidence(f) {
 		add("source.kind user without the owner's words: no owner_quote, no endorsement, not written by them (tacit rulings audit)")
+	}
+	return out
+}
+
+// records is L17, the folder records format (SPEC.md, "Folder records",
+// "Store format"): the format marker reads; nothing of the format (a
+// record, a fact in areas/ or topics/, last_checked) is in a store without
+// it, since an older binary reads such a store wrong; every record parses
+// and holds as it stands (record.Validate, static: the history's shape,
+// the kind for its folder, aliases unique, suppression of the right kind
+// with no chain or loop, an area or topic of the curator's on two
+// sessions, the owner's words backed by the quote ledger); a fact in an
+// area or topic folder has its folder's record; and once the marker says
+// records are complete, every project folder with facts has one too.
+func records(root string, facts []*fact.Fact) []Finding {
+	var out []Finding
+	add := func(p, msg string) { out = append(out, Finding{"L17", p, msg}) }
+	format, haveFormat, ferr := ledger.ReadFormat(root)
+	if ferr != nil {
+		add(ledger.FormatPath, "the format marker cannot be read: "+strings.Join(strings.Fields(ferr.Error()), " "))
+	}
+	recs, errs := record.Walk(root)
+	for _, e := range errs {
+		p, msg, _ := strings.Cut(e.Error(), ": ")
+		add(p, strings.Join(strings.Fields(msg), " "))
+	}
+	if !haveFormat {
+		for f := range recs {
+			add(record.Rel(f), "a folder record in a store without the format marker ("+ledger.FormatPath+")")
+		}
+		for _, f := range facts {
+			if !f.InInbox() && fact.NewRoot(f.Meta.Scope) {
+				add(f.Path, "a fact in "+f.Meta.Scope+" in a store without the format marker")
+			}
+			if f.Meta.LastChecked != "" {
+				add(f.Path, "last_checked in a store without the format marker")
+			}
+		}
+	}
+	ql, _ := os.ReadFile(filepath.Join(root, filepath.FromSlash(ledger.QuotesPath)))
+	env := record.Env{Static: true, Records: recs, QuoteBacked: ledger.Backing(ql)}
+	folders := make([]string, 0, len(recs))
+	for f := range recs {
+		folders = append(folders, f)
+	}
+	sort.Strings(folders)
+	for _, f := range folders {
+		for _, p := range record.Validate(nil, recs[f], "", env) {
+			add(record.Rel(f), p.String())
+		}
+	}
+	for _, p := range record.Chains(recs) {
+		add(record.Rel(p.Folder), p.String())
+	}
+	missing := map[string]bool{}
+	for _, f := range facts {
+		if f.InInbox() || !record.IsFolder(f.Meta.Scope) || f.Dir() != f.Meta.Scope {
+			continue
+		}
+		r := recs[f.Meta.Scope]
+		switch {
+		case fact.NewRoot(f.Meta.Scope) && r == nil:
+			add(f.Path, "a fact in "+f.Meta.Scope+", which has no record")
+		case r == nil && format.RecordsComplete && !missing[f.Meta.Scope]:
+			missing[f.Meta.Scope] = true
+			add(f.Meta.Scope, "a folder with facts and no record (the format marker says records are complete)")
+		}
 	}
 	return out
 }

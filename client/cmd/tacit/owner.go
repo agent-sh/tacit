@@ -853,7 +853,7 @@ func today() string { return time.Now().Format("2006-01-02") }
 func checkScope(scope string) error {
 	switch {
 	case !fact.ValidScope(scope):
-		return fmt.Errorf("%q is not a scope: use projects/<repo>, machines/<host>, user or system", scope)
+		return fmt.Errorf("%q is not a scope: use projects/<repo>, machines/<host>, user, system, areas/<area>, areas/<area>/topics/<topic> or topics/<topic>", scope)
 	case strings.HasPrefix(scope, "derived/"):
 		return errors.New("derived/ holds what the curator generates from git; choose another scope")
 	}

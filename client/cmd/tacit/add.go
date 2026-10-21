@@ -87,6 +87,9 @@ func addFact(ctx context.Context, s *store.Store, harness string, m fact.Meta, b
 	}
 	m.Source = fact.Source{Harness: harness, Host: host, Kind: firstNonEmpty(m.Source.Kind, "observed"), Session: m.Source.Session}
 	env := addEnv(s)
+	if w, ok := env.Redirect(m.Scope); ok {
+		m.Scope = w // a suppressed folder's facts go to the folder that replaces it
+	}
 	env.RepoPaths(&m) // a path inside this machine's checkout of the repo, made relative
 	if err := validate.Error(env.Meta(m, body, true, false)); err != nil {
 		return "", err
