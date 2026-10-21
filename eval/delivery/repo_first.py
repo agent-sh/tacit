@@ -30,7 +30,7 @@ import argparse, concurrent.futures as cf, json, os, re, shutil, subprocess, tem
 
 NAME = re.compile(r'^- (?:RULE )?([a-z0-9][a-z0-9-]*)', re.M)
 LINE = re.compile(r'^- (?:RULE )?([a-z0-9][a-z0-9-]*)[^:\n]*: (.*)$', re.M)
-SWITCHES = ['REPO_START', 'REPO_ALIASES', 'PROMPT_METADATA', 'PROMPT_ACTION', 'INSTRUCTION', 'TOOL_PUSH']
+SWITCHES = ['REPO_START', 'REPO_ALIASES', 'PROMPT_METADATA', 'PROMPT_ACTION', 'INSTRUCTION', 'TOOL_PUSH', 'TREE_POINTER']
 
 
 def hook(exe, config, sub, payload, env, cwd, flags=()):

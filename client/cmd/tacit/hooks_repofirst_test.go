@@ -227,6 +227,34 @@ func TestMCPServerSendsTheInstruction(t *testing.T) {
 	}
 }
 
+// When the repo block shows fewer of the repository's facts than it has,
+// SessionStart's last line says how many it has and the tree call that lists
+// them, as the session names the tree; with all shown, or the setting off,
+// there is no such line.
+func TestSessionStartPointsToTheRepoFolder(t *testing.T) {
+	var facts []fact.Meta
+	for _, n := range []string{"a", "b", "c", "d", "e", "f", "g"} {
+		facts = append(facts, fact.Meta{Name: "widget-standard-" + n, Description: "Widget standard " + n, Type: "user_standard", Scope: "projects/widget"})
+	}
+	_, cwd := repoFirstRig(t, facts...)
+	out := hookOut(t, startPayload(cwd, "s1"), "session-start", "--mcp")
+	if !strings.HasSuffix(out, "# this repo's 8 facts by folder: `mcp__tacit__tacit_tree projects/widget`\n") {
+		t.Fatalf("pointer:\n%s", out)
+	}
+	if out := hookOut(t, startPayload(cwd, "s2"), "session-start"); !strings.Contains(out, "`tacit tree projects/widget`") {
+		t.Fatalf("pointer without MCP:\n%s", out)
+	}
+	t.Setenv("TACIT_DELIVERY_START_CEILING", "8")
+	if out := hookOut(t, startPayload(cwd, "s3"), "session-start", "--mcp"); strings.Contains(out, "tacit_tree") {
+		t.Fatalf("all shown, still a pointer:\n%s", out)
+	}
+	t.Setenv("TACIT_DELIVERY_START_CEILING", "")
+	t.Setenv("TACIT_DELIVERY_TREE_POINTER", "off")
+	if out := hookOut(t, startPayload(cwd, "s4"), "session-start", "--mcp"); strings.Contains(out, "tacit_tree") {
+		t.Fatalf("setting off:\n%s", out)
+	}
+}
+
 // A shell command runs a fact's command when a part starts with it, or
 // goes on with it after its first word when the second is no flag: a
 // program that runs the next one (npx, sudo, a loop's do).

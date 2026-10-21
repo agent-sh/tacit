@@ -146,6 +146,7 @@ Every YAML option is listed here:
 | `delivery.prompt_action` | `TACIT_DELIVERY_PROMPT_ACTION` | `on` (default): the prompt block adds the repo's best rule or decision for the request when it has none |
 | `delivery.instruction` | `TACIT_DELIVERY_INSTRUCTION` | `on` (default): the SessionStart title and the MCP server's instructions say what tacit holds and ask for one search before an action that changes something (the server's also point to `tacit_tree`); `off`: neither, and the server has no instructions |
 | `delivery.tool_push` | `TACIT_DELIVERY_TOOL_PUSH` | `on` (default): the PreToolUse hook gives the one matching rule or decision before an edit or a shell command |
+| `delivery.tree_pointer` | `TACIT_DELIVERY_TREE_POINTER` | `on` (default): when the SessionStart repo block shows fewer of the repo's facts than it has, its last line gives their count and the tree call that lists them |
 | `delivery.start_ceiling` | `TACIT_DELIVERY_START_CEILING` | Most lines of the SessionStart repo block; default `6` |
 | `delivery.prompt_ceiling` | `TACIT_DELIVERY_PROMPT_CEILING` | Most curated lines of the prompt block above its floor; default `5` |
 | `delivery.prompt_relative` | `TACIT_DELIVERY_PROMPT_RELATIVE` | A prompt line also needs this share of the best line's score; default `0.7`, `0` for none |
