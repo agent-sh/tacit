@@ -291,3 +291,14 @@ func TestReadAddsTheLocalLayer(t *testing.T) {
 		t.Errorf("local layer:\n%s", out)
 	}
 }
+
+func TestDepthForIsTwoAtTheRootAndThreeBelow(t *testing.T) {
+	for p, want := range map[string]int{"": RootDepth, ".": RootDepth, "/": RootDepth, "projects": DefaultDepth, "projects/widget": DefaultDepth, "user/": DefaultDepth, "../x": DefaultDepth} {
+		if got := DepthFor(p); got != want {
+			t.Errorf("DepthFor(%q) = %d, want %d", p, got, want)
+		}
+	}
+	if RootDepth != 2 || DefaultDepth != 3 {
+		t.Fatalf("defaults %d, %d", RootDepth, DefaultDepth)
+	}
+}

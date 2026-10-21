@@ -35,7 +35,7 @@ Choose a local store with `tacit init`, or a shared store with `tacit clone`. Lo
 - `tacit review apply VERDICTS.json...`: apply a verifier's marks in one commit.
 - `tacit resolve supersede <old> <new> | conflict <a> <b> | clear <name>`: the same answers from the command line.
 - `tacit lint`, `tacit index` (MEMORY.md and the folder indexes), `tacit import claude|codex` for store maintenance.
-- `tacit tree [--depth N] [path]` (and the MCP `tacit_tree`): this session's scopes with their facts by type, then the folder indexes from a folder down N levels; another repository's or machine's folder only when named as the path.
+- `tacit tree [--depth N] [path]` (and the MCP `tacit_tree`): this session's scopes with their facts by type, then the folder indexes from a folder down N levels (default 2 at the store root, 3 for a folder; a given depth wins); another repository's or machine's folder only when named as the path.
 
 ## Mac
 

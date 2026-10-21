@@ -31,7 +31,7 @@ func usage() {
   tacit doctor [--models] [--role dream|curate|judge|verify] [--json]   offline configuration and dependency checks
   tacit lint   [--store DIR]
   tacit index  [--store DIR] [--check]   MEMORY.md and every folder's _index.md
-  tacit tree   [--depth N] [--repo R] [--host H] [path]   facts by scope and type, then the folder indexes from path (default the root) down N levels (default 3); another repo's or host's folder only when named
+  tacit tree   [--depth N] [--repo R] [--host H] [path]   facts by scope and type, then the folder indexes from path (default the root) down N levels (default 2 at the root, 3 for a folder); another repo's or host's folder only when named
   tacit import [--store DIR] [--host NAME] claude <memory-dir>...
   tacit import [--store DIR] [--host NAME] codex  <memories-dir>
   tacit clone <url> <harness>     clone the store and set up the credential helper

@@ -19,10 +19,11 @@ import (
 
 // runTree implements `tacit tree [--depth N] [--repo R] [--host H] [path]`:
 // the folder indexes from path (default: the store root) down depth levels
-// (default 3), for this session's scopes.
+// (default 2 at the root, 3 for a folder; tree.DepthFor), for this session's
+// scopes.
 func runTree(args []string) int {
 	fs := flag.NewFlagSet("tree", flag.ExitOnError)
-	depth := fs.Int("depth", tree.DefaultDepth, "levels below the folder to include (0: the folder alone)")
+	depth := fs.Int("depth", -1, "levels below the folder to include (0: the folder alone; default 2 at the store root, 3 for a folder)")
 	repo := fs.String("repo", "", "repository whose project folder is in scope (default: the repo of the current directory)")
 	host := fs.String("host", store.ShortHost(), "machine whose folder is in scope")
 	fs.Parse(args)
@@ -34,7 +35,17 @@ func runTree(args []string) int {
 		fmt.Fprintln(os.Stderr, "tree: no store")
 		return 2
 	}
-	out, err := treeView(s, fs.Arg(0), *depth, *repo, *host)
+	d := *depth
+	explicit := false
+	fs.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "depth" })
+	if !explicit {
+		d = tree.DepthFor(fs.Arg(0))
+	}
+	if d < 0 || d > tree.MaxDepth {
+		fmt.Fprintln(os.Stderr, "tree:", errTreeArgs)
+		return 2
+	}
+	out, err := treeView(s, fs.Arg(0), d, *repo, *host)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "tree:", err)
 		return 1
@@ -95,7 +106,7 @@ var errTreeArgs = errors.New("depth must be between 0 and 8")
 // treeToolText answers the MCP tool: the view, or the error as text the agent
 // can act on.
 func treeToolText(s *store.Store, p string, depth *int) string {
-	d := tree.DefaultDepth
+	d := tree.DepthFor(p)
 	if depth != nil {
 		d = *depth
 	}
@@ -113,7 +124,7 @@ func treeToolText(s *store.Store, p string, depth *int) string {
 func addTreeTool(server *mcp.Server, s *store.Store) {
 	type treeArgs struct {
 		Path  string `json:"path,omitempty" jsonschema:"store folder: empty for the root, or system, user, projects/<repo>, machines/<host>, derived/<repo>"`
-		Depth *int   `json:"depth,omitempty" jsonschema:"levels below the folder to include; default 3, 0 for the folder alone"`
+		Depth *int   `json:"depth,omitempty" jsonschema:"levels below the folder to include; default 2 for the store root and 3 for a folder, 0 for the folder alone"`
 	}
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "tacit_tree",

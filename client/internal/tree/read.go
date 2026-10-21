@@ -10,13 +10,26 @@ import (
 )
 
 // DefaultDepth is how many levels below the asked folder the tree tool
-// returns when the caller does not say; MaxDepth is the most it accepts.
+// returns when the caller does not say (DepthFor): RootDepth for the store
+// root, whose third level is every fact of every scope the session reads
+// (26 to 36 KB on the rig's stores, 2026-10-21), DefaultDepth for any other
+// folder. MaxDepth is the most it accepts.
 const (
 	DefaultDepth = 3
+	RootDepth    = 2
 	MaxDepth     = 8
 	// maxOutput bounds one answer; a larger tree is cut with a note.
 	maxOutput = 64 << 10
 )
+
+// DepthFor is the depth for folder p when the caller gives none: RootDepth
+// for the root ("" or what Clean reads as it), DefaultDepth otherwise.
+func DepthFor(p string) int {
+	if c, err := Clean(p); err == nil && c == "" {
+		return RootDepth
+	}
+	return DefaultDepth
+}
 
 // ReadOptions is the session the tree tool answers for.
 type ReadOptions struct {
