@@ -124,3 +124,31 @@ func TestTreeCountsAndSearchListAScope(t *testing.T) {
 		t.Fatalf("an explicit machine scope:\n%s", got)
 	}
 }
+
+// A word search over the session's scopes keeps an agent's two-letter words
+// (a tool named pi), weighs the session's repository's facts over the same
+// match elsewhere, and ends with the tree call that lists the repository's
+// facts by folder; a filtered search has no such line.
+func TestTacitSearchShortWordsRepoWeightAndTreeLine(t *testing.T) {
+	host := store.ShortHost()
+	_, cwd := repoFirstRig(t,
+		fact.Meta{Name: "widget-pi-moved", Description: "The pi agent repo moved to example/pi; link the new one", Type: "history", Scope: "projects/widget"},
+		fact.Meta{Name: "widget-retry-budget", Description: "Retries back off for at most ninety seconds", Type: "design_decision", Scope: "projects/widget"},
+		fact.Meta{Name: "host-retry-budget", Description: "Retries back off for at most ninety seconds", Type: "machine_fact", Scope: "machines/" + host},
+	)
+	t.Chdir(cwd)
+	got := callTool(t, "tacit_search", map[string]any{"query": "pi"})
+	if !strings.Contains(got, "widget-pi-moved") {
+		t.Fatalf("a two-letter word:\n%s", got)
+	}
+	got = callTool(t, "tacit_search", map[string]any{"query": "retries back off ninety seconds"})
+	if strings.Index(got, "widget-retry-budget") < 0 || strings.Index(got, "widget-retry-budget") > strings.Index(got, "host-retry-budget") {
+		t.Fatalf("the repo's fact does not come first:\n%s", got)
+	}
+	if !strings.HasSuffix(got, "# this repo's 3 facts by folder: `tacit_tree projects/widget`\n") {
+		t.Fatalf("tree line:\n%s", got)
+	}
+	if got := callTool(t, "tacit_search", map[string]any{"query": "retries", "scope": "projects/widget"}); strings.Contains(got, "tacit_tree") {
+		t.Fatalf("a filtered search points to the tree:\n%s", got)
+	}
+}

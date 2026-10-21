@@ -334,6 +334,12 @@ type Situation struct {
 	// repo. Known repos, machine scopes, and derived isolation remain strict.
 	// A rare syntactic identifier remains the single-term exception.
 	PromptRelevance bool
+	// ShortTerms keeps two-letter words as query terms (pi, pr, ci, go). An
+	// explicit search's words are the agent's own, picked to find something;
+	// a hook's prompt is prose, where two-letter words are mostly grammar and
+	// would pass its coverage gate. BM25 weighs the grammar ones (to, in, of)
+	// to nearly nothing. eval/VALUE.md, "Search, the push and the tree".
+	ShortTerms bool
 }
 
 func mentionsRepo(prompt, repo string) bool {
@@ -368,12 +374,16 @@ func init() {
 
 // Terms turns free text into FTS query tokens: distinct, lowercase, no stop
 // words, split on . / - so paths and commands contribute their parts too.
-func Terms(text string) []string {
+func Terms(text string) []string { return terms(text, 3) }
+
+// terms is Terms with words of minLen letters or more (non-ASCII words of
+// two letters always count).
+func terms(text string, minLen int) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, t := range tokenRe.FindAllString(strings.ToLower(text), -1) {
 		for _, piece := range strings.FieldsFunc(t, func(r rune) bool { return r == '.' || r == '/' || r == '-' }) {
-			if len([]rune(piece)) < 2 || (len([]rune(piece)) < 3 && !hasNonASCII(piece)) || stop[piece] || seen[piece] {
+			if len([]rune(piece)) < 2 || (len([]rune(piece)) < minLen && !hasNonASCII(piece)) || stop[piece] || seen[piece] {
 				continue
 			}
 			seen[piece] = true
@@ -396,7 +406,11 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	// match, and counted twice they would pass the two-match gate alone.
 	// The relationship evidence stores words as written, so it gets every
 	// spelling; dropping one would lose the pairs it supports.
-	all := Terms(strings.Join(append([]string{sit.Query, sit.Command}, sit.Paths...), " "))
+	minLen := 3
+	if sit.ShortTerms {
+		minLen = 2
+	}
+	all := terms(strings.Join(append([]string{sit.Query, sit.Command}, sit.Paths...), " "), minLen)
 	terms := distinctStems(all)
 	if len(terms) == 0 || (sit.OnlyDerived && sit.Repo == "") {
 		return nil, nil
