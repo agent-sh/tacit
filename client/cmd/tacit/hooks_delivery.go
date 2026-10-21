@@ -268,7 +268,10 @@ var cmdBoundary = regexp.MustCompile(`&&|\|\||[;|&()\n]|\$\(|` + "`")
 
 // commandMatch reports whether the fact's applies_to command (a prefix such
 // as "git commit" or "tsup") is how one of the shell command's parts starts,
-// after any environment assignments (FOO=1 make). The program is compared
+// after any environment assignments (FOO=1 make), or how it goes on after
+// the part's first word when the second is not a flag: a program that runs
+// the next word as its own (npx vitest, sudo make, do make in a shell loop)
+// runs that command, with no list of such programs. The program is compared
 // by base name, so ./node_modules/.bin/tsup runs tsup.
 func commandMatch(factCmd, command string) bool {
 	fw := cmdWords(factCmd)
@@ -280,14 +283,17 @@ func commandMatch(factCmd, command string) bool {
 		for len(w) > 0 && strings.Contains(w[0], "=") && !strings.HasPrefix(w[0], "-") {
 			w = w[1:]
 		}
-		if len(w) < len(fw) {
-			continue
-		}
-		if filepath.Base(w[0]) == filepath.Base(fw[0]) && slicesEqual(w[1:len(fw)], fw[1:]) {
+		if startsWith(w, fw) || (len(w) > 1 && !strings.HasPrefix(w[1], "-") && startsWith(w[1:], fw)) {
 			return true
 		}
 	}
 	return false
+}
+
+// startsWith reports whether the command words w start with the fact's
+// command fw, the program by base name.
+func startsWith(w, fw []string) bool {
+	return len(w) >= len(fw) && filepath.Base(w[0]) == filepath.Base(fw[0]) && slicesEqual(w[1:len(fw)], fw[1:])
 }
 
 func slicesEqual(a, b []string) bool {
