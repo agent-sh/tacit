@@ -60,6 +60,7 @@ func entryCheck(env validate.Env, host string, batch []*fact.Fact, noteByName ma
 				continue
 			}
 			f := curate.ToFact(e, host, taken)
+			env.RedirectFact(f) // a suppressed folder's entries go to its winner
 			env.RepoPaths(&f.Meta)
 			_, ruling := curate.ApplyEvidence(f, e, noteByName[e.Origin], where)
 			if !ruling && e.Kind == "user" && noOwnerCorpus {

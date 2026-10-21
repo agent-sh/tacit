@@ -17,6 +17,8 @@ type Problem struct {
 	Field string
 	Rule  string
 	Hint  string
+	// Folder is the record's folder, set by Chains (a whole-set check).
+	Folder string
 }
 
 func (p Problem) String() string { return p.Field + ": " + p.Rule }
@@ -129,9 +131,9 @@ const MinAreaSessions = 2
 // Every problem is returned; an empty list accepts it.
 func Validate(old, rec *Record, by string, env Env) []Problem {
 	var out []Problem
-	add := func(field, rule, hint string) { out = append(out, Problem{field, rule, hint}) }
+	add := func(field, rule, hint string) { out = append(out, Problem{Field: field, Rule: rule, Hint: hint}) }
 	if rec == nil {
-		return []Problem{{"record", "missing", ""}}
+		return []Problem{{Field: "record", Rule: "missing"}}
 	}
 	folder := rec.Folder
 	allowed := FolderKinds(folder)
@@ -185,6 +187,9 @@ func Validate(old, rec *Record, by string, env Env) []Problem {
 		}
 		if (e.Quote == "") != (e.QuoteFrom == "") {
 			add(f+".quote", "quote and quote_from go together", "")
+		}
+		if e.Quote != "" && e.QuoteFrom != "" && env.QuoteBacked != nil && !env.QuoteBacked(e.Quote, e.QuoteFrom) {
+			add(f+".quote", "the quote ledger does not record these words of the owner's", "")
 		}
 		if i > 0 && e.Date > rec.Was[i-1].Date {
 			add(f+".date", "is later than the entry above it (newest first)", "")
@@ -462,11 +467,11 @@ func Chains(recs map[string]*Record) []Problem {
 			continue
 		}
 		if _, _, err := Resolve(recs, f); err != nil {
-			out = append(out, Problem{"suppressed_by", "loops", f})
+			out = append(out, Problem{Field: "suppressed_by", Rule: "loops", Folder: f})
 			continue
 		}
 		if t := recs[r.SuppressedBy]; t != nil && t.SuppressedBy != "" {
-			out = append(out, Problem{"suppressed_by", "points at a folder that is itself suppressed", fmt.Sprintf("%s -> %s -> %s", f, r.SuppressedBy, t.SuppressedBy)})
+			out = append(out, Problem{Field: "suppressed_by", Rule: "points at a folder that is itself suppressed", Hint: fmt.Sprintf("%s -> %s -> %s", f, r.SuppressedBy, t.SuppressedBy), Folder: f})
 		}
 	}
 	return out

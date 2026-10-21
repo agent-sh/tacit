@@ -25,7 +25,7 @@ var (
 	// server refuses its pushes, and no fact is ever written as it.
 	Harnesses   = set("claude", "codex", "pi", "hermes", "grok", "muse", "agy", "dreamer", "import", "curator", "human", "reader")
 	SourceKinds = set("user", "observed", "web", "derived")
-	ScopeRoots  = set("system", "user", "projects", "machines", "derived")
+	ScopeRoots  = set("system", "user", "projects", "machines", "derived", "areas", "topics")
 )
 
 var (
@@ -349,7 +349,10 @@ func IsSlug(s string) bool { return slugRe.MatchString(s) }
 func IsDate(s string) bool { return dateRe.MatchString(s) }
 
 // ValidScope accepts `system`, `user`, `projects/<repo>`, `machines/<host>`,
-// `derived/<repo>`.
+// `derived/<repo>`, `areas/<area>`, `areas/<area>/topics/<topic>` and
+// `topics/<topic>`: the one scope deeper than two parts is a topic an area
+// owns. The parts after the root are slugs for the new roots; the older
+// roots keep their shape check (one part, not empty).
 func ValidScope(s string) bool {
 	root, rest, has := strings.Cut(s, "/")
 	if !ScopeRoots[root] {
@@ -358,9 +361,27 @@ func ValidScope(s string) bool {
 	switch root {
 	case "system", "user":
 		return !has
+	case "areas":
+		parts := strings.Split(rest, "/")
+		switch len(parts) {
+		case 1:
+			return IsSlug(parts[0])
+		case 3:
+			return IsSlug(parts[0]) && parts[1] == "topics" && IsSlug(parts[2])
+		}
+		return false
+	case "topics":
+		return has && IsSlug(rest)
 	default:
 		return has && rest != "" && !strings.Contains(rest, "/")
 	}
+}
+
+// NewRoot reports a scope under the roots of the folder records format
+// (areas/, topics/): written only into a store with the format marker.
+func NewRoot(scope string) bool {
+	root, _, _ := strings.Cut(scope, "/")
+	return root == "areas" || root == "topics"
 }
 
 // IndexFile is the generated index file of a store folder (internal/tree).

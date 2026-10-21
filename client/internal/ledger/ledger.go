@@ -160,6 +160,27 @@ func Quotes(jsonl []byte) map[string]Quote {
 	return out
 }
 
+// Backing reads the quote ledger as a lookup of the owner's words by what
+// they said and where, whatever fact the line was recorded for: a folder
+// record's status that rests on their words (record.Entry.Quote) is backed
+// by a line the curator recorded after finding the words in their turn.
+// A line of words (too short to prove a ruling) backs nothing.
+func Backing(jsonl []byte) func(quote, from string) bool {
+	set := map[string]bool{}
+	for _, q := range Quotes(jsonl) {
+		if !q.Words {
+			set[strings.Join(strings.Fields(q.Quote), " ")+"\x00"+q.From] = true
+		}
+	}
+	return func(quote, from string) bool {
+		return set[strings.Join(strings.Fields(quote), " ")+"\x00"+from]
+	}
+}
+
+// RecordQuoteName is the ledger line's name for a quote a folder record
+// rests on: the record's path, which no fact name can be.
+func RecordQuoteName(folder string) string { return folder + "/_record" }
+
 // Line encodes a ledger line (with its newline).
 func (q Quote) Line() []byte {
 	b, _ := json.Marshal(q)
