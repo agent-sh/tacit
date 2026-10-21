@@ -332,6 +332,9 @@ type Report struct {
 	Quick            bool            `json:"quick,omitempty"`              // a --quick run: recent notes only, no derive, results, links or staleness step
 	Local            bool            `json:"local,omitempty"`              // a run of the local layer: this machine's overlay, nothing written to the store
 	Redirected       int             `json:"redirected,omitempty"`         // entries whose scope was a suppressed folder, written to the folder that replaces it
+	AssessCandidates int             `json:"assess_candidates,omitempty"`  // folders the assessment put to the model
+	AssessRecords    int             `json:"assess_records,omitempty"`     // folder records it wrote
+	AssessRefused    int             `json:"assess_refused,omitempty"`     // decisions refused twice: asked again next run         // entries whose scope was a suppressed folder, written to the folder that replaces it
 	InvalidEntries   []string        `json:"invalid_entries,omitempty"`    // why split and rulings answers failed validation: "split: entry N: field: rule", never the entry's text
 	Retries          int             `json:"validation_retries,omitempty"` // answers refused by the checks and sent back to the model once (curate.SplitChecked)
 }

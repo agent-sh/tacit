@@ -380,3 +380,27 @@ func (c *Catalog) Names() []string {
 	sort.Strings(out)
 	return out
 }
+
+// Repo is the catalog's repository named slug: a checkout of this machine
+// (Root set) or a name another machine's catalog added (Root empty).
+func (c *Catalog) Repo(slug string) (Repo, bool) {
+	if c == nil {
+		return Repo{}, false
+	}
+	r, ok := c.repos[strings.ToLower(slug)]
+	return r, ok
+}
+
+// LoadRegistryWork is the registry's evidence of work at path, checkouts
+// and non-git folders together, by root or folder.
+func LoadRegistryWork(path string) map[string][]Work {
+	reg := readRegistry(path)
+	out := map[string][]Work{}
+	for k, v := range reg.Work {
+		out[k] = v
+	}
+	for k, v := range reg.Folders {
+		out[k] = append(out[k], v...)
+	}
+	return out
+}

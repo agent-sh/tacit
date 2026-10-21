@@ -900,3 +900,27 @@ func ParseDigestHeader(data []byte) DigestHeader {
 	}
 	return h
 }
+
+// Mention is one of their turns that names a word: where (a session ref),
+// the hash of the turn, and the turn as they wrote it.
+type Mention struct {
+	Ref, TurnHash, Text string
+}
+
+// Mentions are up to max of their turns that hold name as words (name
+// normalized: "valkey-review-bot" is the words valkey review bot), newest
+// sessions not preferred, in corpus order.
+func (c *Corpus) Mentions(name string, max int) []Mention {
+	n := Normalize(name)
+	if c == nil || c.sa == nil || n == "" {
+		return nil
+	}
+	var out []Mention
+	for _, i := range c.candidates(n) {
+		out = append(out, Mention{Ref: c.refs[i], TurnHash: ledger.TurnHash(Normalize(c.raw[i])), Text: c.raw[i]})
+		if len(out) >= max {
+			break
+		}
+	}
+	return out
+}

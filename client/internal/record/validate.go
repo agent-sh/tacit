@@ -62,7 +62,7 @@ type Env struct {
 var (
 	citeRx    = regexp.MustCompile(`\b([a-z][a-z0-9-]*):([A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9])`)
 	citeKinds = func() map[string]bool {
-		m := map[string]bool{"note": true}
+		m := map[string]bool{"note": true, "session": true}
 		for h := range fact.Harnesses {
 			m[h] = true
 		}

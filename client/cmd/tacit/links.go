@@ -488,6 +488,9 @@ func writeFileAtomic(dir, rel string, data []byte) error {
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
 		return err
 	}
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return err // a new folder's first file (a folder record)
+	}
 	f, err := os.CreateTemp(tmpDir, "w-*")
 	if err != nil {
 		return err
