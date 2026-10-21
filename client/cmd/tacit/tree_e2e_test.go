@@ -116,10 +116,13 @@ func TestFreshStoreCuratesIntoAnIndexedTree(t *testing.T) {
 		entry("widget-note", "widget-port", "The widget server listens on port 7781", "machine_fact", "projects/kv-013-g1"),
 		entry("widget-note", "widget-flaky-scheduler", "The widget scheduler test is flaky under load; rerun it alone", "hot_spot", "projects/widget", "client"),
 		box, user))
+	// The fixed answer gives the scheduler test as this machine's absolute
+	// path inside the widget checkout: code makes it repo-relative.
+	flaky := entry("widget-note", "widget-flaky-scheduler", "The widget scheduler test is flaky under load; rerun it alone", "past_mistake", "projects/widget")
+	flaky["applies_to"].(map[string]any)["paths"] = []string{filepath.Join(home, "projects", "widget", "sched", "sched_test.go")}
 	t.Setenv("FIXTURE_FIXED", answer(t,
 		entry("widget-note", "widget-port", "The widget server listens on port 7781", "machine_fact", "projects/widget", "widget"),
-		entry("widget-note", "widget-flaky-scheduler", "The widget scheduler test is flaky under load; rerun it alone", "past_mistake", "projects/widget"),
-		box, user))
+		flaky, box, user))
 	countSteps(t)
 	if code := runCurate(nil); code != 0 {
 		t.Fatalf("curate exit %d", code)
@@ -150,7 +153,7 @@ func TestFreshStoreCuratesIntoAnIndexedTree(t *testing.T) {
 		t.Error("the refused scope was written")
 	}
 	b, _ := os.ReadFile(filepath.Join(s.Dir, "projects/widget/widget-flaky-scheduler.md"))
-	if f, err := fact.Parse("x.md", b); err != nil || f.Meta.Type != "past_mistake" || len(f.Meta.AppliesTo.Repos) != 0 {
+	if f, err := fact.Parse("x.md", b); err != nil || f.Meta.Type != "past_mistake" || len(f.Meta.AppliesTo.Repos) != 0 || strings.Join(f.Meta.AppliesTo.Paths, ",") != "sched/sched_test.go" {
 		t.Errorf("the model's fixed entry is not what was written: %+v %v", f, err)
 	}
 
@@ -273,5 +276,19 @@ func TestAddRefusesWhatItCannotCheck(t *testing.T) {
 	// What it can check passes; Widget is the same scope in lower case.
 	if _, err := addFact(ctx, s, "muse", fact.Meta{Name: "ok", Description: "widget uses make", Type: "design_decision", Scope: "projects/Widget", Source: fact.Source{Kind: "observed"}}, "body"); err != nil {
 		t.Fatalf("a valid note refused: %v", err)
+	}
+	// A path inside this machine's widget checkout is made relative to it;
+	// a machine's fact keeps its absolute path.
+	home, _ := os.UserHomeDir()
+	rel, err := addFact(ctx, s, "muse", fact.Meta{Name: "paths", Description: "the widget server reads its port from config", Type: "design_decision", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Paths: []string{filepath.Join(home, "projects", "widget", "cmd", "server", "main.go"), "~/projects/widget/config/*.yaml"}}, Source: fact.Source{Kind: "observed"}}, "body")
+	if err != nil {
+		t.Fatalf("a path inside the checkout refused: %v", err)
+	}
+	b, _ := os.ReadFile(filepath.Join(s.Dir, rel))
+	if f, err := fact.Parse(rel, b); err != nil || strings.Join(f.Meta.AppliesTo.Paths, ",") != "cmd/server/main.go,config/*.yaml" {
+		t.Errorf("written paths: %+v %v", f, err)
+	}
+	if _, err := addFact(ctx, s, "muse", fact.Meta{Name: "box-paths", Description: "the box keeps its models in /srv/models", Type: "machine_fact", Scope: "machines/" + store.ShortHost(), AppliesTo: fact.AppliesTo{Paths: []string{"/srv/models/*"}}, Source: fact.Source{Kind: "observed"}}, "body"); err != nil {
+		t.Errorf("a machine's absolute path refused: %v", err)
 	}
 }

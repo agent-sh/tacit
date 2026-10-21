@@ -46,6 +46,7 @@ func entryCheck(env validate.Env, host string, batch []*fact.Fact, noteByName ma
 				continue
 			}
 			f := curate.ToFact(e, host, taken)
+			env.RepoPaths(&f.Meta)
 			_, ruling := curate.ApplyEvidence(f, e, noteByName[e.Origin], where)
 			if !ruling && e.Kind == "user" && noOwnerCorpus {
 				ruling = true // not judged here: the batch waits for the owner's history

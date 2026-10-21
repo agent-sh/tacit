@@ -149,12 +149,86 @@ func TestReposMustBeKnown(t *testing.T) {
 }
 
 func TestPathsAreRepoRelativeGlobs(t *testing.T) {
-	if ps := Paths([]string{"src/main.go", "docs/*.md", "tools/hooks/pre-commit", "**/*_test.go", ".github/workflows/ci.yml"}); len(ps) != 0 {
+	if ps := Paths([]string{"src/main.go", "docs/*.md", "tools/hooks/pre-commit", "**/*_test.go", ".github/workflows/ci.yml"}, false); len(ps) != 0 {
 		t.Errorf("good paths refused: %v", ps)
 	}
 	for _, p := range []string{"/home/u/projects/widget/src/main.go", "~/.cache/run", "C:\\Users\\u\\x", "src\\main.go", "../other/x", "a/../../b", "https://example.com/x", "src/[bad", " src/x", ""} {
-		if ps := Paths([]string{p}); len(ps) != 1 {
+		if ps := Paths([]string{p}, false); len(ps) != 1 {
 			t.Errorf("Paths(%q) = %v, want one refusal", p, ps)
+		}
+	}
+	// A machine's fact keeps that machine's absolute paths; the rest holds.
+	if ps := Paths([]string{"/etc/hosts", "~/.cache/run", "C:\\tools\\x", "/var/log/*.log"}, true); len(ps) != 0 {
+		t.Errorf("a machine's absolute paths refused: %v", ps)
+	}
+	for _, p := range []string{"/opt/../etc", "https://example.com/x", "src\\main.go", ""} {
+		if ps := Paths([]string{p}, true); len(ps) != 1 {
+			t.Errorf("machine Paths(%q) = %v, want one refusal", p, ps)
+		}
+	}
+}
+
+// An absolute or ~ path inside this machine's checkout of the fact's
+// repository (a worktree, a symlinked path) is made relative to the
+// checkout; a path anywhere else, or on a fact with no one repository, is
+// left for Paths to refuse, and a machine's fact keeps its paths.
+func TestRepoPathsMakesCheckoutPathsRelative(t *testing.T) {
+	e := env(t)
+	home := e.Catalog.Home()
+	widget := filepath.Join(home, "projects", "widget")
+	// A linked worktree of widget, the way git makes one.
+	admin := filepath.Join(widget, ".git", "worktrees", "fix")
+	write(t, filepath.Join(admin, "commondir"), "../..\n")
+	write(t, filepath.Join(admin, "HEAD"), "ref: refs/heads/fix\n")
+	wt := filepath.Join(home, "wt", "fix")
+	write(t, filepath.Join(wt, ".git"), "gitdir: "+admin+"\n")
+	write(t, filepath.Join(widget, "src", "main.go"), "package main\n")
+	fix := func(m fact.Meta) []string {
+		before := append([]string(nil), m.AppliesTo.Paths...)
+		in := m.AppliesTo.Paths
+		e.RepoPaths(&m)
+		for i := range before {
+			if in[i] != before[i] {
+				t.Fatalf("RepoPaths wrote the caller's slice")
+			}
+		}
+		return m.AppliesTo.Paths
+	}
+	m := fact.Meta{Scope: "projects/widget", AppliesTo: fact.AppliesTo{Paths: []string{
+		filepath.Join(widget, "src", "main.go"), "~/projects/widget/docs/*.md", filepath.Join(wt, "pkg", "new.go"), "src/ok.go",
+		filepath.Join(home, "projects", "atlas", "x.go"), "/nowhere/at/all.go", widget,
+	}}}
+	got := fix(m)
+	want := []string{"src/main.go", "docs/*.md", "pkg/new.go", "src/ok.go", filepath.Join(home, "projects", "atlas", "x.go"), "/nowhere/at/all.go", widget}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("path %d: %q, want %q", i, got[i], want[i])
+		}
+	}
+	if ps := Paths(got, false); len(ps) != 3 {
+		t.Errorf("what stays absolute is refused: %v", ps)
+	}
+	// The repository from applies_to.repos when the scope names none, by an alias too.
+	if got := fix(fact.Meta{Scope: "user", AppliesTo: fact.AppliesTo{Repos: []string{"widget-svc"}, Paths: []string{filepath.Join(widget, "Makefile")}}}); got[0] != "Makefile" {
+		t.Errorf("user fact on widget-svc: %v", got)
+	}
+	for _, m := range []fact.Meta{
+		{Scope: "user", AppliesTo: fact.AppliesTo{Paths: []string{filepath.Join(widget, "Makefile")}}},
+		{Scope: "user", AppliesTo: fact.AppliesTo{Repos: []string{"widget", "atlas"}, Paths: []string{filepath.Join(widget, "Makefile")}}},
+		{Scope: "machines/box", AppliesTo: fact.AppliesTo{Paths: []string{filepath.Join(widget, "Makefile")}}},
+	} {
+		if got := fix(m); got[0] != filepath.Join(widget, "Makefile") {
+			t.Errorf("%s %v: converted to %v", m.Scope, m.AppliesTo.Repos, got)
+		}
+	}
+	if runtime.GOOS != "windows" {
+		// Through a symlink to the checkout.
+		link := filepath.Join(home, "links", "w")
+		os.MkdirAll(filepath.Dir(link), 0o755)
+		if err := os.Symlink(widget, link); err == nil {
+			if got := fix(fact.Meta{Scope: "projects/widget", AppliesTo: fact.AppliesTo{Paths: []string{filepath.Join(link, "src", "main.go")}}}); got[0] != "src/main.go" {
+				t.Errorf("symlinked path: %v", got)
+			}
 		}
 	}
 }
