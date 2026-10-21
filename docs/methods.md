@@ -109,6 +109,12 @@ A verdict records evidence and the model used. Clear observation changes can be 
 
 The owner can inspect the competing facts, sources, dates and git timeline, then keep, edit, retire or mark a conflict. The decision is recorded. That human decision is the backstop: the held-out verifier sample missed most of the retirements the owner made. The verifier's purpose is to settle evidenced cases before the owner sees the remainder.
 
+### Folders and the rotation
+
+Each project folder has a record (`_record.md`) that says what it is and whether it is still worked on. Code gathers the evidence (git roots, remotes, commits under this machine's identity, the sessions that worked there, the owner's words that name it), the curator's model decides, and code checks every value: an agent's status cites a session, the owner's status is never replaced by an agent, an area exists only on two sessions' evidence. A folder known by two names is suppressed into one and its facts move there; a dead or shipped folder goes quiet in the hooks and stays searchable. Areas (an ongoing system such as a ticket tracker) deliver their rules and decisions before the agent calls the area's tools; topics, when the prompt names them.
+
+Nothing is deleted. Facts leave delivery only as stale (`retired`), replaced (`superseded_by`) or compressed into one new fact that cites them all; a changed detail is a note appended to the fact. The rotation sends the facts unchecked longest to the curator's model with the proof code gathers (what git holds now of what they cite, newer facts on the same subject, the folder's record) and stamps each `last_checked`, whatever the answer. Code checks every verdict against that proof, and the owner's own facts only get questions.
+
 ## How to evaluate another store
 
 Start with the [synthetic sample](../eval/README.md#run-the-sample). It checks that the schemas and offline commands work together. Its output is a wiring example, not evidence that tacit improves another workload.
