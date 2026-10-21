@@ -227,7 +227,7 @@ func TestConcurrentDreamWindowsKeepCommittedFactUntouched(t *testing.T) {
 		wg.Add(1)
 		go func(f *fact.Fact) {
 			defer wg.Done()
-			_, err := persistDreamWindow(context.Background(), s, []*fact.Fact{f})
+			_, err := persistDreamWindow(context.Background(), s, []*fact.Fact{f}, nil)
 			failures <- err
 		}(f)
 	}

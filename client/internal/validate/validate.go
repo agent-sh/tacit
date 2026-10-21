@@ -11,7 +11,9 @@
 //
 //   - a repository (a projects/<repo> scope, a name in applies_to.repos) is
 //     one this machine has a checkout of (repoid's catalog: a real git root),
-//     or, until projects are assessed on their own, one whose projects/<repo>
+//     one another machine's catalog in the store lists (repoid.CatalogFile,
+//     which the caller adds to the catalog), or, until projects are assessed
+//     on their own, one whose projects/<repo>
 //     or derived/<repo> folder already holds facts in the store. Another name
 //     a checkout is known by (a symlink's, its origin remote's) is accepted
 //     in applies_to.repos, where delivery matches it, and refused as a scope
@@ -182,7 +184,7 @@ func (e Env) Scope(scope string) *Problem {
 		if own := e.Catalog.AliasOf(rest); own != "" {
 			return &Problem{Field: "scope", Rule: "names another name of a repository, not the repository", Hint: fmt.Sprintf("%s is another name of the checkout %s: use projects/%s", rest, own, own)}
 		}
-		return &Problem{Field: "scope", Rule: "names no known repository: no checkout on this machine and no project folder in the store", Hint: fmt.Sprintf("projects/%s; use the project of the note it came from, user for a fact that holds across repositories, or machines/<host> for one about a machine", rest)}
+		return &Problem{Field: "scope", Rule: "names no known repository: no checkout on this machine or in any machine's catalog, and no project folder in the store", Hint: fmt.Sprintf("projects/%s; use the project of the note it came from, user for a fact that holds across repositories, or machines/<host> for one about a machine", rest)}
 	case "machines":
 		if e.Hosts[rest] {
 			return nil

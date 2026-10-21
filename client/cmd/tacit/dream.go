@@ -312,6 +312,13 @@ func runDream(args []string) int {
 	}
 	ctx, cancel := dreamBatchContext(limit)
 	defer cancel()
+	// This machine's repositories, as its notes carry them: in the store (or
+	// the overlay, with the local layer) beside the notes, so another
+	// machine's checks know the repository a note names.
+	var catalog []byte
+	if !*dry {
+		catalog = sharedCatalog(home)
+	}
 
 	meter := dream.Meter{At: time.Now().Format(time.RFC3339), Windows: len(windows), Local: local}
 	switch {
@@ -395,9 +402,9 @@ func runDream(args []string) int {
 			var paths []string
 			var err error
 			if local {
-				paths, err = persistLocalDreamWindow(s, facts)
+				paths, err = persistLocalDreamWindow(s, facts, catalog)
 			} else {
-				paths, err = persistDreamWindow(ctx, s, facts)
+				paths, err = persistDreamWindow(ctx, s, facts, catalog)
 			}
 			if err != nil {
 				if paused(err) {
@@ -621,7 +628,12 @@ func recoverDreamNotesLocked(ctx context.Context, s *store.Store) (int, error) {
 
 // A window's check, writes and push form one locked operation. Another
 // dreamer cannot overwrite the first run's already committed slug.
-func persistDreamWindow(ctx context.Context, s *store.Store, facts []*fact.Fact) (written []string, err error) {
+//
+// catalog, when not nil, is this machine's repository catalog
+// (repoid.CatalogFile): committed with the notes, in the dreamer's inbox
+// folder, when it differs from the one at HEAD. It is not among the paths
+// returned.
+func persistDreamWindow(ctx context.Context, s *store.Store, facts []*fact.Fact, catalog []byte) (written []string, err error) {
 	err = s.WithLock(ctx, func() error {
 		if err := s.SyncLocked(ctx); err != nil {
 			return err
@@ -656,7 +668,21 @@ func persistDreamWindow(ctx context.Context, s *store.Store, facts []*fact.Fact)
 			return err
 		}
 		if len(pending) > 0 {
-			if err := s.CommitPushNamedLocked(ctx, pending, fmt.Sprintf("dreamer: %d fact(s) from 1 window(s)", len(pending)), "dreamer"); err != nil {
+			commit := pending
+			if catalog != nil {
+				rel := catalogRel()
+				changed, err := catalogChanged(ctx, s, rel, catalog)
+				if err != nil {
+					return err
+				}
+				if changed {
+					if err := writeDreamNote(filepath.Join(s.Dir, filepath.FromSlash(rel)), bytes.NewReader(catalog)); err != nil {
+						return err
+					}
+					commit = append(append([]string(nil), pending...), rel)
+				}
+			}
+			if err := s.CommitPushNamedLocked(ctx, commit, fmt.Sprintf("dreamer: %d fact(s) from 1 window(s)", len(pending)), "dreamer"); err != nil {
 				return err
 			}
 		}

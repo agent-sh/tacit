@@ -46,17 +46,24 @@ func LoadMains(home, projects string) *Mains {
 	}
 	m.dir = realPath(projects)
 	cache := NewCache(home)
-	seen := map[string]bool{}
+	at := map[string]int{} // root -> index in all
 	scanRoots(cache, projects, 2, func(r Repo) {
-		if seen[r.Root] { // a symlink in the projects directory to another checkout there
+		if i, ok := at[r.Root]; ok {
+			// A symlink in the projects directory to another checkout there:
+			// one repository, the symlink's name an alias.
+			for _, a := range r.Aliases {
+				m.all[i].Aliases = addAlias(m.all[i].Aliases, m.all[i].Name, a)
+			}
 			return
 		}
-		seen[r.Root] = true
+		at[r.Root] = len(m.all)
 		m.all = append(m.all, r)
+	})
+	for _, r := range m.all {
 		if r.Origin != "" {
 			m.byURL[r.Origin] = append(m.byURL[r.Origin], r)
 		}
-	})
+	}
 	return m
 }
 

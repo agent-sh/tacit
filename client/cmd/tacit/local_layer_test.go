@@ -339,7 +339,7 @@ func TestLocalCurateWritesTheOverlayAndNeverTheStore(t *testing.T) {
 		dream.ToFact(dream.Extracted{Description: sharedFacts["quokka-build-cache"], Type: "machine_fact", Kind: "observed"}, "", host, "s9"),
 	}
 	notes[2].Meta.Scope = "user"
-	if _, err := persistLocalDreamWindow(r.s, notes); err != nil {
+	if _, err := persistLocalDreamWindow(r.s, notes, nil); err != nil {
 		t.Fatal(err)
 	}
 	// An older fact of the local curator, which the new port replaces.
@@ -506,7 +506,7 @@ func TestLocalQuickCurateTakesRecentNotes(t *testing.T) {
 		dream.ToFact(dream.Extracted{Description: "The dingo fixture proxy uses port 4412 on this machine", Type: "machine_fact", Kind: "observed"}, "", host, "s9"),
 		dream.ToFact(dream.Extracted{Description: "The bilby fixture runner needs 8 GB of swap on this machine", Type: "machine_fact", Kind: "observed"}, "", host, "s9"),
 	}
-	if _, err := persistLocalDreamWindow(r.s, notes); err != nil {
+	if _, err := persistLocalDreamWindow(r.s, notes, nil); err != nil {
 		t.Fatal(err)
 	}
 	old := time.Now().Add(-72 * time.Hour)
@@ -625,7 +625,7 @@ func TestInvalidSplitAnswerIsLoggedByFieldAndRule(t *testing.T) {
 	r := newLocalRig(t)
 	host := store.ShortHost()
 	n := dream.ToFact(dream.Extracted{Description: "The dingo fixture proxy uses port 4412 on this machine", Type: "machine_fact", Kind: "observed"}, "", host, "s9")
-	if _, err := persistLocalDreamWindow(r.s, []*fact.Fact{n}); err != nil {
+	if _, err := persistLocalDreamWindow(r.s, []*fact.Fact{n}, nil); err != nil {
 		t.Fatal(err)
 	}
 	r.split(map[string]any{"origin": n.Meta.Name, "name": "dingo-proxy-port", "description": "The dingo fixture proxy uses port 4412", "type": "machine_fact", "scope": "user", "kind": "observed", "body": "Port 4412.", "applies_to": map[string]any{"paths": []any{7}}})
@@ -668,7 +668,7 @@ func TestLocalCurateTakesDreamerNotesAndChecksTheOwnersTurns(t *testing.T) {
 
 	// A dreamed ruling whose words are in the note, not in the owner's turns.
 	n := dream.ToFact(dream.Extracted{Description: "Always ship the otter service with every feature flag disabled first", Type: "user_standard", Kind: "user", Quote: dream.Quote(q)}, "", host, "s9")
-	if _, err := persistLocalDreamWindow(r.s, []*fact.Fact{n}); err != nil {
+	if _, err := persistLocalDreamWindow(r.s, []*fact.Fact{n}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(n.Body, q) {

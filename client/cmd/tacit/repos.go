@@ -1,12 +1,17 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/agent-sh/tacit/client/internal/dream"
 	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/repoid"
+	"github.com/agent-sh/tacit/client/internal/store"
 )
 
 // recordWindowRepos adds the repositories the dreamer resolved windows to
@@ -54,6 +59,39 @@ func acceptPendingRepos(home string, ws []dream.Window, record bool) {
 		}
 	}
 	dream.AcceptPending(ws, work)
+}
+
+// sharedCatalog is this machine's repository catalog as the store carries
+// it (repoid.CatalogFile): the registry's and the projects directory's
+// repositories, not the current directory's.
+func sharedCatalog(home string) []byte {
+	return repoid.LoadCatalog(home, filepath.Join(platform.StateDir(home), repoid.RegistryFile), projectsRoot(home)).Shared()
+}
+
+// catalogRel is the store path of this machine's catalog: in its dreamer's
+// inbox folder, the one place the dreamer writes.
+func catalogRel() string {
+	return "inbox/dreamer@" + store.ShortHost() + "/" + repoid.CatalogFile
+}
+
+// catalogChanged reports whether the catalog at HEAD differs from b (or
+// there is none).
+func catalogChanged(ctx context.Context, s *store.Store, rel string, b []byte) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "cat-file", "-e", "HEAD:"+rel)
+	cmd.Dir = s.Dir
+	if cmd.Run() != nil {
+		return true, nil // not at HEAD (or no HEAD yet)
+	}
+	cmd = exec.CommandContext(ctx, "git", "show", "HEAD:"+rel)
+	cmd.Dir = s.Dir
+	out, err := cmd.Output()
+	if err != nil {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		return false, fmt.Errorf("read the catalog at HEAD: %w", err)
+	}
+	return !bytes.Equal(out, b), nil
 }
 
 // machineCatalog is the repositories this machine has a checkout of: the
