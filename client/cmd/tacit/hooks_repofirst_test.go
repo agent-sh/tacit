@@ -226,3 +226,25 @@ func TestMCPServerSendsTheInstruction(t *testing.T) {
 		t.Fatalf("instruction off: %q", got)
 	}
 }
+
+// A shell command runs a fact's command when a part starts with it, or
+// goes on with it after its first word when the second is no flag: a
+// program that runs the next one (npx, sudo, a loop's do).
+func TestCommandMatchThroughARunner(t *testing.T) {
+	for _, c := range []struct {
+		fact, cmd string
+		want      bool
+	}{
+		{"vitest", "npx vitest run ts/test/a.test.ts", true},
+		{"make lint", "sudo make lint", true},
+		{"make lint", "for d in a b; do make lint; done", true},
+		{"git commit", "FOO=1 git commit -s -m x", true},
+		{"vitest", "npx -y vitest run", false},
+		{"make lint", "sudo make test", false},
+		{"git stash", "git status && npm test", false},
+	} {
+		if got := commandMatch(c.fact, c.cmd); got != c.want {
+			t.Errorf("commandMatch(%q, %q) = %v, want %v", c.fact, c.cmd, got, c.want)
+		}
+	}
+}
