@@ -834,6 +834,9 @@ func curatorWrite(ctx context.Context, s *store.Store, plan func() (map[string][
 				snap.restore(s)
 				return err
 			}
+			// Facts nobody committed (a killed run's, a hand's) stay out of the
+			// indexes; the facts this step writes new are in them.
+			untracked := untrackedFacts(ctx, s)
 			for _, rel := range rels[:nFiles] {
 				if err := writeFileAtomic(s.Dir, rel, files[rel]); err != nil {
 					return fail(err)
@@ -844,7 +847,6 @@ func curatorWrite(ctx context.Context, s *store.Store, plan func() (map[string][
 				return fail(err)
 			}
 			// MEMORY.md and the folder indexes name only facts the commit's tree holds.
-			untracked := untrackedFacts(ctx, s)
 			var tracked []*fact.Fact
 			for _, f := range all {
 				if !untracked[f.Path] {
