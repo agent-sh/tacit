@@ -107,7 +107,7 @@ func preTool(s *store.Store, in hookInput) {
 	if len(rel) == 0 && command == "" {
 		return
 	}
-	ix, err := openIndex(ctx, s)
+	ix, err := openHookIndex(ctx, s)
 	if err != nil {
 		return
 	}
