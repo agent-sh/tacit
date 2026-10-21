@@ -27,6 +27,13 @@ func TestMain(m *testing.M) {
 		main()
 		os.Exit(0)
 	}
+	// The hooks' background index build, in this process: a detached
+	// `tacit hook index` would be this test binary running every test.
+	startIndexBuild = func() {
+		if s, err := store.Default(); err == nil {
+			buildIndexForHooks(s)
+		}
+	}
 	os.Exit(m.Run())
 }
 

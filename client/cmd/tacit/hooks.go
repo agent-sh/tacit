@@ -125,6 +125,8 @@ func startTitle(sit search.Situation, mcp bool) string {
 // network must never cost the user a turn. pre-compact prints nothing: it
 // starts a dream of the session and returns (preCompact); prompt also starts
 // one when the session's undreamed part reached a full window (windowDream).
+// `tacit hook index` is no harness's hook: the background build the hooks
+// start when they read an older index (openHookIndex).
 func runHook(args []string) int {
 	if os.Getenv("TACIT_MODEL_JOB") == "1" {
 		return 0
@@ -156,6 +158,10 @@ func runHook(args []string) int {
 		preTool(s, in)
 		return 0
 	}
+	if args[0] == "index" {
+		buildIndexForHooks(s)
+		return 0
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), queryBudget+syncBudget)
 	defer cancel()
 	sit := search.Situation{Host: store.ShortHost()}
@@ -180,7 +186,7 @@ func runHook(args []string) int {
 			_ = s.Sync(sctx)
 			scancel()
 		}
-		ix, err := openIndex(ctx, s)
+		ix, err := openHookIndex(ctx, s)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "tacit hook:", err)
 			return 0
@@ -208,7 +214,7 @@ func runHook(args []string) int {
 			home, _ := os.UserHomeDir()
 			sit.Repo = activityRepo(ctx, in, home)
 		}
-		ix, err := openIndex(ctx, s)
+		ix, err := openHookIndex(ctx, s)
 		if err != nil {
 			return 0
 		}
@@ -601,7 +607,7 @@ func runSync(args []string) int {
 		return 1
 	}
 	head, _ := s.Head(ctx)
-	ix, err := search.Open(ctx, s.Dir, head)
+	ix, err := openBuildIndex(ctx, s.Dir, head)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sync: index:", err)
 		return 1

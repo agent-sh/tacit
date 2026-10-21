@@ -14,7 +14,6 @@ import (
 	"github.com/agent-sh/tacit/client/internal/auth"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/follow"
-	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
@@ -215,7 +214,7 @@ func followSync(ctx context.Context, s *store.Store) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	ix, err := search.Open(ctx, s.Dir, head)
+	ix, err := openBuildIndex(ctx, s.Dir, head)
 	if err != nil {
 		return "", fmt.Errorf("index: %w", err)
 	}

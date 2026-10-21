@@ -89,7 +89,7 @@ func treeCounts(s *store.Store, sess tree.Session, p string) string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	ix, err := openIndex(ctx, s)
+	ix, err := openHookIndex(ctx, s)
 	if err != nil {
 		return ""
 	}
