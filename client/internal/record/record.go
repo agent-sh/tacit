@@ -33,6 +33,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/agent-sh/tacit/client/internal/check"
 	"github.com/agent-sh/tacit/client/internal/fact"
 )
 
@@ -109,6 +110,10 @@ type Evidence struct {
 	Paths []string `yaml:"paths,omitempty"`
 	// Sessions: for an area or topic, the sessions whose notes proposed it.
 	Sessions []string `yaml:"sessions,omitempty"`
+	// Checks: what code verified of the folder's dry claims (its name as a
+	// repository, a suppression target's), each with its source, inputs,
+	// output, verdict and time (internal/check).
+	Checks []check.Result `yaml:"checks,omitempty"`
 }
 
 // Root is where a folder of kind folder lives on one machine.
@@ -194,6 +199,7 @@ func (r *Record) Clone() *Record {
 		c.Evidence[i].Remotes = append([]string(nil), e.Remotes...)
 		c.Evidence[i].Paths = append([]string(nil), e.Paths...)
 		c.Evidence[i].Sessions = append([]string(nil), e.Sessions...)
+		c.Evidence[i].Checks = append([]check.Result(nil), e.Checks...)
 		if e.OwnCommits != nil {
 			n := *e.OwnCommits
 			c.Evidence[i].OwnCommits = &n

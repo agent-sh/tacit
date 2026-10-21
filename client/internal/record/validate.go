@@ -44,6 +44,10 @@ type Env struct {
 	// in the dreamer's registry, an inbox note's source.session, the quote
 	// ledger. Nil: only the form is checked (lint).
 	KnownSession func(cite string) bool
+	// KnownCommit reports a commit a why cites (commit:<sha>) as one of the
+	// folder's own: in its checkout, under this machine's git identity. Nil
+	// with KnownSession set: no commit is known; both nil: only the form.
+	KnownCommit func(folder, sha string) bool
 	// QuoteBacked reports the owner's words (quote, where) as the store's
 	// quote ledger records them. Nil: no quote is backed.
 	QuoteBacked func(quote, from string) bool
@@ -65,7 +69,7 @@ type Env struct {
 var (
 	citeRx    = regexp.MustCompile(`\b([a-z][a-z0-9-]*):([A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9])`)
 	citeKinds = func() map[string]bool {
-		m := map[string]bool{"note": true, "session": true}
+		m := map[string]bool{"note": true, "session": true, "commit": true}
 		for h := range fact.Harnesses {
 			m[h] = true
 		}
@@ -74,8 +78,8 @@ var (
 	toolRx = regexp.MustCompile(`^[A-Za-z0-9_*?.\-]+$`)
 )
 
-// Cites are the session and note citations in text: <harness>:<id> or
-// note:<name>, in the order they appear, once each.
+// Cites are the session, note and commit citations in text: <harness>:<id>,
+// note:<name> or commit:<sha>, in the order they appear, once each.
 func Cites(text string) []string {
 	var out []string
 	seen := map[string]bool{}
@@ -99,12 +103,12 @@ func CiteID(cite string) string {
 }
 
 // Sessions are the distinct session ids r cites: in its creation entry's
-// why and its evidence's sessions (notes not counted), sorted.
+// why and its evidence's sessions (notes and commits not counted), sorted.
 func (r *Record) Sessions() []string {
 	set := map[string]bool{}
 	if n := len(r.Was); n > 0 {
 		for _, c := range Cites(r.Was[n-1].Why) {
-			if !strings.HasPrefix(c, "note:") {
+			if !strings.HasPrefix(c, "note:") && !strings.HasPrefix(c, "commit:") {
 				set[CiteID(c)] = true
 			}
 		}
@@ -246,7 +250,14 @@ func Validate(old, rec *Record, by string, env Env) []Problem {
 			cites := Cites(fresh.Why)
 			known := 0
 			for _, c := range cites {
-				if env.KnownSession == nil || env.KnownSession(c) {
+				switch {
+				case env.KnownSession == nil:
+					known++
+				case strings.HasPrefix(c, "commit:"):
+					if env.KnownCommit != nil && env.KnownCommit(folder, CiteID(c)) {
+						known++
+					}
+				case env.KnownSession(c):
 					known++
 				}
 			}
@@ -255,7 +266,7 @@ func Validate(old, rec *Record, by string, env Env) []Problem {
 			// rests on that evidence itself.
 			quietOK := noSessions(rec) && (rec.Status == StatusDead || rec.Status == StatusDormant || rec.Status == StatusNeedsReview)
 			if known == 0 && !quietOK {
-				add("was[0].why", "cites no session or note code can find", "cite the session ids (claude:<id>, codex:<id>) or note:<name> the decision rests on; a git date alone is no reason; a folder whose evidence shows no session at all may only be dead, dormant or needs-review")
+				add("was[0].why", "cites no session, note or commit code can find", "cite the session ids (claude:<id>, codex:<id>), note:<name> or the folder's own commits (commit:<sha>, as the evidence lists them) the decision rests on; a git date alone is no reason; a folder whose evidence shows no session at all may only be dead, dormant or needs-review")
 			}
 		}
 		if fresh.Quote != "" && !ownerQuote(fresh) && fresh.By == ByOwner && by == ByOpus {

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/agent-sh/tacit/client/internal/check"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
 	"github.com/agent-sh/tacit/client/internal/record"
 )
@@ -50,6 +51,45 @@ type Candidate struct {
 	// facts they were made for (which move into the folder when it is made).
 	Proposals []string
 	Facts     []string
+
+	// Name is what code checked of the folder's name as a repository
+	// (projects/ folders; nil for none): every machine's checkouts, the
+	// remotes, the forge.
+	Name *check.RepoCheck
+	// Real are the repositories code proposes this folder belongs to when
+	// its name exists nowhere or is an old name: each one exists by code's
+	// check, with the evidence that names it.
+	Real []RealRepo
+	// Pattern is the folder name's pattern (NamePattern); Similar the
+	// decisions already made on folders alike (same pattern or evidence
+	// shape), one line each, filled in when its batch is rendered.
+	Pattern string
+	Similar []string
+}
+
+// RealRepo is a repository code proposes a folder belongs to, with why.
+type RealRepo struct {
+	Name string
+	Why  []string
+	// Score orders the proposals: sessions that worked in its checkout
+	// weigh most, then facts that name its paths, then a near name.
+	Score int
+}
+
+// Absent reports a folder whose name, as a repository, code verified exists
+// nowhere: no checkout or other name of one on any machine, no remote, and
+// the forge has no repository of that name (or says it was renamed), while
+// no folder of that name exists on any machine either.
+func (c Candidate) Absent() bool {
+	if c.Name == nil || c.Name.Verdict != check.Fails {
+		return false
+	}
+	for _, e := range c.Evidence {
+		if len(e.Paths) > 0 || e.GitRoot {
+			return false
+		}
+	}
+	return true
 }
 
 // Decision is the model's answer for one candidate.
@@ -81,7 +121,7 @@ const Prompt = `You are the curator of tacit, a fact store shared by coding agen
 For each folder decide:
 - kind: "repo" (a git repository that is the owner's project), "folder" (a project folder of the owner's that is no git repository), or "none" (not a project of the owner's: an upstream or tool clone nobody works in, a folder that only holds other checkouts, the home directory, a scratch or task directory). For a proposed area or topic: "area" or "topic", or set reject or fold_into.
 - status: "active" (being worked), "dormant" (real work, nobody on it lately), "shipped" (done and delivered), "dead" (abandoned or gone), or "needs-review" (the evidence does not settle it). Status comes from the owner's words and from sessions: git says whether a folder is real work and whose, never whether it is shipped, dormant or dead.
-- why: one or two sentences. It MUST cite the sessions or notes the decision rests on, as code shows them for THIS folder (session:<id>, claude:<id>, codex:<id>, note:<name>); never cite a session that is not about this folder just to have a citation. Code refuses a why that cites none it can find; a git date alone is no reason. A folder whose evidence shows no session at all (no work sessions, no fact sessions) needs no citation, and its status can then only be dead, dormant or needs-review: say that no session touched it.
+- why: one or two sentences. It MUST cite the sessions, notes or commits the decision rests on, as code shows them for THIS folder (session:<id>, claude:<id>, codex:<id>, note:<name>, or commit:<sha> for the folder's own commits under the owner's git identity, which code lists); never cite a session that is not about this folder just to have a citation. Recent own commits are evidence of work: "active" may rest on them. Code refuses a why that cites none it can find; a git date alone is no reason. A folder whose evidence shows no session at all (no work sessions, no fact sessions) needs no citation, and its status can then only be dead, dormant or needs-review: say that no session touched it.
 - description: one line (at most 200 characters) saying what the folder is.
 - body: optional, a few sentences: why the folder exists and what belongs in it.
 - aliases: optional, other names the same project is known by, only names no other folder has.
@@ -91,6 +131,12 @@ For each folder decide:
 - repos: a topic only, optional: repositories it is tied to.
 - owner_quote, owner_quote_from: only when the owner's own words shown below state the decision for THIS folder (its name or alias in them): copy their words exactly and the ref they came from. Words that only mention the folder are evidence for your why, not a quote here.
 - reject (true) or fold_into ("<existing folder>"): a proposed area or topic only, when it should not be made, with why.
+
+Dry claims are checked by code, not judged. Whether a repository of a name exists and what it is called now has one source of truth: code checked each folder's name against every machine's checkouts, the checkouts' remotes and the forge (lines "check: ..."), and code refuses a decision a check refutes, showing the check:
+- A project folder whose name exists nowhere (no checkout or other name of one, no remote, the forge has no such repository) is no repository under that name: it cannot be active, dormant, shipped or dead as it is. Set suppressed_by to the real repository its facts belong to (code lists candidates with their evidence: the checkouts its sessions worked in, repositories whose paths or remotes its facts name, near names; pick the one the evidence supports), or answer needs-review when the evidence picks none. Only when code lists no candidate may it be kind none.
+- A name the forge says was renamed is an old name: fold it into the current name, never the current name into it.
+- Never set suppressed_by to a repository whose name exists nowhere.
+Folders whose names follow one pattern (kv-013-g1, kv-140-g2) come together, with the decisions already made on folders like them: decide alike folders alike, and when one differs say in why what in its evidence differs.
 
 Output ONLY a JSON array, one object per folder, no prose, no code fence:
   {"folder": "...", "kind": "...", "status": "...", "why": "...", "description": "...", "body": "...", "aliases": [], "suppressed_by": "", "roots": [], "tools": [], "commands": [], "repos": [], "owner_quote": "", "owner_quote_from": "", "reject": false, "fold_into": ""}
@@ -117,10 +163,36 @@ func Render(cands []Candidate) string {
 			}
 			b.WriteString("\n")
 		}
-		for i, e := range c.Evidence {
-			fmt.Fprintf(&b, "evidence %d: %s\n", i+1, evidenceLine(e))
+		n := 0
+		for _, e := range c.Evidence {
+			if l := evidenceLine(e); l != "" {
+				n++
+				fmt.Fprintf(&b, "evidence %d: %s\n", n, l)
+			}
+		}
+		if c.Name != nil {
+			for _, l := range c.Name.Lines() {
+				b.WriteString("check: " + l + "\n")
+			}
+			fmt.Fprintf(&b, "check: the name %s as a repository: %s", c.Name.Name, c.Name.Verdict)
+			if c.Name.Renamed != "" {
+				fmt.Fprintf(&b, " (the forge has it as %s now)", c.Name.Forge)
+			}
+			b.WriteString("\n")
+		}
+		if len(c.Real) > 0 {
+			var parts []string
+			for _, r := range c.Real {
+				parts = append(parts, fmt.Sprintf("%s (%s)", r.Name, strings.Join(r.Why, "; ")))
+			}
+			b.WriteString("candidate real repositories (code's, each exists by its check): " + strings.Join(parts, ", ") + "\n")
+		} else if c.Absent() {
+			b.WriteString("candidate real repositories: none found in the evidence\n")
 		}
 		for _, l := range c.Context {
+			b.WriteString(l + "\n")
+		}
+		for _, l := range c.Similar {
 			b.WriteString(l + "\n")
 		}
 		b.WriteString("\n")
@@ -277,6 +349,10 @@ func Build(c Candidate, d Decision, today string, owner *Owner) *record.Record {
 	}
 	if kind == record.KindFolder && len(d.Roots) > 0 {
 		r.Roots = d.Roots
+	} else if kind == record.KindFolder && len(r.Roots) == 0 && d.Kind != KindNone {
+		// Where the folder lives is code's evidence: the folders of its name
+		// that sessions worked in, or the projects directory's.
+		r.Roots = EvidenceRoots(c.Evidence)
 	}
 	if kind == record.KindArea {
 		r.Tools, r.Commands = union(r.Tools, d.Tools), union(r.Commands, d.Commands)
@@ -286,6 +362,26 @@ func Build(c Candidate, d Decision, today string, owner *Owner) *record.Record {
 	}
 	r.Evidence = c.Evidence
 	return r
+}
+
+// EvidenceRoots are the roots code's evidence shows for a folder: each
+// machine's paths of the folder's name, as {host, path}.
+func EvidenceRoots(ev []record.Evidence) []record.Root {
+	var out []record.Root
+	seen := map[record.Root]bool{}
+	for _, e := range ev {
+		if e.Host == "" {
+			continue
+		}
+		for _, p := range e.Paths {
+			rt := record.Root{Host: e.Host, Path: p}
+			if !seen[rt] {
+				seen[rt] = true
+				out = append(out, rt)
+			}
+		}
+	}
+	return out
 }
 
 func union(a, b []string) []string {
@@ -319,12 +415,35 @@ func Same(a, b *record.Record) bool {
 
 // SortCandidates puts first the folders other folders may be suppressed
 // into: a repository's own name before a folder that is only another name
-// of one (aliasOf names its repository), then by folder.
+// of one (aliasOf names its repository), and a name that exists before one
+// that exists nowhere; then the folders of one name pattern together (so a
+// batch decides alike folders at once), then by folder.
 func SortCandidates(cands []Candidate, aliasOf func(folder string) string) {
+	count := map[string]int{}
+	for _, c := range cands {
+		if c.Pattern != "" {
+			count[c.Pattern]++
+		}
+	}
+	// Pattern keys are per root (projects/kv-#-g#).
+	key := func(c Candidate) string {
+		if c.Pattern != "" && count[c.Pattern] > 1 {
+			return c.Folder[:strings.LastIndex(c.Folder, "/")+1] + c.Pattern
+		}
+		return c.Folder
+	}
 	sort.SliceStable(cands, func(i, j int) bool {
 		ai, aj := aliasOf(cands[i].Folder) != "", aliasOf(cands[j].Folder) != ""
 		if ai != aj {
 			return !ai
+		}
+		bi, bj := cands[i].Absent(), cands[j].Absent()
+		if bi != bj {
+			return !bi
+		}
+		ki, kj := key(cands[i]), key(cands[j])
+		if ki != kj {
+			return ki < kj
 		}
 		return cands[i].Folder < cands[j].Folder
 	})

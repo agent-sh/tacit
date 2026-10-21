@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/assess"
+	"github.com/agent-sh/tacit/client/internal/check"
 	"github.com/agent-sh/tacit/client/internal/curate"
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/dream"
@@ -93,7 +95,7 @@ func runAssess(args []string) int {
 		}
 	}
 	errs := assessStep(ctx, s, assessOpts{model: *model, max: *max, dry: *dry}, rep)
-	fmt.Printf("assess: %d candidate(s), %d record(s) written, %d refused, %s, %d error(s)\n", rep.AssessCandidates, rep.AssessRecords, rep.AssessRefused, rep.ModelCalls.CostSummary(rep.CostUSD), errs)
+	fmt.Printf("assess: %d candidate(s), %d record(s) written, %d refused, %d waiting on unchanged evidence, %d decision(s) refuted by a check, %s, %d error(s)\n", rep.AssessCandidates, rep.AssessRecords, rep.AssessRefused, rep.AssessHeld, rep.CheckRefused, rep.ModelCalls.CostSummary(rep.CostUSD), errs)
 	if errs > 0 {
 		return 1
 	}
@@ -130,11 +132,15 @@ type assessor struct {
 	env                    validate.Env
 	factFolders            map[string]bool
 	sessionRoots           map[string][]string // session id -> the repositories it worked in
+	ctx                    context.Context
+	checker                *check.Checker
+	commitsShown           map[string][]string // folder -> the own commits its evidence lists
+	checkRefused           int                 // decisions a check refuted
 }
 
 func newAssessor(ctx context.Context, s *store.Store, local bool) (*assessor, error) {
 	home, _ := os.UserHomeDir()
-	a := &assessor{dir: s.Dir, home: home, host: store.ShortHost(), today: time.Now().Format("2006-01-02"), local: local}
+	a := &assessor{dir: s.Dir, home: home, host: store.ShortHost(), today: time.Now().Format("2006-01-02"), local: local, ctx: ctx, commitsShown: map[string][]string{}}
 	facts, _, err := fact.Walk(s.Dir)
 	if err != nil {
 		return nil, err
@@ -145,6 +151,7 @@ func newAssessor(ctx context.Context, s *store.Store, local bool) (*assessor, er
 		a.facts = append(a.facts, lf...)
 	}
 	a.catalog = knownCatalog(home, s.Dir, local)
+	a.checker = newChecker(ctx, home, s.Dir, a.catalog)
 	a.storeRecs, _ = record.Walk(s.Dir)
 	a.recs = storeRecords(s.Dir)
 	if local {
@@ -195,6 +202,21 @@ func (a *assessor) knownCite(c string) bool {
 	return a.known[record.CiteID(c)]
 }
 
+// knownCommit reports a commit a why cites that the folder's evidence
+// listed as one of its own (a prefix of seven or more characters either way).
+func (a *assessor) knownCommit(folder, sha string) bool {
+	if len(sha) < 7 {
+		return false
+	}
+	sha = strings.ToLower(sha)
+	for _, h := range a.commitsShown[folder] {
+		if strings.HasPrefix(h, sha) || strings.HasPrefix(sha, h) {
+			return true
+		}
+	}
+	return false
+}
+
 // recordEnv is record.Validate's view: the records with pending ones, the
 // ledger with pending lines.
 func (a *assessor) recordEnv(pending map[string]*record.Record, pendingLedger []byte) record.Env {
@@ -206,7 +228,7 @@ func (a *assessor) recordEnv(pending map[string]*record.Record, pendingLedger []
 		recs[f] = r
 	}
 	return record.Env{
-		Today: a.today, Records: recs, KnownSession: a.knownCite,
+		Today: a.today, Records: recs, KnownSession: a.knownCite, KnownCommit: a.knownCommit,
 		QuoteBacked: ledger.Backing(append(append([]byte(nil), a.ledgerBytes...), pendingLedger...)),
 		ToolUsed:    a.tools.Used,
 		KnownRepo:   a.env.KnownRepo,
@@ -245,8 +267,7 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 			return // a folder with a record: the records' turn below
 		}
 		seen[folder] = true
-		ev, git, ctxLines := a.evidence(folder)
-		out = append(out, assess.Candidate{Folder: folder, Reason: reason, GitRoot: git, Evidence: ev, Context: ctxLines})
+		out = append(out, a.candidate(folder, reason, nil))
 	}
 	for _, n := range a.catalog.Names() {
 		consider("projects/"+n, "a repository of the catalog (this machine's or another's) with no record")
@@ -266,7 +287,8 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 		if seen[f] || (only != nil && !only[f]) || r.Kind != record.KindRepo && r.Kind != record.KindFolder {
 			continue
 		}
-		ev, git, ctxLines := a.evidence(f)
+		c := a.candidate(f, "", r)
+		ev := c.Evidence
 		if a.local && a.storeRecs[f] != nil {
 			// The store's record, read in: this machine checks it against its
 			// own work once, then again on a material change of that work,
@@ -279,13 +301,15 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 			}
 			if why != "" {
 				seen[f] = true
-				out = append(out, assess.Candidate{Folder: f, Reason: why, Old: r, GitRoot: git, Evidence: ev, Context: ctxLines})
+				c.Reason = why
+				out = append(out, c)
 			}
 			continue
 		}
 		if why := materialChange(r, ev, a.host); why != "" {
 			seen[f] = true
-			out = append(out, assess.Candidate{Folder: f, Reason: why, Old: r, GitRoot: git, Evidence: ev, Context: ctxLines})
+			c.Reason = why
+			out = append(out, c)
 		}
 	}
 	assess.SortCandidates(out, func(folder string) string {
@@ -293,6 +317,211 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 	})
 	if len(out) > max {
 		out = out[:max]
+	}
+	return out
+}
+
+// candidate is folder as the model is asked about it: code's evidence, the
+// check of its name as a repository, and, when that name exists nowhere or
+// is an old one, the real repositories code proposes it belongs to.
+func (a *assessor) candidate(folder, reason string, old *record.Record) assess.Candidate {
+	ev, git, lines := a.evidence(folder)
+	c := assess.Candidate{Folder: folder, Reason: reason, Old: old, GitRoot: git, Evidence: ev, Context: lines}
+	if name, ok := strings.CutPrefix(folder, "projects/"); ok {
+		rc := a.checker.Repo(a.ctx, name)
+		c.Name = &rc
+		c.Evidence = append(c.Evidence, record.Evidence{Gathered: a.today, Checks: rc.Results})
+		c.Pattern = assess.NamePattern(name)
+		if rc.Verdict != check.Holds || rc.Renamed != "" {
+			c.Real = a.realRepos(folder, name, rc)
+			c.Context = append(c.Context, a.namedElsewhere(folder, name, 3)...)
+		}
+	}
+	return c
+}
+
+// projectFolders are the projects/ folders that hold curated facts.
+func (a *assessor) projectFolders() map[string]bool {
+	out := map[string]bool{}
+	for _, f := range a.facts {
+		if !f.InInbox() && !overlay.IsInbox(f.Path) && strings.HasPrefix(f.Meta.Scope, "projects/") {
+			out[f.Meta.Scope] = true
+		}
+	}
+	return out
+}
+
+// namedElsewhere are up to n live facts outside folder whose words name the
+// folder's name as a whole word, newest first: evidence of what it is that
+// sits in other folders (the owner's rule: run searches, the evidence may be
+// elsewhere).
+func (a *assessor) namedElsewhere(folder, name string, n int) []string {
+	var hits []*fact.Fact
+	for _, f := range a.facts {
+		if f.Meta.Scope == folder || f.InInbox() || overlay.IsInbox(f.Path) || f.Meta.SupersededBy != "" || f.Meta.Retired != "" {
+			continue
+		}
+		if record.WholeWord(strings.ToLower(f.Meta.Description+"\n"+f.Body), name) {
+			hits = append(hits, f)
+		}
+	}
+	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Meta.Created > hits[j].Meta.Created })
+	var out []string
+	for i, f := range hits {
+		if i == n {
+			break
+		}
+		out = append(out, fmt.Sprintf("  - [[%s]] (%s, %s): %s", f.Meta.Name, f.Meta.Scope, f.Meta.Created, fact.ClipDescription(f.Meta.Description, 200)))
+	}
+	if len(out) > 0 {
+		out = append([]string{fmt.Sprintf("facts in other folders that name %s (%d, newest first):", name, len(hits))}, out...)
+	}
+	return out
+}
+
+// maxReal bounds the repositories proposed for one folder.
+const maxReal = 5
+
+// realRepos are the repositories that exist by code's check and that the
+// evidence says folder's facts belong to: the forge's current name of a
+// renamed one, the checkouts the sessions that filed its notes worked in,
+// the repositories its facts' paths are in or whose remotes they name, and
+// near names. Best first, at most maxReal.
+func (a *assessor) realRepos(folder, name string, rc check.RepoCheck) []assess.RealRepo {
+	score := map[string]int{}
+	why := map[string][]string{}
+	note := func(n, w string, s int) {
+		n = strings.ToLower(n)
+		if n == "" || n == name {
+			return
+		}
+		score[n] += s
+		why[n] = append(why[n], w)
+	}
+	if rc.Renamed != "" {
+		note(rc.Renamed, "the forge's current name of "+name, 1000)
+	}
+	sessions := map[string]string{}
+	var live []*fact.Fact
+	for _, f := range a.facts {
+		if f.Meta.Scope != folder {
+			continue
+		}
+		if id := f.Meta.Source.Session; id != "" {
+			sessions[id] = f.Meta.Created
+		}
+		if !f.InInbox() && !overlay.IsInbox(f.Path) && f.Meta.SupersededBy == "" && f.Meta.Retired == "" {
+			live = append(live, f)
+		}
+	}
+	for n, k := range a.sessionCounts(sessions) {
+		note(n, fmt.Sprintf("%d of %d session(s) that filed its notes worked in its checkout", k, len(sessions)), 100*k)
+	}
+	paths, remotes, applies := map[string]int{}, map[string]int{}, map[string]int{}
+	cache := repoid.NewCache(a.home)
+	cache.Mains = a.catalog.Mains()
+	for _, f := range live {
+		text := f.Meta.Description + "\n" + f.Body + "\n" + strings.Join(f.Meta.AppliesTo.Paths, "\n") + "\n" + strings.Join(f.Meta.AppliesTo.Commands, "\n")
+		inPaths, inRemotes := map[string]bool{}, map[string]bool{}
+		for _, m := range machinePathRx.FindAllStringSubmatch(text, 20) {
+			p := strings.TrimRight(m[1], ".,;:)")
+			if r, ok := cache.Of(p); ok && r.Slug() != "" {
+				inPaths[r.Slug()] = true
+			}
+		}
+		for _, ref := range check.Refs(text) {
+			if ref.Kind == check.KindRepo {
+				inRemotes[ref.Value] = true
+			}
+		}
+		for n := range inPaths {
+			paths[n]++
+		}
+		for n := range inRemotes {
+			remotes[n]++
+		}
+		seenRepo := map[string]bool{}
+		for _, rp := range f.Meta.AppliesTo.Repos {
+			n := strings.ToLower(rp)
+			if own := a.catalog.AliasOf(n); own != "" {
+				n = own
+			} else if o := record.RepoOwner(a.recs, n); o != "" {
+				n = strings.TrimPrefix(o, "projects/")
+			}
+			if !seenRepo[n] {
+				seenRepo[n] = true
+				applies[n]++
+			}
+		}
+	}
+	for n, k := range applies {
+		note(n, fmt.Sprintf("%d of its %d live fact(s) name it in applies_to.repos", k, len(live)), 20*k)
+	}
+	for n, k := range paths {
+		note(n, fmt.Sprintf("%d of its %d live fact(s) name paths in its checkout", k, len(live)), 20*k)
+	}
+	for n, k := range remotes {
+		note(n, fmt.Sprintf("%d of its live fact(s) name its remote", k), 20*k)
+	}
+	pool := map[string]bool{}
+	for _, n := range a.catalog.Names() {
+		pool[n] = true
+	}
+	for f, r := range a.recs {
+		if record.Broad(r.Kind) == "project" && strings.HasPrefix(f, "projects/") {
+			pool[strings.TrimPrefix(f, "projects/")] = true
+		}
+	}
+	// The store's project folders too: one may be the real repository with
+	// no checkout here and no record yet (its name checked like any other).
+	for f := range a.projectFolders() {
+		pool[strings.TrimPrefix(f, "projects/")] = true
+	}
+	for n := range pool {
+		if d, ok := assess.Near(name, n); ok {
+			note(n, fmt.Sprintf("a near name (edit distance %d)", d), max(1, 10-d))
+		}
+	}
+	var out []assess.RealRepo
+	for k, sc := range score {
+		// The live folder that holds it now.
+		n, folderN := k, "projects/"+k
+		ws := append([]string(nil), why[k]...)
+		if w, _, err := record.Resolve(a.recs, folderN); err == nil && w != folderN {
+			if !strings.HasPrefix(w, "projects/") {
+				continue
+			}
+			ws = append(ws, k+" is suppressed into "+w)
+			n, folderN = strings.TrimPrefix(w, "projects/"), w
+		}
+		if n == name || a.checker.Repo(a.ctx, n).Verdict != check.Holds {
+			continue
+		}
+		if r := a.recs[folderN]; r != nil {
+			ws = append(ws, "record: "+r.Kind+", "+r.Status)
+		} else {
+			ws = append(ws, "no record yet")
+		}
+		merged := false
+		for i := range out {
+			if out[i].Name == n {
+				out[i].Score += sc
+				out[i].Why = append(out[i].Why, ws...)
+				merged = true
+			}
+		}
+		if !merged {
+			out = append(out, assess.RealRepo{Name: n, Why: ws, Score: sc})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Score != out[j].Score {
+			return out[i].Score > out[j].Score
+		}
+		return out[i].Name < out[j].Name
+	})
+	if len(out) > maxReal {
+		out = out[:maxReal]
 	}
 	return out
 }
@@ -366,6 +595,9 @@ func (a *assessor) evidence(folder string) (ev []record.Evidence, gitRoot bool, 
 		}
 		if ss := lastWork(work, 6); len(ss) > 0 {
 			lines = append(lines, "sessions that worked in it here (oldest first): "+strings.Join(ss, ", "))
+		}
+		if l := a.ownCommitsLine(folder, r.Root); l != "" {
+			lines = append(lines, l)
 		}
 	} else if a.host != "" {
 		// A folder of the projects directory: a non-git project folder, or nothing.
@@ -476,12 +708,9 @@ func (a *assessor) evidence(folder string) (ev []record.Evidence, gitRoot bool, 
 	return ev, gitRoot, lines
 }
 
-// sessionsWorkedIn says where the given sessions did their work, by the
-// dreamer's registry: each checkout's repository name (or a project
-// folder's name) with how many of the sessions worked there, most first;
-// "" when the registry knows none of them. A folder whose notes all came
-// from sessions in another project's checkout is that project's.
-func (a *assessor) sessionsWorkedIn(sessions map[string]string, folder string) string {
+// sessionCounts is, for each repository (or project folder) name, how many
+// of the given sessions worked there, by the dreamer's registry.
+func (a *assessor) sessionCounts(sessions map[string]string) map[string]int {
 	if a.sessionRoots == nil {
 		a.sessionRoots = map[string][]string{}
 		for root, ws := range repoid.LoadRegistryWork(a.reg) {
@@ -504,6 +733,46 @@ func (a *assessor) sessionsWorkedIn(sessions map[string]string, folder string) s
 			}
 		}
 	}
+	return count
+}
+
+// ownCommitsShown bounds the own commits an evidence lists.
+const ownCommitsShown = 5
+
+// ownCommitsLine lists the checkout's newest commits under this machine's
+// git identity, for a why to cite as commit:<sha> (knownCommit), their
+// subjects redacted (left out when redaction fails); "" for none.
+func (a *assessor) ownCommitsLine(folder, root string) string {
+	ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+	defer cancel()
+	cs := repoid.RecentOwnCommits(ctx, root, ownCommitsShown)
+	if len(cs) == 0 {
+		return ""
+	}
+	subj := make([]string, len(cs))
+	for i, c := range cs {
+		subj[i] = clipOne(c.Subject, 100)
+	}
+	red, err := digest.RedactAll(subj)
+	var parts []string
+	for i, c := range cs {
+		a.commitsShown[folder] = append(a.commitsShown[folder], strings.ToLower(c.Hash))
+		if err == nil {
+			parts = append(parts, fmt.Sprintf("commit:%s %s %q", c.Hash, c.Day, red[i]))
+		} else {
+			parts = append(parts, fmt.Sprintf("commit:%s %s", c.Hash, c.Day))
+		}
+	}
+	return "own commits under this machine's git identity, newest first (cite as commit:<sha>): " + strings.Join(parts, ", ")
+}
+
+// sessionsWorkedIn says where the given sessions did their work, by the
+// dreamer's registry: each checkout's repository name (or a project
+// folder's name) with how many of the sessions worked there, most first;
+// "" when the registry knows none of them. A folder whose notes all came
+// from sessions in another project's checkout is that project's.
+func (a *assessor) sessionsWorkedIn(sessions map[string]string, folder string) string {
+	count := a.sessionCounts(sessions)
 	names := make([]string, 0, len(count))
 	for n := range count {
 		names = append(names, n)
@@ -721,6 +990,21 @@ func (a *assessor) check(cands []assess.Candidate, ds []assess.Decision, pending
 		if op != "" {
 			ps = append(ps, op)
 		}
+		// Dry claims: what code checked refutes the decision, it is refused
+		// with the check's output.
+		if eps := assess.Enforce(c, d, assess.Checked{
+			Repo: func(n string) check.RepoCheck { return a.checker.Repo(a.ctx, n) },
+			Record: func(f string) *record.Record {
+				if r := pending[f]; r != nil {
+					return r
+				}
+				return a.recs[f]
+			},
+		}); len(eps) > 0 {
+			a.checkRefused++
+			ps = append(ps, eps...)
+		}
+		ps = append(ps, a.checkRoots(d)...)
 		if len(ps) > 0 {
 			refused = append(refused, assess.Refusal{Folder: c.Folder, Problems: ps})
 			continue
@@ -740,6 +1024,27 @@ func (a *assessor) check(cands []assess.Candidate, ds []assess.Decision, pending
 		acc = append(acc, dd)
 	}
 	return acc, refused
+}
+
+// checkRoots refuses roots code cannot confirm: a root on another machine
+// (code checks only this one's paths), or a path that does not exist here.
+// No roots is fine: code fills them in from its evidence.
+func (a *assessor) checkRoots(d assess.Decision) []string {
+	var ps []string
+	for _, rt := range d.Roots {
+		if !strings.EqualFold(rt.Host, a.host) {
+			ps = append(ps, fmt.Sprintf("roots: %s is another machine's; code checks only this machine's (%s): leave roots out and code fills them in from its evidence", rt.Host, a.host))
+			continue
+		}
+		p := rt.Path
+		if p == "~" || strings.HasPrefix(p, "~/") {
+			p = filepath.Join(a.home, strings.TrimPrefix(p[1:], "/"))
+		}
+		if fi, err := os.Stat(p); err != nil || !fi.IsDir() || !filepath.IsAbs(p) {
+			ps = append(ps, fmt.Sprintf("roots: %s is no folder on %s (checked: it does not exist)", rt.Path, a.host))
+		}
+	}
+	return ps
 }
 
 func messages(ps []record.Problem) []string {
@@ -963,12 +1268,29 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 	if max <= 0 {
 		max = assessMax
 	}
-	cands := a.candidates(max, o.only)
+	held := loadHeld(filepath.Join(platform.StateDir(a.home), assessHeldFile))
+	all := a.candidates(max+len(held.Folders), o.only)
+	// A folder refused in assessHoldRuns runs on the same evidence waits
+	// until its evidence (what the model reads of it) changes.
+	var cands []assess.Candidate
+	for _, c := range all {
+		c.Similar = a.similar(c, nil)
+		if h, ok := held.Folders[c.Folder]; ok && h.Runs >= assessHoldRuns && h.Fingerprint == assess.Fingerprint(c) {
+			rep.AssessHeld++
+			fmt.Fprintf(os.Stderr, "assess: %s waits: refused in %d runs on the same evidence (%s)\n", c.Folder, h.Runs, clipOne(h.Problems, 300))
+			continue
+		}
+		if len(cands) < max {
+			cands = append(cands, c)
+		}
+	}
 	cands = append(cands, a.proposalCandidates(max-len(cands), o.only)...)
 	rep.AssessCandidates += len(cands)
 	errs := 0
 	pending := map[string]*record.Record{}
 	var pendingLedger []byte
+	var decidedRun []decidedShape // this run's decisions, for folders alike in later batches
+	var refusedRun []refusedItem  // refused twice in this run
 	for i := 0; i < len(cands); i += assessBatch {
 		if ctx.Err() != nil {
 			fmt.Fprintln(os.Stderr, "assess:", ctx.Err())
@@ -976,6 +1298,9 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 			break
 		}
 		batch := cands[i:min(i+assessBatch, len(cands))]
+		for j := range batch {
+			batch[j].Similar = a.similar(batch[j], decidedRun)
+		}
 		prompt := fmt.Sprintf(assess.Prompt, assess.Render(batch))
 		res, cost, err := assessRun(ctx, o.model, prompt)
 		rep.CostUSD += cost
@@ -1023,7 +1348,17 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 			}
 			rep.AssessRefused += len(refused)
 			for _, r := range refused {
-				fmt.Fprintf(os.Stderr, "assess: %s refused twice, asked again next run: %s\n", r.Folder, strings.Join(r.Problems, "; "))
+				for _, c := range batch {
+					if c.Folder == r.Folder {
+						refusedRun = append(refusedRun, refusedItem{c: c, problems: strings.Join(r.Problems, "; ")})
+					}
+				}
+			}
+		}
+		for _, d := range acc {
+			delete(held.Folders, d.c.Folder)
+			if d.rec != nil && d.rec.Folder == d.c.Folder {
+				decidedRun = append(decidedRun, decidedShape{shape: d.c.Shape(), absent: d.c.Absent(), rec: d.rec})
 			}
 		}
 		// A decision that changes nothing but the evidence still writes the
@@ -1067,8 +1402,137 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 		pendingLedger = nil
 		pending = map[string]*record.Record{}
 	}
+	// The refused folders' fingerprints are taken as the next run will see
+	// them (the records as this run left them), so a folder whose evidence
+	// does not change waits.
+	for _, r := range refusedRun {
+		c := r.c
+		c.Similar = a.similar(c, nil)
+		fp := assess.Fingerprint(c)
+		h := held.Folders[c.Folder]
+		if h.Fingerprint == fp {
+			h.Runs++
+		} else {
+			h = heldFolder{Fingerprint: fp, Runs: 1}
+		}
+		h.Problems, h.At = r.problems, a.today
+		held.Folders[c.Folder] = h
+		next := "asked again next run"
+		if h.Runs >= assessHoldRuns {
+			next = fmt.Sprintf("refused in %d runs on the same evidence: it waits until that changes", h.Runs)
+		}
+		fmt.Fprintf(os.Stderr, "assess: %s refused twice, %s: %s\n", c.Folder, next, r.problems)
+	}
 	_ = a.commits.Save()
+	_ = a.checker.Forge.Save()
+	rep.CheckRefused += a.checkRefused
+	if !o.dry {
+		if err := held.save(); err != nil {
+			fmt.Fprintln(os.Stderr, "assess: held folders:", err)
+		}
+	}
 	return errs
+}
+
+// assessHoldRuns is how many runs a folder may be refused in, on the same
+// evidence, before it waits for that evidence to change. Each run already
+// sends a refused decision back once with code's problems; a second run asks
+// again with a fresh prompt and the decisions other folders got since; a
+// third on identical evidence asks the identical question and pays for the
+// identical answer (the shadow run: one folder refused 16 times in 8 runs).
+const assessHoldRuns = 2
+
+// assessHeldFile is the held folders' state file.
+const assessHeldFile = "assess-held.json"
+
+// heldState is the folders refused on the same evidence, by folder.
+type heldState struct {
+	path    string
+	Folders map[string]heldFolder `json:"folders"`
+}
+
+type heldFolder struct {
+	Fingerprint string `json:"fingerprint"` // assess.Fingerprint of what the model read
+	Runs        int    `json:"runs"`        // runs it was refused in with that fingerprint
+	Problems    string `json:"problems"`    // the last refusal
+	At          string `json:"at"`
+}
+
+func loadHeld(path string) *heldState {
+	h := &heldState{path: path, Folders: map[string]heldFolder{}}
+	if b, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(b, h)
+	}
+	if h.Folders == nil {
+		h.Folders = map[string]heldFolder{}
+	}
+	h.path = path
+	return h
+}
+
+func (h *heldState) save() error {
+	b, err := json.MarshalIndent(h, "", " ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(h.path), 0o700); err != nil {
+		return err
+	}
+	tmp := h.path + ".tmp"
+	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, h.path)
+}
+
+// refusedItem is a candidate refused twice in a run, with the last problems.
+type refusedItem struct {
+	c        assess.Candidate
+	problems string
+}
+
+// decidedShape is one decision of this run with its candidate's evidence
+// shape (assess.Candidate.Shape).
+type decidedShape struct {
+	shape  string
+	absent bool
+	rec    *record.Record
+}
+
+// similar are the lines that show c the decisions already made on folders
+// alike: the records of folders whose names follow c's pattern (a pattern
+// with a number in it), and this run's decisions on folders whose evidence
+// has c's shape, when c's name exists nowhere.
+func (a *assessor) similar(c assess.Candidate, run []decidedShape) []string {
+	if c.Kind != "" {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{c.Folder: true}
+	if strings.Contains(c.Pattern, "#") {
+		var recs []*record.Record
+		for _, f := range sortedRecordFolders(a.recs) {
+			r := a.recs[f]
+			if seen[f] || !strings.HasPrefix(f, "projects/") || assess.NamePattern(strings.TrimPrefix(f, "projects/")) != c.Pattern {
+				continue
+			}
+			seen[f] = true
+			recs = append(recs, r)
+		}
+		out = append(out, assess.SimilarLines("the same name pattern "+c.Pattern, recs)...)
+	}
+	if c.Absent() {
+		var recs []*record.Record
+		for _, d := range run {
+			if seen[d.rec.Folder] || !d.absent || d.shape != c.Shape() {
+				continue
+			}
+			seen[d.rec.Folder] = true
+			recs = append(recs, d.rec)
+		}
+		out = append(out, assess.SimilarLines("the same evidence: "+c.Shape(), recs)...)
+	}
+	return out
 }
 
 func firstClause(s string) string {

@@ -58,7 +58,7 @@ func TestParseVerdicts(t *testing.T) {
 	if vs := ParseVerdicts("garbage", 2); vs[0] != NoConflict || vs[1] != NoConflict {
 		t.Fatal("unparsable answer must retire nothing")
 	}
-	r := RenderPairs([]Pair{{"a", "A", "b", "B"}})
+	r := RenderPairs([]Pair{{ExistingName: "a", ExistingDesc: "A", NewName: "b", NewDesc: "B"}})
 	if !strings.Contains(r, "1.\nEXISTING (a): A\nNEW (b): B") {
 		t.Fatalf("render %q", r)
 	}
