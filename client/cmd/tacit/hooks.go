@@ -191,7 +191,9 @@ func runHook(args []string) int {
 			return 0
 		}
 		remember(in.SessionID, hits)
-		fmt.Print(search.Block(hits, startTitle(sit, slices.Contains(args[1:], "--mcp"))))
+		mcp := slices.Contains(args[1:], "--mcp")
+		fmt.Print(search.Block(hits, startTitle(sit, mcp)))
+		fmt.Print(startTreeLine(ctx, ix, sit, len(hits), mcp))
 	case "prompt":
 		// First, and whatever the prompt: a session whose undreamed part
 		// reached a full window starts its dream (windowDream).
@@ -221,6 +223,27 @@ func runHook(args []string) int {
 		usage()
 	}
 	return 0
+}
+
+// startTreeLine is the SessionStart block's last line when the repo block
+// shows fewer of the repository's facts than it has (startCeiling, the type
+// filter): how many it has and the tree call that lists them by folder
+// (repoTreeLine), so a session knows there is more to browse. With the
+// tree-pointer setting off, or outside a repo, or with the repo block off,
+// nothing.
+func startTreeLine(ctx context.Context, ix *search.Index, sit search.Situation, shown int, mcp bool) string {
+	if sit.Repo == "" || !deliveryOn("REPO_START", true) || !deliveryOn("TREE_POINTER", true) {
+		return ""
+	}
+	tool := "`tacit tree"
+	if mcp {
+		tool = "`mcp__tacit__tacit_tree"
+	}
+	n, folder := repoFacts(ctx, ix, repoNames(sit))
+	if n <= shown {
+		return ""
+	}
+	return treeLine(n, folder, tool)
 }
 
 // isDerived reports a generated fact (derived/<repo>): hot spots, module map.

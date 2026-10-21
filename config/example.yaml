@@ -22,6 +22,7 @@ delivery:
   prompt_action: on
   instruction: on
   tool_push: on
+  tree_pointer: on
   start_ceiling: 6
   prompt_ceiling: 5
   prompt_relative: 0.7

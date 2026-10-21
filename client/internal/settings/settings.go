@@ -54,6 +54,7 @@ type Delivery struct {
 	PromptAction   string   `yaml:"prompt_action"`   // TACIT_DELIVERY_PROMPT_ACTION
 	Instruction    string   `yaml:"instruction"`     // TACIT_DELIVERY_INSTRUCTION
 	ToolPush       string   `yaml:"tool_push"`       // TACIT_DELIVERY_TOOL_PUSH
+	TreePointer    string   `yaml:"tree_pointer"`    // TACIT_DELIVERY_TREE_POINTER
 	StartCeiling   *int     `yaml:"start_ceiling"`   // TACIT_DELIVERY_START_CEILING
 	PromptCeiling  *int     `yaml:"prompt_ceiling"`  // TACIT_DELIVERY_PROMPT_CEILING
 	PromptRelative *float64 `yaml:"prompt_relative"` // TACIT_DELIVERY_PROMPT_RELATIVE
@@ -174,7 +175,7 @@ func Load(path string, required bool) error {
 	default:
 		return fmt.Errorf("memory_md must be on or off")
 	}
-	for key, v := range map[string]string{"repo_start": c.Delivery.RepoStart, "repo_aliases": c.Delivery.RepoAliases, "prompt_metadata": c.Delivery.PromptMetadata, "prompt_action": c.Delivery.PromptAction, "instruction": c.Delivery.Instruction, "tool_push": c.Delivery.ToolPush} {
+	for key, v := range map[string]string{"repo_start": c.Delivery.RepoStart, "repo_aliases": c.Delivery.RepoAliases, "prompt_metadata": c.Delivery.PromptMetadata, "prompt_action": c.Delivery.PromptAction, "instruction": c.Delivery.Instruction, "tool_push": c.Delivery.ToolPush, "tree_pointer": c.Delivery.TreePointer} {
 		switch strings.ToLower(v) {
 		case "", "on", "off", "true", "false":
 		default:
@@ -226,7 +227,7 @@ func Load(path string, required bool) error {
 			return fmt.Errorf("utility timeout must be positive and no more than 2s")
 		}
 	}
-	for key, v := range map[string]string{"REPO_START": c.Delivery.RepoStart, "REPO_ALIASES": c.Delivery.RepoAliases, "PROMPT_METADATA": c.Delivery.PromptMetadata, "PROMPT_ACTION": c.Delivery.PromptAction, "INSTRUCTION": c.Delivery.Instruction, "TOOL_PUSH": c.Delivery.ToolPush} {
+	for key, v := range map[string]string{"REPO_START": c.Delivery.RepoStart, "REPO_ALIASES": c.Delivery.RepoAliases, "PROMPT_METADATA": c.Delivery.PromptMetadata, "PROMPT_ACTION": c.Delivery.PromptAction, "INSTRUCTION": c.Delivery.Instruction, "TOOL_PUSH": c.Delivery.ToolPush, "TREE_POINTER": c.Delivery.TreePointer} {
 		values["TACIT_DELIVERY_"+key] = strings.ToLower(v)
 	}
 	for key, v := range map[string]*int{"START_CEILING": c.Delivery.StartCeiling, "PROMPT_CEILING": c.Delivery.PromptCeiling, "META_CEILING": c.Delivery.MetaCeiling} {
