@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -144,4 +145,34 @@ func (c *CommitCache) Save() error {
 		return err
 	}
 	return os.Rename(tmp, c.path)
+}
+
+// OwnCommit is one commit under this machine's git identity.
+type OwnCommit struct {
+	Hash    string // abbreviated
+	Day     string // committer date, YYYY-MM-DD
+	Subject string
+}
+
+// RecentOwnCommits are the newest n commits of the checkout at root under
+// this machine's git identity (as CommitEvidence counts them), newest first;
+// nil when git cannot say.
+func RecentOwnCommits(ctx context.Context, root string, n int) []OwnCommit {
+	id := identity(ctx, root)
+	if id == "" || n <= 0 {
+		return nil
+	}
+	out, err := gitOut(ctx, root, "log", "--all", "--fixed-strings", "--author="+id, "-n", strconv.Itoa(n), "--format=%h%x09%cs%x09%s")
+	if err != nil {
+		return nil
+	}
+	var cs []OwnCommit
+	for _, l := range strings.Split(out, "\n") {
+		parts := strings.SplitN(l, "\t", 3)
+		if len(parts) != 3 || !dayRx.MatchString(parts[1]) {
+			continue
+		}
+		cs = append(cs, OwnCommit{Hash: parts[0], Day: parts[1], Subject: parts[2]})
+	}
+	return cs
 }

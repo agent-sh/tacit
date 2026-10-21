@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/auth"
+	"github.com/agent-sh/tacit/client/internal/check"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
@@ -29,6 +30,8 @@ func TestMain(m *testing.M) {
 	}
 	// The hooks' background index build, in this process: a detached
 	// `tacit hook index` would be this test binary running every test.
+	// No test asks a real forge: a test that needs one installs a fake.
+	newForge = func(context.Context) check.Forge { return nil }
 	startIndexBuild = func() {
 		if s, err := store.Default(); err == nil {
 			buildIndexForHooks(s)
