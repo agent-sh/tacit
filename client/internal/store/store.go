@@ -723,11 +723,12 @@ func (s *Store) Changed(ctx context.Context, from, to string) ([]string, error) 
 
 // RepoName is the name of the repository dir is in, as repoid names it (a
 // real git root; a linked worktree, a subdirectory and a symlinked checkout
-// report the main checkout's real directory name), or "" when dir is in
-// none. ctx is unused: the lookup reads the file system, no git process.
+// report the main checkout's real directory name, and so does a separate
+// clone of a checkout in the projects directory), or "" when dir is in none.
+// ctx is unused: the lookup reads the file system, no git process.
 func RepoName(ctx context.Context, dir string) string {
 	home, _ := os.UserHomeDir()
-	return repoid.Name(dir, home)
+	return repoid.NameMachine(dir, home)
 }
 
 // ShortHost is the machine's short host name, lowercased.

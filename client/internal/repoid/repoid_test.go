@@ -234,3 +234,75 @@ func TestCatalogKnowsOnlyRealCheckouts(t *testing.T) {
 		t.Errorf("a repo's own name is no alias: %q", got)
 	}
 }
+
+func TestNormURL(t *testing.T) {
+	for in, want := range map[string]string{
+		"git@github.com:Acme/Widget.git":              "github.com/acme/widget",
+		"https://github.com/acme/widget":              "github.com/acme/widget",
+		"https://u:tok3n@github.com/acme/widget.git/": "github.com/acme/widget",
+		"ssh://git@github.com:22/acme/widget.git":     "github.com/acme/widget",
+		"https://gitlab.example.com/g/sub/widget?x=1": "gitlab.example.com/g/sub/widget",
+		"/srv/git/widget.git":                         "",
+		"../widget":                                   "",
+		"file:///home/u/widget":                       "",
+		`C:\repos\widget`:                             "",
+		"":                                            "",
+		"github.com:":                                 "",
+	} {
+		if got := NormURL(in); got != want {
+			t.Errorf("NormURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A separate full clone (its own .git directory, outside the projects
+// directory) whose origin is a main checkout's is that repository, named for
+// the main checkout; a clone that matches no main checkout, or two, keeps
+// its own name, and the main checkout itself is never renamed.
+func TestSeparateCloneIsItsMainCheckout(t *testing.T) {
+	home := realTemp(t)
+	p := filepath.Join(home, "projects")
+	t.Setenv("TACIT_PROJECTS", p)
+	mkRepo(t, filepath.Join(p, "pikadon"), "git@github.com:acme/ginza.git")
+	mkRepo(t, filepath.Join(home, "tasks", "t1", "ginza"), "https://github.com/Acme/ginza")
+	mkWorktree(t, filepath.Join(home, "tasks", "t1", "ginza"), filepath.Join(home, "tasks", "t1", "ginza-wt"))
+	mkRepo(t, filepath.Join(home, "tasks", "t2", "other"), "git@github.com:acme/other.git")
+	mkRepo(t, filepath.Join(home, "tasks", "t3", "local"), "/srv/git/pikadon.git") // a file system remote matches nothing
+	mkRepo(t, filepath.Join(p, "twin-a"), "git@github.com:acme/twin.git")
+	mkRepo(t, filepath.Join(p, "twin-b"), "git@github.com:acme/twin.git")
+	mkRepo(t, filepath.Join(home, "tasks", "t4", "twin"), "git@github.com:acme/twin.git")
+
+	r, ok := OfMachine(filepath.Join(home, "tasks", "t1", "ginza", "src"), home)
+	if !ok || r.Name != "pikadon" || r.Root != filepath.Join(p, "pikadon") || r.Clone != filepath.Join(home, "tasks", "t1", "ginza") || r.Worktree != filepath.Join(home, "tasks", "t1", "ginza") {
+		t.Fatalf("clone: %+v", r)
+	}
+	if len(r.Aliases) != 1 || r.Aliases[0] != "ginza" || r.Origin != "github.com/acme/ginza" {
+		t.Fatalf("clone aliases %v origin %q", r.Aliases, r.Origin)
+	}
+	if r, _ := OfMachine(filepath.Join(home, "tasks", "t1", "ginza-wt"), home); r.Name != "pikadon" || r.Worktree != filepath.Join(home, "tasks", "t1", "ginza-wt") {
+		t.Fatalf("a worktree of the clone: %+v", r)
+	}
+	for path, want := range map[string]string{
+		filepath.Join(p, "pikadon"):                 "pikadon",
+		filepath.Join(home, "tasks", "t2", "other"): "other",
+		filepath.Join(home, "tasks", "t3", "local"): "local",
+		filepath.Join(home, "tasks", "t4", "twin"):  "twin", // two main checkouts: no guess
+		filepath.Join(p, "twin-b"):                  "twin-b",
+	} {
+		if got := NameMachine(path, home); got != want {
+			t.Errorf("NameMachine(%s) = %q, want %q", path, got, want)
+		}
+	}
+	// Of alone reads no projects directory.
+	if got := Name(filepath.Join(home, "tasks", "t1", "ginza"), home); got != "ginza" {
+		t.Errorf("Of named the clone %q", got)
+	}
+	// The catalog names the clone for its main checkout too.
+	c := LoadCatalog(home, "", p)
+	if r, ok := c.Of(filepath.Join(home, "tasks", "t1", "ginza")); !ok || r.Name != "pikadon" {
+		t.Errorf("catalog Of: %+v", r)
+	}
+	if !c.Has("pikadon") || c.Has("ginza") || c.AliasOf("ginza") != "pikadon" {
+		t.Errorf("catalog: %v, alias %q", c.Names(), c.AliasOf("ginza"))
+	}
+}

@@ -23,10 +23,11 @@ func hookRepoAliases(cwd string) []string {
 	return repoAliases(r)
 }
 
-// sessionRepo is the repository cwd is in, under this user's home.
+// sessionRepo is the repository cwd is in, under this user's home (a
+// separate clone named for its main checkout, repoid.OfMachine).
 func sessionRepo(cwd string) (repoid.Repo, bool) {
 	home, _ := os.UserHomeDir()
-	return repoid.Of(cwd, home)
+	return repoid.OfMachine(cwd, home)
 }
 
 // repoAliases are r's name and the other names repoid knows it by (the

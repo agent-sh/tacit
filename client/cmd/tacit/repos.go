@@ -34,7 +34,7 @@ func recordWindowRepos(home string, ws []dream.Window) {
 func machineCatalog(home string) *repoid.Catalog {
 	c := repoid.LoadCatalog(home, filepath.Join(platform.StateDir(home), repoid.RegistryFile), projectsRoot(home))
 	if cwd, err := os.Getwd(); err == nil {
-		if r, ok := repoid.Of(cwd, home); ok {
+		if r, ok := c.Of(cwd); ok {
 			c.Add(r)
 		}
 	}

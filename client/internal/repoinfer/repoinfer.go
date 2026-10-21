@@ -89,6 +89,13 @@ func NewResolver(home string) *Resolver {
 	return &Resolver{ids: repoid.NewCache(home), roots: map[string]string{}}
 }
 
+// WithMains names a separate clone for its main checkout
+// (repoid.Mains.Canonical) and returns r.
+func (r *Resolver) WithMains(m *repoid.Mains) *Resolver {
+	r.ids.Mains = m
+	return r
+}
+
 // Stats is how many file system lookups the resolver has made (what MaxDirs
 // caps).
 func (r *Resolver) Stats() int { return r.ids.Stats() }
