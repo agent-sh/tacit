@@ -28,7 +28,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `usage:
   tacit [--config FILE] [--runner TOOL] <command>
   tacit init   [--store DIR]    initialize a local store (no server or keys)
-  tacit maintain [--env-file FILE]   curate then verify on this machine
+  tacit maintain [--env-file FILE]   curate, the rotation, then verify on this machine
   tacit doctor [--models] [--role dream|curate|judge|verify] [--json]   offline configuration and dependency checks
   tacit lint   [--store DIR]
   tacit index  [--store DIR] [--check]   MEMORY.md and every folder's _index.md
@@ -68,6 +68,7 @@ func usage() {
   tacit app                        the desktop window: what needs you, every fact, edit, retire, new rulings (a build with -tags desktop)
   tacit app --browser [--addr 127.0.0.1:7450] [--no-open]   the same page as tacit review, on its own port
   tacit review apply VERDICTS.json...   apply a verifier's checked marks (with evidence) in one commit
+  tacit rotation [--max N] [--age DAYS] [--fact A,B] [--model M] [--dry-run]   the facts unchecked longest, judged by the curator's model against the proof code gathers; stale ones retired, replaced ones pointed at their successor, changed details noted in place, the owner's facts only asked about; every answered fact stamped last_checked (needs the store format marker; TACIT_ROTATION_MAX, TACIT_ROTATION_AGE_DAYS)
   tacit verify [--model M] [--max N] [--batch N] [--budget USD] [--ids SAMPLE.json] [--dry-run]   settle open findings against their sources; leave the owner only real questions
   tacit timeline [--as-of T] [--json] [--ids SAMPLE.json] [ID...]   the git timeline of review findings: fact dates, commits on their subject, what HEAD shows; no model
   tacit probe <verb> ...           the read-only commands a verifier may run (git-log, git-show, git-blame, git-grep, git-ls, git-tags, grep, find, ls, gh view/list, unit, units, sys)
@@ -202,6 +203,8 @@ func main() {
 		os.Exit(runProbe(os.Args[2:]))
 	case "verify":
 		os.Exit(runVerify(os.Args[2:]))
+	case "rotation":
+		os.Exit(runRotation(os.Args[2:]))
 	case "review":
 		os.Exit(runReview(os.Args[2:]))
 	case "app":

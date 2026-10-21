@@ -78,6 +78,8 @@ const KINDS = {
   "link":               { label: "Broken links in your rules", q: "Your rule links to a fact that does not exist." },
   // One fact, not a pair: git deleted something it names after the day it was last current.
   "stale":              { label: "Maybe outdated", q: "Git says something this fact names was deleted. Is it still true?", qRule: "Git says something your rule names was deleted. Does your rule still hold?" },
+  // One fact: the curator's regular check went against one of your facts, and changed nothing in it.
+  "check":              { label: "Checked by the curator", q: "The curator checked this fact against what tacit knows now and reads it differently. Is it still true?", qRule: "The curator checked your rule against what tacit knows now and reads it differently. Does your rule still hold?", side: "What the curator found" },
 };
 const an = (w) => (/^[aeiou]/i.test(w) ? "an " : "a ") + w;
 // The day a fact speaks for, the one its card prints: the newest date in its
@@ -425,7 +427,7 @@ function wire(it, made) {
 }
 // A stale check is about one fact: the card, and beside it what git shows.
 function staleSheet(it) {
-  const inner = $("sheet-inner"), K = KINDS.stale, f = it.a, d = it.decision, fl = it.flag || {};
+  const inner = $("sheet-inner"), K = KINDS[it.kind] && KINDS[it.kind].qRule ? KINDS[it.kind] : KINDS.stale, f = it.a, d = it.decision, fl = it.flag || {};
   sideNouns = { A: "this fact", B: "this fact", "A,B": "this fact" };
   const made = it.state === "retired" ? "retire" : d && d.action === "current" ? "current" : "";
   const word = agentWord(it, { a: "fact", b: "fact" });
@@ -436,14 +438,14 @@ function staleSheet(it) {
     : it.state === "retired" && !d ? "This fact is already retired."
     : it.state === "gone" ? "This fact was replaced or removed, so there is nothing to decide."
     : "";
-  const sum = staleSummary(fl);
+  const sum = it.kind === "check" ? (fl.detail || []) : staleSummary(fl);
   inner.innerHTML = `
     <h2 class="question">${esc(isRule(f) ? K.qRule : K.q)}</h2>
     ${word.text ? `<p class="suggest">${esc(word.text)}</p>` : ""}
     ${it.prior ? `<p class="suggest quiet">An earlier check left a fix that was never applied: ${esc(it.prior.evidence || "")}</p>` : ""}
     ${recordHTML(it)}${notesHTML(it)}
     <div class="pair">${card(f, "a", isRule(f) ? "Your rule" : "Fact")}
-      <aside class="side-col" aria-label="What git shows"><h3>What git shows</h3><ul class="sum">${sum.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
+      <aside class="side-col" aria-label="${esc(K.side || "What git shows")}"><h3>${esc(K.side || "What git shows")}</h3><ul class="sum">${sum.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
         <section class="git inside" id="timeline" aria-busy="true"><p class="tl-sub">Reading git.</p></section></aside></div>
     ${choicesHTML(it, word.mark)}`;
   if (why) { const h = $("hint"); if (h) { h.textContent = why; h.dataset.fixed = "1"; } }

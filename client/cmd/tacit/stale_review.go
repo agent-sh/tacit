@@ -45,6 +45,7 @@ type staleRef struct {
 	name, scope, sha, since, source string
 	n                               int
 	detail                          []string
+	outcome                         string // a rotation question's (check_review.go)
 }
 
 // parseStaleFiles reads the stale findings of review/*.md in file order.
@@ -179,7 +180,7 @@ func (rs *reviewServer) staleItems() []staleItem {
 }
 
 func (rs *reviewServer) staleByID(id string) *staleItem {
-	for _, it := range rs.staleItems() {
+	for _, it := range append(rs.staleItems(), rs.checkItems()...) {
 		if it.ID == id {
 			c := it
 			return &c
@@ -213,6 +214,9 @@ func (rs *reviewServer) allItems() []any {
 		out = append(out, it)
 	}
 	for _, it := range rs.staleItems() {
+		out = append(out, it)
+	}
+	for _, it := range rs.checkItems() {
 		out = append(out, it)
 	}
 	return out
@@ -262,6 +266,9 @@ func staleQuestion(name, mark string, it *staleItem) string {
 // Everything is prepared in memory first, so a refused mark writes nothing.
 func (rs *reviewServer) applyStaleOp(o *op, it *staleItem) (string, []string, error) {
 	name := it.A.Name
+	if o.By == "agent" && it.Kind == kindCheck {
+		return "", nil, errors.New("the rotation's question is the owner's to answer")
+	}
 	if o.By == "agent" {
 		// An agent says one of four things. The guard below does not depend on a
 		// caller having checked: no other mark, reopen included, gets past here.
