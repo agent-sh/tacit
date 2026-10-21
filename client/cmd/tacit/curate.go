@@ -737,6 +737,15 @@ func runCurate(args []string) int {
 		// The folders' cited overviews, on a material change (overview.go).
 		rep.Errors += curateOverviewStep(ctx, s, *model, *dry, &rep)
 		curateUpkeep(ctx, s, host, *dry, &rep)
+		if !*dry {
+			// The folder steps change what the hooks read (the records, the
+			// quiet marks, an area's tools), and the hooks read the closest
+			// index while the exact one is missing: build it now, before the
+			// staleness step, not in the first session that asks.
+			if ix, err := openIndex(ctx, s); err == nil {
+				ix.Close()
+			}
+		}
 	} else if !*dry && rep.Facts > 0 {
 		// The hooks read the index at the new HEAD: build it now, not in the
 		// first session that asks.
