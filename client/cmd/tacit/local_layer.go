@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/overlay"
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
 	"github.com/agent-sh/tacit/client/internal/platform"
+	"github.com/agent-sh/tacit/client/internal/repoid"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
@@ -49,8 +51,11 @@ func canDream(ctx context.Context, s *store.Store) bool {
 // persistLocalDreamWindow writes a window's notes to this machine's overlay,
 // inbox/dreamer@<host>/<name>.md, redacted like an agent's overlay note
 // (fail closed: no scrump, nothing written) and atomically. A note already
-// there is not written again. It returns the Prefix paths it wrote.
-func persistLocalDreamWindow(s *store.Store, facts []*fact.Fact) ([]string, error) {
+// there is not written again. It returns the Prefix paths it wrote. catalog,
+// when not nil and a note was written, is this machine's repository catalog
+// (repoid.CatalogFile), written beside the notes in the overlay when it
+// changed: the local layer's checks read it, and it never reaches the store.
+func persistLocalDreamWindow(s *store.Store, facts []*fact.Fact, catalog []byte) ([]string, error) {
 	dir := overlay.Dir()
 	if !overlay.Outside(dir, s.Dir) {
 		return nil, overlay.ErrInside
@@ -82,6 +87,14 @@ func persistLocalDreamWindow(s *store.Store, facts []*fact.Fact) ([]string, erro
 			return written, err
 		}
 		written = append(written, f.Path)
+	}
+	if len(written) > 0 && catalog != nil {
+		rel := filepath.ToSlash(filepath.Join(overlay.InboxDir, "dreamer@"+host, repoid.CatalogFile))
+		if old, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel))); err != nil || !bytes.Equal(old, catalog) {
+			if err := overlay.Write(dir, s.Dir, rel, catalog); err != nil {
+				return written, err
+			}
+		}
 	}
 	return written, nil
 }

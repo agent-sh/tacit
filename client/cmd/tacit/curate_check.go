@@ -9,6 +9,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/curate"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/overlay"
+	"github.com/agent-sh/tacit/client/internal/repoid"
 	"github.com/agent-sh/tacit/client/internal/store"
 	"github.com/agent-sh/tacit/client/internal/validate"
 )
@@ -22,7 +23,20 @@ func curateEnv(storeDir string, layer bool) validate.Env {
 	if layer {
 		dir = filepath.Join(overlay.Dir(), filepath.FromSlash(overlay.CuratedDir))
 	}
-	return validate.NewEnv(storeDir, dir, machineCatalog(home), store.ShortHost())
+	return validate.NewEnv(storeDir, dir, knownCatalog(home, storeDir, layer), store.ShortHost())
+}
+
+// knownCatalog is every repository the checks may name: this machine's
+// checkouts (machineCatalog), every machine's catalog in the store
+// (repoid.CatalogFile in inbox/*/), and with the local layer this machine's
+// catalog in the overlay.
+func knownCatalog(home, storeDir string, layer bool) *repoid.Catalog {
+	c := machineCatalog(home)
+	c.AddStoreCatalogs(storeDir)
+	if layer {
+		c.AddSharedFile(filepath.Join(overlay.Dir(), overlay.InboxDir, "dreamer@"+store.ShortHost(), repoid.CatalogFile))
+	}
+	return c
 }
 
 // entryCheck checks a split or rulings answer's entries as they would be

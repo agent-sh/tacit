@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -366,5 +367,61 @@ func TestCatalogNeedsWorkForACheckoutElsewhere(t *testing.T) {
 	c := LoadCatalog(home, reg, "")
 	if !c.Has("kv-tool") || !c.Accepted(r) || WorkSessions(c.Work(scratch)) != 2 {
 		t.Fatalf("two sessions: %v", c.Names())
+	}
+}
+
+// A machine's shared catalog names its repositories, their aliases and
+// their remotes' normalized URLs, never a local path or a URL's user; another
+// machine's catalog that adds it knows the names (as names with no checkout
+// there) and keeps its own checkouts' entries.
+func TestSharedCatalogCarriesNamesNotPaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need a privilege on Windows")
+	}
+	homeA := filepath.Join(realTemp(t), "alice")
+	p := filepath.Join(homeA, "projects")
+	mkRepo(t, filepath.Join(p, "pikadon"), "https://alice:s3cretTok@github.com/Acme/ginza.git")
+	mkRepo(t, filepath.Join(p, "localonly"), filepath.Join(homeA, "srv", "localonly.git"))
+	os.Symlink("pikadon", filepath.Join(p, "kadon"))
+	a := LoadCatalog(homeA, "", p)
+	b := a.Shared()
+	if string(b) != string(LoadCatalog(homeA, "", p).Shared()) {
+		t.Fatal("the same catalog wrote different bytes")
+	}
+	for _, leak := range []string{homeA, "alice", "s3cretTok", "srv"} {
+		if strings.Contains(string(b), leak) {
+			t.Errorf("the shared catalog holds %q:\n%s", leak, b)
+		}
+	}
+	if !strings.Contains(string(b), `"github.com/acme/ginza"`) || !strings.Contains(string(b), `"ginza"`) {
+		t.Errorf("the shared catalog lacks the URL or alias:\n%s", b)
+	}
+
+	homeB := realTemp(t)
+	mkRepo(t, filepath.Join(homeB, "projects", "localonly"), "")
+	c := LoadCatalog(homeB, "", filepath.Join(homeB, "projects"))
+	if c.Has("pikadon") {
+		t.Fatal("machine B knows pikadon before reading A's catalog")
+	}
+	if !c.AddShared(b) || c.AddShared([]byte("not json")) {
+		t.Fatal("AddShared parse result")
+	}
+	if !c.Has("pikadon") || c.AliasOf("ginza") != "pikadon" || c.AliasOf("kadon") != "pikadon" || !c.Has("localonly") {
+		t.Errorf("B after A's catalog: %v", c.Names())
+	}
+	if r := c.repos["localonly"]; r.Root == "" {
+		t.Error("B's own checkout lost its entry")
+	}
+	// B's own shared catalog re-exports only its checkouts.
+	if s := string(c.Shared()); strings.Contains(s, "pikadon") || !strings.Contains(s, "localonly") {
+		t.Errorf("B's shared catalog:\n%s", s)
+	}
+	// The store holds every machine's catalog in its writer's inbox folder.
+	store := realTemp(t)
+	write(t, filepath.Join(store, "inbox", "dreamer@alice-box", CatalogFile), string(b))
+	d := LoadCatalog(realTemp(t), "", "")
+	d.AddStoreCatalogs(store)
+	if !d.Has("pikadon") {
+		t.Errorf("AddStoreCatalogs: %v", d.Names())
 	}
 }
