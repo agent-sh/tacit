@@ -56,6 +56,15 @@ type Repo struct {
 	// repository still has), lower case, without Name, sorted. Delivery may
 	// add them to Aliases (the repo-aliases setting); the catalog does not.
 	Remotes []string
+	// Origin is the origin remote's URL normalized (NormURL): host and path,
+	// lower case, no scheme, user, port or .git; "" for none or a remote on
+	// this file system. URLs are every remote's, the same way, sorted.
+	Origin string
+	URLs   []string
+	// Clone is the root of a separate full clone (its own .git directory)
+	// that Mains.Canonical named for the main checkout with the same origin;
+	// "" otherwise. Worktree is still the clone's checkout.
+	Clone string
 }
 
 // Slug is the project scope name of r: Name in lower case when that is a
@@ -98,6 +107,9 @@ type Cache struct {
 	// directory; true ends the lookups (a hook past its deadline).
 	MaxDirs int
 	Stop    func() bool
+	// Mains, when set, names a separate clone for its main checkout
+	// (Mains.Canonical) in every answer of Of.
+	Mains *Mains
 }
 
 type found struct {
@@ -188,6 +200,9 @@ func (c *Cache) Of(path string) (Repo, bool) {
 		if lex := lexicalCheckout(p, real, r.Worktree); lex != "" {
 			r.Aliases = addAlias(r.Aliases, r.Name, lex)
 		}
+	}
+	if c.Mains != nil {
+		r = c.Mains.Canonical(r)
 	}
 	return r, true
 }
@@ -287,12 +302,16 @@ func (c *Cache) rootAt(d string) (r Repo, isRoot, ok bool) {
 		return Repo{}, true, false
 	}
 	r = Repo{Name: name, Root: main, Worktree: d}
-	origin, remotes := remoteNames(common)
-	if origin != "" {
-		r.Aliases = addAlias(r.Aliases, name, origin)
+	rem := readRemotes(common)
+	if rem.origin != "" {
+		r.Aliases = addAlias(r.Aliases, name, rem.origin)
 	}
-	for _, n := range remotes {
+	for _, n := range rem.names {
 		r.Remotes = addAlias(r.Remotes, name, n)
+	}
+	r.Origin = rem.originURL
+	for _, u := range rem.urls {
+		r.URLs = addURL(r.URLs, u)
 	}
 	return r, true, true
 }
@@ -359,13 +378,20 @@ var (
 	remoteSec = regexp.MustCompile(`^\[remote\s+"([^"]*)"\]$`)
 )
 
-// remoteNames reads the repository's config: origin is the repository name
-// of the origin remote's URL (URLName), all the same for every remote's
-// URL; "" and nil when there is none.
-func remoteNames(common string) (origin string, all []string) {
+// remotes is what a repository's config says of its remotes.
+type remotes struct {
+	origin    string   // the repository name of origin's URL (URLName)
+	names     []string // the same for every remote's URL
+	originURL string   // origin's URL, normalized (NormURL)
+	urls      []string // every remote's URL, normalized, where it is a network URL
+}
+
+// readRemotes reads the repository's config (no git process); the zero
+// value when there is none.
+func readRemotes(common string) (out remotes) {
 	fh, err := os.Open(filepath.Join(common, "config"))
 	if err != nil {
-		return "", nil
+		return out
 	}
 	defer fh.Close()
 	sc := bufio.NewScanner(fh)
@@ -388,13 +414,73 @@ func remoteNames(common string) (origin string, all []string) {
 			if n == "" {
 				continue
 			}
-			all = append(all, n)
-			if remote == "origin" && origin == "" {
-				origin = n
+			out.names = append(out.names, n)
+			u := NormURL(m[1])
+			if u != "" {
+				out.urls = append(out.urls, u)
+			}
+			if remote == "origin" && out.origin == "" {
+				out.origin, out.originURL = n, u
 			}
 		}
 	}
-	return origin, all
+	return out
+}
+
+// NormURL is a remote URL as one repository's identity on every machine:
+// host and path, lower case, with no scheme, user name or password, port,
+// trailing slash or .git ("git@github.com:Acme/Widget.git" and
+// "https://u:tok@github.com/acme/widget" are both "github.com/acme/widget").
+// A remote on the file system (a path, a file:// URL) is "": it says nothing
+// another machine can match, and it is a local path.
+func NormURL(u string) string {
+	u = strings.TrimSpace(u)
+	var host, p string
+	if i := strings.Index(u, "://"); i >= 0 {
+		if strings.EqualFold(u[:i], "file") {
+			return ""
+		}
+		rest := u[i+3:]
+		j := strings.IndexByte(rest, '/')
+		if j < 0 {
+			return ""
+		}
+		host, p = rest[:j], rest[j+1:]
+	} else {
+		// scp-like: [user@]host:path, with the colon before any slash; a
+		// one-letter host is a Windows drive.
+		colon, slash := strings.IndexByte(u, ':'), strings.IndexByte(u, '/')
+		if colon <= 1 || (slash >= 0 && slash < colon) {
+			return ""
+		}
+		host, p = u[:colon], u[colon+1:]
+	}
+	if at := strings.LastIndexByte(host, '@'); at >= 0 {
+		host = host[at+1:]
+	}
+	if c := strings.LastIndexByte(host, ':'); c >= 0 && !strings.Contains(host, "]") {
+		host = host[:c]
+	}
+	host = strings.ToLower(host)
+	p = strings.Trim(strings.TrimSuffix(strings.Trim(p, "/"), ".git"), "/")
+	if i := strings.IndexAny(p, "?#"); i >= 0 {
+		p = p[:i]
+	}
+	if host == "" || p == "" || strings.ContainsAny(host, "/\\ ") {
+		return ""
+	}
+	return host + "/" + strings.ToLower(p)
+}
+
+func addURL(urls []string, u string) []string {
+	for _, x := range urls {
+		if x == u {
+			return urls
+		}
+	}
+	out := append(append([]string(nil), urls...), u)
+	sort.Strings(out)
+	return out
 }
 
 // URLName is the repository name of a remote URL or an owner/repo form: its

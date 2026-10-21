@@ -21,10 +21,13 @@ import (
 //     two levels deep (an organisation folder of checkouts is one level).
 //
 // No name is guessed: a repository is in the catalog only when Of resolves a
-// real directory to it.
+// real directory to it. A separate clone is named for its main checkout
+// (Mains).
 type Catalog struct {
 	repos   map[string]Repo   // slug -> repo
 	aliases map[string]string // alias -> slug of the repo it names
+	home    string
+	mains   *Mains
 }
 
 // RegistryFile is the registry's name in the state directory.
@@ -122,8 +125,12 @@ func readRegistry(path string) registry {
 // LoadCatalog builds the catalog for home from the registry at registryPath
 // ("" for none) and the projects directory projects ("" for none).
 func LoadCatalog(home, registryPath, projects string) *Catalog {
-	c := &Catalog{repos: map[string]Repo{}, aliases: map[string]string{}}
+	c := &Catalog{repos: map[string]Repo{}, aliases: map[string]string{}, home: home, mains: LoadMains(home, projects)}
+	for _, r := range c.mains.All() {
+		c.add(r)
+	}
 	cache := NewCache(home)
+	cache.Mains = c.mains
 	if registryPath != "" {
 		reg := readRegistry(registryPath)
 		for _, slug := range sortedKeys(reg.Repos) {
@@ -137,10 +144,31 @@ func LoadCatalog(home, registryPath, projects string) *Catalog {
 			}
 		}
 	}
-	if projects != "" {
-		c.scan(cache, projects, 2)
-	}
 	return c
+}
+
+// Home is the home directory the catalog was loaded for.
+func (c *Catalog) Home() string {
+	if c == nil {
+		return ""
+	}
+	return c.home
+}
+
+// Mains are the main checkouts the catalog's projects directory holds.
+func (c *Catalog) Mains() *Mains {
+	if c == nil {
+		return nil
+	}
+	return c.mains
+}
+
+// Of is the repository path is in, a separate clone named for its main
+// checkout.
+func (c *Catalog) Of(path string) (Repo, bool) {
+	cache := NewCache(c.Home())
+	cache.Mains = c.Mains()
+	return cache.Of(path)
 }
 
 func sortedKeys(m map[string]regEntry) []string {
@@ -150,33 +178,6 @@ func sortedKeys(m map[string]regEntry) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-// scan adds the git roots in dir down to depth levels.
-func (c *Catalog) scan(cache *Cache, dir string, depth int) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".") {
-			continue
-		}
-		p := filepath.Join(dir, e.Name())
-		fi, err := os.Stat(p) // a symlinked checkout counts
-		if err != nil || !fi.IsDir() {
-			continue
-		}
-		if _, err := os.Lstat(filepath.Join(p, ".git")); err == nil {
-			if r, ok := cache.Of(p); ok {
-				c.add(r)
-			}
-			continue
-		}
-		if depth > 1 {
-			c.scan(cache, p, depth-1)
-		}
-	}
 }
 
 func (c *Catalog) add(r Repo) {

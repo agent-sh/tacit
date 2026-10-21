@@ -321,3 +321,29 @@ func TestBodyQuote(t *testing.T) {
 		t.Errorf("long quote: %d bytes, %q", len(q), q[len(q)-20:])
 	}
 }
+
+// A session in a separate full clone of a checkout in the projects
+// directory (same origin URL) is filed under the main checkout's name.
+func TestWindowsNameASeparateCloneForItsMainCheckout(t *testing.T) {
+	home, _ := filepath.EvalSymlinks(t.TempDir())
+	t.Setenv("HOME", home)
+	t.Setenv("TACIT_PROJECTS", filepath.Join(home, "projects"))
+	mk := func(dir, origin string) {
+		os.MkdirAll(filepath.Join(dir, ".git"), 0o755)
+		os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644)
+		os.WriteFile(filepath.Join(dir, ".git", "config"), []byte("[remote \"origin\"]\n\turl = "+origin+"\n"), 0o644)
+	}
+	mk(filepath.Join(home, "projects", "pikadon"), "git@github.com:acme/ginza.git")
+	clone := filepath.Join(home, "tasks", "t7", "ginza")
+	mk(clone, "https://github.com/acme/ginza.git")
+	dir := filepath.Join(home, "transcripts")
+	os.MkdirAll(dir, 0o755)
+	f := filepath.Join(dir, "a.jsonl")
+	os.WriteFile(f, []byte(`{"type":"user","cwd":"`+filepath.ToSlash(clone)+`","message":{"content":"fix the build"}}`+"\n"+
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"Fixed."}]}}`+"\n"+strings.Repeat(" ", minNewBytes)+"\n"), 0o644)
+	st := &State{Offsets: map[string]int64{f: 0}}
+	ws, _ := Windows([]Source{{Glob: filepath.Join(dir, "*.jsonl"), Format: digest.Claude}}, st, false)
+	if len(ws) != 1 || ws[0].Repo != "pikadon" || ws[0].RepoRoot != filepath.Join(home, "projects", "pikadon") {
+		t.Fatalf("windows %+v", ws)
+	}
+}

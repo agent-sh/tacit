@@ -316,6 +316,9 @@ func WindowsFor(sources []Source, st *State, fresh bool, sel Select) ([]Window, 
 	home, _ := os.UserHomeDir()
 	var ws []Window
 	exclude := loadExclude()
+	// A separate clone of a checkout in the projects directory is that
+	// repository (repoid.Mains); scanned once per run.
+	mains := repoid.LoadMains(home, repoid.ProjectsDir(home))
 	for _, src := range sources {
 		if sel.Only != "" && !st.started(src) {
 			continue
@@ -325,7 +328,7 @@ func WindowsFor(sources []Source, st *State, fresh bool, sel Select) ([]Window, 
 			st.Sources = append(st.Sources, src.root())
 		}
 		if src.Format == digest.Hermes {
-			ws = append(ws, hermesWindows(src.DB, st, fresh, exclude, home, sel)...)
+			ws = append(ws, hermesWindows(src.DB, st, fresh, exclude, home, mains, sel)...)
 			continue
 		}
 		files, _ := filepath.Glob(src.Glob)
@@ -425,8 +428,8 @@ func WindowsFor(sources []Source, st *State, fresh bool, sel Select) ([]Window, 
 			// The cwd's repo, else the repo the window's own paths are in. Per
 			// window, not per delta: a long session moves between repos, and
 			// measured per delta, 10 of 40 inferred repos were wrong.
-			cwdRepo := repoOf(head, home)
-			resolver := repoinfer.NewResolver(home)
+			cwdRepo := repoOf(head, home, mains)
+			resolver := repoinfer.NewResolver(home).WithMains(mains)
 			for part, c := range chunk(lines, maxWindowChars) {
 				repo, root := cwdRepo.Name, cwdRepo.Root
 				if repo == "" {
@@ -491,7 +494,7 @@ const hermesTimeout = 2 * time.Minute
 // the session's git root or cwd when it records one, else the window's paths.
 // A store that cannot be read is reported and left for the next run, its
 // cursors unmoved.
-func hermesWindows(path string, st *State, fresh bool, exclude map[string]bool, home string, sel Select) []Window {
+func hermesWindows(path string, st *State, fresh bool, exclude map[string]bool, home string, mains *repoid.Mains, sel Select) []Window {
 	ctx, cancel := context.WithTimeout(context.Background(), hermesTimeout)
 	defer cancel()
 	db, err := hermes.Open(path)
@@ -517,7 +520,7 @@ func hermesWindows(path string, st *State, fresh bool, exclude map[string]bool, 
 			return nil
 		}
 	}
-	resolver := repoinfer.NewResolver(home)
+	resolver := repoinfer.NewResolver(home).WithMains(mains)
 	var ws []Window
 	for _, s := range sessions {
 		lastID, ok := last[s.ID]
@@ -581,7 +584,9 @@ func hermesWindows(path string, st *State, fresh bool, exclude map[string]bool, 
 		var cwdRepo repoid.Repo
 		for _, d := range []string{s.RepoRoot, s.Cwd} {
 			if d != "" {
-				cwdRepo, _ = repoid.Of(cwdPath(d), home)
+				ids := repoid.NewCache(home)
+				ids.Mains = mains
+				cwdRepo, _ = ids.Of(cwdPath(d))
 				break
 			}
 		}
@@ -661,10 +666,13 @@ var cwdRx = regexp.MustCompile(`"cwd":"([^"]+)"`)
 // carry one), as repoid names it: a real git root, a worktree for its main
 // repository. A transcript without a cwd gets none from here (the window's
 // paths decide, windowRepo): its folder's name is a lossy spelling of a
-// path, not a git root.
-func repoOf(raw []byte, home string) repoid.Repo {
+// path, not a git root. A separate clone of a main checkout (mains) is
+// that checkout's repository.
+func repoOf(raw []byte, home string, mains *repoid.Mains) repoid.Repo {
 	if m := cwdRx.FindSubmatch(raw); m != nil {
-		r, _ := repoid.Of(cwdPath(string(m[1])), home)
+		ids := repoid.NewCache(home)
+		ids.Mains = mains
+		r, _ := ids.Of(cwdPath(string(m[1])))
 		return r
 	}
 	return repoid.Repo{}
