@@ -140,7 +140,60 @@ type Entry struct {
 	OwnerQuote  string           `json:"owner_quote,omitempty"`
 	AppliesTo   map[string][]any `json:"applies_to"`
 	Body        string           `json:"body"`
+	// Propose is the entry's proposal of an area or topic no listed folder
+	// fits (FoldersSection); the entry itself is filed where it would be
+	// anyway.
+	Propose *Proposal `json:"propose,omitempty"`
 }
+
+// Proposal is a split entry's proposal of a new area or topic.
+type Proposal struct {
+	Kind        string `json:"kind"` // area | topic
+	Name        string `json:"name"`
+	Area        string `json:"area,omitempty"` // a topic's area, when one owns it
+	Description string `json:"description"`
+}
+
+// Folder is one live area or topic the split prompt lists.
+type Folder struct {
+	Scope, Kind, Description string
+	Tools, Commands, Repos   []string
+}
+
+// FoldersSection is what the split prompt adds in a store of the folder
+// records format: the live areas and topics an entry may take as its scope
+// (at most maxListed), and how to propose one when none fits. Empty folders
+// still get the proposal rule.
+func FoldersSection(folders []Folder) string {
+	var b strings.Builder
+	b.WriteString("\nAREAS AND TOPICS:\nAn area is an ongoing system or practice of the owner's (the ticketing system, the on-call), a topic a bounded work stream (a migration, a launch). An entry about one may take its folder as its scope, exactly as listed; code refuses any other area or topic scope. When the notes are about an area or topic none of these fits, file the entry as you would anyway and add to it \"propose\": {\"kind\": \"area\"|\"topic\", \"name\": \"<slug>\", \"area\": \"<the area a topic belongs to, if one does>\", \"description\": \"<one line>\"}; a folder is made only once notes of two different sessions propose it.\n")
+	if len(folders) == 0 {
+		b.WriteString("(none yet)\n")
+	}
+	for i, f := range folders {
+		if i == maxListed {
+			fmt.Fprintf(&b, "(and %d more)\n", len(folders)-maxListed)
+			break
+		}
+		fmt.Fprintf(&b, "- %s (%s): %s", f.Scope, f.Kind, ClipLine(f.Description, 160))
+		if len(f.Tools) > 0 {
+			b.WriteString("; tools: " + strings.Join(f.Tools, ", "))
+		}
+		if len(f.Commands) > 0 {
+			b.WriteString("; commands: " + strings.Join(f.Commands, ", "))
+		}
+		if len(f.Repos) > 0 {
+			b.WriteString("; repos: " + strings.Join(f.Repos, ", "))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+const maxListed = 40
+
+// ClipLine is s on one line, at most max runes.
+func ClipLine(s string, max int) string { return fact.ClipDescription(s, max) }
 
 // Runner is the model call; tests substitute it.
 type Runner func(ctx context.Context, model, prompt string) (string, float64, error)

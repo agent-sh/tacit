@@ -20,12 +20,18 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/agent-sh/tacit/client/internal/curate"
+	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/ledger"
+	"github.com/agent-sh/tacit/client/internal/record"
+	"github.com/agent-sh/tacit/client/internal/validate"
 )
 
 // folderEntry is one line of the folder log.
@@ -111,4 +117,55 @@ func openFolderAsks(dir string) []folderAsk {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].At < out[j].At })
 	return out
+}
+
+// splitPrompt is the curator's split prompt for a batch: with the folder
+// records format, the live areas and topics the batch may file under
+// (active or waiting for review, and topics tied to the batch's
+// repositories) and the rule for proposing one.
+func splitPrompt(env validate.Env, host string, batch []*fact.Fact) string {
+	p := fmt.Sprintf(curate.SplitPrompt, host, host, curate.Render(batch))
+	if !env.Format {
+		return p
+	}
+	repos := map[string]bool{}
+	for _, n := range batch {
+		if r, ok := strings.CutPrefix(n.Meta.Scope, "projects/"); ok {
+			repos[r] = true
+		}
+		for _, r := range n.Meta.AppliesTo.Repos {
+			repos[strings.ToLower(r)] = true
+		}
+	}
+	var folders []curate.Folder
+	for _, f := range sortedRecordFolders(env.Records) {
+		r := env.Records[f]
+		if r.Kind != record.KindArea && r.Kind != record.KindTopic || !r.Live() {
+			continue
+		}
+		tied := false
+		for _, x := range r.Repos {
+			tied = tied || repos[strings.ToLower(x)]
+		}
+		if !r.ReadByDefault() && !tied || r.Kind == record.KindTopic && len(r.Repos) > 0 && !tied {
+			continue
+		}
+		folders = append(folders, curate.Folder{Scope: f, Kind: r.Kind, Description: r.Description, Tools: r.Tools, Commands: r.Commands, Repos: r.Repos})
+	}
+	return p + curate.FoldersSection(folders)
+}
+
+// proposalLines is the folder log line of an entry's proposal of an area or
+// topic, for the fact it became (in a store of the format; none without).
+func proposalLines(env validate.Env, e curate.Entry, factName string, note *fact.Fact) []byte {
+	if e.Propose == nil || !env.Format {
+		return nil
+	}
+	session := ""
+	if note != nil {
+		session = note.Meta.Source.Session
+	}
+	p := e.Propose
+	return folderEntry{Kind: "propose", ID: folderID("propose", p.Name, factName), At: time.Now().Format("2006-01-02"),
+		Name: p.Name, FolderKind: p.Kind, Area: p.Area, Description: fact.ClipDescription(p.Description, 200), Fact: factName, Session: session}.line()
 }

@@ -364,7 +364,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		// The model's metadata is checked by code (internal/validate); a refused
 		// answer goes back to the model once with the problems.
 		check := entryCheck(env, host, batch, noteByName, where, noOwnerCorpus)
-		entries, err := splitChecked(ctx, &rep, "split", curate.RunCLI, o.model, fmt.Sprintf(curate.SplitPrompt, host, host, curate.Render(batch)), check)
+		entries, err := splitChecked(ctx, &rep, "split", curate.RunCLI, o.model, splitPrompt(env, host, batch), check)
 		if err != nil {
 			if errors.Is(err, modelrun.ErrInvalidResult) {
 				logInvalid(&rep, "split", err)
@@ -425,6 +425,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		absorbed := map[string]string{}
 		nAbsorbed := 0
 		var ledgerLines []byte
+		var proposals []byte // the overlay's review/folders.jsonl lines of area and topic proposals
 		produced := map[string]bool{}
 		nRulings, notWords := 0, 0
 		invalidBatch, unbackedRuling := false, false
@@ -473,6 +474,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 			newFacts = append(newFacts, f)
 			newRulings = append(newRulings, ruling)
 			produced[e.Origin] = true
+			proposals = append(proposals, proposalLines(env, e, f.Meta.Name, noteByName[e.Origin])...)
 		}
 		if invalidBatch {
 			if retry(batch, fmt.Errorf("%w: invalid origin or unbacked owner ruling", modelrun.ErrInvalidResult), !unbackedRuling) {
@@ -520,6 +522,9 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		}
 		n, retired, err := writeLocalBatch(dir, s.Dir, newFacts, newRulings, ledgerLines, review, supersede, rep.At, bi+1)
 		wrote += n
+		if err == nil && len(proposals) > 0 {
+			err = overlay.Append(dir, s.Dir, overlay.CuratedDir+"/"+ledger.FoldersPath, proposals)
+		}
 		if err != nil {
 			rep.Errors++
 			fmt.Fprintln(os.Stderr, "curate: local write:", err)
@@ -558,6 +563,12 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 				ix.Close()
 			}
 		}
+	}
+	if !o.quick {
+		// The folders of this machine's layer: records decided on its own
+		// evidence, and the facts of suppressed folders moved, in the overlay.
+		rep.Errors += curateAssessStep(ctx, s, o.model, o.dry, &rep)
+		rep.Errors += curateMigrateStep(ctx, s, o.dry)
 	}
 	fmt.Printf("curate: local layer: %d notes in %d batches (%d split) -> %d facts (%d rulings, %d absorbed), %d pairs in %d judge calls, %d contradictions, %d supersedes, %d unchecked, %d set aside, %s, %d error(s)\n", rep.Notes, rep.Batches, rep.BatchSplits, rep.Facts, rep.Rulings, rep.Absorbed, rep.Checked, rep.JudgeCalls, rep.Contradicts, rep.Supersedes, rep.JudgeUnchecked, rep.SetAside, rep.ModelCalls.CostSummary(rep.CostUSD), rep.Errors)
 	if rep.Errors > 0 || rep.DeferredOwner > 0 && !o.quick {

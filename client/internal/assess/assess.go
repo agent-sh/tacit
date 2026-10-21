@@ -46,6 +46,10 @@ type Candidate struct {
 	// notes (Kind is its kind), Sessions the distinct sessions behind it.
 	Kind     string
 	Sessions []string
+	// Proposals are the folder log ids of the proposals behind it, Facts the
+	// facts they were made for (which move into the folder when it is made).
+	Proposals []string
+	Facts     []string
 }
 
 // Decision is the model's answer for one candidate.
