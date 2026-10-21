@@ -440,7 +440,7 @@ func runCurate(args []string) int {
 		// The model's metadata is checked by code (internal/validate); a refused
 		// answer goes back to the model once with the problems.
 		check := entryCheck(env, host, batch, noteByName, where, noOwnerCorpus)
-		entries, err := splitChecked(ctx, &rep, "split", curate.RunCLI, *model, fmt.Sprintf(curate.SplitPrompt, host, host, curate.Render(batch)), check)
+		entries, err := splitChecked(ctx, &rep, "split", curate.RunCLI, *model, splitPrompt(env, host, batch), check)
 		if err != nil {
 			if errors.Is(err, modelrun.ErrInvalidResult) {
 				logInvalid(&rep, "split", err)
@@ -508,6 +508,7 @@ func runCurate(args []string) int {
 		absorbed := map[string]string{}    // note -> the fact one of its entries restates
 		nAbsorbed := 0
 		var ledgerLines []byte
+		var proposals []byte // review/folders.jsonl lines of the batch's area and topic proposals
 		produced := map[string]bool{}
 		nRulings, notWords := 0, 0
 		invalidBatch := false
@@ -561,6 +562,7 @@ func runCurate(args []string) int {
 			newFacts = append(newFacts, f)
 			newRulings = append(newRulings, ruling)
 			produced[e.Origin] = true
+			proposals = append(proposals, proposalLines(env, e, f.Meta.Name, noteByName[e.Origin])...)
 		}
 
 		if invalidBatch {
@@ -651,6 +653,17 @@ func runCurate(args []string) int {
 				fh.Write(ledgerLines)
 				fh.Close()
 				written = append(written, ledger.QuotesPath)
+			} else {
+				rep.Errors++
+			}
+		}
+		if len(proposals) > 0 {
+			full := filepath.Join(s.Dir, filepath.FromSlash(ledger.FoldersPath))
+			os.MkdirAll(filepath.Dir(full), 0o755)
+			if fh, err := os.OpenFile(full, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+				fh.Write(proposals)
+				fh.Close()
+				written = append(written, ledger.FoldersPath)
 			} else {
 				rep.Errors++
 			}

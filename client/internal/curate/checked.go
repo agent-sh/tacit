@@ -122,6 +122,18 @@ func ParseChecked(text string) ([]Entry, error) {
 		case !fact.SourceKinds[entry.Kind]:
 			bad("kind", "not user, observed or web")
 		}
+		if p := entry.Propose; p != nil {
+			switch {
+			case p.Kind != "area" && p.Kind != "topic":
+				bad("propose.kind", "not area or topic")
+			case !fact.IsSlug(p.Name):
+				bad("propose.name", "not a slug (a-z, 0-9, -)")
+			case p.Area != "" && (p.Kind != "topic" || !fact.IsSlug(p.Area)):
+				bad("propose.area", "only a topic has an area, and it is a slug")
+			case strings.TrimSpace(p.Description) == "":
+				bad("propose.description", "empty")
+			}
+		}
 		for _, key := range sortedKeys(entry.AppliesTo) {
 			for _, value := range entry.AppliesTo[key] {
 				if _, ok := value.(string); !ok {

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -544,8 +545,13 @@ func (a *assessor) verifyOwner(folder string, d assess.Decision) (*assess.Owner,
 // decided is one accepted decision.
 type decided struct {
 	c    assess.Candidate
-	rec  *record.Record
-	line []byte // its quote ledger line, if the owner's words back it
+	rec  *record.Record // the record to write, nil for none (a rejected proposal)
+	old  *record.Record // the record it replaces (the candidate's, or a folded-into one's)
+	line []byte         // its quote ledger line, if the owner's words back it
+	// A proposal's: the facts that move into the folder, and the folder
+	// log's close lines.
+	moves  []moveItem
+	closes []folderEntry
 }
 
 // check judges an answer's decisions in candidate order, accepting each
@@ -583,6 +589,37 @@ func (a *assessor) check(cands []assess.Candidate, ds []assess.Decision, pending
 		default:
 			ps = append(ps, fmt.Sprintf("kind: not repo, folder or none (got %q)", d.Kind))
 		}
+		if c.Kind != "" && (d.Reject || d.FoldInto != "") {
+			if strings.TrimSpace(d.Why) == "" {
+				refused = append(refused, assess.Refusal{Folder: c.Folder, Problems: []string{"why: empty"}})
+				continue
+			}
+			if d.Reject {
+				acc = append(acc, decided{c: c, closes: closeProposals(c, "rejected: "+clipOne(d.Why, 300), a.today)})
+				continue
+			}
+			into := strings.TrimSpace(d.FoldInto)
+			target := pending[into]
+			if target == nil {
+				target = a.recs[into]
+			}
+			if target == nil || !target.Live() || (target.Kind != record.KindArea && target.Kind != record.KindTopic) {
+				refused = append(refused, assess.Refusal{Folder: c.Folder, Problems: []string{"fold_into: names no live area or topic"}})
+				continue
+			}
+			rec := target.Clone()
+			name := c.Folder[strings.LastIndex(c.Folder, "/")+1:]
+			if name != rec.Name && !slices.Contains(rec.Aliases, name) {
+				rec.Aliases = append(rec.Aliases, name)
+			}
+			if vps := record.Validate(target, rec, record.ByOpus, a.recordEnv(pending, *pendingLedger)); len(vps) > 0 {
+				refused = append(refused, assess.Refusal{Folder: c.Folder, Problems: messages(vps)})
+				continue
+			}
+			pending[into] = rec
+			acc = append(acc, decided{c: c, rec: rec, old: target, moves: proposalMoves(c, into), closes: closeProposals(c, "folded into "+into, a.today)})
+			continue
+		}
 		owner, line, op := a.verifyOwner(c.Folder, d)
 		if op != "" {
 			ps = append(ps, op)
@@ -594,18 +631,215 @@ func (a *assessor) check(cands []assess.Candidate, ds []assess.Decision, pending
 		rec := assess.Build(c, d, a.today, owner)
 		env := a.recordEnv(pending, append(append([]byte(nil), *pendingLedger...), line...))
 		if vps := record.Validate(c.Old, rec, record.ByOpus, env); len(vps) > 0 {
-			var msgs []string
-			for _, p := range vps {
-				msgs = append(msgs, p.Message())
-			}
-			refused = append(refused, assess.Refusal{Folder: c.Folder, Problems: msgs})
+			refused = append(refused, assess.Refusal{Folder: c.Folder, Problems: messages(vps)})
 			continue
 		}
 		pending[c.Folder] = rec
 		*pendingLedger = append(*pendingLedger, line...)
-		acc = append(acc, decided{c: c, rec: rec, line: line})
+		dd := decided{c: c, rec: rec, old: c.Old, line: line}
+		if c.Kind != "" {
+			dd.moves, dd.closes = proposalMoves(c, c.Folder), closeProposals(c, "made "+c.Folder, a.today)
+		}
+		acc = append(acc, dd)
 	}
 	return acc, refused
+}
+
+func messages(ps []record.Problem) []string {
+	var out []string
+	for _, p := range ps {
+		out = append(out, p.Message())
+	}
+	return out
+}
+
+// proposalMoves are the moves of a proposal's facts into folder.
+func proposalMoves(c assess.Candidate, folder string) []moveItem {
+	var out []moveItem
+	for _, f := range c.Facts {
+		out = append(out, moveItem{Name: f, To: folder, Renames: map[string]string{}})
+	}
+	return out
+}
+
+// closeProposals are the folder log lines that end a candidate's proposals.
+func closeProposals(c assess.Candidate, outcome, today string) []folderEntry {
+	var out []folderEntry
+	for _, id := range c.Proposals {
+		out = append(out, folderEntry{Kind: "close", ID: folderID("close", id), At: today, Closes: id, Outcome: outcome})
+	}
+	return out
+}
+
+// proposalCandidates are the proposals of areas and topics in the folder
+// log (the store's, and the overlay's with the local layer) that no line
+// closed, grouped by name (lower case; one a record already holds goes to
+// that folder), each group put to the model once code counts at least
+// record.MinAreaSessions distinct sessions behind it, with the sessions'
+// shared tool usage as evidence.
+func (a *assessor) proposalCandidates(n int, only map[string]bool) []assess.Candidate {
+	if n <= 0 {
+		return nil
+	}
+	log := readFolderLog(a.dir)
+	if a.local {
+		log = append(log, readFolderLog(filepath.Join(overlay.Dir(), filepath.FromSlash(overlay.CuratedDir)))...)
+	}
+	closed := closedFolderIDs(log)
+	groups := map[string][]folderEntry{}
+	var names []string
+	for _, e := range log {
+		if e.Kind != "propose" || closed[e.ID] != "" || e.Name == "" {
+			continue
+		}
+		k := strings.ToLower(e.Name)
+		if groups[k] == nil {
+			names = append(names, k)
+		}
+		groups[k] = append(groups[k], e)
+	}
+	sort.Strings(names)
+	var out []assess.Candidate
+	for _, name := range names {
+		g := groups[name]
+		sessions := map[string]bool{}
+		kinds := map[string]int{}
+		areas := map[string]int{}
+		var ids, facts, descs []string
+		seenFact := map[string]bool{}
+		for _, e := range g {
+			if e.Session != "" {
+				sessions[e.Session] = true
+			}
+			kinds[e.FolderKind]++
+			if e.Area != "" {
+				areas[e.Area]++
+			}
+			ids = append(ids, e.ID)
+			if !seenFact[e.Fact] {
+				seenFact[e.Fact] = true
+				facts = append(facts, e.Fact)
+			}
+			if len(descs) < 5 && e.Description != "" && !slices.Contains(descs, e.Description) {
+				descs = append(descs, e.Description)
+			}
+		}
+		if len(sessions) < record.MinAreaSessions {
+			continue // waits for a second session
+		}
+		kind := record.KindArea
+		if kinds[record.KindTopic] > kinds[record.KindArea] {
+			kind = record.KindTopic
+		}
+		folder := "areas/" + name
+		if kind == record.KindTopic {
+			folder = "topics/" + name
+			if ar := topKey(areas); ar != "" {
+				if r := a.recs["areas/"+ar]; r != nil && r.Live() && r.Kind == record.KindArea {
+					folder = "areas/" + ar + "/topics/" + name
+				}
+			}
+		}
+		if owner := record.RepoOwner(a.recs, name); owner != "" && a.recs[folder] == nil {
+			_ = owner
+		}
+		if only != nil && !only[folder] {
+			continue
+		}
+		var ss []string
+		for s := range sessions {
+			ss = append(ss, "session:"+s)
+		}
+		sort.Strings(ss)
+		c := assess.Candidate{Folder: folder, Kind: kind, Sessions: ss, Proposals: ids, Facts: facts, Old: a.recs[folder],
+			Reason:   fmt.Sprintf("a proposed %s: %d proposal(s) from %d distinct session(s)", kind, len(g), len(sessions)),
+			Evidence: []record.Evidence{{Gathered: a.today, Sessions: ss}}}
+		for _, d := range descs {
+			c.Context = append(c.Context, "proposed as: "+d)
+		}
+		for f, r := range a.recs {
+			if r.Kind == record.KindArea || r.Kind == record.KindTopic {
+				for _, x := range r.Names() {
+					if x == name && f != folder {
+						c.Context = append(c.Context, fmt.Sprintf("a folder already answers to %s: %s (fold_into it?)", name, f))
+					}
+				}
+			}
+		}
+		byName := map[string]*fact.Fact{}
+		for _, f := range a.facts {
+			byName[f.Meta.Name] = f
+		}
+		for i, fn := range facts {
+			if i == 8 {
+				c.Context = append(c.Context, fmt.Sprintf("  ... and %d more fact(s)", len(facts)-8))
+				break
+			}
+			if f := byName[fn]; f != nil {
+				c.Context = append(c.Context, fmt.Sprintf("  - fact %s (%s): %s", fn, f.Meta.Scope, fact.ClipDescription(f.Meta.Description, 160)))
+			}
+		}
+		c.Context = append(c.Context, a.sharedTools(sessions)...)
+		out = append(out, c)
+		if len(out) == n {
+			break
+		}
+	}
+	return out
+}
+
+// sharedTools are the tool names and command programs that two or more of
+// the sessions used (this machine's tool usage), as lines for the model.
+func (a *assessor) sharedTools(sessions map[string]bool) []string {
+	tools, progs := map[string]int{}, map[string]int{}
+	for s := range sessions {
+		u := a.tools.Sessions[s]
+		for _, t := range u.Tools {
+			tools[t]++
+		}
+		for _, p := range u.Commands {
+			progs[p]++
+		}
+	}
+	pick := func(m map[string]int) []string {
+		var out []string
+		for k, v := range m {
+			if v >= record.MinAreaSessions {
+				out = append(out, k)
+			}
+		}
+		sort.Strings(out)
+		if len(out) > 30 {
+			out = out[:30]
+		}
+		return out
+	}
+	var out []string
+	if ts := pick(tools); len(ts) > 0 {
+		out = append(out, "tools two or more of its sessions used: "+strings.Join(ts, ", "))
+	}
+	if ps := pick(progs); len(ps) > 0 {
+		out = append(out, "programs two or more of its sessions ran: "+strings.Join(ps, ", "))
+	}
+	return out
+}
+
+func topKey(m map[string]int) string {
+	best, n := "", 0
+	for k, v := range m {
+		if v > n || v == n && k < best {
+			best, n = k, v
+		}
+	}
+	return best
+}
+
+func clipOne(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len([]rune(s)) > max {
+		s = string([]rune(s)[:max]) + "…"
+	}
+	return s
 }
 
 // assessStep runs one assessment: candidates in batches, one model call
@@ -697,8 +931,8 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 		// refreshed evidence once; one identical to the record writes nothing.
 		var write []decided
 		for _, d := range acc {
-			if d.c.Old != nil {
-				ob, _ := d.c.Old.Encode()
+			if d.old != nil && d.rec != nil && len(d.moves) == 0 && len(d.closes) == 0 {
+				ob, _ := d.old.Encode()
 				nb, _ := d.rec.Encode()
 				if string(ob) == string(nb) {
 					continue
@@ -708,7 +942,11 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 		}
 		if o.dry {
 			for _, d := range write {
-				fmt.Printf("- %s: %s, %s: %s\n", d.c.Folder, d.rec.Kind, d.rec.Status, d.rec.Was[0].Why)
+				if d.rec == nil {
+					fmt.Printf("- %s: rejected\n", d.c.Folder)
+					continue
+				}
+				fmt.Printf("- %s: %s, %s: %s\n", d.rec.Folder, d.rec.Kind, d.rec.Status, d.rec.Was[0].Why)
 			}
 			continue
 		}
@@ -722,7 +960,9 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 			errs++
 		}
 		for _, d := range write {
-			a.recs[d.c.Folder] = d.rec
+			if d.rec != nil {
+				a.recs[d.rec.Folder] = d.rec
+			}
 		}
 		a.ledgerBytes = append(a.ledgerBytes, pendingLedger...)
 		pendingLedger = nil
@@ -739,15 +979,20 @@ func firstClause(s string) string {
 	return s
 }
 
-// write puts a batch's records (and their quote ledger lines) in the store
-// in one curator commit, each checked again on the synced clone; with the
-// local layer, in the overlay. It returns how many it wrote.
+// write puts a batch's records (and their quote ledger lines), a
+// proposal's moves of its facts into the new folder and its close lines in
+// the store in one curator commit, each record checked again on the synced
+// clone; with the local layer, in the overlay. It returns how many records
+// it wrote.
 func (a *assessor) write(ctx context.Context, s *store.Store, ds []decided) (int, error) {
 	kinds := map[string]int{}
 	for _, d := range ds {
-		k := d.rec.Kind
-		if strings.HasPrefix(d.rec.Was[0].Why, assess.NotProject) {
-			k = "not a project"
+		k := "rejected"
+		if d.rec != nil {
+			k = d.rec.Kind
+			if strings.HasPrefix(d.rec.Was[0].Why, assess.NotProject) {
+				k = "not a project"
+			}
 		}
 		kinds[k]++
 	}
@@ -758,7 +1003,17 @@ func (a *assessor) write(ctx context.Context, s *store.Store, ds []decided) (int
 	msg := fmt.Sprintf("curator: assess: %d folder(s): %s", len(ds), strings.Join(parts, ", "))
 	var body []string
 	for _, d := range ds {
-		body = append(body, fmt.Sprintf("%s: %s, %s", d.c.Folder, d.rec.Kind, d.rec.Status))
+		switch {
+		case d.rec == nil:
+			body = append(body, d.c.Folder+": rejected")
+		case d.rec.Folder != d.c.Folder:
+			body = append(body, fmt.Sprintf("%s: folded into %s", d.c.Folder, d.rec.Folder))
+		default:
+			body = append(body, fmt.Sprintf("%s: %s, %s", d.c.Folder, d.rec.Kind, d.rec.Status))
+		}
+		if len(d.moves) > 0 {
+			body[len(body)-1] += fmt.Sprintf(" (%d fact(s) move in)", len(d.moves))
+		}
 	}
 	msg += "\n\n" + strings.Join(body, "\n")
 	if a.local {
@@ -771,38 +1026,70 @@ func (a *assessor) write(ctx context.Context, s *store.Store, ds []decided) (int
 		fresh, _ := record.Walk(s.Dir)
 		ql, _ := os.ReadFile(filepath.Join(s.Dir, filepath.FromSlash(ledger.QuotesPath)))
 		var lines []byte
+		var moves []moveItem
+		var closes []folderEntry
 		pending := map[string]*record.Record{}
 		for _, d := range ds {
-			now := fresh[d.c.Folder]
-			if !assess.Same(now, d.c.Old) {
-				continue // changed since it was read: the next run decides again
+			if d.rec != nil {
+				now := fresh[d.rec.Folder]
+				if !assess.Same(now, d.old) {
+					continue // changed since it was read: the next run decides again
+				}
+				env := a.recordEnv(pending, nil)
+				env.Records = map[string]*record.Record{}
+				for f, r := range fresh {
+					env.Records[f] = r
+				}
+				for f, r := range pending {
+					env.Records[f] = r
+				}
+				env.QuoteBacked = ledger.Backing(append(append(append([]byte(nil), ql...), lines...), d.line...))
+				if ps := record.Validate(now, d.rec, record.ByOpus, env); len(ps) > 0 {
+					continue
+				}
+				b, err := d.rec.Encode()
+				if err != nil {
+					return nil, "", err
+				}
+				files[record.Rel(d.rec.Folder)] = b
+				pending[d.rec.Folder] = d.rec
+				lines = append(lines, d.line...)
+				written++
 			}
-			env := a.recordEnv(pending, append(append([]byte(nil), lines...), d.line...))
-			env.Records = map[string]*record.Record{}
-			for f, r := range fresh {
-				env.Records[f] = r
-			}
-			for f, r := range pending {
-				env.Records[f] = r
-			}
-			env.QuoteBacked = ledger.Backing(append(append(append([]byte(nil), ql...), lines...), d.line...))
-			if ps := record.Validate(now, d.rec, record.ByOpus, env); len(ps) > 0 {
-				continue
-			}
-			b, err := d.rec.Encode()
+			moves = append(moves, d.moves...)
+			closes = append(closes, d.closes...)
+		}
+		if len(files) == 0 && len(closes) == 0 {
+			return nil, "", nil
+		}
+		var log []byte
+		if len(moves) > 0 {
+			facts, _, err := fact.Walk(s.Dir)
 			if err != nil {
 				return nil, "", err
 			}
-			files[record.Rel(d.c.Folder)] = b
-			pending[d.c.Folder] = d.rec
-			lines = append(lines, d.line...)
-			written++
+			open := map[string]bool{}
+			for _, q := range openFolderAsks(s.Dir) {
+				open[q.ID] = true
+			}
+			res := planMoves(s.Dir, "", facts, moves, append(append([]byte(nil), ql...), lines...), open, a.today, len(moves))
+			for k, v := range res.files {
+				files[k] = v
+			}
+			lines = append(lines, res.ledger...)
+			for _, q := range res.asks {
+				log = append(log, q.line()...)
+			}
 		}
-		if len(files) == 0 {
-			return nil, "", nil
+		for _, c := range closes {
+			log = append(log, c.line()...)
 		}
 		if len(lines) > 0 {
 			files[ledger.QuotesPath] = append(append([]byte(nil), ql...), lines...)
+		}
+		if len(log) > 0 {
+			cur, _ := os.ReadFile(filepath.Join(s.Dir, filepath.FromSlash(ledger.FoldersPath)))
+			files[ledger.FoldersPath] = append(append([]byte(nil), cur...), log...)
 		}
 		return files, msg, nil
 	})
@@ -817,16 +1104,23 @@ func (a *assessor) write(ctx context.Context, s *store.Store, ds []decided) (int
 // clone; the overlay's folder indexes are regenerated.
 func (a *assessor) writeLocal(s *store.Store, ds []decided) (int, error) {
 	dir := overlay.Dir()
+	curated := filepath.Join(dir, filepath.FromSlash(overlay.CuratedDir))
 	n := 0
+	var moves []moveItem
+	var log []byte
 	for _, d := range ds {
-		if a.storeRecs[d.c.Folder] != nil {
+		moves = append(moves, d.moves...)
+		for _, c := range d.closes {
+			log = append(log, c.line()...)
+		}
+		if d.rec == nil || a.storeRecs[d.rec.Folder] != nil {
 			continue
 		}
 		b, err := d.rec.Encode()
 		if err != nil {
 			return n, err
 		}
-		if err := overlay.Write(dir, s.Dir, overlay.CuratedDir+"/"+record.Rel(d.c.Folder), b); err != nil {
+		if err := overlay.Write(dir, s.Dir, overlay.CuratedDir+"/"+record.Rel(d.rec.Folder), b); err != nil {
 			return n, err
 		}
 		if len(d.line) > 0 {
@@ -836,10 +1130,39 @@ func (a *assessor) writeLocal(s *store.Store, ds []decided) (int, error) {
 		}
 		n++
 	}
+	if len(moves) > 0 {
+		all, _ := overlay.Load(dir)
+		var facts []*fact.Fact
+		for _, f := range all {
+			if overlay.IsCurated(f.Path) {
+				facts = append(facts, f)
+			}
+		}
+		quotes, _ := os.ReadFile(filepath.Join(dir, filepath.FromSlash(overlay.QuotesRel)))
+		open := map[string]bool{}
+		for _, q := range openFolderAsks(curated) {
+			open[q.ID] = true
+		}
+		res := planMoves(curated, overlay.Prefix+overlay.CuratedDir+"/", facts, moves, quotes, open, a.today, len(moves))
+		for _, rel := range sortedFileKeys(res.files) {
+			if err := overlay.Write(dir, s.Dir, overlay.CuratedDir+"/"+rel, res.files[rel]); err != nil {
+				return n, err
+			}
+		}
+		if len(res.ledger) > 0 {
+			if err := overlay.Append(dir, s.Dir, overlay.QuotesRel, res.ledger); err != nil {
+				return n, err
+			}
+		}
+		for _, q := range res.asks {
+			log = append(log, q.line()...)
+		}
+	}
+	if len(log) > 0 {
+		if err := overlay.Append(dir, s.Dir, overlay.CuratedDir+"/"+ledger.FoldersPath, log); err != nil {
+			return n, err
+		}
+	}
 	local, _ := overlay.Load(dir)
 	return n, regenLocalIndexes(dir, s.Dir, local)
 }
-
-// proposalCandidates are the proposed areas and topics that reached the
-// two-session bar (folders.go); none before proposals exist.
-func (a *assessor) proposalCandidates(n int, only map[string]bool) []assess.Candidate { return nil }
