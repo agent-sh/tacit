@@ -719,6 +719,8 @@ func runCurate(args []string) int {
 		// The folders: records for repositories and project folders, decided
 		// by the model on code's evidence (assess.go), before derive.
 		rep.Errors += curateAssessStep(ctx, s, *model, *dry, &rep)
+		// The suppressed folders' facts move to their winners (migrate.go).
+		rep.Errors += curateMigrateStep(ctx, s, *dry)
 		curateUpkeep(ctx, s, host, *dry, &rep)
 	} else if !*dry && rep.Facts > 0 {
 		// The hooks read the index at the new HEAD: build it now, not in the
