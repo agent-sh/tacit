@@ -882,6 +882,7 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 		prompt := fmt.Sprintf(assess.Prompt, assess.Render(batch))
 		res, cost, err := assessRun(ctx, o.model, prompt)
 		rep.CostUSD += cost
+		fmt.Fprintf(os.Stderr, "assess: batch %d of %d folder(s): $%.3f\n", i/assessBatch+1, len(batch), cost)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "assess: model:", err)
 			errs++
@@ -905,6 +906,7 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 			}
 			res2, c2, err := assessRun(ctx, o.model, assess.RetryPrompt(prompt, res, refused))
 			rep.CostUSD += c2
+			fmt.Fprintf(os.Stderr, "assess: batch %d retry for %d folder(s): $%.3f\n", i/assessBatch+1, len(refused), c2)
 			if err == nil {
 				if ds2, perr := assess.Parse(res2); perr == nil {
 					var left []assess.Candidate
