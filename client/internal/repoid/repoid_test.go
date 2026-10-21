@@ -1,7 +1,10 @@
 package repoid
 
 import (
+	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -423,5 +426,108 @@ func TestSharedCatalogCarriesNamesNotPaths(t *testing.T) {
 	d.AddStoreCatalogs(store)
 	if !d.Has("pikadon") {
 		t.Errorf("AddStoreCatalogs: %v", d.Names())
+	}
+}
+
+// Work is kept for every checkout and non-git folder, one entry per
+// session, and summarized as sessions with the first and last day.
+func TestRecordWorksForEveryRoot(t *testing.T) {
+	reg := filepath.Join(realTemp(t), RegistryFile)
+	if err := RecordWorks(reg, []WorkItem{
+		{Root: "/r/a", Session: "s1", By: "edit", Day: "2026-10-01"},
+		{Root: "/r/a", Session: "s1", By: "commit", Day: "2026-10-03"},
+		{Root: "/r/a", Session: "s2", By: "commit", Day: "2026-10-05"},
+		{Folder: "/p/notes", Session: "s3", By: "edit", Day: "2026-10-02"},
+		{Root: "/r/a", Folder: "/p/x", Session: "s4", By: "edit"}, // both: refused
+		{Root: "/r/b", Session: "", By: "edit"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	n, first, last := WorkSummary(WorkFor(reg, "/r/a"))
+	if n != 2 || first != "2026-10-01" || last != "2026-10-05" {
+		t.Fatalf("summary %d %s %s", n, first, last)
+	}
+	if f := FolderWork(reg); len(f["/p/notes"]) != 1 || len(f) != 1 || WorkFor(reg, "/r/b") != nil {
+		t.Fatalf("folders %v", f)
+	}
+	if s := Sessions(WorkFor(reg, "/r/a")); strings.Join(s, ",") != "s1,s2" {
+		t.Fatalf("sessions %v", s)
+	}
+	var many []WorkItem
+	for i := 0; i < maxWork+10; i++ {
+		many = append(many, WorkItem{Root: "/r/c", Session: fmt.Sprintf("s%d", i), By: "edit"})
+	}
+	RecordWorks(reg, many)
+	if ws := WorkFor(reg, "/r/c"); len(ws) != maxWork || ws[0].Session != "s10" {
+		t.Fatalf("cap: %d, first %s", len(ws), ws[0].Session)
+	}
+}
+
+// Commit evidence is git's count of the commits under the checkout's git
+// identity, cached by HEAD; the shared catalog carries it with the work.
+func TestCommitEvidenceAndSharedFields(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	home := realTemp(t)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "gitconfig"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	repo := filepath.Join(home, "projects", "widget")
+	run := func(env []string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(), env...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	mkdir(t, repo)
+	run(nil, "init", "-q", "-b", "main")
+	run(nil, "config", "user.email", "me@example.com")
+	run(nil, "config", "user.name", "Me")
+	for i, who := range []string{"me@example.com", "other@example.com", "me@example.com"} {
+		write(t, filepath.Join(repo, "f.txt"), fmt.Sprint(i))
+		run(nil, "add", "f.txt")
+		day := fmt.Sprintf("2026-10-0%dT12:00:00", i+1)
+		run([]string{"GIT_AUTHOR_EMAIL=" + who, "GIT_AUTHOR_NAME=x", "GIT_AUTHOR_DATE=" + day, "GIT_COMMITTER_DATE=" + day}, "commit", "-q", "-m", "c")
+	}
+	ctx := context.Background()
+	c, ok := CommitEvidence(ctx, repo)
+	if !ok || c.Own != 2 || c.First != "2026-10-01" || c.Last != "2026-10-03" {
+		t.Fatalf("evidence %+v %v", c, ok)
+	}
+	cache := LoadCommitCache(filepath.Join(home, "state", CommitCacheFile))
+	if c2, ok := cache.Get(ctx, repo); !ok || c2 != c {
+		t.Fatalf("cache %+v", c2)
+	}
+	if err := cache.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if c3, _ := LoadCommitCache(filepath.Join(home, "state", CommitCacheFile)).Get(ctx, repo); c3 != c {
+		t.Fatalf("cache reread %+v", c3)
+	}
+	empty := filepath.Join(home, "projects", "fresh")
+	mkdir(t, empty)
+	if _, ok := CommitEvidence(ctx, empty); ok {
+		t.Fatal("evidence for a folder with no history")
+	}
+	reg := filepath.Join(home, "state", RegistryFile)
+	RecordWorks(reg, []WorkItem{{Root: repo, Session: "s1", By: "edit", Day: "2026-10-02"}})
+	cat := LoadCatalog(home, reg, filepath.Join(home, "projects"))
+	b := cat.SharedWith(func(root string) (Commits, bool) { return CommitEvidence(ctx, root) })
+	for _, want := range []string{`"own_commits": 2`, `"first_commit": "2026-10-01"`, `"work_sessions": 1`, `"last_work": "2026-10-02"`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("shared lacks %s:\n%s", want, b)
+		}
+	}
+	if strings.Contains(string(b), "me@example.com") || strings.Contains(string(b), home) {
+		t.Errorf("identity or path in the shared catalog:\n%s", b)
+	}
+	store := realTemp(t)
+	write(t, filepath.Join(store, "inbox", "dreamer@box-a", CatalogFile), string(b))
+	ev := StoreEvidence(store)
+	if hs := ev["widget"]; len(hs) != 1 || hs[0].Host != "box-a" || hs[0].OwnCommits == nil || *hs[0].OwnCommits != 2 {
+		t.Fatalf("store evidence %+v", ev)
 	}
 }

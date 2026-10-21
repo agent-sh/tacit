@@ -45,3 +45,29 @@ func TestAcceptPendingReposKeepsTheEvidenceAcrossRuns(t *testing.T) {
 		t.Fatalf("two sessions: %+v", ws[0])
 	}
 }
+
+// The dreamer keeps the evidence of work for a repository in home and for
+// a non-git project folder, and each session's tool names, in this
+// machine's state only.
+func TestDreamKeepsWorkAndToolUsageInState(t *testing.T) {
+	base, _ := filepath.EvalSymlinks(t.TempDir())
+	home := filepath.Join(base, "home")
+	os.MkdirAll(home, 0o700)
+	t.Setenv("HOME", home)
+	t.Setenv("TACIT_STATE_DIR", "")
+	ws := []dream.Window{
+		{Session: "s1", WorkRoot: "/r/widget", Work: "edit", Lines: []string{"T: mcp__x__Ticketing V1", "T: Bash make test"}},
+		{Session: "s2", WorkFolder: "/p/notes", Work: "edit"},
+		{Session: "s3", WorkRoot: "/r/widget"},
+	}
+	acceptPendingRepos(home, ws, true)
+	recordToolUsage(home, ws)
+	reg := filepath.Join(platform.StateDir(home), repoid.RegistryFile)
+	if n, _, _ := repoid.WorkSummary(repoid.WorkFor(reg, "/r/widget")); n != 1 || len(repoid.FolderWork(reg)["/p/notes"]) != 1 {
+		t.Fatalf("work: %v %v", repoid.WorkFor(reg, "/r/widget"), repoid.FolderWork(reg))
+	}
+	u := dream.LoadToolUsage(filepath.Join(platform.StateDir(home), dream.ToolsFile))
+	if !u.Used("s1", "mcp__*__Ticketing*") || len(u.Sessions["s1"].Commands) != 1 {
+		t.Fatalf("tools %+v", u.Sessions)
+	}
+}

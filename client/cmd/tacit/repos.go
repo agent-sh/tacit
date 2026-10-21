@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/agent-sh/tacit/client/internal/dream"
 	"github.com/agent-sh/tacit/client/internal/platform"
@@ -37,7 +38,10 @@ func recordWindowRepos(home string, ws []dream.Window) {
 // checkout (outside home or in a temp directory, dream.Window.Pending): the
 // sessions the registry holds for it and this run's windows, recorded in
 // the registry when record is set, and names the windows' repository for
-// the checkout once repoid.MinWorkSessions sessions worked there.
+// the checkout once repoid.MinWorkSessions sessions worked there. With
+// record set it also keeps every other window's evidence of work, in its
+// cwd's checkout or non-git project folder (dream.Window.WorkRoot and
+// WorkFolder), which a project's assessment reads.
 func acceptPendingRepos(home string, ws []dream.Window, record bool) {
 	reg := filepath.Join(platform.StateDir(home), repoid.RegistryFile)
 	work := map[string]map[string]bool{}
@@ -52,20 +56,52 @@ func acceptPendingRepos(home string, ws []dream.Window, record bool) {
 		}
 	}
 	if record {
+		var items []repoid.WorkItem
 		for _, w := range ws {
-			if w.Pending.Root != "" && w.Work != "" {
-				_ = repoid.RecordWork(reg, w.Pending.Root, w.Session, w.Work)
+			switch {
+			case w.Work == "":
+			case w.Pending.Root != "":
+				items = append(items, repoid.WorkItem{Root: w.Pending.Root, Session: w.Session, By: w.Work})
+			case w.WorkRoot != "":
+				items = append(items, repoid.WorkItem{Root: w.WorkRoot, Session: w.Session, By: w.Work})
+			case w.WorkFolder != "":
+				items = append(items, repoid.WorkItem{Folder: w.WorkFolder, Session: w.Session, By: w.Work})
 			}
 		}
+		_ = repoid.RecordWorks(reg, items)
 	}
 	dream.AcceptPending(ws, work)
+}
+
+// recordToolUsage keeps the tools and command programs each window's
+// session used in this machine's state (dream.ToolsFile), never the store.
+// Best effort.
+func recordToolUsage(home string, ws []dream.Window) {
+	p := filepath.Join(platform.StateDir(home), dream.ToolsFile)
+	u := dream.LoadToolUsage(p)
+	day := time.Now().Format("2006-01-02")
+	for _, w := range ws {
+		tools, programs := dream.ToolsOf(w.Lines)
+		u.Add(w.Session, day, tools, programs)
+	}
+	_ = u.Save(p, time.Now())
 }
 
 // sharedCatalog is this machine's repository catalog as the store carries
 // it (repoid.CatalogFile): the registry's and the projects directory's
 // repositories, not the current directory's.
 func sharedCatalog(home string) []byte {
-	return repoid.LoadCatalog(home, filepath.Join(platform.StateDir(home), repoid.RegistryFile), projectsRoot(home)).Shared()
+	cache := repoid.LoadCommitCache(filepath.Join(platform.StateDir(home), repoid.CommitCacheFile))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	b := repoid.LoadCatalog(home, filepath.Join(platform.StateDir(home), repoid.RegistryFile), projectsRoot(home)).SharedWith(func(root string) (repoid.Commits, bool) {
+		if ctx.Err() != nil {
+			return repoid.Commits{}, false
+		}
+		return cache.Get(ctx, root)
+	})
+	_ = cache.Save()
+	return b
 }
 
 // catalogRel is the store path of this machine's catalog: in its dreamer's

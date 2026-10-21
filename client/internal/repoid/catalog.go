@@ -36,10 +36,15 @@ const RegistryFile = "repos.json"
 
 type registry struct {
 	Repos map[string]regEntry `json:"repos"`
-	// Work is the evidence of real work in checkouts outside home or in a
-	// temp directory (Elsewhere), by root: the sessions that edited files or
-	// committed there (RecordWork).
+	// Work is the evidence of real work in every checkout, by root: the
+	// sessions that edited files or committed there (RecordWork). A
+	// checkout outside home or in a temp directory (Elsewhere) counts as a
+	// repository only with it; for every checkout it is what a project's
+	// assessment reads (sessions, first and last day).
 	Work map[string][]Work `json:"work,omitempty"`
+	// Folders is the same evidence for folders of the projects directory
+	// that are no git repository, by the folder's path.
+	Folders map[string][]Work `json:"folders,omitempty"`
 }
 
 // Work is one session's evidence of real work in a checkout: By is "edit"
@@ -92,34 +97,103 @@ func Record(path string, repos ...Repo) error {
 	return writeRegistry(path, reg)
 }
 
-// maxWork caps the sessions kept per root: acceptance needs MinWorkSessions.
-const maxWork = 4
+// maxWork caps the sessions kept per root, the oldest dropped first; the
+// count an assessment reads is the sessions kept.
+const maxWork = 400
+
+// WorkItem is one session's evidence of work for RecordWorks: in the
+// checkout Root, or in the non-git project folder Folder.
+type WorkItem struct {
+	Root, Folder string
+	Session, By  string
+	// Day is when (YYYY-MM-DD); "" is today.
+	Day string
+}
 
 // RecordWork adds a session's evidence of work in the checkout root to the
 // registry at path; a session already recorded for root is not added again.
 func RecordWork(path, root, session, by string) error {
-	if root == "" || session == "" || by == "" {
-		return nil
-	}
+	return RecordWorks(path, []WorkItem{{Root: root, Session: session, By: by}})
+}
+
+// RecordWorks adds sessions' evidence of work to the registry at path in one
+// rewrite; a session already recorded for its root or folder is not added
+// again.
+func RecordWorks(path string, items []WorkItem) error {
 	reg := readRegistry(path)
-	ws := reg.Work[root]
-	for _, w := range ws {
-		if w.Session == session {
-			return nil
+	changed := false
+	today := time.Now().Format("2006-01-02")
+	for _, it := range items {
+		if it.Session == "" || it.By == "" || (it.Root == "") == (it.Folder == "") {
+			continue
 		}
+		m, key := &reg.Work, it.Root
+		if it.Folder != "" {
+			m, key = &reg.Folders, it.Folder
+		}
+		if *m == nil {
+			*m = map[string][]Work{}
+		}
+		ws := (*m)[key]
+		dup := false
+		for _, w := range ws {
+			dup = dup || w.Session == it.Session
+		}
+		if dup {
+			continue
+		}
+		day := it.Day
+		if day == "" {
+			day = today
+		}
+		ws = append(ws, Work{Session: it.Session, By: it.By, Seen: day})
+		if len(ws) > maxWork {
+			ws = ws[len(ws)-maxWork:]
+		}
+		(*m)[key] = ws
+		changed = true
 	}
-	if len(ws) >= maxWork {
+	if !changed {
 		return nil
 	}
-	if reg.Work == nil {
-		reg.Work = map[string][]Work{}
-	}
-	reg.Work[root] = append(ws, Work{Session: session, By: by, Seen: time.Now().Format("2006-01-02")})
 	return writeRegistry(path, reg)
 }
 
 // WorkFor is the evidence the registry at path holds for the checkout root.
 func WorkFor(path, root string) []Work { return readRegistry(path).Work[root] }
+
+// FolderWork is the evidence the registry at path holds for non-git project
+// folders, by folder path.
+func FolderWork(path string) map[string][]Work { return readRegistry(path).Folders }
+
+// WorkSummary is what evidence of work says: the distinct sessions, and the
+// first and last day one was recorded.
+func WorkSummary(ws []Work) (sessions int, first, last string) {
+	seen := map[string]bool{}
+	for _, w := range ws {
+		seen[w.Session] = true
+		if first == "" || w.Seen < first {
+			first = w.Seen
+		}
+		if w.Seen > last {
+			last = w.Seen
+		}
+	}
+	return len(seen), first, last
+}
+
+// Sessions are the distinct session ids of ws, newest recorded last.
+func Sessions(ws []Work) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, w := range ws {
+		if !seen[w.Session] {
+			seen[w.Session] = true
+			out = append(out, w.Session)
+		}
+	}
+	return out
+}
 
 func writeRegistry(path string, reg registry) error {
 	b, err := json.MarshalIndent(reg, "", " ")
