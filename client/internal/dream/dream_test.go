@@ -13,6 +13,7 @@ import (
 
 func TestWindowsCursorAndFreshStart(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("HOME", dir) // the checkout is under home: outside it, it would need work from two sessions
 	f := filepath.Join(dir, "s1.jsonl")
 	line := func(s string) string { return s + "\n" }
 	// The session works in a real checkout: its repo is the git root's name.

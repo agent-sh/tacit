@@ -306,3 +306,65 @@ func TestSeparateCloneIsItsMainCheckout(t *testing.T) {
 		t.Errorf("catalog: %v, alias %q", c.Names(), c.AliasOf("ginza"))
 	}
 }
+
+// A checkout outside home or in a temp directory is elsewhere, unless it is
+// a main checkout of the projects directory; a temp directory that holds
+// home does not count.
+func TestElsewhere(t *testing.T) {
+	base := realTemp(t)
+	home := filepath.Join(base, "home")
+	tmp := filepath.Join(home, "tmp")
+	mkdir(t, tmp)
+	t.Setenv("TMPDIR", tmp)
+	t.Setenv("TEMP", tmp)
+	t.Setenv("TMP", tmp)
+	projects := filepath.Join(base, "data", "projects") // outside home, the owner's choice
+	mkRepo(t, filepath.Join(projects, "widget"), "")
+	mains := LoadMains(home, projects)
+	for root, want := range map[string]bool{
+		filepath.Join(home, "w", "tool"):       false,
+		filepath.Join(tmp, "scratch", "clone"): true,
+		filepath.Join(base, "srv", "memra"):    true,
+		filepath.Join(projects, "widget"):      false,
+		"":                                     false,
+	} {
+		if got := Elsewhere(root, home, mains); got != want {
+			t.Errorf("Elsewhere(%s) = %v, want %v", root, got, want)
+		}
+	}
+	// A home inside the temp directory (a sandbox): only outside home counts.
+	t.Setenv("TMPDIR", base)
+	t.Setenv("TEMP", base)
+	t.Setenv("TMP", base)
+	if Elsewhere(filepath.Join(home, "w", "tool"), home, nil) || !Elsewhere(filepath.Join(base, "x"), home, nil) {
+		t.Error("a temp directory holding home was counted")
+	}
+}
+
+// A registry entry elsewhere counts only with work from MinWorkSessions
+// distinct sessions; RecordWork keeps one entry per session.
+func TestCatalogNeedsWorkForACheckoutElsewhere(t *testing.T) {
+	base := realTemp(t)
+	home := filepath.Join(base, "home")
+	mkdir(t, home)
+	scratch := filepath.Join(base, "scratch", "kv-tool")
+	mkRepo(t, scratch, "")
+	reg := filepath.Join(home, "state", RegistryFile)
+	r, _ := Of(scratch, home)
+	if err := Record(reg, r); err != nil {
+		t.Fatal(err)
+	}
+	if c := LoadCatalog(home, reg, ""); c.Has("kv-tool") {
+		t.Fatal("a checkout elsewhere with no work counted")
+	}
+	RecordWork(reg, scratch, "s1", "edit")
+	RecordWork(reg, scratch, "s1", "commit")
+	if c := LoadCatalog(home, reg, ""); c.Has("kv-tool") || len(WorkFor(reg, scratch)) != 1 {
+		t.Fatalf("one session counted: %v", WorkFor(reg, scratch))
+	}
+	RecordWork(reg, scratch, "s2", "commit")
+	c := LoadCatalog(home, reg, "")
+	if !c.Has("kv-tool") || !c.Accepted(r) || WorkSessions(c.Work(scratch)) != 2 {
+		t.Fatalf("two sessions: %v", c.Names())
+	}
+}
