@@ -49,7 +49,10 @@ const (
 // moveItem is one fact to move: its name and the scope it goes to, with
 // the names its applies_to.repos should read as the winner's.
 type moveItem struct {
-	Name    string
+	Name string
+	// Path is the fact's file when known: names are meant to be unique
+	// store-wide, but a store can hold two facts of one name.
+	Path    string
 	To      string
 	Renames map[string]string
 	Folder  string // the suppressed folder it leaves, "" for a rescope
@@ -71,6 +74,7 @@ type moveResult struct {
 func planMoves(dir, prefix string, facts []*fact.Fact, items []moveItem, quotes []byte, open map[string]bool, today string, max int) moveResult {
 	res := moveResult{files: map[string][]byte{}}
 	byName := map[string]*fact.Fact{}
+	byPath := map[string]*fact.Fact{}
 	taken := map[string]bool{}
 	var curated []*fact.Fact
 	for _, f := range facts {
@@ -79,6 +83,7 @@ func planMoves(dir, prefix string, facts []*fact.Fact, items []moveItem, quotes 
 			if byName[f.Meta.Name] == nil {
 				byName[f.Meta.Name] = f
 			}
+			byPath[f.Path] = f
 			curated = append(curated, f)
 		}
 	}
@@ -100,6 +105,9 @@ func planMoves(dir, prefix string, facts []*fact.Fact, items []moveItem, quotes 
 			break
 		}
 		f := byName[it.Name]
+		if it.Path != "" {
+			f = byPath[it.Path]
+		}
 		if f == nil || f.Meta.SupersededBy != "" || f.Meta.Retired != "" || f.Meta.Scope == it.To || strings.HasPrefix(f.Meta.Scope, "derived/") {
 			continue
 		}
@@ -301,7 +309,7 @@ func migrationItems(facts []*fact.Fact, recs map[string]*record.Record) []moveIt
 		fs := byFolder[folder]
 		sort.Slice(fs, func(i, j int) bool { return fs[i].Meta.Name < fs[j].Meta.Name })
 		for _, f := range fs {
-			out = append(out, moveItem{Name: f.Meta.Name, To: winner, Renames: renames, Folder: folder})
+			out = append(out, moveItem{Name: f.Meta.Name, Path: f.Path, To: winner, Renames: renames, Folder: folder})
 		}
 	}
 	return out
@@ -636,8 +644,7 @@ func readRescopePlan(file string, env validate.Env) ([]moveItem, int, error) {
 			skipped++
 			continue
 		}
-		renames := map[string]string{}
-		out = append(out, moveItem{Name: name, To: to, Renames: renames})
+		out = append(out, moveItem{Name: name, Path: l.Path, To: to, Renames: map[string]string{}})
 	}
 	return out, skipped, sc.Err()
 }

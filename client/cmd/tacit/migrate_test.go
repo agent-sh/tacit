@@ -45,6 +45,9 @@ func migrateHome(t *testing.T) *store.Store {
 	}
 	put(&fact.Fact{Meta: fact.Meta{Name: "widget-port", Description: "The widget server listens on port 7781", Type: "machine_fact", Scope: "projects/widget"}, Body: "Port 7781 on every host.\n"})
 	put(&fact.Fact{Meta: fact.Meta{Name: "widget-queue", Description: "Widget jobs go through one queue", Type: "design_decision", Scope: "projects/widget", ConflictsWith: []string{"old-tenant-queues"}}, Body: "One queue.\n"})
+	// Two facts of one name (a store can hold them): the suppressed folder's moves too.
+	put(&fact.Fact{Meta: fact.Meta{Name: "twin-note", Description: "The twin note lives in the gadget folder", Type: "history", Scope: "projects/gadget"}, Body: "Gadget twin.\n"})
+	put(&fact.Fact{Meta: fact.Meta{Name: "twin-note", Description: "The twin note of the old widget is about its release", Type: "history", Scope: "projects/widget-old"}, Body: "Old widget twin.\n"})
 	put(&fact.Fact{Meta: fact.Meta{Name: "old-build", Description: "The old widget builds with make release", Type: "design_decision", Scope: "projects/widget-old", AppliesTo: fact.AppliesTo{Repos: []string{"widget-old", "widget-legacy", "other"}}}, Body: "make release.\n"})
 	put(&fact.Fact{Meta: fact.Meta{Name: "old-port", Description: "The widget server listens on port 7781", Type: "machine_fact", Scope: "projects/widget-old"}, Body: "Port 7781 on every host.\n"})
 	quote := "never deploy the widget on a friday afternoon"
@@ -95,7 +98,7 @@ func TestMigrateEmptiesTheSuppressedFolder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Moved != 3 || rep.Absorbed != 1 || rep.Held != 1 || rep.Commits != 1 {
+	if rep.Moved != 4 || rep.Absorbed != 1 || rep.Held != 1 || rep.Commits != 1 {
 		t.Fatalf("report %+v", rep)
 	}
 	fs := factsByName(t, s.Dir)
@@ -108,6 +111,10 @@ func TestMigrateEmptiesTheSuppressedFolder(t *testing.T) {
 		if f.Meta.Updated == "" {
 			t.Errorf("%s: updated not set", old)
 		}
+	}
+	twin, _ := fact.Parse("projects/widget-old/twin-note.md", []byte(readFile(t, filepath.Join(s.Dir, "projects", "widget-old", "twin-note.md"))))
+	if twin == nil || twin.Meta.SupersededBy == "" {
+		t.Errorf("the suppressed folder's fact of a shared name did not move: %+v", twin)
 	}
 	if fs["old-port"].Meta.SupersededBy != "widget-port" {
 		t.Errorf("the restating fact was copied: %s", fs["old-port"].Meta.SupersededBy)
@@ -134,7 +141,7 @@ func TestMigrateEmptiesTheSuppressedFolder(t *testing.T) {
 		t.Fatalf("%s commits", n)
 	}
 	msg := gitIn(t, s.Dir, "log", "-1", "--format=%B")
-	if !strings.HasPrefix(msg, "curator: migrate: projects/widget-old -> projects/widget (5 fact(s): 3 moved, 1 absorbed, 1 held)") || !strings.Contains(msg, "old-port -> absorbed by widget-port") {
+	if !strings.HasPrefix(msg, "curator: migrate: projects/widget-old -> projects/widget (6 fact(s): 4 moved, 1 absorbed, 1 held)") || !strings.Contains(msg, "old-port -> absorbed by widget-port") {
 		t.Fatalf("message %q", msg)
 	}
 	if fs, err := lint.Run(s.Dir); err != nil || len(fs) != 0 {
@@ -177,4 +184,13 @@ func TestRescopeMovesAPlansFacts(t *testing.T) {
 	if fs, err := lint.Run(s.Dir); err != nil || len(fs) != 0 {
 		t.Fatalf("lint %v %v", fs, err)
 	}
+}
+
+func readFile(t *testing.T, p string) string {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
