@@ -266,6 +266,13 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 			fmt.Fprintf(os.Stderr, "curate: no owner history; observations can be curated, %d owner note(s) stay pending\n", deferredOwner)
 		}
 	}
+	pending, deferredRepo, deferChanged := deferUnknownRepos(pending, env, cst, time.Now())
+	if deferredRepo > 0 {
+		fmt.Fprintf(os.Stderr, "curate: %d note(s) name a repository no catalog knows yet; each waits up to %d days for one (%s \"deferred_repo\")\n", deferredRepo, int(maxRepoDefer.Hours()/24), localCuratorState)
+	}
+	if deferChanged && !o.dry {
+		saveCuratorState(statePath, cst)
+	}
 	restated := curate.Restated(pending, known)
 	if len(restated) > 0 {
 		kept := pending[:0]
@@ -282,7 +289,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		pending = kept
 	}
 	absorber := curate.NewAbsorber(known)
-	rep := curate.Report{At: time.Now().Format(time.RFC3339), Notes: len(pending), Restated: len(restated), DeferredOwner: deferredOwner, Quick: o.quick, Local: true}
+	rep := curate.Report{At: time.Now().Format(time.RFC3339), Notes: len(pending), Restated: len(restated), DeferredOwner: deferredOwner, DeferredRepo: deferredRepo, Quick: o.quick, Local: true}
 	rep.ModelCalls = &modelrun.Trace{}
 	ctx = modelrun.WithTrace(ctx, rep.ModelCalls)
 	batches := curate.Batches(pending)

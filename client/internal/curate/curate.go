@@ -306,6 +306,7 @@ func ParseVerdict(s string) Verdict {
 type Report struct {
 	ModelCalls       *modelrun.Trace `json:"model_calls,omitempty"`
 	DeferredOwner    int             `json:"deferred_owner_notes,omitempty"`
+	DeferredRepo     int             `json:"deferred_repo_notes,omitempty"` // notes whose scope names a repository no catalog knows yet: they wait (maxRepoDefer)
 	At               string          `json:"at"`
 	Notes            int             `json:"notes"`
 	Restated         int             `json:"restated,omitempty"` // pending notes dropped before the split: they restate a curated fact or an earlier note

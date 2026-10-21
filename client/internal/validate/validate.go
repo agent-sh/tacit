@@ -194,6 +194,16 @@ func (e Env) Scope(scope string) *Problem {
 	return nil
 }
 
+// UnknownRepo reports a well-formed projects/<repo> scope that names
+// neither a repository the checks know nor an alias of one: the one refusal
+// a later catalog can lift (a note from a machine whose catalog has not
+// reached the store yet), which the curator waits on (SPEC.md, Metadata
+// checks) instead of refusing.
+func (e Env) UnknownRepo(scope string) bool {
+	root, rest, _ := strings.Cut(strings.ToLower(scope), "/")
+	return root == "projects" && fact.IsSlug(rest) && !e.KnownRepo(rest) && e.Catalog.AliasOf(rest) == ""
+}
+
 // Type checks a type a model or an agent gave, for a fact in scope (inbox:
 // an inbox note's).
 func Type(typ, scope string, inbox bool) *Problem {
