@@ -128,6 +128,7 @@ type assessor struct {
 	tools                  *dream.ToolUsage
 	env                    validate.Env
 	factFolders            map[string]bool
+	sessionRoots           map[string][]string // session id -> the repositories it worked in
 }
 
 func newAssessor(ctx context.Context, s *store.Store, local bool) (*assessor, error) {
@@ -428,6 +429,9 @@ func (a *assessor) evidence(folder string) (ev []record.Evidence, gitRoot bool, 
 			cites = append(cites, "session:"+id+" "+sessions[id])
 		}
 		lines = append(lines, "sessions whose notes are filed here (newest first): "+strings.Join(cites, ", "))
+		if w := a.sessionsWorkedIn(sessions, folder); w != "" {
+			lines = append(lines, "those sessions worked in (the dreamer's registry): "+w)
+		}
 	}
 	if live+gone > 0 {
 		sort.Slice(newest, func(i, j int) bool { return newest[i].Meta.Created > newest[j].Meta.Created })
@@ -442,6 +446,54 @@ func (a *assessor) evidence(folder string) (ev []record.Evidence, gitRoot bool, 
 	}
 	lines = append(lines, a.ownerWords(name)...)
 	return ev, gitRoot, lines
+}
+
+// sessionsWorkedIn says where the given sessions did their work, by the
+// dreamer's registry: each checkout's repository name (or a project
+// folder's name) with how many of the sessions worked there, most first;
+// "" when the registry knows none of them. A folder whose notes all came
+// from sessions in another project's checkout is that project's.
+func (a *assessor) sessionsWorkedIn(sessions map[string]string, folder string) string {
+	if a.sessionRoots == nil {
+		a.sessionRoots = map[string][]string{}
+		for root, ws := range repoid.LoadRegistryWork(a.reg) {
+			name := filepath.Base(root)
+			if r, ok := a.catalog.Of(root); ok {
+				name = r.Name
+			}
+			for _, w := range ws {
+				a.sessionRoots[w.Session] = append(a.sessionRoots[w.Session], strings.ToLower(name))
+			}
+		}
+	}
+	count := map[string]int{}
+	for id := range sessions {
+		seen := map[string]bool{}
+		for _, n := range a.sessionRoots[id] {
+			if !seen[n] {
+				seen[n] = true
+				count[n]++
+			}
+		}
+	}
+	names := make([]string, 0, len(count))
+	for n := range count {
+		names = append(names, n)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if count[names[i]] != count[names[j]] {
+			return count[names[i]] > count[names[j]]
+		}
+		return names[i] < names[j]
+	})
+	var parts []string
+	for i, n := range names {
+		if i == 5 {
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s (%d of %d)", n, count[n], len(sessions)))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // ownerWords are the owner's words that name the folder: lines of the quote
