@@ -153,6 +153,7 @@ Every YAML option is listed here:
 | (environment only) | `TACIT_DELIVERY_TOPICS` | `on` (default): a prompt that names a live topic searches its folder too |
 | (environment only) | `TACIT_ROTATION_MAX` | Facts one rotation run checks; default `0`, every fact that is due |
 | (environment only) | `TACIT_ROTATION_AGE_DAYS` | Days a checked fact rests before the rotation checks it again; default `30` |
+| (environment only) | `TACIT_FORGE` | `off` to check no repository name on the forge; by default the checks ask GitHub through `gh` when it is installed and logged in (SPEC.md, Checked claims) |
 | (environment only) | `TACIT_OVERVIEW_MAX`, `TACIT_OVERVIEW_CHANGE_PCT` | Overviews one curate writes (default `10`), and the share of a folder's facts that must change for a new one (default `20`) |
 | `delivery.start_ceiling` | `TACIT_DELIVERY_START_CEILING` | Most lines of the SessionStart repo block; default `6` |
 | `delivery.prompt_ceiling` | `TACIT_DELIVERY_PROMPT_CEILING` | Most curated lines of the prompt block above its floor; default `5` |
