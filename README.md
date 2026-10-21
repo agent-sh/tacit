@@ -41,7 +41,7 @@ tacit app --browser
 
 The installers select amd64 or arm64, verify the archive checksum and test the bundled redactor before replacing executables. They install into your account and leave PATH changes to you. For a specific release or another directory, use `sh tacit-install.sh --version v0.1.0 --bin-dir PATH`, or `-Version v0.1.0 -BinDir PATH` in PowerShell. Git and model CLIs remain separate dependencies. [Source builds](docs/portable.md#source-builds) are also available.
 
-`init` creates a local store. It needs no server, tailnet or enrollment keys. Open the app to add your own rulings, inspect facts and review changes.
+`init` creates a local store. It needs no server, tailnet or enrollment keys. Open the app to add your own rulings, inspect facts and review changes. `tacit review` opens the same page: it is your channel for every edit, retirement, new rule and folder change in every build. Its link carries a one-run token; it goes to the browser the command opens and is printed only on a terminal, so an agent running the command sees no token and cannot drive the page.
 
 Choose the integration for your agent:
 
@@ -82,7 +82,8 @@ Open **Inbox** to inspect the note and its source. After curation, installed int
 1. **Collect.** Agents write short inbox notes. Imports bring in existing memory files. An optional dreamer extracts candidates from redacted transcript deltas: from the prompt hook once a session's undreamed part fills a dream window, before a compaction, every 10 minutes for the sessions that went quiet, and every 4 hours as a backstop. It saves each successful window before the next call and recovers pending notes after interrupted runs.
 2. **Curate.** Notes become individual facts with sources and scopes. Contradictions and uncertain changes become review items. A quick run after the idle dream curates the last day's notes, so a session's fact reaches other sessions within about an hour.
 3. **Deliver.** A local SQLite FTS5 index matches facts to the repo, host and prompt. Hooks supply up to 10 facts at session start and 3 curated facts per prompt, with a separate match for a computed fact. Explicit search can return the full text.
-4. **Check.** A verifier reads code, git, docs and permitted machine sources. It records evidence for its decisions and leaves unresolved questions for you.
+4. **Check.** A verifier reads code, git, docs and permitted machine sources. It records evidence for its decisions and leaves unresolved questions for you. A daily rotation sends the facts unchecked longest back to the curator's model with the proof code gathers, stamps each `last_checked`, and retires, redirects, notes or compresses only what the proof shows; it asks you about your own facts instead of changing them.
+5. **Organize.** Every project folder has a record that code checks: what it is (a repository, a folder, an area of ongoing work, a bounded topic), its status and its history, decided by the curator's model on evidence from git and sessions, or by you on the Folders page. A folder suppressed into another moves its facts there. Dead and shipped folders go quiet in the hooks and stay searchable. An area's facts arrive before its tools are used, a topic's when the prompt names it, and each folder can carry an overview whose every line cites its facts.
 
 Git also supplies hot spots, module maps, committed measurements and deletion-based staleness checks. Those steps need no model. The app brings facts, sources, history and review decisions together.
 
@@ -147,6 +148,12 @@ Every YAML option is listed here:
 | `delivery.instruction` | `TACIT_DELIVERY_INSTRUCTION` | `on` (default): the SessionStart title and the MCP server's instructions say what tacit holds and ask for one search before an action that changes something (the server's also point to `tacit_tree`); `off`: neither, and the server has no instructions |
 | `delivery.tool_push` | `TACIT_DELIVERY_TOOL_PUSH` | `on` (default): the PreToolUse hook gives the one matching rule or decision before an edit or a shell command |
 | `delivery.tree_pointer` | `TACIT_DELIVERY_TREE_POINTER` | `on` (default): when the SessionStart repo block shows fewer of the repo's facts than it has, its last line gives their count and the tree call that lists them |
+| (environment only) | `TACIT_DELIVERY_AREA_PUSH` | `on` (default): before an MCP tool call or shell command an area's tool patterns or commands match, the PreToolUse hook gives a few of the area's rules and decisions, once a session, in a repo or not |
+| (environment only) | `TACIT_DELIVERY_AREA_CEILING` | Most lines of one area push; default `3` |
+| (environment only) | `TACIT_DELIVERY_TOPICS` | `on` (default): a prompt that names a live topic searches its folder too |
+| (environment only) | `TACIT_ROTATION_MAX` | Facts one rotation run checks; default `0`, every fact that is due |
+| (environment only) | `TACIT_ROTATION_AGE_DAYS` | Days a checked fact rests before the rotation checks it again; default `30` |
+| (environment only) | `TACIT_OVERVIEW_MAX`, `TACIT_OVERVIEW_CHANGE_PCT` | Overviews one curate writes (default `10`), and the share of a folder's facts that must change for a new one (default `20`) |
 | `delivery.start_ceiling` | `TACIT_DELIVERY_START_CEILING` | Most lines of the SessionStart repo block; default `6` |
 | `delivery.prompt_ceiling` | `TACIT_DELIVERY_PROMPT_CEILING` | Most curated lines of the prompt block above its floor; default `5` |
 | `delivery.prompt_relative` | `TACIT_DELIVERY_PROMPT_RELATIVE` | A prompt line also needs this share of the best line's score; default `0.7`, `0` for none |
@@ -245,6 +252,10 @@ The server reads its own settings at startup:
 | `TACIT_PUBLIC_PORT` | Optional reader-only listener on `127.0.0.1`; disabled when unset |
 
 For background work, `tacit install dream` (the 4-hour dreamer and the 10-minute idle job) and `tacit install curate` write native job files and print start commands. Select the private config and provide the job environment before starting them. See [portable job setup](docs/portable.md#linux-and-macos).
+
+### Upgrading a shared store to folder records
+
+Folder records, `areas/` and `topics/`, overviews and `last_checked` form store format 1. A binary from before it reads such a store wrong, so nothing writes them until the store holds the format marker. Install the new binary on every machine that reads the store first (`tacit doctor` shows each machine's format and the marker), then set the marker once with `tacit format --set`. The assessment, migration, overviews and rotation start with the next curate and maintain runs. The rotation checks every fact that is due unless `TACIT_ROTATION_MAX` is set; its cost per fact is logged in `rotation.jsonl` in the state directory (about $0.01 a fact with Opus in our measurement, eval/VALUE.md).
 
 ## What we measured
 

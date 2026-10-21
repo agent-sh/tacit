@@ -125,4 +125,4 @@ Every screen at 1600 by 1000 (the window) and 1920 by 1080 (a common laptop and 
 
 ## Page and server
 
-Styles and script are files beside the page (app.css, app.js, desk.css, desk.js, api.js), never inline, under a strict content policy: same origin only, no framing. tacit review (index.html) runs app.js and app.css alone: Needs you without the other places.
+Styles and script are files beside the page (app.css, app.js, desk.css, desk.js, api.js), never inline, under a strict content policy: same origin only, no framing. tacit review and tacit app --browser serve app.html, the window's page, to the URL that carries the run's token; tacit review --label (index.html) runs app.js and app.css alone: Needs you without the other places. A rotation question ("Checked by the curator") is one fact, drawn as a stale check is, with what the curator found beside the card in place of what git shows.

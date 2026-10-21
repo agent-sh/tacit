@@ -1192,3 +1192,25 @@ The session's repository is no reliable proxy for relevance on the holdout: its 
 TOOLS-PI went from 0.5 / 0.5 / 0 to 1 / 1 / 1: both reps found the pi move through search. CRA-FAILFIRST's fact reached no cell again. Replayed through the 0.8.0 binary, the new cells' hook calls give the same prompt blocks and pushes byte for byte, and the SessionStart block differs only by the tree line, so the three more noise pushes are the agents' other commands (more `git show` and `git stash`), and the runner rule did not fire live. The tree calls (2, both the review bot's folder, 6.5k characters each) came after the pointer. Agents searched more (1.04 a cell) and with other words; each answer carries about 500 more characters (the tree line, a page count over every candidate, more lines when they asked for them). The CB-RESTORE regression (0.5 / 0.5 to 0 / 0) is the agents': both reps had the "Linux must keep working" rule in the same SessionStart line and changed Linux anyway.
 
 **Limits.** One owner's store; 26 cells, so a task's mean moves by a whole rep; the act-bench requests were in the design set of the search weight, chosen on the holdout's level range. The judge grades lines against the request, not the call.
+
+## Folder records, area delivery, the rotation and overviews (2026-10-21)
+
+Phase 2 (SPEC.md, "Folder records", "Overviews", "Rotation", Delivery "Areas and topics") measured on copies, never on a live store.
+
+**Assessment and migration.** A copy of the author's 16,603-fact store, with its machine's recorded git roots rebuilt as `.git` folders (no objects, so own commits are unknown) and its sessions' work dated by their facts, assessed by real Opus 5.5 and migrated: 194 records (100 of them needs-review, set by the model; 4 written by the simulated owner on the Folders page), 0 record errors, lint clean before and after. Facts filed under another name of a checkout fell from 1,752 (10.6%) to 1; facts no hook can reach (by scope or by `applies_to.repos`) from 2,442 (14.7%) to 1,767 (10.7%); the ginza folder alone moved 1,638 facts and 94 were absorbed as restatements of the winner's. A second run of each step wrote nothing.
+
+**Delivery replay.** The held-out and design replay of "Repo-first delivery" (276 cases, its store, which has no records) gives the same output in every case as release 0.8.1: design 12 (+2) reached, 2,185 chars a case, 57% noise; holdout 140 (+2), 1,658 chars, 62% noise. No replay case holds an area or topic yet, so the area ceiling (3) is not measured.
+
+**Area push latency.** `tacit hook pre-tool` as real process starts, 300 each, on a copy of the 16,600-fact store with one area added (an MCP tool-name glob and 5 facts), each binary with its own index built once before, on a workstation with other load:
+
+| call | p50 | p95 |
+|---|---|---|
+| release 0.8.1, an edit outside a repo (the process alone) | 26 to 33 ms | 38 to 52 ms |
+| phase 2, an MCP call no area matches | 49 ms | 65 ms |
+| phase 2, the area's MCP call, pushed (a new session each call) | 62 ms | 76 ms |
+| phase 2, the area's MCP call, already pushed in the session | 47 ms | 79 ms |
+| phase 2, an edit outside a repo | 24 ms | 43 ms |
+
+An MCP call costs one `git rev-parse` and the index open over the bare process; well inside the 400 ms budget.
+
+**Rotation.** Real Opus on a copy of the assessed store, one batch of 12 never-checked facts (the oldest): $0.116 in all, $0.0097 a fact, 1 min 57 s with proof gathering; 10 still, 1 compressed (two acceptance rules for rented GPU boxes into one that cites both), 1 unknown; lint clean. The copy's repositories hold no objects, so its proof came from search and the records, not git: a store whose repositories are on the machine adds git reads per fact. At that rate a first pass over 16,600 facts costs about $160 and 1,400 batches.
