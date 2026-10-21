@@ -241,10 +241,19 @@ func TestFreshStoreCuratesIntoAnIndexedTree(t *testing.T) {
 			t.Errorf("tacit_tree %q answered:\n%s", p, out)
 		}
 	}
-	// The MCP answer with the defaults (root, depth 3) from inside widget.
+	// The MCP answer with the defaults (root, depth 2: the scope folders'
+	// own indexes) from inside widget; a folder's default is 3; an explicit
+	// depth wins.
 	t.Chdir(filepath.Join(home, "projects", "widget"))
 	if out := treeToolText(s, "", nil); !strings.Contains(out, "`widget-port`") || len(heads(out)) != 6 {
 		t.Errorf("tacit_tree defaults:\n%s", out)
+	}
+	if out := treeToolText(s, "projects", nil); len(heads(out)) != 2 {
+		t.Errorf("tacit_tree projects default:\n%s", out)
+	}
+	zero := 0
+	if out := treeToolText(s, "", &zero); len(heads(out)) != 1 {
+		t.Errorf("tacit_tree root depth 0:\n%s", out)
 	}
 }
 
