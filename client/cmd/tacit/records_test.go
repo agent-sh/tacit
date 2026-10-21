@@ -1,14 +1,17 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/agent-sh/tacit/client/internal/curate"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/record"
+	"github.com/agent-sh/tacit/client/internal/store"
 )
 
 func testRec(kind, folder string) *record.Record {
@@ -96,4 +99,13 @@ func writeFormatForTest(t *testing.T, dir string) {
 	if err := os.WriteFile(p, ledger.Format{Version: ledger.FormatVersion, At: "2026-10-21T00:00:00Z"}.Encode(), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// noAssess turns the full curate's assessment off for a test about
+// another step (its prompts and its fixture answers are not that test's).
+func noAssess(t *testing.T) {
+	t.Helper()
+	prev := curateAssessStep
+	t.Cleanup(func() { curateAssessStep = prev })
+	curateAssessStep = func(context.Context, *store.Store, string, bool, *curate.Report) int { return 0 }
 }

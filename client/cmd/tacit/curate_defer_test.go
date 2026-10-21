@@ -56,6 +56,7 @@ func TestDeferUnknownReposIsBounded(t *testing.T) {
 // knows is not sent to the model and stays in the inbox; once a machine's
 // catalog naming it reaches the store, the next curate takes it.
 func TestCurateWaitsForTheCatalogOfANotesRepo(t *testing.T) {
+	noAssess(t)
 	_, s, prompts := treeHome(t)
 	ctx := context.Background()
 	// A note from another machine's dreamer, whose catalog is not in the store yet.

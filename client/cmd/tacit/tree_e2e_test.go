@@ -94,6 +94,7 @@ func entry(origin, name, desc, typ, scope string, repos ...string) map[string]an
 // retry, and the batch lands with every folder index committed with it. The
 // tree tool then answers from those index files alone.
 func TestFreshStoreCuratesIntoAnIndexedTree(t *testing.T) {
+	noAssess(t)
 	home, s, prompts := treeHome(t)
 	host := store.ShortHost()
 	ctx := context.Background()

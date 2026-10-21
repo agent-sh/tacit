@@ -1,0 +1,327 @@
+// Package assess is the curator's assessment of folders (SPEC.md, "Folder
+// records"): code gathers the evidence of what a project, area or topic
+// folder is (git, the dreamer's registry, the store's facts, the owner's
+// words), the curator's model decides its kind and status and why, and code
+// checks the decision (record.Validate) and builds the record. Code never
+// judges the evidence itself: a git date or a count is shown, not ruled on.
+package assess
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/agent-sh/tacit/client/internal/modelrun"
+	"github.com/agent-sh/tacit/client/internal/record"
+)
+
+// KindNone is the model's answer for a folder that is no project of the
+// owner's (an upstream clone, a tool's checkout, a folder of checkouts):
+// its record says so, with status dead, so it is not asked again.
+const KindNone = "none"
+
+// NotProject starts the why of a "none" decision's entry, written by code.
+const NotProject = "not a project: "
+
+// Candidate is one folder to decide.
+type Candidate struct {
+	Folder string
+	// Reason is why code put it to the model ("a repository of this
+	// machine with no record", "new work since the last decision", ...).
+	Reason string
+	// Old is its record now, nil for none.
+	Old *record.Record
+	// GitRoot: some machine's evidence says the folder is a git checkout
+	// (a none decision is then a repo record, else a folder record).
+	GitRoot bool
+	// Evidence is what code gathered, written into the record as it is.
+	Evidence []record.Evidence
+	// Context is what else the model reads, one line each: names repoid
+	// proves, the folder's facts, the sessions that worked there, the
+	// owner's words naming it. Not written into the record.
+	Context []string
+	// Proposal: the folder is an area or topic proposed from sessions'
+	// notes (Kind is its kind), Sessions the distinct sessions behind it.
+	Kind     string
+	Sessions []string
+}
+
+// Decision is the model's answer for one candidate.
+type Decision struct {
+	Folder         string        `json:"folder"`
+	Kind           string        `json:"kind"`
+	Status         string        `json:"status"`
+	Why            string        `json:"why"`
+	Description    string        `json:"description"`
+	Body           string        `json:"body,omitempty"`
+	Aliases        []string      `json:"aliases,omitempty"`
+	SuppressedBy   string        `json:"suppressed_by,omitempty"`
+	Roots          []record.Root `json:"roots,omitempty"`
+	Tools          []string      `json:"tools,omitempty"`
+	Commands       []string      `json:"commands,omitempty"`
+	Repos          []string      `json:"repos,omitempty"`
+	OwnerQuote     string        `json:"owner_quote,omitempty"`
+	OwnerQuoteFrom string        `json:"owner_quote_from,omitempty"`
+	// Reject: for a proposed area or topic, the model's no (Why says why);
+	// FoldInto: the existing folder it belongs to instead (it gains the
+	// proposed name as an alias).
+	Reject   bool   `json:"reject,omitempty"`
+	FoldInto string `json:"fold_into,omitempty"`
+}
+
+// Prompt is the assessment prompt; %s is the candidates (Render).
+const Prompt = `You are the curator of tacit, a fact store shared by coding agents on one owner's machines. Facts are filed in folders: projects/<name> (a git repository, or a project folder that is no repository), areas/<name> (an ongoing system or practice) and topics/<name> (a bounded work stream). Each folder gets a record that says what it is. Code gathered the evidence below for each folder; you decide.
+
+For each folder decide:
+- kind: "repo" (a git repository that is the owner's project), "folder" (a project folder of the owner's that is no git repository), or "none" (not a project of the owner's: an upstream or tool clone nobody works in, a folder that only holds other checkouts, the home directory, a scratch or task directory). For a proposed area or topic: "area" or "topic", or set reject or fold_into.
+- status: "active" (being worked), "dormant" (real work, nobody on it lately), "shipped" (done and delivered), "dead" (abandoned or gone), or "needs-review" (the evidence does not settle it). Status comes from the owner's words and from sessions: git says whether a folder is real work and whose, never whether it is shipped, dormant or dead.
+- why: one or two sentences. It MUST cite at least one session or note the decision rests on, as code shows them (session:<id>, claude:<id>, codex:<id>, note:<name>). Code refuses a why that cites none it can find; a git date alone is no reason.
+- description: one line (at most 200 characters) saying what the folder is.
+- body: optional, a few sentences: why the folder exists and what belongs in it.
+- aliases: optional, other names the same project is known by, only names no other folder has.
+- suppressed_by: optional, the folder that replaces this one when they are the same project under two names (a symlink's or a remote's name, a rename). It must be a folder that has or gets a record and is not itself replaced. Only when the evidence shows they are one project.
+- roots: kind folder only, optional: [{"host": ..., "path": ...}] where it lives.
+- tools, commands: an area only: tool-name patterns (globs such as "mcp__*__Ticketing*") and command prefixes its sessions used, only ones the evidence lists.
+- repos: a topic only, optional: repositories it is tied to.
+- owner_quote, owner_quote_from: only when the owner's own words shown below state the decision for THIS folder (its name or alias in them): copy their words exactly and the ref they came from. Words that only mention the folder are evidence for your why, not a quote here.
+- reject (true) or fold_into ("<existing folder>"): a proposed area or topic only, when it should not be made, with why.
+
+Output ONLY a JSON array, one object per folder, no prose, no code fence:
+  {"folder": "...", "kind": "...", "status": "...", "why": "...", "description": "...", "body": "...", "aliases": [], "suppressed_by": "", "roots": [], "tools": [], "commands": [], "repos": [], "owner_quote": "", "owner_quote_from": "", "reject": false, "fold_into": ""}
+
+FOLDERS:
+%s
+`
+
+// Render writes the candidates section of the prompt.
+func Render(cands []Candidate) string {
+	var b strings.Builder
+	for _, c := range cands {
+		fmt.Fprintf(&b, "### folder=%s\nwhy asked: %s\n", c.Folder, c.Reason)
+		if c.Kind != "" {
+			fmt.Fprintf(&b, "proposed %s, from %d session(s): %s\n", c.Kind, len(c.Sessions), strings.Join(c.Sessions, ", "))
+		}
+		if r := c.Old; r != nil {
+			fmt.Fprintf(&b, "record now: %s, %s, %q", r.Kind, r.Status, r.Description)
+			if len(r.Was) > 0 {
+				fmt.Fprintf(&b, "; last decided %s by %s: %s", r.Was[0].Date, r.Was[0].By, oneLine(r.Was[0].Why, 300))
+			}
+			if r.SuppressedBy != "" {
+				fmt.Fprintf(&b, "; suppressed by %s", r.SuppressedBy)
+			}
+			b.WriteString("\n")
+		}
+		for i, e := range c.Evidence {
+			fmt.Fprintf(&b, "evidence %d: %s\n", i+1, evidenceLine(e))
+		}
+		for _, l := range c.Context {
+			b.WriteString(l + "\n")
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func evidenceLine(e record.Evidence) string {
+	var parts []string
+	add := func(k string, v any) { parts = append(parts, fmt.Sprintf("%s %v", k, v)) }
+	if e.Host != "" {
+		add("host", e.Host)
+	}
+	if e.Host != "" || e.GitRoot {
+		add("git_root", e.GitRoot)
+	}
+	if e.Checkout != "" {
+		add("checkout", e.Checkout)
+	}
+	if len(e.Remotes) > 0 {
+		add("remotes", strings.Join(e.Remotes, " "))
+	}
+	if e.OwnCommits != nil {
+		add("own_commits", *e.OwnCommits)
+		if e.FirstCommit != "" {
+			add("commits", e.FirstCommit+".."+e.LastCommit)
+		}
+	} else if e.GitRoot && e.Host != "" {
+		parts = append(parts, "own commits unknown (git history not readable here)")
+	}
+	if e.WorkSessions > 0 || e.Host != "" {
+		add("work_sessions", e.WorkSessions)
+		if e.FirstWork != "" {
+			add("work", e.FirstWork+".."+e.LastWork)
+		}
+	}
+	if e.UpstreamClone {
+		parts = append(parts, "upstream_clone (no own commits, no work sessions)")
+	}
+	if e.FactSessions > 0 {
+		add("fact_sessions", e.FactSessions)
+		add("facts", e.FirstFact+".."+e.LastFact)
+	}
+	if len(e.Paths) > 0 {
+		add("paths", strings.Join(e.Paths, " "))
+	}
+	if len(e.Sessions) > 0 {
+		add("sessions", strings.Join(e.Sessions, " "))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func oneLine(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len([]rune(s)) > max {
+		s = string([]rune(s)[:max]) + "…"
+	}
+	return s
+}
+
+// Parse reads the model's answer: a JSON array of decisions. An answer
+// that is no such array wraps modelrun.ErrInvalidResult.
+func Parse(text string) ([]Decision, error) {
+	text = strings.TrimSpace(text)
+	text = strings.TrimPrefix(strings.TrimPrefix(text, "```json"), "```")
+	text = strings.TrimSpace(strings.TrimSuffix(text, "```"))
+	if i := strings.Index(text, "["); i > 0 {
+		text = text[i:]
+	}
+	if j := strings.LastIndex(text, "]"); j >= 0 {
+		text = text[:j+1]
+	}
+	var ds []Decision
+	if err := json.Unmarshal([]byte(text), &ds); err != nil {
+		return nil, fmt.Errorf("%w: the assessment must be a JSON array of decisions", modelrun.ErrInvalidResult)
+	}
+	return ds, nil
+}
+
+// Refusal is a decision code refused, with why, for the retry prompt.
+type Refusal struct {
+	Folder   string
+	Problems []string
+}
+
+// RetryPrompt is prompt again with the answer and code's refusals, asking
+// for the refused folders only.
+func RetryPrompt(prompt, answer string, refused []Refusal) string {
+	var b strings.Builder
+	b.WriteString(prompt)
+	b.WriteString("\nYOUR PREVIOUS ANSWER:\n")
+	a := strings.TrimSpace(answer)
+	if len(a) > 40_000 {
+		a = a[:40_000] + "\n[... cut]"
+	}
+	b.WriteString(a)
+	b.WriteString("\n\nCODE REFUSED THESE DECISIONS. Code checks every value; it does not change your decisions for you. The problems:\n")
+	for _, r := range refused {
+		fmt.Fprintf(&b, "- %s: %s\n", r.Folder, strings.Join(r.Problems, "; "))
+	}
+	b.WriteString("Return a JSON array with decisions for these folders only, with the problems fixed. Output ONLY the JSON array.\n")
+	return b.String()
+}
+
+// ErrNoDecision is a candidate the answer said nothing about.
+var ErrNoDecision = errors.New("no decision")
+
+// Owner is the owner's words a decision rests on, when code verified them
+// in their turns: the entry is then theirs (by owner, quote cited).
+type Owner struct {
+	Quote, From string
+}
+
+// Build makes the record a decision asks for: the candidate's record with
+// the decision applied (a new history entry when the status or kind
+// changes), or a new one. Code writes the evidence, the dates and the
+// entry's writer; the model's values are taken as given, for
+// record.Validate to judge. owner is non-nil when the decision's quote is
+// the owner's (verified by the caller).
+func Build(c Candidate, d Decision, today string, owner *Owner) *record.Record {
+	kind, status, why := d.Kind, d.Status, strings.TrimSpace(d.Why)
+	if kind == KindNone {
+		kind, status, why = record.KindFolder, record.StatusDead, NotProject+why
+		if c.GitRoot {
+			kind = record.KindRepo
+		}
+	}
+	entry := record.Entry{Status: status, Date: today, By: record.ByOpus, Why: why}
+	if owner != nil {
+		entry.By, entry.Quote, entry.QuoteFrom = record.ByOwner, owner.Quote, owner.From
+	}
+	var r *record.Record
+	if c.Old != nil {
+		r = c.Old.Clone()
+		if status != r.Status || kind != r.Kind {
+			r.Was = append([]record.Entry{entry}, r.Was...)
+			r.Status, r.Kind = status, kind
+		}
+		if strings.TrimSpace(d.SuppressedBy) != "" {
+			r.SuppressedBy = strings.TrimSpace(d.SuppressedBy)
+		}
+		r.Aliases = union(r.Aliases, d.Aliases)
+	} else {
+		r = &record.Record{Kind: kind, Status: status, Was: []record.Entry{entry}, Created: today, CreatedBy: entry.By,
+			SuppressedBy: strings.TrimSpace(d.SuppressedBy), Aliases: union(nil, d.Aliases)}
+	}
+	r.Folder = c.Folder
+	r.Name = c.Folder[strings.LastIndex(c.Folder, "/")+1:]
+	if desc := strings.TrimSpace(d.Description); desc != "" {
+		r.Description = desc
+	}
+	if body := strings.TrimSpace(d.Body); body != "" {
+		r.Body = body
+	}
+	if kind == record.KindFolder && len(d.Roots) > 0 {
+		r.Roots = d.Roots
+	}
+	if kind == record.KindArea {
+		r.Tools, r.Commands = union(r.Tools, d.Tools), union(r.Commands, d.Commands)
+	}
+	if kind == record.KindTopic {
+		r.Repos = union(r.Repos, d.Repos)
+	}
+	r.Evidence = c.Evidence
+	return r
+}
+
+func union(a, b []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, x := range append(append([]string(nil), a...), b...) {
+		x = strings.TrimSpace(x)
+		if x != "" && !seen[x] {
+			seen[x] = true
+			out = append(out, x)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// Same reports whether two records say the same thing (evidence aside):
+// writing b over a would change no decision.
+func Same(a, b *record.Record) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	x, y := a.Clone(), b.Clone()
+	x.Evidence, y.Evidence = nil, nil
+	ea, _ := x.Encode()
+	eb, _ := y.Encode()
+	return string(ea) == string(eb)
+}
+
+// SortCandidates puts first the folders other folders may be suppressed
+// into: a repository's own name before a folder that is only another name
+// of one (aliasOf names its repository), then by folder.
+func SortCandidates(cands []Candidate, aliasOf func(folder string) string) {
+	sort.SliceStable(cands, func(i, j int) bool {
+		ai, aj := aliasOf(cands[i].Folder) != "", aliasOf(cands[j].Folder) != ""
+		if ai != aj {
+			return !ai
+		}
+		return cands[i].Folder < cands[j].Folder
+	})
+}
