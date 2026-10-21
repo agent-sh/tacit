@@ -363,3 +363,17 @@ func TestLayerOffHidesTheLayersFiles(t *testing.T) {
 		t.Fatal("layer off: the stamp still covers the layer's files")
 	}
 }
+
+// A store file of the local layer (a folder's record, its index) is never
+// read as a local fact.
+func TestLoadSkipsStoreFiles(t *testing.T) {
+	t.Setenv("TACIT_LOCAL_LAYER", "on")
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "curated", "areas", "ops"), 0o700)
+	os.WriteFile(filepath.Join(dir, "curated", "areas", "ops", "_record.md"), []byte("---\nkind: area\nname: ops\n---\nwhy\n"), 0o600)
+	os.WriteFile(filepath.Join(dir, "curated", "areas", "ops", "_overview.md"), []byte("x"), 0o600)
+	facts, errs := Load(dir)
+	if len(facts) != 0 || len(errs) != 0 {
+		t.Fatalf("facts %v errs %v", facts, errs)
+	}
+}

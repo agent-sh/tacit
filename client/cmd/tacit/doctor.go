@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/digest"
+	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
 	"github.com/agent-sh/tacit/client/internal/platform"
+	"github.com/agent-sh/tacit/client/internal/store"
 )
 
 type doctorCheck struct {
@@ -144,6 +146,19 @@ func doctorChecks(models bool, role string) ([]doctorCheck, bool) {
 			} else {
 				add(name+" runner", "ok", route.Runner+": executable responds to --version")
 			}
+		}
+	}
+	add("tacit", "info", fmt.Sprintf("binary %s, writes store format %d", version, ledger.FormatVersion))
+	if s, err := store.Default(); err == nil && s.Exists() {
+		switch f, ok, err := ledger.ReadFormat(s.Dir); {
+		case err != nil:
+			add("store format", "warn", "the marker "+ledger.FormatPath+" cannot be read; folder records are not written")
+		case !ok:
+			add("store format", "info", "no format marker: folder records are not written until the owner runs `tacit format --set` (once every machine runs a binary of format "+fmt.Sprint(ledger.FormatVersion)+")")
+		case !f.Writes():
+			add("store format", "warn", fmt.Sprintf("the store is format %d, newer than this binary: update tacit", f.Version))
+		default:
+			add("store format", "ok", fmt.Sprintf("format %d set %s", f.Version, f.At))
 		}
 	}
 	add("provider", "info", "offline only; credentials, model availability and live completions were not checked")

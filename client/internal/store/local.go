@@ -131,7 +131,13 @@ func (s *Store) initEmpty(ctx context.Context) error {
 	if err := os.WriteFile(filepath.Join(s.Dir, filepath.FromSlash(ledger.MarkerPath)), append(marker, '\n'), 0o600); err != nil {
 		return err
 	}
-	initial := []string{tree.FileName, ledger.MarkerPath, ".gitattributes"}
+	// A new store starts in this binary's format (ledger.Format): nothing
+	// older ever read it, so its writers write folder records at once.
+	format := ledger.Format{Version: ledger.FormatVersion, At: time.Now().UTC().Format(time.RFC3339)}
+	if err := os.WriteFile(filepath.Join(s.Dir, filepath.FromSlash(ledger.FormatPath)), format.Encode(), 0o600); err != nil {
+		return err
+	}
+	initial := []string{tree.FileName, ledger.MarkerPath, ledger.FormatPath, ".gitattributes"}
 	if index.On() {
 		if err := os.WriteFile(filepath.Join(s.Dir, index.File), []byte(index.Generate(nil)), 0o600); err != nil {
 			return err

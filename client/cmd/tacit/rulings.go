@@ -816,7 +816,7 @@ func curatorWrite(ctx context.Context, s *store.Store, plan func() (map[string][
 			}
 			rels := make([]string, 0, len(files)+1)
 			for rel := range files {
-				if !safeRel(rel) && rel != ledger.QuotesPath && rel != ledger.MarkerPath {
+				if !safeRel(rel) && rel != ledger.QuotesPath && rel != ledger.MarkerPath && rel != ledger.FormatPath && rel != ledger.FoldersPath {
 					return fmt.Errorf("refusing path %s", rel)
 				}
 				rels = append(rels, rel)

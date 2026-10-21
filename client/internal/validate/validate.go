@@ -124,7 +124,7 @@ func factFolders(dir string) []string {
 			continue
 		}
 		for _, f := range files {
-			if !f.IsDir() && strings.HasSuffix(f.Name(), ".md") && !fact.IsIndexFile(f.Name()) {
+			if !f.IsDir() && strings.HasSuffix(f.Name(), ".md") && !fact.IsStoreFile(f.Name()) {
 				out = append(out, en.Name())
 				break
 			}

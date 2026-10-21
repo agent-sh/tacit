@@ -31,6 +31,7 @@ func usage() {
   tacit doctor [--models] [--role dream|curate|judge|verify] [--json]   offline configuration and dependency checks
   tacit lint   [--store DIR]
   tacit index  [--store DIR] [--check]   MEMORY.md and every folder's _index.md
+  tacit format [--set] [--records-complete]   the store's format marker: show it; --set writes this binary's format (once every machine runs it), --records-complete once every fact folder has a record
   tacit tree   [--depth N] [--repo R] [--host H] [path]   facts by scope and type, then the folder indexes from path (default the root) down N levels (default 2 at the root, 3 for a folder); another repo's or host's folder only when named
   tacit import [--store DIR] [--host NAME] claude <memory-dir>...
   tacit import [--store DIR] [--host NAME] codex  <memories-dir>
@@ -136,6 +137,8 @@ func main() {
 		os.Exit(runInit(os.Args[2:]))
 	case "lint":
 		os.Exit(runLint(os.Args[2:]))
+	case "format":
+		os.Exit(runFormat(os.Args[2:]))
 	case "tree":
 		os.Exit(runTree(os.Args[2:]))
 	case "index":

@@ -23,6 +23,11 @@ const (
 	DecisionsPath = "review/decisions.jsonl"
 	QuotesPath    = "review/owner-quotes.jsonl"
 	MarkerPath    = "review/rulings-audit.json"
+	// FormatPath is the store's format marker (Format).
+	FormatPath = "review/format.json"
+	// FoldersPath is the curator's folder log: proposals of areas and
+	// topics, and the questions for the owner a folder step left open.
+	FoldersPath = "review/folders.jsonl"
 )
 
 // Decision actions that only the owner records in the app.
@@ -216,5 +221,68 @@ func ParseMarker(b []byte) (Marker, error) {
 // Encode renders the marker.
 func (m Marker) Encode() []byte {
 	b, _ := json.MarshalIndent(m, "", " ")
+	return append(b, '\n')
+}
+
+// FormatVersion is the newest store format this binary writes. Version 1
+// is the folder records format (SPEC.md, "Store format"): folder records
+// (_record.md), the areas/ and topics/ roots, last_checked on facts. A
+// binary older than the format reads such a store wrong (its strict
+// decoder refuses last_checked, it reads _record.md as a broken fact), so
+// no writer of this binary writes any of them until the store holds the
+// marker, which the owner sets once every machine runs a binary that knows
+// the format.
+const FormatVersion = 1
+
+// Format is review/format.json, the store's format marker: the format
+// version every machine that writes the store can read, set by the owner's
+// one-time command (`tacit format --set`). RecordsComplete is set once
+// every project, area and topic folder that holds facts has a record (the
+// migration's last step): from then on lint requires a record for every
+// such folder, and the metadata checks no longer accept a project folder
+// only because it holds facts.
+type Format struct {
+	Version         int    `json:"version"`
+	At              string `json:"at"`
+	RecordsComplete bool   `json:"records_complete,omitempty"`
+}
+
+// ParseFormat reads marker bytes.
+func ParseFormat(b []byte) (Format, error) {
+	var f Format
+	if err := json.Unmarshal(b, &f); err != nil {
+		return Format{}, err
+	}
+	if f.Version < 1 {
+		return Format{}, errors.New("no version")
+	}
+	return f, nil
+}
+
+// ReadFormat reads the format marker of the store at root. ok is false
+// without one; err is a marker that exists and cannot be read.
+func ReadFormat(root string) (f Format, ok bool, err error) {
+	b, rerr := os.ReadFile(filepath.Join(root, filepath.FromSlash(FormatPath)))
+	if errors.Is(rerr, os.ErrNotExist) {
+		return Format{}, false, nil
+	}
+	if rerr != nil {
+		return Format{}, false, rerr
+	}
+	f, err = ParseFormat(b)
+	if err != nil {
+		return Format{}, false, err
+	}
+	return f, true, nil
+}
+
+// Writes reports whether this binary may write the folder records format
+// into a store with this marker: the marker is set and names a version
+// this binary knows (a newer one is a newer binary's store).
+func (f Format) Writes() bool { return f.Version >= 1 && f.Version <= FormatVersion }
+
+// Encode renders the marker.
+func (f Format) Encode() []byte {
+	b, _ := json.MarshalIndent(f, "", " ")
 	return append(b, '\n')
 }

@@ -15,10 +15,15 @@ import (
 // path applies it, so a fact read on its own (Parse) is judged the same as one
 // from Walk (WithStore).
 type StoreState struct {
-	Audited  bool
-	quotes   map[string]ledger.Quote
-	endorsed map[string]ledger.Endorsement
-	notMine  map[string]string
+	Audited bool
+	// Format is the store's format marker (ledger.FormatPath); zero without
+	// one. FormatErr is a marker that exists and cannot be read: no writer
+	// writes the new format then (fail closed), and lint reports it.
+	Format    ledger.Format
+	FormatErr error
+	quotes    map[string]ledger.Quote
+	endorsed  map[string]ledger.Endorsement
+	notMine   map[string]string
 }
 
 // ErrMarker is a rulings audit marker that exists but cannot be read. The
@@ -40,6 +45,11 @@ func LoadState(root string) (StoreState, error) {
 			return st, fmt.Errorf("%w (%s): %v", ErrMarker, ledger.MarkerPath, perr)
 		}
 		st.Audited = true
+	}
+	if f, ok, ferr := ledger.ReadFormat(root); ferr != nil {
+		st.FormatErr = ferr
+	} else if ok {
+		st.Format = f
 	}
 	ql, _ := os.ReadFile(filepath.Join(root, filepath.FromSlash(ledger.QuotesPath)))
 	dl, _ := os.ReadFile(filepath.Join(root, filepath.FromSlash(ledger.DecisionsPath)))
@@ -73,4 +83,19 @@ func WithStore(root string, f *Fact) error {
 	}
 	st.Apply(f)
 	return nil
+}
+
+// FormatWrites reports whether writers of this binary may write the folder
+// records format into the store at root (ledger.Format.Writes), and why not.
+func FormatWrites(root string) (bool, string) {
+	f, ok, err := ledger.ReadFormat(root)
+	switch {
+	case err != nil:
+		return false, fmt.Sprintf("the store's format marker (%s) cannot be read: %v", ledger.FormatPath, err)
+	case !ok:
+		return false, fmt.Sprintf("the store has no format marker (%s): folder records, the areas/ and topics/ folders and last_checked are written only once every machine runs a binary that reads them and the owner has run `tacit format --set`", ledger.FormatPath)
+	case !f.Writes():
+		return false, fmt.Sprintf("the store's format is version %d, newer than this binary's %d: update tacit", f.Version, ledger.FormatVersion)
+	}
+	return true, ""
 }

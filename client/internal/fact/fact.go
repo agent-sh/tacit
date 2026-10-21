@@ -141,19 +141,26 @@ func IsRuling(f *Fact) bool {
 
 // Meta is the frontmatter.
 type Meta struct {
-	Name          string    `yaml:"name"`
-	Description   string    `yaml:"description"`
-	Type          string    `yaml:"type"`
-	Scope         string    `yaml:"scope"`
-	AppliesTo     AppliesTo `yaml:"applies_to,omitempty"`
-	Source        Source    `yaml:"source"`
-	Created       string    `yaml:"created"`
-	Updated       string    `yaml:"updated,omitempty"`
-	SupersededBy  string    `yaml:"superseded_by,omitempty"`
-	Retired       string    `yaml:"retired,omitempty"` // YYYY-MM-DD: outdated per git, retired on a staleness verdict; the evidence is in review/decisions.jsonl
-	DerivedFrom   string    `yaml:"derived_from,omitempty"`
-	Origin        string    `yaml:"origin,omitempty"`         // curator output: name of the inbox note this fact came from
-	ConflictsWith []string  `yaml:"conflicts_with,omitempty"` // curator finding: facts this one contradicts, unresolved until one supersedes the other
+	Name         string    `yaml:"name"`
+	Description  string    `yaml:"description"`
+	Type         string    `yaml:"type"`
+	Scope        string    `yaml:"scope"`
+	AppliesTo    AppliesTo `yaml:"applies_to,omitempty"`
+	Source       Source    `yaml:"source"`
+	Created      string    `yaml:"created"`
+	Updated      string    `yaml:"updated,omitempty"`
+	SupersededBy string    `yaml:"superseded_by,omitempty"`
+	Retired      string    `yaml:"retired,omitempty"` // YYYY-MM-DD: outdated per git, retired on a staleness verdict; the evidence is in review/decisions.jsonl
+	// LastChecked is the day the curator's rotation last judged the fact
+	// against fresh proof (YYYY-MM-DD; empty: never). Only the rotation
+	// writes it (PatchRelations); it is not a change to the fact, so the tree
+	// index and the staleness check's dating do not read it. A store's
+	// writers set it only once the store holds the format marker
+	// (ledger.FormatPath): an older binary's strict decoder refuses the key.
+	LastChecked   string   `yaml:"last_checked,omitempty"`
+	DerivedFrom   string   `yaml:"derived_from,omitempty"`
+	Origin        string   `yaml:"origin,omitempty"`         // curator output: name of the inbox note this fact came from
+	ConflictsWith []string `yaml:"conflicts_with,omitempty"` // curator finding: facts this one contradicts, unresolved until one supersedes the other
 }
 
 // Fact is one parsed file.
@@ -361,11 +368,29 @@ func ValidScope(s string) bool {
 // so it never collides with a fact and is never read as one.
 const IndexFile = "_index.md"
 
+// RecordFile is a folder's record (internal/record): what the folder is
+// (kind, status and its history, aliases, a suppression pointer), written
+// by the curator or the owner. OverviewFile is a folder's cited overview.
+// Both are store files, not facts (IsStoreFile).
+const (
+	RecordFile   = "_record.md"
+	OverviewFile = "_overview.md"
+)
+
 // IsIndexFile reports a folder index file by its base name.
 func IsIndexFile(name string) bool { return name == IndexFile }
 
+// IsStoreFile reports a file of the store that is not a fact, by its base
+// name: every name that starts with an underscore (the folder index, a
+// folder's record and overview, a machine's catalog). A fact's name is a
+// slug, which never starts with one, so the two never collide; every
+// reader of facts (Walk, the local layer, the metadata checks) passes
+// these over, whatever new kind of store file a later binary adds.
+func IsStoreFile(name string) bool { return strings.HasPrefix(name, "_") }
+
 // Walk loads every .md fact under root, in path order. Skipped: the
-// generated MEMORY.md and folder indexes (_index.md), a root README.md,
+// generated MEMORY.md, every store file (IsStoreFile: the folder indexes,
+// records and overviews, _index.md, _record.md, _overview.md), a root README.md,
 // keys/, review/, dot directories and symlinks (a symlink could point
 // outside the store). Files that fail to
 // parse are returned in errs with their path.
@@ -381,7 +406,7 @@ func Walk(root string) (facts []*Fact, errs []error, err error) {
 			}
 			return nil
 		}
-		if d.Type()&os.ModeSymlink != 0 || !strings.HasSuffix(name, ".md") || IsIndexFile(name) {
+		if d.Type()&os.ModeSymlink != 0 || !strings.HasSuffix(name, ".md") || IsStoreFile(name) {
 			return nil
 		}
 		rel, _ := filepath.Rel(root, p)
