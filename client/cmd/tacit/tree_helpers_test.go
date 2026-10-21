@@ -7,6 +7,7 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/index"
+	"github.com/agent-sh/tacit/client/internal/record"
 	"github.com/agent-sh/tacit/client/internal/tree"
 )
 
@@ -18,7 +19,8 @@ func writeIndexesForTest(t testing.TB, dir string, facts []*fact.Fact) {
 	if err := os.WriteFile(filepath.Join(dir, "MEMORY.md"), []byte(index.Generate(facts)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	w, r, err := tree.Plan(dir, tree.Generate(facts, ""))
+	recs, _ := record.Walk(dir)
+	w, r, err := tree.Plan(dir, tree.GenerateWith(facts, recs, ""))
 	if err == nil {
 		err = tree.Apply(dir, w, r)
 	}

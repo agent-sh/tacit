@@ -570,27 +570,17 @@ func runFact(args []string) int {
 	if err != nil {
 		return 2
 	}
-	var found string
-	filepath.WalkDir(s.Dir, func(p string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && d.Name() == args[0]+".md" && !strings.Contains(p, "/.git/") {
-			found = p
-			return filepath.SkipAll
-		}
-		return nil
-	})
-	if found == "" {
-		// This machine's own notes (a read-only clone's local overlay).
-		found, _ = overlay.Find(overlay.Dir(), args[0])
-	}
-	if found == "" {
+	// The store's facts, then this machine's own notes (a read-only clone's
+	// local overlay); a replaced fact prints its successor first.
+	out, ok, err := factText(s.Dir, args[0])
+	if !ok {
 		fmt.Fprintln(os.Stderr, "fact: not found:", args[0])
 		return 1
 	}
-	b, err := os.ReadFile(found)
 	if err != nil {
 		return 2
 	}
-	os.Stdout.Write(b)
+	os.Stdout.WriteString(out)
 	return 0
 }
 

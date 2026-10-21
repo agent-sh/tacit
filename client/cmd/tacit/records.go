@@ -1,8 +1,12 @@
 package main
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/agent-sh/tacit/client/internal/fact"
 
 	"github.com/agent-sh/tacit/client/internal/overlay"
 	"github.com/agent-sh/tacit/client/internal/record"
@@ -67,4 +71,46 @@ func suppressionNames(recs map[string]*record.Record, names []string) []string {
 		}
 	}
 	return out
+}
+
+// factText is what tacit_fact and `tacit fact` print for name: the file as
+// it is, or, for a fact something replaced (superseded_by, followed to the
+// live end of the chain), the newer fact first with a line naming the old
+// one, then the old one. ok is false when no fact has the name.
+func factText(storeDir, name string) (string, bool, error) {
+	p, ok := findFactOrLocal(storeDir, name)
+	if !ok {
+		return "", false, nil
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return "", true, err
+	}
+	f, perr := fact.Parse(name+".md", b)
+	if perr != nil || f.Meta.SupersededBy == "" {
+		return string(b), true, nil
+	}
+	seen := map[string]bool{name: true}
+	cur, curBytes := f, b
+	for cur.Meta.SupersededBy != "" && !seen[cur.Meta.SupersededBy] && len(seen) < 16 {
+		next := cur.Meta.SupersededBy
+		seen[next] = true
+		np, ok := findFactOrLocal(storeDir, next)
+		if !ok {
+			break
+		}
+		nb, err := os.ReadFile(np)
+		if err != nil {
+			break
+		}
+		nf, err := fact.Parse(next+".md", nb)
+		if err != nil {
+			break
+		}
+		cur, curBytes = nf, nb
+	}
+	if cur == f {
+		return string(b), true, nil
+	}
+	return fmt.Sprintf("%s was superseded by %s; the newer fact first, then the old one.\n\n%s\n--- the old fact, %s ---\n%s", name, cur.Meta.Name, curBytes, name, b), true, nil
 }

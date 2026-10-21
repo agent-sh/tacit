@@ -76,6 +76,11 @@ func treeScopes(ctx context.Context, a *browseArgs) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
+		// A suppressed folder is searched as the folder that replaces it,
+		// and its own facts the migration has not moved yet.
+		if w, chain, err := record.Resolve(a.Records, sc); err == nil && len(chain) > 0 && a.Records[w] != nil {
+			return []string{w, sc}, nil
+		}
 		return []string{sc}, nil
 	}
 	return readSession(a.Records, a.Cwd, a.Repo, store.ShortHost()).Scopes(), nil
@@ -204,6 +209,11 @@ func inScope(h search.Hit, scope string) bool {
 // 20 a page: what browsing a scope takes). Filters: scope, type, rulings
 // only, and an applies_to path or command.
 func treeSearch(ctx context.Context, ix *search.Index, a browseArgs) (string, error) {
+	if a.Records == nil {
+		if recs, err := ix.Records(ctx); err == nil {
+			a.Records = recs
+		}
+	}
 	scopes, err := treeScopes(ctx, &a)
 	if err != nil {
 		return "", err
@@ -254,8 +264,11 @@ func treeSearch(ctx context.Context, ix *search.Index, a browseArgs) (string, er
 		if a.Scope != "" {
 			var in []search.Hit
 			for _, h := range hits {
-				if inScope(h, scopes[0]) {
-					in = append(in, h)
+				for _, sc := range scopes {
+					if inScope(h, sc) {
+						in = append(in, h)
+						break
+					}
 				}
 			}
 			hits = in
