@@ -329,3 +329,15 @@ func TestValidateNoSessionFolder(t *testing.T) {
 	r.Evidence[0].WorkSessions = 1
 	expect(t, Validate(nil, r, ByOpus, env()), "cites no session")
 }
+
+// An alias may not be the name of a project folder that holds facts: that
+// folder needs a record of its own, suppressed, so its facts move.
+func TestValidateAliasOfAFolderWithFacts(t *testing.T) {
+	r := repoRec("widget")
+	r.Aliases = []string{"widget-old"}
+	e := env()
+	e.HoldsFacts = func(f string) bool { return f == "projects/widget-old" }
+	expect(t, Validate(nil, r, ByOpus, e), "is the name of a project folder that holds facts")
+	r.Aliases = []string{"widget-svc"}
+	expect(t, Validate(nil, r, ByOpus, e), "")
+}

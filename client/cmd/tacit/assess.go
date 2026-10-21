@@ -127,6 +127,7 @@ type assessor struct {
 	ledgerBytes            []byte
 	tools                  *dream.ToolUsage
 	env                    validate.Env
+	factFolders            map[string]bool
 }
 
 func newAssessor(ctx context.Context, s *store.Store, local bool) (*assessor, error) {
@@ -204,7 +205,21 @@ func (a *assessor) recordEnv(pending map[string]*record.Record, pendingLedger []
 		QuoteBacked: ledger.Backing(append(append([]byte(nil), a.ledgerBytes...), pendingLedger...)),
 		ToolUsed:    a.tools.Used,
 		KnownRepo:   a.env.KnownRepo,
+		HoldsFacts:  a.holdsFacts,
 	}
+}
+
+// holdsFacts reports a folder with curated facts (live or not).
+func (a *assessor) holdsFacts(folder string) bool {
+	if a.factFolders == nil {
+		a.factFolders = map[string]bool{}
+		for _, f := range a.facts {
+			if !f.InInbox() && !overlay.IsInbox(f.Path) {
+				a.factFolders[f.Meta.Scope] = true
+			}
+		}
+	}
+	return a.factFolders[folder]
 }
 
 // candidates are the folders to decide this run (SPEC.md, "Folder

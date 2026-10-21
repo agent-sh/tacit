@@ -199,7 +199,7 @@ func (rs *reviewServer) folderSave(ctx context.Context, d folderDraft) (*saveRes
 			return nil, err
 		}
 		ql, _ := os.ReadFile(filepath.Join(rs.s.Dir, filepath.FromSlash(ledger.QuotesPath)))
-		env := record.Env{Today: today(), Records: recs, QuoteBacked: ledger.Backing(ql), KnownRepo: curateEnv(rs.s.Dir, false).KnownRepo}
+		env := record.Env{Today: today(), Records: recs, QuoteBacked: ledger.Backing(ql), KnownRepo: curateEnv(rs.s.Dir, false).KnownRepo, HoldsFacts: factFolderSet(rs.s.Dir)}
 		if ps := record.Validate(old, rec, record.ByOwner, env); len(ps) > 0 {
 			var msgs []string
 			for _, p := range ps {
@@ -300,4 +300,17 @@ func runFolder(args []string) int {
 	}
 	fmt.Println("folder: written")
 	return 0
+}
+
+// factFolderSet reports the folders of the store at dir that hold curated
+// facts.
+func factFolderSet(dir string) func(string) bool {
+	facts, _, _ := fact.Walk(dir)
+	set := map[string]bool{}
+	for _, f := range facts {
+		if !f.InInbox() {
+			set[f.Meta.Scope] = true
+		}
+	}
+	return func(folder string) bool { return set[folder] }
 }

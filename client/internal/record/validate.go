@@ -54,6 +54,9 @@ type Env struct {
 	// KnownRepo reports a repository name a topic's repos may name. Nil:
 	// not checked.
 	KnownRepo func(name string) bool
+	// HoldsFacts reports a folder of the store that holds facts. Nil: not
+	// checked (lint).
+	HoldsFacts func(folder string) bool
 	// Static is lint's check: the record as it stands, without the writer
 	// (no history entry is new, no day is today's).
 	Static bool
@@ -288,6 +291,10 @@ func Validate(old, rec *Record, by string, env Env) []Problem {
 			add("aliases", "is the folder's own name", a)
 		case seenAlias[a]:
 			add("aliases", "listed twice", a)
+		case Broad(rec.Kind) == "project" && env.HoldsFacts != nil && env.HoldsFacts("projects/"+a) && !(old != nil && contains(old.Aliases, a)):
+			// That folder needs a record of its own, suppressed into this
+			// one, so its facts move here; an alias would leave them behind.
+			add("aliases", "is the name of a project folder that holds facts", fmt.Sprintf("projects/%s holds facts: give it its own record with suppressed_by: %s instead", a, folder))
 		}
 		seenAlias[a] = true
 	}
