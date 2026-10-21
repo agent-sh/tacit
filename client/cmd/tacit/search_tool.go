@@ -59,6 +59,11 @@ func readSession(recs map[string]*record.Record, cwd, repo, host string) tree.Se
 		sess.Repos = repoAliases(r)
 	} else if repo != "" {
 		sess.Repos = []string{repo}
+	} else if home, _ := os.UserHomeDir(); cwd != "" {
+		// A project folder whose record names the place cwd is in.
+		if n := rootFolder(recs, host, home, cwd); n != "" {
+			sess.Repos = []string{n}
+		}
 	}
 	sess.Repos = suppressionNames(recs, sess.Repos)
 	return sess
