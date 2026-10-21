@@ -31,8 +31,15 @@ keys/<harness>@<host>.pub  Ed25519 public keys of enrolled writers; written by t
 review/<date>.md           curator findings for the owner: contradictions, supersessions, stale? checks and LINK? lines (dead links in rulings), appended per run
 MEMORY.md                  generated flat index; never edited by hand; not generated with memory_md off (a bridge for older clients, to be dropped)
 _index.md                  generated folder index, in the root and every curated folder (see Tree index); never edited by hand
+review/format.json         the store's format marker (see Store format)
 README.md                  optional, ignored by lint and index
 ```
+
+A file whose name starts with an underscore (`_index.md`, `_repos.json`, a folder's `_record.md`) is a store file, never a fact: a fact's name is a slug and cannot start with one, and every reader of facts passes such files over, whatever their kind.
+
+### Store format
+
+`review/format.json` (`{"version": 1, "at": ...}`) says which store format every machine that writes the store reads. Format 1 adds folder records (`_record.md`), the `areas/` and `topics/` folders and the `last_checked` field. A binary older than a format reads such a store wrong (its frontmatter decoder is strict), so no writer writes any of them until the marker is there; the owner sets it once with `tacit format --set`, after every machine runs a binary of that format (`tacit doctor` shows the binary's format and the marker). A new store (`tacit init`) starts with the marker. `records_complete` is set by `tacit format --records-complete` once every project, area and topic folder that holds facts has a record.
 
 `<harness>` is one of `claude`, `codex`, `pi`, `hermes`, `grok`, `muse`, `agy`, `dreamer`, `import`, `curator`, `human`, `reader`. `<host>` is the short hostname. A reader key only reads (see Public path).
 
@@ -74,6 +81,7 @@ created: 2026-10-07                       # YYYY-MM-DD
 updated: 2026-10-07
 superseded_by: memra-precommit-path-fixed-in-hook   # optional, name of the newer fact
 retired: 2026-10-12                       # optional, YYYY-MM-DD: outdated per git, no newer fact (see Staleness check)
+last_checked: 2026-10-21                  # optional, YYYY-MM-DD: the curator's rotation last judged the fact (format 1 stores only); not a change to the fact
 derived_from: 3f2a9c1                     # derived/ only, git sha the aggregate was built from
 origin: some-inbox-note                   # curator output only: the inbox note this fact was split from
 ---
@@ -117,7 +125,7 @@ The store carries every writing machine's catalog, so a note about a repository 
 | L2 | `name` equals the file stem and is a slug (`[a-z0-9][a-z0-9-]*`) |
 | L3 | `type` is a known type; `unclassified` only under `inbox/` |
 | L4 | curated file directory equals `scope`; an inbox path is `inbox/<harness>@<host>/...` with a known harness and a slug host, and the note's `source.harness` is that harness |
-| L5 | `created`, `updated` are `YYYY-MM-DD` |
+| L5 | `created`, `updated`, `last_checked` are `YYYY-MM-DD` |
 | L6 | every `[[link]]` in a curated fact names an existing fact (inbox links are the curator's to resolve on promotion; the curator repairs a curated fact's dead links, see Link repair) |
 | L7 | `superseded_by` names an existing fact |
 | L8 | no `system/` fact has `source.kind: web` |

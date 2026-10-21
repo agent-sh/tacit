@@ -127,7 +127,7 @@ func Load(dir string) (facts []*fact.Fact, errs []error) {
 			}
 			return nil
 		}
-		if d.Type()&os.ModeSymlink != 0 || !strings.HasSuffix(d.Name(), ".md") || fact.IsIndexFile(d.Name()) {
+		if d.Type()&os.ModeSymlink != 0 || !strings.HasSuffix(d.Name(), ".md") || fact.IsStoreFile(d.Name()) {
 			return nil
 		}
 		rel, _ := filepath.Rel(dir, p)

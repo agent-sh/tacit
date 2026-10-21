@@ -529,9 +529,10 @@ func appendReview(full string, at time.Time, lines []string) error {
 }
 
 // isFactPath is a curated fact file: a Markdown file outside inbox/, review/,
-// keys/, the two root files and the folder indexes.
+// keys/, the two root files and the store files (folder indexes, records,
+// overviews).
 func isFactPath(rel string) bool {
-	if !strings.HasSuffix(rel, ".md") || rel == "MEMORY.md" || rel == "README.md" || fact.IsIndexFile(path.Base(rel)) {
+	if !strings.HasSuffix(rel, ".md") || rel == "MEMORY.md" || rel == "README.md" || fact.IsStoreFile(path.Base(rel)) {
 		return false
 	}
 	for _, d := range []string{"inbox/", "review/", "keys/"} {

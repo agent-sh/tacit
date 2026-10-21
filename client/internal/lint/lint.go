@@ -121,6 +121,9 @@ func check(f *fact.Fact, names map[string]bool) []Finding {
 	if m.Updated != "" && !fact.IsDate(m.Updated) {
 		add("L5", "updated is not YYYY-MM-DD: "+m.Updated)
 	}
+	if m.LastChecked != "" && !fact.IsDate(m.LastChecked) {
+		add("L5", "last_checked is not YYYY-MM-DD: "+m.LastChecked)
+	}
 	// L6 links resolve (curated only; inbox links are resolved by the curator
 	// on promotion, and imported facts may point at facts that were never written)
 	if !f.InInbox() {

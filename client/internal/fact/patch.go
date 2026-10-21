@@ -9,8 +9,9 @@ import (
 
 var rePlainDate = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
-// PatchRelations rewrites only the updated, superseded_by, retired and
-// conflicts_with lines of a fact file to match f, leaving every other byte as it was. A
+// PatchRelations rewrites only the updated, superseded_by, retired,
+// last_checked and conflicts_with lines of a fact file to match f, leaving
+// every other byte as it was. A
 // field that is empty in f loses its line; a missing one is added before the
 // closing ---. Applying the old values back restores the original bytes when
 // they were written in this same layout, which is what tacit writes.
@@ -61,6 +62,9 @@ func PatchRelations(data []byte, f *Fact) ([]byte, error) {
 	if f.Meta.Retired != "" && !rePlainDate.MatchString(f.Meta.Retired) {
 		return nil, errors.New("retired is not a YYYY-MM-DD date")
 	}
+	if f.Meta.LastChecked != "" && !rePlainDate.MatchString(f.Meta.LastChecked) {
+		return nil, errors.New("last_checked is not a YYYY-MM-DD date")
+	}
 	conflicts := ""
 	if len(f.Meta.ConflictsWith) > 0 {
 		for _, n := range f.Meta.ConflictsWith {
@@ -85,6 +89,9 @@ func PatchRelations(data []byte, f *Fact) ([]byte, error) {
 	if cur.Meta.Retired != f.Meta.Retired {
 		set("retired", f.Meta.Retired)
 	}
+	if cur.Meta.LastChecked != f.Meta.LastChecked {
+		set("last_checked", f.Meta.LastChecked)
+	}
 	if strings.Join(cur.Meta.ConflictsWith, "\x00") != strings.Join(f.Meta.ConflictsWith, "\x00") {
 		set("conflicts_with", conflicts)
 	}
@@ -98,7 +105,7 @@ func PatchRelations(data []byte, f *Fact) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if got.Meta.Updated != f.Meta.Updated || got.Meta.SupersededBy != f.Meta.SupersededBy || got.Meta.Retired != f.Meta.Retired || strings.Join(got.Meta.ConflictsWith, "\x00") != strings.Join(f.Meta.ConflictsWith, "\x00") {
+	if got.Meta.Updated != f.Meta.Updated || got.Meta.SupersededBy != f.Meta.SupersededBy || got.Meta.Retired != f.Meta.Retired || got.Meta.LastChecked != f.Meta.LastChecked || strings.Join(got.Meta.ConflictsWith, "\x00") != strings.Join(f.Meta.ConflictsWith, "\x00") {
 		return nil, errors.New("patched frontmatter does not read back")
 	}
 	return []byte(out), nil

@@ -24,6 +24,7 @@ func TestDoctorMissingRunnerModes(t *testing.T) {
 		t.Skip("redactor shell fixture")
 	}
 	stubScrump(t)
+	t.Setenv("TACIT_STORE", filepath.Join(t.TempDir(), "no-store"))
 	t.Setenv("TACIT_RUNNER", "muse")
 	t.Setenv("TACIT_MUSE_COMMAND", filepath.Join(t.TempDir(), "missing"))
 	for _, role := range []string{"DREAM", "CURATE", "JUDGE", "VERIFY"} {
@@ -37,7 +38,7 @@ func TestDoctorMissingRunnerModes(t *testing.T) {
 	if _, failed := doctorChecks(true, ""); !failed {
 		t.Fatal("required model runner accepted")
 	}
-	if checks, failed := doctorChecks(false, "dream"); !failed || len(checks) != 5 {
+	if checks, failed := doctorChecks(false, "dream"); !failed || len(checks) != 6 {
 		t.Fatal("role selection did not restrict checks", checks, failed)
 	}
 }
