@@ -92,9 +92,9 @@ func TestValidateNewRecord(t *testing.T) {
 	expect(t, Validate(nil, r, ByOpus, env()), "status: not an allowed status")
 	r = repoRec("widget")
 	r.Was[0].Why = "last commit 2026-10-20"
-	expect(t, Validate(nil, r, ByOpus, env()), "cites no session or note code can find")
+	expect(t, Validate(nil, r, ByOpus, env()), "cites no session, note or commit code can find")
 	r.Was[0].Why = "worked in claude:unknown-session"
-	expect(t, Validate(nil, r, ByOpus, env()), "cites no session or note code can find")
+	expect(t, Validate(nil, r, ByOpus, env()), "cites no session, note or commit code can find")
 	r = repoRec("widget")
 	r.Was[0].Date = "2026-10-01"
 	expect(t, Validate(nil, r, ByOpus, env()), "a new entry is dated today")

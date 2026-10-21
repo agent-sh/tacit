@@ -77,6 +77,7 @@ const ConflictPrompt = `For each numbered pair of facts from a shared store, dec
 - "supersedes": the same subject, and the NEW fact states the current state of something the EXISTING fact describes as it used to be.
 - "no": everything else, including related or overlapping facts that can both be followed.
 When unsure, answer "no".
+Lines "checked:" under a fact are code's checks of its dry references (whether a repository of that name exists and is called that now, whether a path exists in the checkout at HEAD, whether a version is a tag or the manifest's): they are the source of truth, not a judgement. A NEW fact whose checked references fail does not supersede an EXISTING one whose references hold; code refuses that answer.
 Output ONLY a JSON array of strings, one per pair in order, each exactly "contradicts", "supersedes" or "no".
 
 %s`
@@ -100,13 +101,24 @@ NOTES:
 type Pair struct {
 	ExistingName, ExistingDesc string
 	NewName, NewDesc           string
+	// ExistingChecks and NewChecks are code's checks of each fact's dry
+	// references (internal/check), one line each.
+	ExistingChecks, NewChecks []string
 }
 
 // RenderPairs formats pairs for ConflictPrompt.
 func RenderPairs(pairs []Pair) string {
 	var b strings.Builder
 	for i, p := range pairs {
-		fmt.Fprintf(&b, "%d.\nEXISTING (%s): %s\nNEW (%s): %s\n\n", i+1, p.ExistingName, p.ExistingDesc, p.NewName, p.NewDesc)
+		fmt.Fprintf(&b, "%d.\nEXISTING (%s): %s\n", i+1, p.ExistingName, p.ExistingDesc)
+		for _, l := range p.ExistingChecks {
+			b.WriteString("  checked: " + l + "\n")
+		}
+		fmt.Fprintf(&b, "NEW (%s): %s\n", p.NewName, p.NewDesc)
+		for _, l := range p.NewChecks {
+			b.WriteString("  checked: " + l + "\n")
+		}
+		b.WriteString("\n")
 	}
 	return b.String()
 }
@@ -387,7 +399,9 @@ type Report struct {
 	Redirected       int             `json:"redirected,omitempty"`         // entries whose scope was a suppressed folder, written to the folder that replaces it
 	AssessCandidates int             `json:"assess_candidates,omitempty"`  // folders the assessment put to the model
 	AssessRecords    int             `json:"assess_records,omitempty"`     // folder records it wrote
-	AssessRefused    int             `json:"assess_refused,omitempty"`     // decisions refused twice: asked again next run         // entries whose scope was a suppressed folder, written to the folder that replaces it
+	AssessRefused    int             `json:"assess_refused,omitempty"`     // decisions refused twice in a run: asked again next run, unless the folder waits (AssessHeld)
+	AssessHeld       int             `json:"assess_held,omitempty"`        // folders refused in assessHoldRuns runs on the same evidence: not asked until it changes
+	CheckRefused     int             `json:"check_refused,omitempty"`      // decisions a check refuted (sent back once with the check's output)
 	InvalidEntries   []string        `json:"invalid_entries,omitempty"`    // why split and rulings answers failed validation: "split: entry N: field: rule", never the entry's text
 	Retries          int             `json:"validation_retries,omitempty"` // answers refused by the checks and sent back to the model once (curate.SplitChecked)
 }
