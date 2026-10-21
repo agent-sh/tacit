@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,8 +55,10 @@ func TestLocalOverlayIsSearchedWithTheStore(t *testing.T) {
 	if b := Block([]Hit{*got}, "#"); !strings.Contains(b, "- brew-prefix (this machine): ") {
 		t.Fatalf("block: %q", b)
 	}
+	// The layered file, and the store-only file of the same HEAD it was
+	// copied from, which the next change of the overlay copies again.
 	entries, _ := os.ReadDir(filepath.Join(base, "index"))
-	if len(entries) != 1 || !strings.Contains(entries[0].Name(), "-abc123-l") {
+	if len(entries) != 2 || !strings.Contains(entries[0].Name(), "-abc123-l") || entries[1].Name() != fmt.Sprintf("index-v%d-abc123.db", schemaVersion) {
 		t.Fatalf("index files: %v", entries)
 	}
 }

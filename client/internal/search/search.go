@@ -9,8 +9,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/agent-sh/tacit/client/internal/platform"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -56,8 +59,9 @@ type Hit struct {
 
 // Index is an open FTS index for one store commit.
 type Index struct {
-	db  *sql.DB
-	sha string
+	db    *sql.DB
+	sha   string
+	stale bool // opened by OpenRecent in place of the exact index
 }
 
 // IndexDir is where index files live: $TACIT_INDEX or ~/.local/state/tacit/index.
@@ -86,11 +90,17 @@ const (
 // created column (Hit.Created).
 const schemaVersion = 9
 
-// Open returns the index for the store at head, building it when missing.
-// Index files are index-v<schema>-<sha>.db under IndexDir, or
-// index-v<schema>-<sha>-l<stamp>.db when this machine's local overlay
-// (internal/overlay) holds notes, which are indexed with the store's facts;
-// prune removes the ones nobody should need.
+// Open returns the index for the store at head, building it when missing:
+// the exact index, for callers that must not read an older one (the
+// curator's conflict checks, search, sync and follow, the owner app).
+// Index files are index-v<schema>-<sha>.db under IndexDir, the store's facts
+// alone, or index-v<schema>-<sha>-l<stamp>.db when this machine's local
+// overlay (internal/overlay) holds notes, the store's facts and the notes.
+// The layered file is the store-only file of the same HEAD copied and the
+// notes added (build with a base): a change of the overlay costs a file copy and
+// the notes, never a build of the store again. One process builds a file at
+// a time (lock.go); the others wait for it. prune removes the files nobody
+// should need.
 //
 // The file is opened here, not at the first query, and the one connection is
 // kept until Close: another process may prune the file at any time (a new
@@ -101,54 +111,227 @@ const schemaVersion = 9
 // pruned between the build and the open, or one that fails to read
 // (truncated, corrupt), is built again, up to three times.
 func Open(ctx context.Context, storeDir, head string) (*Index, error) {
+	t, err := targetFor(storeDir, head)
+	if err != nil {
+		return nil, err
+	}
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if _, err := os.Stat(t.path); err != nil {
+			if err := t.ensure(ctx, storeDir); err != nil {
+				return nil, err
+			}
+		}
+		ix, err := openFile(ctx, t.path, head)
+		if err == nil {
+			return ix, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		if _, serr := os.Stat(t.path); serr == nil {
+			// The file is there and fails (truncated, corrupt): build it again.
+			os.Remove(t.path)
+		}
+	}
+	return nil, fmt.Errorf("index %s could not be opened after %d builds: %w", filepath.Base(t.path), 3, lastErr)
+}
+
+// OpenRecent is Open for a caller bound by latency (the hooks): it never
+// builds while any index of this schema version is there to read. When the
+// exact index is missing it opens the closest one (the same HEAD with an
+// older overlay, then the store-only file of that HEAD, then the newest file
+// of another HEAD), calls start, which starts a build that outlives the
+// caller, unless a process is building the file already, and returns that
+// index, marked Stale. Only when no index file is there at all (a first run,
+// a new schema version) does it build within ctx, and when that runs out it
+// calls start too; when another process is building it, it returns
+// ErrBuilding at once.
+//
+// On 2026-10-21 every change of the local overlay (the local curator writes
+// its facts a batch at a time) renamed the index, and every prompt hook
+// started a full build of 16k facts that took longer than its deadline: the
+// hooks printed nothing, three in a row, until the session gave up on them.
+func OpenRecent(ctx context.Context, storeDir, head string, start func()) (*Index, error) {
+	t, err := targetFor(storeDir, head)
+	if err != nil {
+		return nil, err
+	}
+	if ix, err := openFile(ctx, t.path, head); err == nil {
+		return ix, nil
+	}
+	for _, p := range recentFiles(t.dir, head, t.local != "") {
+		if p == t.path {
+			continue // there and failing to read: the build replaces it
+		}
+		ix, err := openFile(ctx, p, head)
+		if err != nil {
+			continue // pruned since the listing, or corrupt
+		}
+		ix.stale = true
+		if start != nil && !t.busy() {
+			start()
+		}
+		return ix, nil
+	}
+	if t.busy() {
+		// Waiting would spend the caller's whole deadline on a build that
+		// finishes for a later call.
+		return nil, ErrBuilding
+	}
+	ix, err := Open(ctx, storeDir, head)
+	if err != nil && ctx.Err() != nil && start != nil && !t.busy() {
+		start()
+	}
+	return ix, err
+}
+
+// ErrBuilding is OpenRecent's answer when no index is there to read and
+// another process is building the one asked for.
+var ErrBuilding = errors.New("the index is being built")
+
+// Stale reports an index OpenRecent opened in place of the exact one.
+func (ix *Index) Stale() bool { return ix.stale }
+
+// target is the index file for one HEAD and overlay, and the store-only file
+// of that HEAD it is copied from (base == path without an overlay).
+type target struct {
+	dir, path, base, local string
+}
+
+// busy reports a process building the target's file or the store-only file
+// it is copied from.
+func (t target) busy() bool {
+	return building(t.path+".lock") || t.base != t.path && building(t.base+".lock")
+}
+
+func targetFor(storeDir, head string) (target, error) {
 	dir := IndexDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
+		return target{}, err
 	}
 	local := overlay.Dir()
 	if !overlay.Outside(local, storeDir) {
 		local = "" // never index a directory inside the clone as this machine's notes
 	}
 	name := fmt.Sprintf("index-v%d-%s", schemaVersion, head)
+	base := filepath.Join(dir, name+".db")
 	if st := overlay.Stamp(local); st != "" {
 		name += "-l" + st
 	} else {
 		local = ""
 	}
-	path := filepath.Join(dir, name+".db")
-	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		if _, err := os.Stat(path); err != nil {
-			if err := build(ctx, storeDir, local, path); err != nil {
-				return nil, err
+	return target{dir: dir, path: filepath.Join(dir, name+".db"), base: base, local: local}, nil
+}
+
+// ensure builds the target's file unless another process has built it
+// while this one waited for the lock: the store-only file first, then, with
+// an overlay, the layered file from it.
+func (t target) ensure(ctx context.Context, storeDir string) error {
+	if t.base != t.path {
+		if ix, err := openFile(ctx, t.base, ""); err == nil {
+			ix.Close()
+		} else {
+			if _, serr := os.Stat(t.base); serr == nil && ctx.Err() == nil {
+				os.Remove(t.base) // there and failing to read (truncated, corrupt)
 			}
-			prune(dir, path)
+			bt := t
+			bt.path, bt.local = t.base, ""
+			if err := bt.ensure(ctx, storeDir); err != nil {
+				return err
+			}
 		}
-		db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&immutable=1")
-		if err != nil {
-			return nil, err
+	}
+	lk, err := waitLock(ctx, t.path+".lock")
+	if err != nil {
+		return err
+	}
+	defer lk.release()
+	if _, err := os.Stat(t.path); err == nil {
+		return nil // built by the process that held the lock
+	}
+	if t.base == t.path {
+		err = build(ctx, storeDir, "", t.path, "")
+	} else {
+		err = build(ctx, storeDir, t.local, t.path, t.base)
+		if errors.Is(err, fs.ErrNotExist) && ctx.Err() == nil {
+			// The store-only file was pruned before it was copied (another
+			// process moved to a new HEAD): build everything here.
+			err = build(ctx, storeDir, t.local, t.path, "")
 		}
-		db.SetMaxOpenConns(1)
-		db.SetMaxIdleConns(1)
-		db.SetConnMaxLifetime(0)
-		db.SetConnMaxIdleTime(0)
-		var n int
-		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM facts`).Scan(&n); err != nil {
-			db.Close()
-			lastErr = err
-			if ctx.Err() != nil {
-				return nil, err
-			}
-			if _, serr := os.Stat(path); serr == nil {
-				// The file is there and fails (truncated, corrupt): build it again.
-				os.Remove(path)
-			}
+	}
+	if err != nil {
+		return err
+	}
+	prune(t.dir, t.path, t.base)
+	return nil
+}
+
+// openFile opens one index file read-only and checks that it reads.
+func openFile(ctx context.Context, path, head string) (*Index, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&immutable=1")
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+	db.SetConnMaxIdleTime(0)
+	var n int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM facts`).Scan(&n); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return &Index{db: db, sha: head}, nil
+}
+
+// recentFiles lists the index files of this schema version OpenRecent may
+// read in place of the exact one, best first: the same HEAD before another,
+// a file with an overlay before one without when this machine has one (and
+// the other way round), the newest first.
+func recentFiles(dir, head string, layered bool) []string {
+	entries, _ := os.ReadDir(dir)
+	type cand struct {
+		path      string
+		same, kin bool
+		mod       int64
+	}
+	var cs []cand
+	for _, e := range entries {
+		m := indexFile.FindStringSubmatch(e.Name())
+		if m == nil || m[1] != strconv.Itoa(schemaVersion) {
 			continue
 		}
-		return &Index{db: db, sha: head}, nil
+		info, err := e.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		cs = append(cs, cand{filepath.Join(dir, e.Name()), m[2] == head, (m[3] != "") == layered, info.ModTime().UnixNano()})
 	}
-	return nil, fmt.Errorf("index %s could not be opened after %d builds: %w", filepath.Base(path), 3, lastErr)
+	sort.SliceStable(cs, func(i, j int) bool {
+		a, b := cs[i], cs[j]
+		if a.same != b.same {
+			return a.same
+		}
+		if a.kin != b.kin {
+			return a.kin
+		}
+		return a.mod > b.mod
+	})
+	out := make([]string, len(cs))
+	for i, c := range cs {
+		out[i] = c.path
+	}
+	return out
 }
+
+// indexFile matches a finished index file: index-v<schema>-<sha>.db or
+// index-v<schema>-<sha>-l<stamp>.db.
+var indexFile = regexp.MustCompile(`^index-v(\d+)-([0-9a-zA-Z]+)(-l[0-9a-f]+)?\.db$`)
 
 func (ix *Index) Close() error { return ix.db.Close() }
 
@@ -167,14 +350,26 @@ func Invalidate(head string) {
 }
 
 // build writes the index to a temp file and renames it into place, so a
-// crash never leaves a half-built index under the final name.
-func build(ctx context.Context, storeDir, localDir, path string) error {
-	facts, perrs, err := fact.Walk(storeDir)
-	if err != nil {
-		return err
+// crash never leaves a half-built index under the final name. With base (the
+// store-only index of the same HEAD) it copies base and adds the overlay's
+// notes to it, after the store's facts as a build from nothing adds them:
+// the same rows under the same ids, the same full-text statistics, so the
+// same answers (TestLayeredIndexAnswersAsAFullBuild).
+func build(ctx context.Context, storeDir, localDir, path, base string) error {
+	if onBuild != nil {
+		onBuild(path)
 	}
-	if len(perrs) > 0 {
-		fmt.Fprintf(os.Stderr, "tacit index: %d fact file(s) did not parse and are not indexed (run `tacit lint`)\n", len(perrs))
+	var facts []*fact.Fact
+	if base == "" {
+		var perrs []error
+		var err error
+		facts, perrs, err = fact.Walk(storeDir)
+		if err != nil {
+			return err
+		}
+		if len(perrs) > 0 {
+			fmt.Fprintf(os.Stderr, "tacit index: %d fact file(s) did not parse and are not indexed (run `tacit lint`)\n", len(perrs))
+		}
 	}
 	local, lerrs := overlay.Load(localDir)
 	if len(lerrs) > 0 {
@@ -182,14 +377,25 @@ func build(ctx context.Context, storeDir, localDir, path string) error {
 	}
 	nStore := len(facts)
 	facts = append(facts, local...)
+	baseRows := 0 // the store's facts in base, ids 1..baseRows
 	tmp := fmt.Sprintf("%s.%d.tmp", path, os.Getpid())
 	os.Remove(tmp)
 	defer os.Remove(tmp)
+	if base != "" {
+		if err := copyFile(base, tmp); err != nil {
+			return err
+		}
+	}
 	db, err := sql.Open("sqlite", "file:"+tmp)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
+	if base != "" {
+		if err := db.QueryRowContext(ctx, `SELECT coalesce(max(id), 0) FROM facts`).Scan(&baseRows); err != nil {
+			return err
+		}
+	}
 	stmts := []string{
 		`CREATE TABLE facts(id INTEGER PRIMARY KEY, path TEXT, name TEXT, scope TEXT, type TEXT, description TEXT, body TEXT, inbox INT, superseded INT, applies TEXT, kind TEXT, conflicts TEXT, ruling INT, intask INT, words INT, local INT, created TEXT)`,
 		`CREATE VIRTUAL TABLE fts USING fts5(name, description, body, content='facts', content_rowid='id', tokenize='porter unicode61 remove_diacritics 2')`,
@@ -199,6 +405,9 @@ func build(ctx context.Context, storeDir, localDir, path string) error {
 		`CREATE VIRTUAL TABLE fts_words USING fts5(name, description, body, content='facts', content_rowid='id', tokenize='unicode61 remove_diacritics 2')`,
 	}
 	for _, s := range stmts {
+		if base != "" {
+			break // base has the tables
+		}
 		if _, err := db.ExecContext(ctx, s); err != nil {
 			return err
 		}
@@ -228,11 +437,27 @@ func build(ctx context.Context, storeDir, localDir, path string) error {
 			return err
 		}
 	}
-	if err := buildEvidence(ctx, tx, facts, nStore); err != nil {
-		return err
+	fill := []string{`INSERT INTO fts(fts) VALUES('rebuild')`, `INSERT INTO fts_words(fts_words) VALUES('rebuild')`}
+	if base == "" {
+		if err := buildEvidence(ctx, tx, facts, nStore); err != nil {
+			return err
+		}
+	} else {
+		// The notes only: buildEvidence records no local note. A change
+		// that indexes notes in another table must add them here too, or
+		// the layered file answers otherwise than a full build
+		// (TestLayeredIndexAnswersAsAFullBuild compares every table).
+		fill = []string{
+			`INSERT INTO fts(rowid, name, description, body) SELECT id, name, description, body FROM facts WHERE id > ?`,
+			`INSERT INTO fts_words(rowid, name, description, body) SELECT id, name, description, body FROM facts WHERE id > ?`,
+		}
 	}
-	for _, q := range []string{`INSERT INTO fts(fts) VALUES('rebuild')`, `INSERT INTO fts_words(fts_words) VALUES('rebuild')`} {
-		if _, err := tx.ExecContext(ctx, q); err != nil {
+	for _, q := range fill {
+		var args []any
+		if base != "" {
+			args = append(args, baseRows)
+		}
+		if _, err := tx.ExecContext(ctx, q, args...); err != nil {
 			return err
 		}
 	}
@@ -246,6 +471,28 @@ func build(ctx context.Context, storeDir, localDir, path string) error {
 		return nil // another process finished first; its file is identical
 	}
 	return os.Rename(tmp, path)
+}
+
+// onBuild, when set (tests), is called by every build as it starts.
+var onBuild func(path string)
+
+// copyFile copies a finished index file, which no process writes once it is
+// renamed into place, to dst.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 // inTaskRuling reports a ruling proved by a quote of theirs that is an
@@ -264,17 +511,19 @@ func inTaskRuling(f *fact.Fact) bool {
 func (h Hit) Rule() bool { return h.Ruling && !h.InTask }
 
 // prune removes the index files no process should need: other heads of this
-// schema version, older schema versions, and temp files whose builder has
-// exited. It keeps a newer schema version (a newer binary on this machine
-// uses it; pruning it made the two builds delete each other's files on every
-// sync) and another process's build in progress (deleting its journal failed
-// that build with a disk I/O error).
-func prune(dir, keep string) {
+// schema version, older schema versions, temp files whose builder has
+// exited, and lock files nobody holds. It keeps the files in keep (the file
+// just built and the store-only file it was copied from), a newer schema
+// version (a newer binary on this machine uses it; pruning it made the two
+// builds delete each other's files on every sync) and another process's
+// build in progress (deleting its journal failed that build with a disk I/O
+// error).
+func prune(dir string, keep ...string) {
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
 		name := e.Name()
 		p := filepath.Join(dir, name)
-		if p == keep || !strings.HasPrefix(name, "index-") {
+		if slices.Contains(keep, p) || !strings.HasPrefix(name, "index-") {
 			continue
 		}
 		if m := indexName.FindStringSubmatch(name); m != nil {
@@ -286,14 +535,23 @@ func prune(dir, keep string) {
 					continue
 				}
 			}
+			if strings.HasSuffix(name, ".lock") {
+				// Held: a build in progress. Free: removed under the lock,
+				// so no builder can be holding the removed file.
+				if lk, err := tryLock(p); err == nil {
+					lk.release()
+				}
+				continue
+			}
 		}
 		os.Remove(p)
 	}
 }
 
 // indexName matches index-v<schema>-<sha>.db and its build files
-// (.<pid>.tmp, plus SQLite's -journal, -wal or -shm beside it).
-var indexName = regexp.MustCompile(`^index-v(\d+)-[^.]+\.db(?:\.(\d+)\.tmp)?(?:-journal|-wal|-shm)?$`)
+// (.<pid>.tmp, plus SQLite's -journal, -wal or -shm beside it, and the
+// builders' .lock).
+var indexName = regexp.MustCompile(`^index-v(\d+)-[^.]+\.db(?:\.(\d+)\.tmp)?(?:-journal|-wal|-shm|\.lock)?$`)
 
 // Situation is what a hook knows: the repo, the host, and optionally the
 // user's prompt or the paths and command in play.
