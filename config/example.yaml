@@ -8,6 +8,9 @@ local_overlay: ~/.local/share/tacit/local
 # on: a read-only clone dreams and curates its own sessions into the local overlay, never pushed.
 local_layer: off
 owner_names: []
+# The flat MEMORY.md, for clients from before the folder indexes; on (default) keeps generating it.
+# Turn it off only once every client reads the folder indexes; the setting goes away then.
+# memory_md: on
 # Hermes session store (read-only); default ~/.hermes/state.db when it exists, off for none.
 # hermes_db: off
 verify_roots: []

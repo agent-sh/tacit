@@ -373,6 +373,22 @@ func TestLocalLayerSetting(t *testing.T) {
 	}
 }
 
+// memory_md sets TACIT_MEMORY_MD (on by default, unset), and a value that
+// is neither on nor off fails.
+func TestMemoryMDSetting(t *testing.T) {
+	clear(t, "TACIT_MEMORY_MD")
+	file := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(file, []byte("memory_md: off\n"), 0o600)
+	if err := Load(file, true); err != nil || os.Getenv("TACIT_MEMORY_MD") != "off" {
+		t.Fatalf("memory_md: off gives %q, %v", os.Getenv("TACIT_MEMORY_MD"), err)
+	}
+	clear(t, "TACIT_MEMORY_MD")
+	os.WriteFile(file, []byte("memory_md: later\n"), 0o600)
+	if err := Load(file, true); err == nil || os.Getenv("TACIT_MEMORY_MD") != "" {
+		t.Fatalf("an unknown memory_md value loaded: %v", err)
+	}
+}
+
 func TestDeliverySettingsBecomeEnvironment(t *testing.T) {
 	for _, k := range []string{"TACIT_DELIVERY_TOOL_PUSH", "TACIT_DELIVERY_START_CEILING", "TACIT_DELIVERY_PROMPT_RELATIVE", "TACIT_DELIVERY_REPO_START"} {
 		t.Setenv(k, "")

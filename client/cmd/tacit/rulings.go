@@ -822,7 +822,8 @@ func curatorWrite(ctx context.Context, s *store.Store, plan func() (map[string][
 				rels = append(rels, rel)
 			}
 			sort.Strings(rels)
-			rels = append(rels, "MEMORY.md")
+			nFiles := len(rels)
+			rels = append(rels, memoryPaths(ctx, s.Dir)...)
 			head, _ := s.Head(ctx)
 			before, err := lint.Run(s.Dir)
 			if err != nil {
@@ -833,7 +834,7 @@ func curatorWrite(ctx context.Context, s *store.Store, plan func() (map[string][
 				snap.restore(s)
 				return err
 			}
-			for _, rel := range rels[:len(rels)-1] {
+			for _, rel := range rels[:nFiles] {
 				if err := writeFileAtomic(s.Dir, rel, files[rel]); err != nil {
 					return fail(err)
 				}

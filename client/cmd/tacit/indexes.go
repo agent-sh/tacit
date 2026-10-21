@@ -24,17 +24,22 @@ import (
 // records the bytes of each path before it is changed, so a failure puts it
 // back. Every writer of curated facts calls it inside its locked write, so
 // the indexes never drift from the facts.
+//
+// With the memory_md setting off (index.On) MEMORY.md is not generated: a
+// copy in the working tree is removed, and named for the commit only while
+// git tracks it, so the commit records its removal once.
 func regenIndexes(ctx context.Context, dir string, facts []*fact.Fact, snap snapshot) ([]string, error) {
 	gen := tree.Generate(facts, "")
 	write, remove, err := tree.Plan(dir, gen)
 	if err != nil {
 		return nil, err
 	}
-	rels := []string{"MEMORY.md"}
+	rels := memoryPaths(ctx, dir)
+	n := len(rels)
 	for rel := range gen {
 		rels = append(rels, rel)
 	}
-	sort.Strings(rels[1:])
+	sort.Strings(rels[n:])
 	if snap != nil {
 		for _, rel := range append(append([]string{}, rels...), remove...) {
 			if _, ok := snap[rel]; !ok {
@@ -46,7 +51,11 @@ func regenIndexes(ctx context.Context, dir string, facts []*fact.Fact, snap snap
 			}
 		}
 	}
-	if err := writeFileAtomic(dir, "MEMORY.md", []byte(index.Generate(facts))); err != nil {
+	if index.On() {
+		if err := writeFileAtomic(dir, index.File, []byte(index.Generate(facts))); err != nil {
+			return rels, err
+		}
+	} else if err := os.Remove(filepath.Join(dir, index.File)); err != nil && !os.IsNotExist(err) {
 		return rels, err
 	}
 	if err := tree.Apply(dir, write, remove); err != nil {
@@ -71,7 +80,21 @@ func indexFinding(f lint.Finding) bool { return f.Rule == "L16" }
 // have left them dirty); untracked ones are the next regeneration's to
 // remove.
 func restoreIndexes(ctx context.Context, dir string) {
-	_, _ = store.Git(ctx, dir, "checkout", "--quiet", "HEAD", "--", "MEMORY.md", ":(glob)"+tree.FileName, ":(glob)**/"+tree.FileName)
+	args := append([]string{"checkout", "--quiet", "HEAD", "--"}, memoryPaths(ctx, dir)...)
+	_, _ = store.Git(ctx, dir, append(args, ":(glob)"+tree.FileName, ":(glob)**/"+tree.FileName)...)
+}
+
+// memoryPaths is MEMORY.md for a commit's paths: always while the writers
+// generate it (index.On), and with the setting off only while git still
+// tracks it (the commit that removes it), never after.
+func memoryPaths(ctx context.Context, dir string) []string {
+	if index.On() {
+		return []string{index.File}
+	}
+	if out, err := store.Git(ctx, dir, "ls-files", "--", index.File); err == nil && strings.TrimSpace(out) != "" {
+		return []string{index.File}
+	}
+	return nil
 }
 
 // regenLocalIndexes writes the folder indexes of the local layer's curated

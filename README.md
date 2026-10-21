@@ -138,6 +138,7 @@ Every YAML option is listed here:
 | `local_overlay` | `TACIT_LOCAL` | Local notes for a read-only clone; `~/.local/share/tacit/local` |
 | `local_layer` | `TACIT_LOCAL_LAYER` | `on`: a read-only clone dreams and curates its own sessions into its local overlay, which never leaves the machine; `off` (default) |
 | `owner_names` | `TACIT_OWNER_NAMES` | Owner name aliases; YAML list, comma-separated environment value |
+| `memory_md` | `TACIT_MEMORY_MD` | `on` (default): the curator's writes generate the flat `MEMORY.md` as before; `off`: they stop, and the next write removes the store's copy (`tacit index` too). For clients from before the folder indexes (`_index.md`); turn it off only once every client runs a version that reads them. The setting, and `MEMORY.md`, will be dropped then |
 | `hermes_db` | `TACIT_HERMES_DB` | Hermes session store the dreamer and the owner's words read; `~/.hermes/state.db` when it exists, `off` for none |
 | `delivery.repo_start` | `TACIT_DELIVERY_REPO_START` | `on` (default): in a repo the SessionStart block is the repo's own rules and standards, then decisions and past mistakes; `off`: the release 0.7.1 block |
 | `delivery.repo_aliases` | `TACIT_DELIVERY_REPO_ALIASES` | `on` (default): a checkout also answers to every remote's repository name in its git config and its root manifest's package name |

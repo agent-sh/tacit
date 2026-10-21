@@ -2,11 +2,30 @@
 package index
 
 import (
+	"os"
 	"sort"
 	"strings"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
 )
+
+// File is the flat index's name in the store root.
+const File = "MEMORY.md"
+
+// On reports whether the writers generate MEMORY.md: the memory_md setting
+// (TACIT_MEMORY_MD), on unless it is off, 0, false or no. MEMORY.md is the
+// flat index clients from before the folder indexes (_index.md) read; with
+// the setting off a writer stops generating it and removes the store's copy
+// in its next commit. The setting is a bridge: it, and MEMORY.md with it,
+// are to be dropped once every client runs a version that reads the folder
+// indexes, and it should be turned off only then.
+func On() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TACIT_MEMORY_MD"))) {
+	case "off", "0", "false", "no":
+		return false
+	}
+	return true
+}
 
 // Generate renders the index: one line per non-superseded curated fact,
 // grouped by scope, sorted by scope then name. Inbox facts are not indexed.

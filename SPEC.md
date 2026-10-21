@@ -29,7 +29,7 @@ inbox/<harness>@<host>/    raw, unreviewed, append-only; subdirectories allowed
 inbox/dreamer@<host>/_repos.json   generated: the repositories that machine has checkouts of (see Scopes)
 keys/<harness>@<host>.pub  Ed25519 public keys of enrolled writers; written by the server at enroll
 review/<date>.md           curator findings for the owner: contradictions, supersessions, stale? checks and LINK? lines (dead links in rulings), appended per run
-MEMORY.md                  generated flat index; never edited by hand
+MEMORY.md                  generated flat index; never edited by hand; not generated with memory_md off (a bridge for older clients, to be dropped)
 _index.md                  generated folder index, in the root and every curated folder (see Tree index); never edited by hand
 README.md                  optional, ignored by lint and index
 ```
@@ -122,7 +122,7 @@ The store carries every writing machine's catalog, so a note about a repository 
 | L7 | `superseded_by` names an existing fact |
 | L8 | no `system/` fact has `source.kind: web` |
 | L9 | `derived/` facts carry `derived_from`; no other fact does |
-| L10 | `MEMORY.md`, if present, equals the generated index |
+| L10 | `MEMORY.md`, if present, equals the generated index (with the `memory_md` setting off the writers remove it instead of generating it: README, Client settings) |
 | L11 | `description` is at most 200 chars; body is not empty |
 | L12 | `source.kind` and `source.harness` are known values |
 | L13 | `conflicts_with` names existing facts, never the fact itself |
