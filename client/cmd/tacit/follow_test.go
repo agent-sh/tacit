@@ -117,6 +117,7 @@ func TestFollowSyncMergesAndIndexes(t *testing.T) {
 	clone, push := newPair(t, root)
 	idx := filepath.Join(root, "index")
 	t.Setenv("TACIT_INDEX", idx)
+	t.Setenv("TACIT_LOCAL", filepath.Join(root, "local")) // not this machine's local layer
 
 	moved := push("new.txt")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
