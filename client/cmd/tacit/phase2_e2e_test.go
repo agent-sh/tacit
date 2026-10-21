@@ -6,9 +6,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agent-sh/tacit/client/internal/assess"
 	"github.com/agent-sh/tacit/client/internal/curate"
@@ -16,6 +19,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/lint"
+	"github.com/agent-sh/tacit/client/internal/overview"
 	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/record"
 	"github.com/agent-sh/tacit/client/internal/store"
@@ -42,7 +46,11 @@ func toolSession(t *testing.T, home, cwd, id, text, tool, file string) string {
 // expects a record per folder with the upstream clone recorded as not a
 // project, the alias folder suppressed and emptied with every old fact
 // pointing at a live winner fact, an area from the two-session tool family
-// and none from the one-session one, and a second run making no commit.
+// and none from the one-session one, a PreToolUse push of the area's facts
+// for its tool outside any repository (once a session), the rotation with
+// K = 2 stamping the two oldest facts, an overview of the folder that grew
+// to three facts whose every citation is live, and a second run making no
+// commit.
 func TestFreshStoreFolderRecordsEndToEnd(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlinks and the shell CLI fixture")
@@ -170,6 +178,15 @@ func TestFreshStoreFolderRecordsEndToEnd(t *testing.T) {
 		b, _ := json.Marshal(out)
 		return string(b), .01, nil
 	}
+	prevOv := overviewRun
+	t.Cleanup(func() { overviewRun = prevOv })
+	overviewRun = func(_ context.Context, _, prompt string) (string, float64, error) {
+		var lines []string
+		for _, m := range promptFactRx.FindAllStringSubmatch(prompt, -1) {
+			lines = append(lines, "- A fact of the folder [["+m[1]+"]].")
+		}
+		return strings.Join(lines, "\n"), 0.01, nil
+	}
 	prevUpkeep, prevStale := curateUpkeep, curateStaleStep
 	t.Cleanup(func() { curateUpkeep, curateStaleStep = prevUpkeep, prevStale })
 	curateUpkeep = func(context.Context, *store.Store, string, bool, *curate.Report) {}
@@ -254,6 +271,84 @@ func TestFreshStoreFolderRecordsEndToEnd(t *testing.T) {
 	}
 	if !strings.Contains(gitIn(t, s.Dir, "log", "--format=%s"), "curator: migrate: projects/widget-old -> projects/widget") {
 		t.Error("no migrate commit")
+	}
+
+	// The area's tool, outside any repository: its facts before the call,
+	// once in the session.
+	push := hookOut(t, toolPayload(home, "x1", "mcp__tracker__TicketRead", map[string]any{"q": "open"}), "pre-tool")
+	if !strings.Contains(push, "tracker-triage-morning") || !strings.Contains(push, "tacit_tree areas/tracker") {
+		t.Fatalf("no area push outside a repo:\n%s", push)
+	}
+	if again := hookOut(t, toolPayload(home, "x1", "mcp__tracker__TicketList", map[string]any{"q": "open"}), "pre-tool"); again != "" {
+		t.Fatalf("pushed twice:\n%s", again)
+	}
+	if other := hookOut(t, toolPayload(home, "x2", "mcp__pager__PageSend", nil), "pre-tool"); other != "" {
+		t.Fatalf("a tool of no area pushed:\n%s", other)
+	}
+
+	// The rotation with K = 2: the two oldest live curated facts are stamped.
+	var live []*fact.Fact
+	for _, f := range factsByName(t, s.Dir) {
+		if !f.InInbox() && f.Meta.SupersededBy == "" && f.Meta.Retired == "" && !strings.HasPrefix(f.Meta.Scope, "derived/") {
+			live = append(live, f)
+		}
+	}
+	sort.Slice(live, func(i, j int) bool {
+		if live[i].Meta.Created != live[j].Meta.Created {
+			return live[i].Meta.Created < live[j].Meta.Created
+		}
+		return live[i].Meta.Name < live[j].Meta.Name
+	})
+	prevRot := rotationRun
+	t.Cleanup(func() { rotationRun = prevRot })
+	rotationRun = func(_ context.Context, _, prompt string) (string, float64, error) {
+		var out []string
+		for _, m := range regexp.MustCompile(`"name":"([a-z0-9-]+)"`).FindAllStringSubmatch(prompt, -1) {
+			out = append(out, `{"name":"`+m[1]+`","outcome":"still"}`)
+		}
+		return "[" + strings.Join(out, ",") + "]", 0.01, nil
+	}
+	if code := runRotation([]string{"--max", "2"}); code != 0 {
+		t.Fatalf("rotation exit %d", code)
+	}
+	today := time.Now().Format("2006-01-02")
+	byName = factsByName(t, s.Dir)
+	for i, f := range live {
+		if got := byName[f.Meta.Name].Meta.LastChecked; (i < 2) != (got == today) {
+			t.Errorf("%s (%d oldest): last_checked %q", f.Meta.Name, i+1, got)
+		}
+	}
+
+	// A third fact in the widget folder: the next full run writes its
+	// overview, whose every citation resolves.
+	writeFactFile(t, s.Dir, &fact.Fact{Path: "projects/widget/widget-release-notes.md", Meta: fact.Meta{Name: "widget-release-notes", Description: "Widget release notes go in CHANGES.md", Type: "user_standard", Scope: "projects/widget",
+		Source: fact.Source{Harness: "curator", Host: "box", Kind: "observed", Session: "s2"}, Created: today}, Body: "CHANGES.md.\n"})
+	facts, _, _ = fact.Walk(s.Dir)
+	writeIndexesForTest(t, s.Dir, facts)
+	gitIn(t, s.Dir, "add", "-A")
+	gitIn(t, s.Dir, "commit", "-q", "-m", "a third widget fact")
+	if code := runCurate(nil); code != 0 {
+		t.Fatalf("curate with an overview exit %d", code)
+	}
+	ob, err := os.ReadFile(filepath.Join(s.Dir, "projects", "widget", overview.File))
+	if err != nil {
+		t.Fatalf("no overview of widget: %v", err)
+	}
+	o, err := overview.Parse(ob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName = factsByName(t, s.Dir)
+	for _, c := range overview.Cites(o.Body) {
+		if f := byName[c]; f == nil || f.Meta.SupersededBy != "" || f.Meta.Retired != "" {
+			t.Errorf("the overview cites %s, no live fact", c)
+		}
+	}
+	if len(overview.Cites(o.Body)) < 3 {
+		t.Errorf("the overview cites %v", overview.Cites(o.Body))
+	}
+	if fs, err := lint.Run(s.Dir); err != nil || len(fs) != 0 {
+		t.Fatalf("lint after the overview %v %v", fs, err)
 	}
 
 	// A second full run makes no commit.
