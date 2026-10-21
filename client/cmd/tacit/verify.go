@@ -53,7 +53,7 @@ Findings (JSON, one per line; answer every id, no others):
 const ownerWordsRule = `A fact may carry owner_words: a phrase the owner wrote themself, found in one of their own sessions or notes, that the fact holds. Too short to make the fact their rule, it is still strong evidence of what they want, stronger than an agent's reading or a doc an agent wrote. Judge such a fact like any other, but never retire it against their words: when the sources only reword, narrow or restate them, the fact stands. When the sources or the other fact truly conflict with their words, mark "owner" and ask them in "question" whether their words still hold. Words of theirs are no reason to ask by themselves; ask only on a real conflict. A mark that would retire a fact with owner_words comes back to them as a question.`
 
 // verifySchema is the structured output the verifier must return.
-const verifySchema = `{"type":"object","properties":{"verdicts":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"mark":{"type":"string","enum":["both","keep","query","owner","retire","fix"]},"keep":{"type":"string"},"evidence":{"type":"string"},"fix":{"type":"string"},"question":{"type":"string"}},"required":["id","mark","evidence"]}}},"required":["verdicts"]}`
+const verifySchema = `{"type":"object","properties":{"verdicts":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"mark":{"type":"string","enum":["both","keep","query","owner","retire","fix"]},"keep":{"type":"string"},"evidence":{"type":"string"},"fix":{"type":"string"},"was":{"type":"string"},"question":{"type":"string"}},"required":["id","mark","evidence"]}}},"required":["verdicts"]}`
 
 // verifySettings is the only settings file the verifier loads. Relative
 // deny rules apply to the working directory only, so every rule is also
@@ -78,6 +78,9 @@ func verifySettings(roots []string) string {
 
 type verifyVerdict struct {
 	ID, Mark, Keep, Evidence, Fix, Question string
+	// Was is the detail a fix replaces, word for word as the fact says it:
+	// with it the fix lands as an in-place note (fact.AppendNote).
+	Was string
 }
 
 // Verification and its fallback are selected by operator configuration.

@@ -1,4 +1,4 @@
-// Package lint checks a store tree against the rules in SPEC.md (L1 to L17).
+// Package lint checks a store tree against the rules in SPEC.md (L1 to L18).
 package lint
 
 import (
@@ -175,6 +175,11 @@ func check(f *fact.Fact, names map[string]bool) []Finding {
 	}
 	if strings.TrimSpace(f.Body) == "" {
 		add("L11", "empty body")
+	}
+	// L18 in-place notes are well formed: a body line that starts like one
+	// ("> superseded ") has the whole form, on a curated fact.
+	if _, bad := fact.Notes(f.Body); len(bad) > 0 && !f.InInbox() {
+		add("L18", fmt.Sprintf("%d malformed in-place note(s), want \"> superseded YYYY-MM-DD: <old> -> <new>\": %q", len(bad), bad[0]))
 	}
 	// L15 a curated ruling carries the owner's words; evidence is well formed
 	// L12 known enum values
