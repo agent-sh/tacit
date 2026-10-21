@@ -569,6 +569,12 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		// evidence, and the facts of suppressed folders moved, in the overlay.
 		rep.Errors += curateAssessStep(ctx, s, o.model, o.dry, &rep)
 		rep.Errors += curateMigrateStep(ctx, s, o.dry)
+		// Overviews of this machine's own folders, and the rotation of its own
+		// facts: the layer's daily job runs curate, not maintain.
+		rep.Errors += curateOverviewStep(ctx, s, o.model, o.dry, &rep)
+		if !o.dry {
+			rep.Errors += maintainRotation(ctx, s)
+		}
 	}
 	fmt.Printf("curate: local layer: %d notes in %d batches (%d split) -> %d facts (%d rulings, %d absorbed), %d pairs in %d judge calls, %d contradictions, %d supersedes, %d unchecked, %d set aside, %s, %d error(s)\n", rep.Notes, rep.Batches, rep.BatchSplits, rep.Facts, rep.Rulings, rep.Absorbed, rep.Checked, rep.JudgeCalls, rep.Contradicts, rep.Supersedes, rep.JudgeUnchecked, rep.SetAside, rep.ModelCalls.CostSummary(rep.CostUSD), rep.Errors)
 	if rep.Errors > 0 || rep.DeferredOwner > 0 && !o.quick {

@@ -235,7 +235,7 @@ func checkQuietMarks(t *testing.T, path string) {
 	for _, r := range rows {
 		got[r[0].(string)] = int(r[1].(int64))
 	}
-	want := map[string]int{"projects/api": 0, "projects/done": 1, "projects/gone": 1, "areas/ops/topics/old": 1, "areas/lab/topics/x": 1, "areas/ops": 1}
+	want := map[string]int{"projects/api": 0, "projects/web": 1, "projects/done": 0, "projects/gone": 1, "areas/ops/topics/old": 1, "areas/lab/topics/x": 1, "areas/ops": 1}
 	for sc, q := range want {
 		if got[sc] != q {
 			t.Errorf("store facts of %s: quiet %d, want %d (all %v)", sc, got[sc], q, got)

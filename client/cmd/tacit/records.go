@@ -13,19 +13,22 @@ import (
 )
 
 // storeRecords are the folder records of the store at dir and, with the
-// local layer on, of this machine's overlay (a store record wins), folder
-// -> record. A record that does not parse is left out (lint L17 reports it).
+// local layer on, of this machine's overlay, folder -> record: the layer's
+// own folders, and the layer's status over a store folder's for this
+// machine only (record.MergeLocal). A record that does not parse is left
+// out (lint L17 reports it).
 func storeRecords(dir string) map[string]*record.Record {
 	recs, _ := record.Walk(dir)
 	if overlay.LayerOn() && overlay.Outside(overlay.Dir(), dir) {
-		local, _ := record.Walk(filepath.Join(overlay.Dir(), filepath.FromSlash(overlay.CuratedDir)))
-		for f, r := range local {
-			if recs[f] == nil {
-				recs[f] = r
-			}
-		}
+		return record.MergeLocal(recs, localRecords())
 	}
 	return recs
+}
+
+// localRecords are the records of this machine's overlay.
+func localRecords() map[string]*record.Record {
+	local, _ := record.Walk(filepath.Join(overlay.Dir(), filepath.FromSlash(overlay.CuratedDir)))
+	return local
 }
 
 // suppressionNames adds to names (a session's repository and its other
