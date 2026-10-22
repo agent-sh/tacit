@@ -190,7 +190,7 @@ func (rs *reviewServer) folderSave(ctx context.Context, d folderDraft) (*saveRes
 		}
 		folder := strings.TrimSpace(d.Folder)
 		if !record.IsFolder(folder) {
-			return nil, fmt.Errorf("%q is no folder that holds a record: projects/<name>, areas/<name>, areas/<area>/topics/<name> or topics/<name>", folder)
+			return nil, fmt.Errorf("%q is no folder that holds a record: projects/<name>, areas/<name>, areas/<area>/topics/<name>, topics/<name> or orgs/<name>", folder)
 		}
 		recs, _ := record.Walk(rs.s.Dir)
 		old := recs[folder]

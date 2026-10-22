@@ -12,6 +12,7 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/record"
 	"github.com/agent-sh/tacit/client/internal/search"
+	"github.com/agent-sh/tacit/client/internal/tree"
 )
 
 // areaCeiling is how many of an area's facts the PreToolUse hook prints
@@ -140,6 +141,70 @@ func hookRecords(ctx context.Context, ix *search.Index) map[string]*record.Recor
 		return nil
 	}
 	return recs
+}
+
+// withOrgs is the situation with its repository's display name (the
+// record's: "pikadon (GitHub: ginza)") and the org folders of its forge
+// organization (the records' org, tree.Session.Orgs).
+func withOrgs(sit search.Situation, recs map[string]*record.Record) search.Situation {
+	if sit.Repo == "" || len(recs) == 0 {
+		return sit
+	}
+	if f := record.RepoOwner(recs, sit.Repo); f != "" {
+		if w, _, err := record.Resolve(recs, f); err == nil && recs[w] != nil {
+			sit.RepoDisplay = recs[w].Display()
+		}
+	}
+	sit.Orgs = tree.Session{Repos: repoNames(sit), Records: recs}.Orgs()
+	return sit
+}
+
+// repoTitle is the repository's name in a hook's title: its display name.
+func repoTitle(sit search.Situation) string {
+	if sit.RepoDisplay != "" {
+		return sit.RepoDisplay
+	}
+	return sit.Repo
+}
+
+// orgStartLimit bounds the org lines of the SessionStart block: the org's
+// rules and standards come lightly, after the repository's own.
+const orgStartLimit = 2
+
+// orgStartHits are the org's rulings and standards (tier 0) for the
+// SessionStart block, newest first, at most orgStartLimit in all, none the
+// session has.
+func orgStartHits(ctx context.Context, ix *search.Index, sit search.Situation, have []search.Hit) []search.Hit {
+	if len(sit.Orgs) == 0 {
+		return nil
+	}
+	hs, err := ix.List(ctx, sit.Orgs, "", false, false)
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, h := range have {
+		seen[h.Name] = true
+	}
+	var keep []search.Hit
+	for _, h := range hs {
+		if tier(h) == 0 && !h.Quiet && !seen[h.Name] {
+			keep = append(keep, h)
+		}
+	}
+	sort.SliceStable(keep, func(i, j int) bool {
+		if a, b := subRank(keep[i]), subRank(keep[j]); a != b {
+			return a < b
+		}
+		if keep[i].Created != keep[j].Created {
+			return keep[i].Created > keep[j].Created
+		}
+		return keep[i].Name < keep[j].Name
+	})
+	if n := deliveryInt("ORG_START", orgStartLimit); len(keep) > n {
+		keep = keep[:n]
+	}
+	return keep
 }
 
 // withRecordAliases is the situation with the names the records give its

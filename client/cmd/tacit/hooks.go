@@ -110,13 +110,13 @@ func startTitle(sit search.Situation, mcp bool) string {
 		if mcp {
 			detail = "`mcp__tacit__tacit_fact <name>` opens one"
 		}
-		return fmt.Sprintf("# tacit: facts for %s on %s (read before acting; %s)\n%s", sit.Repo, sit.Host, detail, instruction(mcp))
+		return fmt.Sprintf("# tacit: facts for %s on %s (read before acting; %s)\n%s", repoTitle(sit), sit.Host, detail, instruction(mcp))
 	}
 	detail := "`tacit fact <name>` for detail"
 	if mcp {
 		detail = "`mcp__tacit__tacit_fact` for detail, `mcp__tacit__tacit_search` for more"
 	}
-	return fmt.Sprintf("# tacit: facts for %s on %s (read before acting; %s)", sit.Repo, sit.Host, detail)
+	return fmt.Sprintf("# tacit: facts for %s on %s (read before acting; %s)", repoTitle(sit), sit.Host, detail)
 }
 
 // runHook implements `tacit hook session-start|prompt|pre-compact`. It reads
@@ -193,7 +193,7 @@ func runHook(args []string) int {
 		}
 		defer ix.Close()
 		recs := hookRecords(ctx, ix)
-		sit = withRecordAliases(withRootFolder(sit, recs, in.Cwd), recs)
+		sit = withOrgs(withRecordAliases(withRootFolder(sit, recs, in.Cwd), recs), recs)
 		hits, err := sessionStartHits(ctx, ix, sit)
 		if err != nil {
 			return 0
@@ -224,10 +224,13 @@ func runHook(args []string) int {
 			home, _ := os.UserHomeDir()
 			sit.Repo = activityRepo(ctx, in, home)
 		}
-		sit = withRecordAliases(sit, recs)
+		sit = withOrgs(withRecordAliases(sit, recs), recs)
 		if deliveryOn("TOPICS", true) {
 			sit.ExtraScopes = topicScopes(recs, p)
 		}
+		// The org's rules, standards and decisions are eligible at the prompt,
+		// by match like the repository's.
+		sit.ExtraScopes = append(sit.ExtraScopes, sit.Orgs...)
 		strong, err := promptHits(ctx, ix, sit, p, delivered(in.SessionID))
 		if err != nil {
 			return 0

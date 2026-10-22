@@ -167,3 +167,47 @@ func TestReadShowsTheOverviewAtDepthZero(t *testing.T) {
 		t.Fatalf("the parent shows a child's overview:\n%s", out)
 	}
 }
+
+// An org's folder lists its member projects (the records' org) and is read
+// by default in a session in one of them, and only named elsewhere; a
+// project whose forge name differs from the folder's shows both.
+func TestOrgFoldersAndForgeNames(t *testing.T) {
+	recs := map[string]*record.Record{}
+	add := func(r *record.Record) *record.Record { recs[r.Folder] = r; return r }
+	add(rec("org", "orgs/agent-sh", "active"))
+	add(rec("repo", "projects/tower-crane", "active")).Org = "agent-sh"
+	add(rec("repo", "projects/agnix", "active")).Org = "agent-sh"
+	p := add(rec("repo", "projects/pikadon", "active"))
+	p.Forge = "github.com/avifenesh/ginza"
+	facts := []*fact.Fact{
+		mk("orgs/agent-sh/release-flow.md", "user_standard", "Every agent-sh repository releases from a signed tag", "2026-10-20"),
+		mk("projects/tower-crane/tc-build.md", "design_decision", "tower-crane builds with cargo", "2026-10-20"),
+		mk("projects/pikadon/pk-port.md", "machine_fact", "pikadon listens on 7781", "2026-10-20"),
+	}
+	dir := writeTree(t, facts, recs)
+	in := ReadOptions{Store: dir, Session: Session{Repos: []string{"tower-crane"}, Host: "box", Records: recs}}
+	out, err := Read(in, "", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "orgs/agent-sh: orgs/agent-sh/_index.md") || !strings.Contains(out, "Member projects (2): agnix, tower-crane") || !strings.Contains(out, "release-flow") {
+		t.Fatalf("the org in its member's session:\n%s", out)
+	}
+	if got := strings.Join(in.Session.Scopes(), ","); !strings.Contains(got, "orgs/agent-sh") {
+		t.Fatalf("scopes %s", got)
+	}
+	away := ReadOptions{Store: dir, Session: Session{Repos: []string{"pikadon"}, Host: "box", Records: recs}}
+	out, _ = Read(away, "", 3)
+	if strings.Contains(out, "release-flow") {
+		t.Fatalf("the org read outside its projects:\n%s", out)
+	}
+	if out, err := Read(away, "orgs/agent-sh", 0); err != nil || !strings.Contains(out, "release-flow") {
+		t.Fatalf("a named org: %v\n%s", err, out)
+	}
+	if out, _ := Read(away, "projects", 1); !strings.Contains(out, "- [pikadon/](pikadon/_index.md) (GitHub: ginza) repo, active") {
+		t.Fatalf("the forge name beside the folder's:\n%s", out)
+	}
+	if out, _ := Read(away, "projects/pikadon", 0); !strings.Contains(out, "Name: pikadon (GitHub: ginza), https://github.com/avifenesh/ginza") {
+		t.Fatalf("the record's name line:\n%s", out)
+	}
+}

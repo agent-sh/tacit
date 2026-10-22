@@ -169,12 +169,12 @@ func scopeRule(scope string) string {
 		return "empty"
 	case scopeRx.MatchString(asciiLower(scope)):
 		return "has upper-case letters"
-	case strings.HasPrefix(scope, "projects/") || strings.HasPrefix(scope, "machines/") || strings.HasPrefix(scope, "areas/") || strings.HasPrefix(scope, "topics/"):
+	case strings.HasPrefix(scope, "projects/") || strings.HasPrefix(scope, "machines/") || strings.HasPrefix(scope, "areas/") || strings.HasPrefix(scope, "topics/") || strings.HasPrefix(scope, "orgs/"):
 		return "the repo or host is not a slug (a-z, 0-9, -)"
 	case strings.HasPrefix(scope, "derived/"):
 		return "derived/ is for generated facts only"
 	}
-	return "not user, system, projects/<slug>, machines/<slug>, areas/<slug>, areas/<slug>/topics/<slug> or topics/<slug>"
+	return "not user, system, projects/<slug>, machines/<slug>, areas/<slug>, areas/<slug>/topics/<slug>, topics/<slug> or orgs/<slug>"
 }
 
 // knownApplies are the applies_to keys a fact has (fact.AppliesTo).

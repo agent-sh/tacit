@@ -26,11 +26,13 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/assess"
+	"github.com/agent-sh/tacit/client/internal/check"
 	"github.com/agent-sh/tacit/client/internal/curate"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/importer"
@@ -317,11 +319,37 @@ func renameRepos(repos []string, renames map[string]string) []string {
 // folder first, each with the scope of the live folder that replaces it;
 // then the live facts of folders that are no project (assess's "not a
 // project") that refile places by their own evidence (nil: none).
-func migrationItems(facts []*fact.Fact, recs map[string]*record.Record, refile func(*fact.Fact) string) []moveItem {
+func migrationItems(facts []*fact.Fact, recs map[string]*record.Record, rf *refiler) []moveItem {
 	out := suppressedItems(facts, recs)
-	if refile == nil {
+	if rf == nil {
 		return out
 	}
+	// A project folder folded into an org (the folder named for it): each
+	// fact goes to the one repository its own evidence names, the others
+	// stay in the org as its facts.
+	byName := map[string]*fact.Fact{}
+	for _, f := range facts {
+		if !f.InInbox() && !overlay.IsInbox(f.Path) {
+			byName[f.Path] = f
+		}
+	}
+	for i, it := range out {
+		if !strings.HasPrefix(it.To, "orgs/") {
+			continue
+		}
+		f := byName[it.Path]
+		if f == nil {
+			continue
+		}
+		if to := rf.orgTarget(f); to != "" {
+			out[i].To = to
+			out[i].Renames = map[string]string{}
+			for n := range it.Renames {
+				out[i].Renames[n] = path.Base(to)
+			}
+		}
+	}
+	refile := rf.target
 	byFolder := map[string][]moveItem{}
 	var folders []string
 	for _, f := range facts {
@@ -369,11 +397,12 @@ func notProject(r *record.Record) bool {
 type refiler struct {
 	recs     map[string]*record.Record
 	cache    *repoid.Cache
+	catalog  *repoid.Catalog
 	sessions map[string]map[string]bool // session -> repositories it worked in
 }
 
 func newRefiler(home string, catalog *repoid.Catalog, recs map[string]*record.Record) *refiler {
-	r := &refiler{recs: recs, cache: repoid.NewCache(home), sessions: map[string]map[string]bool{}}
+	r := &refiler{recs: recs, cache: repoid.NewCache(home), catalog: catalog, sessions: map[string]map[string]bool{}}
 	r.cache.Mains = catalog.Mains()
 	for root, ws := range repoid.LoadRegistryWork(filepath.Join(platform.StateDir(home), repoid.RegistryFile)) {
 		rp, ok := catalog.Of(root)
@@ -390,40 +419,101 @@ func newRefiler(home string, catalog *repoid.Catalog, recs map[string]*record.Re
 	return r
 }
 
-func (r *refiler) target(f *fact.Fact) string {
-	text := f.Meta.Description + "\n" + f.Body + "\n" + strings.Join(f.Meta.AppliesTo.Paths, "\n") + "\n" + strings.Join(f.Meta.AppliesTo.Commands, "\n")
-	paths := map[string]bool{}
-	for _, m := range machinePathRx.FindAllStringSubmatch(text, 20) {
-		p := strings.TrimRight(m[1], ".,;:)")
-		if rp, ok := r.cache.Of(p); ok && rp.Slug() != "" {
-			paths[rp.Slug()] = true
-		}
+// pointed are the repositories f's own evidence names (pointedRepos): the
+// paths and forge URLs it names, else the checkouts its session worked in.
+func (r *refiler) pointed(f *fact.Fact) map[string]bool {
+	if set := pointedRepos(r.cache, r.catalog, f); len(set) > 0 {
+		return set
 	}
-	pick := func(set map[string]bool) string {
-		if len(set) != 1 {
+	return r.sessions[f.Meta.Source.Session]
+}
+
+// orgTarget is where a fact of a folder suppressed into an org goes (SPEC.md,
+// "Orgs"): the one repository its own evidence names (its paths, the forge
+// URLs it names, else its session's checkouts), whose folder is a live
+// project that is not quiet; "" when it names none or several: it stays in
+// the org, as a fact of the org's.
+func (r *refiler) orgTarget(f *fact.Fact) string {
+	return r.pick(r.pointed(f))
+}
+
+func (r *refiler) target(f *fact.Fact) string {
+	return r.pick(r.pointed(f))
+}
+
+// pick is the live project folder of the one repository in set, "" for
+// none: an empty set, two or more, or a folder that is quiet, no project or
+// gone.
+func (r *refiler) pick(set map[string]bool) string {
+	if len(set) != 1 {
+		return ""
+	}
+	for n := range set {
+		folder := record.RepoOwner(r.recs, n)
+		if folder == "" {
+			folder = "projects/" + n
+		}
+		w, _, err := record.Resolve(r.recs, folder)
+		if err != nil {
 			return ""
 		}
-		for n := range set {
-			folder := record.RepoOwner(r.recs, n)
-			if folder == "" {
-				folder = "projects/" + n
-			}
-			w, _, err := record.Resolve(r.recs, folder)
-			if err != nil {
-				return ""
-			}
-			rec := r.recs[w]
-			if rec == nil || !rec.Live() || rec.Quiet() || record.Broad(rec.Kind) != "project" || notProject(rec) {
-				return ""
-			}
-			return w
+		rec := r.recs[w]
+		if rec == nil || !rec.Live() || rec.Quiet() || record.Broad(rec.Kind) != "project" || notProject(rec) {
+			return ""
+		}
+		return w
+	}
+	return ""
+}
+
+// projectsPathRx is a path under a projects directory, ~/projects or
+// /home/<user>/projects (/Users/<user>/projects): the checkouts every
+// machine's catalog lists by name live there, one or two levels down.
+var projectsPathRx = regexp.MustCompile(`(?:^|/)projects/([A-Za-z0-9._-]+)(?:/([A-Za-z0-9._-]+))?`)
+
+// pointedRepos are the repositories f's own words point at (SPEC.md,
+// "Suppression", "Orgs"): the absolute and ~ paths it names (its text,
+// applies_to.paths and commands), each the repository repoid makes of it on
+// this machine, or, for a path of another machine (no git root here), the
+// checkout a projects directory path names that some machine's catalog
+// lists (by name or another name of it); and the repositories of the forge
+// URLs it names (github.com/<owner>/<name>) that a catalog lists. Names are
+// the catalogs' (a checkout's own name, lower case).
+func pointedRepos(cache *repoid.Cache, catalog *repoid.Catalog, f *fact.Fact) map[string]bool {
+	text := f.Meta.Description + "\n" + f.Body + "\n" + strings.Join(f.Meta.AppliesTo.Paths, "\n") + "\n" + strings.Join(f.Meta.AppliesTo.Commands, "\n")
+	set := map[string]bool{}
+	known := func(n string) string {
+		n = strings.ToLower(n)
+		if own := catalog.AliasOf(n); own != "" {
+			return own
+		}
+		if catalog.Has(n) {
+			return n
 		}
 		return ""
 	}
-	if len(paths) > 0 {
-		return pick(paths)
+	for _, m := range machinePathRx.FindAllStringSubmatch(text, 40) {
+		p := strings.TrimRight(m[1], ".,;:)")
+		if rp, ok := cache.Of(p); ok && rp.Slug() != "" {
+			set[rp.Slug()] = true
+			continue
+		}
+		if pm := projectsPathRx.FindStringSubmatch(p); pm != nil {
+			if n := known(pm[1]); n != "" {
+				set[n] = true
+			} else if n := known(pm[2]); pm[2] != "" && n != "" {
+				set[n] = true
+			}
+		}
 	}
-	return pick(r.sessions[f.Meta.Source.Session])
+	for _, ref := range check.Refs(text) {
+		if ref.Kind == check.KindRepo {
+			if n := known(ref.Value); n != "" {
+				set[n] = true
+			}
+		}
+	}
+	return set
 }
 
 // suppressedItems are the live facts of every suppressed folder, largest
@@ -577,7 +667,7 @@ func migratePlan(dir string, max int, plan []moveItem) moveResult {
 	if items == nil {
 		recs, _ := record.Walk(dir)
 		home, _ := os.UserHomeDir()
-		items = migrationItems(facts, recs, newRefiler(home, knownCatalog(home, dir, false), recs).target)
+		items = migrationItems(facts, recs, newRefiler(home, knownCatalog(home, dir, false), recs))
 	}
 	quotes, _ := os.ReadFile(filepath.Join(dir, filepath.FromSlash(ledger.QuotesPath)))
 	open := map[string]bool{}
@@ -677,7 +767,7 @@ func migrateLocal(s *store.Store, max int, dry bool, plan []moveItem) (moveResul
 	if items == nil {
 		recs := storeRecords(s.Dir)
 		home, _ := os.UserHomeDir()
-		items = migrationItems(facts, recs, newRefiler(home, knownCatalog(home, s.Dir, true), recs).target)
+		items = migrationItems(facts, recs, newRefiler(home, knownCatalog(home, s.Dir, true), recs))
 	}
 	curated := filepath.Join(dir, filepath.FromSlash(overlay.CuratedDir))
 	quotes, _ := os.ReadFile(filepath.Join(dir, filepath.FromSlash(overlay.QuotesRel)))

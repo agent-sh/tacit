@@ -77,8 +77,8 @@ func (o ReadOptions) Eligible(p string) bool {
 func (o ReadOptions) known(p string) []string {
 	switch p {
 	case "":
-		return []string{"system", "user", "projects", "areas", "topics", "machines", "derived"}
-	case "areas", "topics":
+		return []string{"system", "user", "projects", "orgs", "areas", "topics", "machines", "derived"}
+	case "areas", "topics", "orgs":
 		var out []string
 		for _, f := range o.folders() {
 			if strings.Count(f, "/") == 1 && strings.HasPrefix(f, p+"/") {
@@ -195,7 +195,7 @@ func (o ReadOptions) filter(p, content string) (string, []string) {
 			if !o.Eligible(child) {
 				// An area or topic not read by default (dormant, dead,
 				// shipped) is listed, not read: findable when named.
-				if r, _, _ := strings.Cut(child, "/"); r == "areas" || r == "topics" {
+				if r, _, _ := strings.Cut(child, "/"); r == "areas" || r == "topics" || r == "orgs" {
 					out = append(out, l)
 					continue
 				}
@@ -228,7 +228,7 @@ func Read(o ReadOptions, p string, depth int) (string, error) {
 	}
 	o.named = Named(p)
 	if !o.Eligible(p) {
-		return "", fmt.Errorf("%s is not a folder of the store's tree: system, user, projects/<repo>, machines/<host>, derived/<repo>, areas/<area> and topics/<topic> are", p)
+		return "", fmt.Errorf("%s is not a folder of the store's tree: system, user, projects/<repo>, machines/<host>, derived/<repo>, areas/<area>, topics/<topic> and orgs/<org> are", p)
 	}
 	var b strings.Builder
 	// A suppressed folder is read as the folder that replaces it, then what

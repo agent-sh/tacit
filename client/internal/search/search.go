@@ -94,8 +94,9 @@ const (
 // created column (Hit.Created). 10: the records table (Index.Records) and
 // the quiet column (a dead or shipped folder's facts, which hooks pass over).
 // 11: the records' roots (where a folder of kind folder lives, so a session
-// there reads its facts).
-const schemaVersion = 11
+// there reads its facts). 12: the records' org and forge (a repository's
+// forge organization and its current forge name, store format 2).
+const schemaVersion = 12
 
 // Open returns the index for the store at head, building it when missing:
 // the exact index, for callers that must not read an older one (the
@@ -420,7 +421,7 @@ func build(ctx context.Context, storeDir, localDir, path, base string) error {
 		`CREATE TABLE facts(id INTEGER PRIMARY KEY, path TEXT, name TEXT, scope TEXT, type TEXT, description TEXT, body TEXT, inbox INT, superseded INT, applies TEXT, kind TEXT, conflicts TEXT, ruling INT, intask INT, words INT, local INT, created TEXT, quiet INT)`,
 		// The folder records (internal/record), so a reader needs no file
 		// beyond the index: kinds, statuses, suppression, an area's tools.
-		`CREATE TABLE records(folder TEXT PRIMARY KEY, kind TEXT, name TEXT, status TEXT, suppressed_by TEXT, aliases TEXT, tools TEXT, commands TEXT, repos TEXT, description TEXT, local INT, roots TEXT)`,
+		`CREATE TABLE records(folder TEXT PRIMARY KEY, kind TEXT, name TEXT, status TEXT, suppressed_by TEXT, aliases TEXT, tools TEXT, commands TEXT, repos TEXT, description TEXT, local INT, roots TEXT, org TEXT, forge TEXT)`,
 		`CREATE VIRTUAL TABLE fts USING fts5(name, description, body, content='facts', content_rowid='id', tokenize='porter unicode61 remove_diacritics 2')`,
 		// Rank's prefix search needs the words as written: porter stems a
 		// half-typed prefix too ("deploy"* becomes "deploi"*, which no stem
@@ -450,7 +451,7 @@ func build(ctx context.Context, storeDir, localDir, path, base string) error {
 			return err
 		}
 	}
-	insRec, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO records(folder, kind, name, status, suppressed_by, aliases, tools, commands, repos, description, local, roots) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
+	insRec, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO records(folder, kind, name, status, suppressed_by, aliases, tools, commands, repos, description, local, roots, org, forge) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
@@ -462,7 +463,7 @@ func build(ctx context.Context, storeDir, localDir, path, base string) error {
 		j := func(xs []string) string { b, _ := json.Marshal(xs); return string(b) }
 		isLocal := b2i(recs[f] == nil || r.LocalStatus)
 		roots, _ := json.Marshal(r.Roots)
-		if _, err := insRec.ExecContext(ctx, f, r.Kind, r.Name, r.Status, r.SuppressedBy, j(r.Aliases), j(r.Tools), j(r.Commands), j(r.Repos), r.Description, isLocal, string(roots)); err != nil {
+		if _, err := insRec.ExecContext(ctx, f, r.Kind, r.Name, r.Status, r.SuppressedBy, j(r.Aliases), j(r.Tools), j(r.Commands), j(r.Repos), r.Description, isLocal, string(roots), r.Org, r.Forge); err != nil {
 			return err
 		}
 	}
@@ -614,7 +615,7 @@ func sortedFolders(m map[string]*record.Record) []string {
 func readRecords(ctx context.Context, db interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }) (map[string]*record.Record, error) {
-	rows, err := db.QueryContext(ctx, `SELECT folder, kind, name, status, suppressed_by, aliases, tools, commands, repos, description, roots FROM records ORDER BY local, folder`)
+	rows, err := db.QueryContext(ctx, `SELECT folder, kind, name, status, suppressed_by, aliases, tools, commands, repos, description, roots, org, forge FROM records ORDER BY local, folder`)
 	if err != nil {
 		return nil, err
 	}
@@ -623,7 +624,7 @@ func readRecords(ctx context.Context, db interface {
 	for rows.Next() {
 		r := &record.Record{}
 		var aliases, tools, commands, repos, roots string
-		if err := rows.Scan(&r.Folder, &r.Kind, &r.Name, &r.Status, &r.SuppressedBy, &aliases, &tools, &commands, &repos, &r.Description, &roots); err != nil {
+		if err := rows.Scan(&r.Folder, &r.Kind, &r.Name, &r.Status, &r.SuppressedBy, &aliases, &tools, &commands, &repos, &r.Description, &roots, &r.Org, &r.Forge); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(aliases), &r.Aliases)
@@ -641,8 +642,8 @@ func readRecords(ctx context.Context, db interface {
 // Records returns the folder records the index was built with (the store's,
 // and the local layer's where the store has none), folder -> record with
 // the fields readers need: kind, name, status, suppression, aliases, an
-// area's tools and commands, a topic's repos, a folder's roots, the
-// description. The history and evidence are in the files.
+// area's tools and commands, a topic's repos, a folder's roots, a
+// project's org and forge name, the description. The history and evidence are in the files.
 func (ix *Index) Records(ctx context.Context) (map[string]*record.Record, error) {
 	return readRecords(ctx, ix.db)
 }
@@ -709,6 +710,12 @@ var indexName = regexp.MustCompile(`^index-v(\d+)-[^.]+\.db(?:\.(\d+)\.tmp)?(?:-
 // user's prompt or the paths and command in play.
 type Situation struct {
 	Repo string
+	// RepoDisplay is how hooks name the repository to the agent: its
+	// record's display name ("pikadon (GitHub: ginza)"); Query ignores it.
+	RepoDisplay string
+	// Orgs are the org folders (orgs/<org>) of the repository's forge
+	// organization, from the records (the hooks'); Query ignores them.
+	Orgs []string
 	// RepoAliases are verified names for the current repository (e.g. a
 	// symlink checkout name). Hooks supply these; explicit search ignores them.
 	RepoAliases []string

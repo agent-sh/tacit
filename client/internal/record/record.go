@@ -16,6 +16,14 @@
 //	tools, commands  areas only: tool-name patterns and command prefixes
 //	repos         topics only: repositories the topic is tied to
 //	roots         kind folder only: where the folder lives, per machine
+//	org           a project's forge organization (its origin's owner when
+//	              the forge says that owner is an organization), by code
+//	forge         a project's current forge name (normalized URL,
+//	              github.com/<owner>/<name>), by code from the forge
+//
+// A folder orgs/<name> has a record of kind org: an organization on the
+// forge (GitHub: an account of type Organization) whose facts hold across
+// its repositories. Code makes it from the forge's answer, never a model.
 //
 // An agent decides the values; code checks them (Validate) and fills in
 // only what it derives reliably (the evidence block, dates).
@@ -46,6 +54,7 @@ const (
 	KindFolder = "folder" // a project folder that is no git repository
 	KindArea   = "area"   // an ongoing system or practice (areas/<name>)
 	KindTopic  = "topic"  // a bounded work stream (topics/<name>, areas/<a>/topics/<name>)
+	KindOrg    = "org"    // a forge organization (orgs/<name>): facts across its repositories
 
 	StatusActive      = "active"
 	StatusDormant     = "dormant"
@@ -58,7 +67,7 @@ const (
 )
 
 var (
-	kinds    = map[string]bool{KindRepo: true, KindFolder: true, KindArea: true, KindTopic: true}
+	kinds    = map[string]bool{KindRepo: true, KindFolder: true, KindArea: true, KindTopic: true, KindOrg: true}
 	statuses = map[string]bool{StatusActive: true, StatusDormant: true, StatusDead: true, StatusShipped: true, StatusNeedsReview: true}
 )
 
@@ -138,6 +147,11 @@ type Record struct {
 	Commands     []string   `yaml:"commands,omitempty"`
 	Repos        []string   `yaml:"repos,omitempty"`
 	Roots        []Root     `yaml:"roots,omitempty"`
+	// Org is a project's forge organization, Forge its current forge name
+	// (github.com/<owner>/<name>): both written by code from the forge's
+	// answers (store format 2), never by a model.
+	Org   string `yaml:"org,omitempty"`
+	Forge string `yaml:"forge,omitempty"`
 
 	// Folder is the store-relative folder the record is in (its scope);
 	// Body the free text after the frontmatter. Neither is frontmatter.
@@ -234,8 +248,49 @@ func (r *Record) ReadByDefault() bool {
 // Names are the folder's own name and its aliases.
 func (r *Record) Names() []string { return append([]string{r.Name}, r.Aliases...) }
 
+// ForgeName is the repository name part of the record's current forge name
+// ("" for none).
+func (r *Record) ForgeName() string {
+	if r == nil || r.Forge == "" {
+		return ""
+	}
+	return strings.ToLower(path.Base(r.Forge))
+}
+
+// ForgeLabel is how the forge of a normalized URL is named to a reader:
+// "GitHub" for github.com, else the host.
+func ForgeLabel(url string) string {
+	host, _, _ := strings.Cut(url, "/")
+	if host == "github.com" {
+		return "GitHub"
+	}
+	return host
+}
+
+// Display is the folder's name as every reader shows it: the intended name
+// (the folder's), and the current forge name when it differs, so an agent
+// uses the right URL: "pikadon (GitHub: ginza)".
+func (r *Record) Display() string {
+	if r == nil {
+		return ""
+	}
+	return DisplayName(r.Name, r.Forge)
+}
+
+// DisplayName is Display for a name and a forge name (normalized URL).
+func DisplayName(name, forge string) string {
+	fn := ""
+	if forge != "" {
+		fn = strings.ToLower(path.Base(forge))
+	}
+	if fn == "" || fn == strings.ToLower(name) {
+		return name
+	}
+	return name + " (" + ForgeLabel(forge) + ": " + fn + ")"
+}
+
 // FolderKinds are the kinds a record of folder may have, and the folder's
-// root ("projects", "areas", "topics"); none for a folder that holds no
+// root ("projects", "areas", "topics", "orgs"); none for a folder that holds no
 // record (system, user, machines/..., derived/..., a deeper path).
 func FolderKinds(folder string) []string {
 	segs := strings.Split(folder, "/")
@@ -253,6 +308,8 @@ func FolderKinds(folder string) []string {
 		return []string{KindTopic}
 	case len(segs) == 4 && segs[0] == "areas" && segs[2] == "topics":
 		return []string{KindTopic}
+	case len(segs) == 2 && segs[0] == "orgs":
+		return []string{KindOrg}
 	}
 	return nil
 }
@@ -261,19 +318,38 @@ func FolderKinds(folder string) []string {
 func IsFolder(folder string) bool { return len(FolderKinds(folder)) > 0 }
 
 // Broad is a kind's family for suppression: a project folds into a
-// project, an area or topic into an area or topic.
+// project, an area or topic into an area or topic. An org is its own: it
+// never folds into a project (only a project folder named for the org folds
+// into the org, OrgFolds).
 func Broad(kind string) string {
 	switch kind {
 	case KindRepo, KindFolder:
 		return "project"
 	case KindArea, KindTopic:
 		return "area-or-topic"
+	case KindOrg:
+		return "org"
 	}
 	return ""
 }
 
-// Walk reads every record under root: projects/*, areas/*, areas/*/topics/*
-// and topics/*, folder -> record. A record that does not parse is in errs
+// OrgFolds reports the one fold across families: a project folder named for
+// a forge organization (projects/agent-sh) into that organization's folder
+// (orgs/agent-sh), whose names hold the project folder's name.
+func OrgFolds(project, org *Record) bool {
+	if project == nil || org == nil || Broad(project.Kind) != "project" || org.Kind != KindOrg {
+		return false
+	}
+	for _, n := range org.Names() {
+		if n == project.Name {
+			return true
+		}
+	}
+	return false
+}
+
+// Walk reads every record under root: projects/*, areas/*, areas/*/topics/*,
+// topics/* and orgs/*, folder -> record. A record that does not parse is in errs
 // with its path; symlinks are not followed.
 func Walk(root string) (map[string]*Record, []error) {
 	out := map[string]*Record{}
@@ -282,7 +358,7 @@ func Walk(root string) (map[string]*Record, []error) {
 		return out, nil
 	}
 	var paths []string
-	for _, pat := range []string{"projects/*/", "areas/*/", "areas/*/topics/*/", "topics/*/"} {
+	for _, pat := range []string{"projects/*/", "areas/*/", "areas/*/topics/*/", "topics/*/", "orgs/*/"} {
 		m, _ := filepath.Glob(filepath.Join(root, filepath.FromSlash(pat), FileName))
 		paths = append(paths, m...)
 	}

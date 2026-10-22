@@ -21,6 +21,8 @@ import (
 //     or needs review (record.ReadByDefault); a topic tied to repositories
 //     only in their sessions. Dormant, dead and shipped ones, and
 //     suppressed ones, only when named;
+//   - the org folders (orgs/<org>) of the session's repositories: the org
+//     their records name (record.Org, from the forge);
 //   - another repository's or machine's scope only when the caller names it
 //     (a path or scope given explicitly), and then that scope alone.
 type Session struct {
@@ -51,12 +53,37 @@ func (s Session) topicReads(r *record.Record) bool {
 	return false
 }
 
-// folders are the area and topic folders the session reads by default,
-// sorted.
+// Orgs are the live org folders of the session's repositories (the org
+// their project records name), sorted.
+func (s Session) Orgs() []string {
+	set := map[string]bool{}
+	rs := s.repoSet()
+	for f, r := range s.Records {
+		if r.Org == "" || record.Broad(r.Kind) != "project" || !strings.HasPrefix(f, "projects/") {
+			continue
+		}
+		hit := false
+		for _, n := range r.Names() {
+			hit = hit || rs[n]
+		}
+		if o := s.Records["orgs/"+r.Org]; hit && o != nil && o.Kind == record.KindOrg && o.Live() {
+			set["orgs/"+r.Org] = true
+		}
+	}
+	out := make([]string, 0, len(set))
+	for f := range set {
+		out = append(out, f)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// folders are the area, topic and org folders the session reads by
+// default, sorted.
 func (s Session) folders() []string {
 	var out []string
 	for f := range s.Records {
-		if (strings.HasPrefix(f, "areas/") || strings.HasPrefix(f, "topics/")) && s.Reads(f, "") {
+		if (strings.HasPrefix(f, "areas/") || strings.HasPrefix(f, "topics/") || strings.HasPrefix(f, "orgs/")) && s.Reads(f, "") {
 			out = append(out, f)
 		}
 	}
@@ -135,6 +162,15 @@ func (s Session) Reads(p, named string) bool {
 		}
 		t := s.Records["topics/"+segs[1]]
 		return t != nil && s.topicReads(t)
+	case "orgs":
+		if len(segs) == 1 {
+			return true
+		}
+		for _, o := range s.Orgs() {
+			if o == "orgs/"+segs[1] {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -155,7 +191,7 @@ func Named(p string) string {
 		if len(segs) >= 2 && segs[1] != "" {
 			return segs[0] + "/" + segs[1]
 		}
-	case "projects", "machines", "derived", "topics":
+	case "projects", "machines", "derived", "topics", "orgs":
 		if len(segs) >= 2 && segs[1] != "" {
 			return segs[0] + "/" + segs[1]
 		}
@@ -168,7 +204,7 @@ func Named(p string) string {
 func Scope(scope string) (string, error) {
 	p, err := Clean(strings.ToLower(scope))
 	if err != nil || p == "" || Named(p) != p {
-		return "", fmt.Errorf("scope must be user, system, projects/<repo>, machines/<host>, derived/<repo>, areas/<area>, areas/<area>/topics/<topic> or topics/<topic>")
+		return "", fmt.Errorf("scope must be user, system, projects/<repo>, machines/<host>, derived/<repo>, areas/<area>, areas/<area>/topics/<topic>, topics/<topic> or orgs/<org>")
 	}
 	return p, nil
 }

@@ -44,6 +44,7 @@ import (
 	"unicode"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/record"
 	"github.com/agent-sh/tacit/client/internal/repoid"
 )
@@ -84,6 +85,9 @@ type Env struct {
 	// roots and records may be written); RecordsComplete: every fact
 	// folder has a record, so the interim rule is off.
 	Format, RecordsComplete bool
+	// Format2: the marker is format 2 or newer (ledger.Format.Orgs): org
+	// folders (orgs/<name>) may be written.
+	Format2 bool
 }
 
 // NewEnv builds the checks' knowledge from the folders of the store at
@@ -101,6 +105,14 @@ func NewEnv(storeDir, layer string, catalog *repoid.Catalog, host string) Env {
 		if st, err := fact.LoadState(storeDir); err == nil {
 			e.RecordsComplete = e.Format && st.Format.RecordsComplete
 		}
+		if f, ok, err := ledger.ReadFormat(storeDir); err == nil && ok {
+			e.Format2 = f.Orgs()
+		}
+	}
+	if layer != "" {
+		// This machine's overlay never leaves it: its own orgs are written
+		// whatever the store's format.
+		e.Format2 = true
 	}
 	for _, root := range []string{storeDir, layer} {
 		recs, _ := record.Walk(root)
@@ -250,9 +262,17 @@ func (e Env) Scope(scope string) *Problem {
 		return &Problem{Field: "scope", Rule: "derived/ is for facts code generates from git", Hint: "use projects/" + rest + " for a fact about that repository"}
 	}
 	if !fact.ValidScope(scope) || ((root == "projects" || root == "machines") && !fact.IsSlug(rest)) {
-		return &Problem{Field: "scope", Rule: "not user, system, projects/<repo>, machines/<host>, areas/<area>, areas/<area>/topics/<topic> or topics/<topic> (lower-case letters, digits and dashes)", Hint: fmt.Sprintf("got %q", scope)}
+		return &Problem{Field: "scope", Rule: "not user, system, projects/<repo>, machines/<host>, areas/<area>, areas/<area>/topics/<topic>, topics/<topic> or orgs/<org> (lower-case letters, digits and dashes)", Hint: fmt.Sprintf("got %q", scope)}
 	}
 	switch root {
+	case "orgs":
+		if !e.Format2 {
+			return &Problem{Field: "scope", Rule: "org folders are written only once the store's format marker is 2 or newer", Hint: fmt.Sprintf("%s; use the project or user scope", scope)}
+		}
+		if r := e.Records[scope]; r == nil || r.Kind != record.KindOrg || !r.Live() {
+			return &Problem{Field: "scope", Rule: "names no org with a record", Hint: fmt.Sprintf("%s; code makes an org's folder from the forge's answer; use a listed one, or the project or user scope", scope)}
+		}
+		return nil
 	case "areas", "topics":
 		if !e.Format {
 			return &Problem{Field: "scope", Rule: "areas and topics are written only once the store holds the format marker", Hint: fmt.Sprintf("%s; use the project, user or machines/<host> scope", scope)}
@@ -467,6 +487,56 @@ var attributionRx = regexp.MustCompile(`(?i)\bowner(?:'s|’s)?\s+(?:ruling|rule
 // Attribution refuses "owner ruling" wording on a fact that is not an owner
 // ruling (no verified quote of theirs): a reading agent would take the
 // agent's statement for the owner's word.
+// OrgMembers are the live project folders whose record names org as their
+// forge organization (record.Org, filled by code from the forge), by name,
+// sorted.
+func (e Env) OrgMembers(org string) []string {
+	set := map[string]bool{}
+	for f, r := range e.Records {
+		if r.Live() && record.Broad(r.Kind) == "project" && r.Org == org && strings.HasPrefix(f, "projects/") {
+			set[r.Name] = true
+		}
+	}
+	return sorted(set)
+}
+
+// MinOrgRepos is how many of an org's repositories a fact must name for a
+// model to file it in the org's folder (or the org itself).
+const MinOrgRepos = 2
+
+// OrgFact checks a fact a model or an agent files in an org's folder
+// (orgs/<org>): code verifies it is about the org, by naming at least
+// MinOrgRepos of the org's repositories (in applies_to.repos, or as whole
+// words in its text), or the org itself (its name as a whole word, its
+// forge URL). nil for any other scope. Membership comes from the records'
+// org (the forge), never from what a fact mentions.
+func (e Env) OrgFact(m fact.Meta, body string) *Problem {
+	org, ok := strings.CutPrefix(m.Scope, "orgs/")
+	if !ok || e.Records[m.Scope] == nil {
+		return nil
+	}
+	text := strings.ToLower(m.Description + "\n" + body)
+	if record.WholeWord(text, org) {
+		return nil
+	}
+	members := e.OrgMembers(org)
+	named := map[string]bool{}
+	for _, n := range members {
+		if record.WholeWord(text, n) {
+			named[n] = true
+		}
+		for _, r := range m.AppliesTo.Repos {
+			if strings.EqualFold(r, n) {
+				named[n] = true
+			}
+		}
+	}
+	if len(named) >= MinOrgRepos {
+		return nil
+	}
+	return &Problem{Field: "scope", Rule: fmt.Sprintf("a fact goes up to an org only when it names %d or more of the org's repositories, or the org itself", MinOrgRepos), Hint: fmt.Sprintf("%s: it names %d of %s; file it in the one repository it is about, or in user", m.Scope, len(named), strings.Join(members, ", "))}
+}
+
 func Attribution(desc, body string, ruling bool) *Problem {
 	if ruling {
 		return nil
@@ -489,6 +559,9 @@ func (e Env) Meta(m fact.Meta, body string, inbox, ruling bool) []Problem {
 		}
 	}
 	add(e.Scope(m.Scope))
+	if !inbox {
+		add(e.OrgFact(m, body))
+	}
 	add(Type(m.Type, m.Scope, inbox))
 	add(Kind(m.Source.Kind))
 	out = append(out, e.Repos(m.AppliesTo.Repos)...)
