@@ -51,10 +51,14 @@ func runDedupe(args []string) int {
 	var cs []curate.Copies
 	pushed, err := curatorWrite(ctx, s, func() (map[string][]byte, string, error) {
 		var err error
-		if cs, err = dedupePlan(s.Dir); err != nil || len(cs) == 0 {
+		if cs, err = dedupePlan(s.Dir); err != nil {
 			return nil, "", err
 		}
-		return dedupeFiles(s.Dir, cs, time.Now())
+		files, msg, err := dedupeFiles(s.Dir, cs, time.Now())
+		if err != nil || len(files) == 0 {
+			return nil, "", err
+		}
+		return files, msg, nil
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "dedupe:", err)
@@ -115,8 +119,10 @@ func dedupeFiles(dir string, cs []curate.Copies, now time.Time) (map[string][]by
 			lines = append(lines, x.Meta.Name+" -> "+c.Kept.Meta.Name)
 		}
 	}
-	// A fact that already pointed at a copy points at the fact kept now:
-	// a chain of replacements ends at the live fact in one step.
+	// A chain of replacements ends at the live fact in one step: a fact
+	// that points at a copy retired now, or at any fact that is itself
+	// replaced (a migration's move, an earlier supersede), points at the
+	// live end of its chain.
 	kept := map[string]string{}
 	for _, c := range cs {
 		for _, x := range c.Copies {
@@ -124,30 +130,69 @@ func dedupeFiles(dir string, cs []curate.Copies, now time.Time) (map[string][]by
 		}
 	}
 	repointed := 0
-	if facts, _, err := fact.Walk(dir); err == nil {
-		for _, f := range facts {
-			to, ok := kept[f.Meta.SupersededBy]
-			if !ok || f.InInbox() || files[f.Path] != nil || to == f.Meta.Name {
-				continue
-			}
-			data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(f.Path)))
-			if err != nil {
-				return nil, "", err
-			}
-			y := *f
-			y.Meta.SupersededBy, y.Meta.Updated = to, now.Format("2006-01-02")
-			nb, err := fact.PatchRelations(data, &y)
-			if err != nil {
-				return nil, "", fmt.Errorf("%s: %w", f.Path, err)
-			}
-			files[f.Path] = nb
-			lines = append(lines, f.Meta.Name+" -> "+to+" (was -> "+f.Meta.SupersededBy+")")
-			repointed++
+	facts, _, err := fact.Walk(dir)
+	if err != nil {
+		return nil, "", err
+	}
+	next := map[string]string{} // name -> its successor, this run's copies included
+	retired := map[string]bool{}
+	for _, f := range facts {
+		if f.InInbox() {
+			continue
 		}
+		if f.Meta.SupersededBy != "" {
+			next[f.Meta.Name] = f.Meta.SupersededBy
+		}
+		if f.Meta.Retired != "" {
+			retired[f.Meta.Name] = true
+		}
+	}
+	for c, k := range kept {
+		next[c] = k
+	}
+	end := func(n string) string {
+		seen := map[string]bool{n: true}
+		for {
+			m, ok := next[n]
+			if !ok || seen[m] || len(seen) > 32 {
+				return n
+			}
+			seen[m] = true
+			n = m
+		}
+	}
+	for _, f := range facts {
+		if f.InInbox() || files[f.Path] != nil {
+			continue
+		}
+		cur := f.Meta.SupersededBy
+		if cur == "" {
+			continue
+		}
+		to := end(cur)
+		if to == cur || to == f.Meta.Name || retired[to] {
+			continue // already one step, a loop, or no live end
+		}
+		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(f.Path)))
+		if err != nil {
+			return nil, "", err
+		}
+		y := *f
+		y.Meta.SupersededBy, y.Meta.Updated = to, now.Format("2006-01-02")
+		nb, err := fact.PatchRelations(data, &y)
+		if err != nil {
+			return nil, "", fmt.Errorf("%s: %w", f.Path, err)
+		}
+		files[f.Path] = nb
+		lines = append(lines, f.Meta.Name+" -> "+to+" (was -> "+cur+")")
+		repointed++
+	}
+	if len(files) == 0 {
+		return nil, "", nil
 	}
 	msg := fmt.Sprintf("curator: dedupe: %d near-duplicate fact(s) superseded by the fact they restate, in %d cluster(s)", len(files)-repointed, len(cs))
 	if repointed > 0 {
-		msg += fmt.Sprintf("; %d older fact(s) that pointed at a copy point at the kept fact", repointed)
+		msg += fmt.Sprintf("; %d replaced fact(s) point at the live end of their chain", repointed)
 	}
 	msg += "\n\n" + strings.Join(lines, "\n")
 	return files, msg, nil

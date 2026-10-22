@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agent-sh/tacit/client/internal/assess"
 	"github.com/agent-sh/tacit/client/internal/check"
@@ -229,5 +230,45 @@ func TestAssessDecidesOneRepositorysNamesTogether(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(refused[1].Problems, " "), "decide them together") {
 		t.Fatalf("%+v", refused)
+	}
+}
+
+// A fact that pointed at a fact the migration moves points at its copy;
+// dedupe ends every older chain at its live fact, with no copy to retire.
+func TestMoveAndDedupeEndChainsAtTheLiveFact(t *testing.T) {
+	s := migrateHome(t)
+	writeFactFile(t, s.Dir, &fact.Fact{Path: "user/older-build.md", Meta: fact.Meta{Name: "older-build", Description: "An older wording of the old widget build", Type: "design_decision", Scope: "user",
+		SupersededBy: "old-build", Source: fact.Source{Harness: "curator", Host: "box", Kind: "observed", Session: "s1"}, Created: "2026-09-01"}, Body: "make.\n"})
+	facts, _, _ := fact.Walk(s.Dir)
+	writeIndexesForTest(t, s.Dir, facts)
+	gitIn(t, s.Dir, "add", "-A")
+	gitIn(t, s.Dir, "commit", "-q", "-m", "an older fact")
+	if _, err := migrateStep(context.Background(), s, migrateBatch, migrateCommits, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]*fact.Fact{}
+	facts, _, _ = fact.Walk(s.Dir)
+	for _, f := range facts {
+		by[f.Meta.Name] = f
+	}
+	ob := by["old-build"]
+	if ob.Meta.SupersededBy == "" || by["older-build"].Meta.SupersededBy != ob.Meta.SupersededBy {
+		t.Fatalf("older-build -> %q, old-build -> %q", by["older-build"].Meta.SupersededBy, ob.Meta.SupersededBy)
+	}
+	// A chain made elsewhere (a supersede of a fact later replaced): dedupe
+	// points its start at the live end.
+	writeFactFile(t, s.Dir, &fact.Fact{Path: "user/chain-a.md", Meta: fact.Meta{Name: "chain-a", Description: "The first wording of the quokka rule", Type: "history", Scope: "user",
+		SupersededBy: "older-build", Source: fact.Source{Harness: "curator", Host: "box", Kind: "observed", Session: "s1"}, Created: "2026-08-01"}, Body: "a.\n"})
+	facts, _, _ = fact.Walk(s.Dir)
+	writeIndexesForTest(t, s.Dir, facts)
+	gitIn(t, s.Dir, "add", "-A")
+	gitIn(t, s.Dir, "commit", "-q", "-m", "a chain")
+	files, msg, err := dedupeFiles(s.Dir, nil, time.Now())
+	if err != nil || len(files) != 1 || !strings.Contains(msg, "1 replaced fact(s) point at the live end of their chain") {
+		t.Fatalf("%v %v %q", files, err, msg)
+	}
+	f, _ := fact.Parse("user/chain-a.md", files["user/chain-a.md"])
+	if f.Meta.SupersededBy != ob.Meta.SupersededBy {
+		t.Fatalf("chain-a -> %q, want %q", f.Meta.SupersededBy, ob.Meta.SupersededBy)
 	}
 }
