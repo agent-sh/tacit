@@ -133,6 +133,12 @@ func aDecision(folder, kind, status, why string) assess.Decision {
 	return assess.Decision{Folder: folder, Kind: kind, Status: status, Why: why, Description: "what " + folder + " is"}
 }
 
+// independent is d citing independence evidence (keys code may list).
+func independent(d assess.Decision, keys ...string) assess.Decision {
+	d.Independent = keys
+	return d
+}
+
 // The assessment asks the model about every repository and project folder
 // with no record, shows it code's evidence, sends a refused decision back
 // once, writes the records in one commit, and a second run asks nothing.

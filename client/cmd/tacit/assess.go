@@ -146,6 +146,8 @@ type assessor struct {
 	retry                  bool                  // assessOpts.retry
 	attempts               []reviewAttempt       // this run's re-attempts, for the log
 	reviewWaiting          int                   // folders left for review that wait this run
+	ancIx                  *ancestorIndex        // where facts put folders (assess_ancestor.go)
+	families               map[string]bool       // names a family of repositories holds (familyName)
 }
 
 func newAssessor(ctx context.Context, s *store.Store, local bool) (*assessor, error) {
@@ -277,7 +279,9 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 			return // a folder with a record: the records' turn below
 		}
 		seen[folder] = true
-		out = append(out, a.candidate(folder, reason, nil))
+		c := a.candidate(folder, reason, nil)
+		a.findAncestors(&c)
+		out = append(out, c)
 	}
 	for _, n := range a.catalog.Names() {
 		consider("projects/"+n, "a repository of the catalog (this machine's or another's) with no record")
@@ -312,6 +316,7 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 			if why != "" {
 				seen[f] = true
 				c.Reason = why
+				a.findAncestors(&c)
 				out = append(out, c)
 			}
 			continue
@@ -319,6 +324,7 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 		if why := materialChange(r, ev, a.host); why != "" {
 			seen[f] = true
 			c.Reason = why
+			a.findAncestors(&c)
 			if a.held != nil && r.Live() && r.Status == record.StatusNeedsReview {
 				st := a.held.Review[f]
 				a.deepen(&c, st.Attempts+1, st.Keys, st.At)
@@ -331,6 +337,7 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 		// waits only when that wider search found nothing new, until the
 		// weekly retry.
 		if a.held != nil && r.Live() && r.Status == record.StatusNeedsReview {
+			a.findAncestors(&c)
 			if why, ok := a.reviewDue(&c); ok {
 				seen[f] = true
 				c.Reason = why
@@ -616,6 +623,15 @@ func groupSame(cands []assess.Candidate) {
 				union(n, r.Value)
 			}
 		}
+		// The folders of one ancestor, and the ancestor itself, are decided
+		// together (one batch): they cannot diverge.
+		if len(c.Ancestors) > 0 {
+			top := strings.TrimPrefix(c.Ancestors[0].Folder, "projects/")
+			union(n, "\x00"+top)
+			if in[top] {
+				union(top, "\x00"+top)
+			}
+		}
 	}
 	size := map[string]int{}
 	for n := range in {
@@ -623,7 +639,7 @@ func groupSame(cands []assess.Candidate) {
 	}
 	for i := range cands {
 		if n, ok := strings.CutPrefix(cands[i].Folder, "projects/"); ok && size[find(n)] > 1 {
-			cands[i].Group = find(n)
+			cands[i].Group = strings.TrimPrefix(find(n), "\x00")
 		}
 	}
 }
@@ -1580,6 +1596,8 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 		i += len(batch) // before any candidate waits to the end of the run
 		n++
 		for j := range batch {
+			// The records this run wrote may change where its ancestors live.
+			a.findAncestors(&batch[j])
 			a.refresh(&batch[j], decidedRun)
 		}
 		// The candidates the checks settle are decided by code; the rest go to
@@ -1591,6 +1609,7 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 			// the rest of the batch with them among the decisions on folders alike.
 			finish(codeAcc)
 			for j := range batch {
+				a.findAncestors(&batch[j])
 				a.refresh(&batch[j], decidedRun)
 			}
 		}

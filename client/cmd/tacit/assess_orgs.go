@@ -325,7 +325,7 @@ func (a *assessor) codeDecision(c assess.Candidate, recs func(string) *record.Re
 }
 
 func (a *assessor) codeDecisionOf(c assess.Candidate, recs func(string) *record.Record) (assess.Decision, bool, bool) {
-	if c.Kind != "" || c.Name == nil || !c.Absent() || !strings.HasPrefix(c.Folder, "projects/") {
+	if c.Kind != "" || c.Name == nil || !strings.HasPrefix(c.Folder, "projects/") {
 		return assess.Decision{}, false, false
 	}
 	name := path.Base(c.Folder)
@@ -345,6 +345,26 @@ func (a *assessor) codeDecisionOf(c assess.Candidate, recs func(string) *record.
 			w = r.SuppressedBy
 		}
 		return ""
+	}
+	// A linked worktree's or a separate clone's directory (git's metadata,
+	// recorded while it existed), with nothing that gives it an identity of
+	// its own: part of its repository.
+	if len(c.Ancestors) > 0 && c.Ancestors[0].Certain() && len(c.Independence) == 0 && len(c.Same) == 0 {
+		an := c.Ancestors[0]
+		w := live(an.Name)
+		if w == "" || w == c.Folder {
+			return assess.Decision{}, false, w == "" && recs("projects/"+an.Name) == nil
+		}
+		kind := record.KindFolder
+		if c.GitRoot || c.Absent() {
+			kind = record.KindRepo
+		}
+		why := fmt.Sprintf("code: %s; nothing gives it an identity of its own (no own commits, no remote or forge repository of its own, no work in a folder of its name): part of %s", strings.Join(an.Why, "; "), path.Base(w))
+		return assess.Decision{Folder: c.Folder, Kind: kind, Status: record.StatusDead, Why: why + a.factCite(c.Folder, ""),
+			Description: fmt.Sprintf("A worktree or clone directory of %s; its facts are %s's.", path.Base(w), path.Base(w)), SuppressedBy: w}, true, false
+	}
+	if !c.Absent() {
+		return assess.Decision{}, false, false
 	}
 	if to := c.Name.Renamed; to != "" {
 		if a.checker.Repo(a.ctx, to).Verdict != check.Holds {
@@ -416,8 +436,8 @@ func (a *assessor) factsPoint(c assess.Candidate) (map[string]bool, int, int, st
 	for _, p := range c.Proposed() {
 		if r, ok := a.catalog.Repo(p.Name); ok && r.Root != "" {
 			roots[p.Name] = pathSource{root: r.Root}
-		} else if rc := a.checker.Repo(a.ctx, p.Name); rc.Verdict == check.Holds && rc.Forge != "" {
-			roots[p.Name] = pathSource{forge: rc.Forge}
+		} else if full := a.forgeFullOf(p.Name); full != "" {
+			roots[p.Name] = pathSource{forge: full}
 		}
 	}
 	var facts []*fact.Fact

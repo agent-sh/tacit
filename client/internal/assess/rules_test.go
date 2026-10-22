@@ -1,6 +1,7 @@
 package assess
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -204,5 +205,74 @@ func TestFingerprintKeepsVerdictsAndNamesNotWording(t *testing.T) {
 	d.Name = repoCheck("x", check.Holds, "")
 	if Fingerprint(d) == fp {
 		t.Fatal("a new verdict kept it")
+	}
+}
+
+// Find the ancestor: a folder with ancestor candidates stands alone only on
+// independence evidence it cites; without any, it must fold.
+func TestEnforceFindsTheAncestor(t *testing.T) {
+	env := Checked{Repo: func(n string) check.RepoCheck { return *repoCheck(n, check.Holds, "") }}
+	c := Candidate{Folder: "projects/wt-portfolio-rework", Name: repoCheck("wt-portfolio-rework", check.Unknown, ""),
+		Ancestors: []Ancestor{{Name: "portfolio", Folder: "projects/portfolio", Sources: []string{SourceName}, Why: []string{"its name contains portfolio"}}}}
+	for _, d := range []Decision{
+		{Kind: "repo", Status: "active"}, {Kind: "repo", Status: "needs-review"}, {Kind: "none", Status: "dead"},
+		{Kind: "folder", Status: "dormant", Independent: Keys{"commits"}},
+	} {
+		ps := Enforce(c, d, env)
+		if len(ps) != 1 || !strings.Contains(ps[0], "presumed part of") || !strings.Contains(ps[0], "set suppressed_by to projects/portfolio") {
+			t.Errorf("%+v: %v", d, ps)
+		}
+	}
+	if ps := Enforce(c, Decision{Kind: "repo", Status: "active", SuppressedBy: "projects/portfolio"}, env); len(ps) != 0 {
+		t.Errorf("the fold refused: %v", ps)
+	}
+	// An owner's quote decides for the owner (verified by the caller).
+	if ps := Enforce(c, Decision{Kind: "repo", Status: "active", OwnerQuote: "wt-portfolio-rework is its own site", OwnerQuoteFrom: "claude:x"}, env); len(ps) != 0 {
+		t.Errorf("the owner's decision refused: %v", ps)
+	}
+	// With its own commits it may stand alone, citing them.
+	c.Independence = []Independence{{Key: "commits", Line: "12 own commits"}, {Key: "remote:github.com/o/wt", Line: "its own remote"}}
+	if ps := Enforce(c, Decision{Kind: "repo", Status: "active"}, env); len(ps) != 1 || !strings.Contains(ps[0], "code's keys: commits, remote:github.com/o/wt") {
+		t.Errorf("uncited: %v", ps)
+	}
+	for _, k := range []Keys{{"commits"}, {"remote:github.com/o/wt"}, {"other", "commits"}} {
+		if ps := Enforce(c, Decision{Kind: "repo", Status: "active", Independent: k}, env); len(ps) != 0 {
+			t.Errorf("cited %v: %v", k, ps)
+		}
+	}
+	if ps := Enforce(c, Decision{Kind: "repo", Status: "active", Independent: Keys{"made-up"}}, env); len(ps) != 1 {
+		t.Errorf("a key code did not list: %v", ps)
+	}
+	// A folder with no ancestor is not asked for any.
+	if ps := Enforce(Candidate{Folder: "projects/solo", Name: repoCheck("solo", check.Holds, "")}, Decision{Kind: "repo", Status: "active"}, env); len(ps) != 0 {
+		t.Errorf("no ancestors: %v", ps)
+	}
+}
+
+func TestAncestorsRenderAndFingerprint(t *testing.T) {
+	c := Candidate{Folder: "projects/kvstore", Ancestors: []Ancestor{{Name: "agent-lab", Folder: "projects/agent-lab", Sources: []string{SourcePath}, Why: []string{"2 fact(s) name paths with a kvstore directory inside agent-lab's tree"}}}}
+	out := Render([]Candidate{c})
+	for _, want := range []string{"ancestor candidates (code's, best first; this folder is presumed part of one of them): 1. projects/agent-lab [path]", "independence: none found"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("render lacks %q:\n%s", want, out)
+		}
+	}
+	d := c
+	d.Independence = []Independence{{Key: "work", Line: "3 sessions worked in it"}}
+	if Fingerprint(c) == Fingerprint(d) {
+		t.Error("independence evidence is no part of the fingerprint")
+	}
+	if !strings.Contains(Render([]Candidate{d}), "independence [work]: 3 sessions worked in it") {
+		t.Error("independence not rendered")
+	}
+	if p := c.Proposed(); len(p) != 1 || p[0].Name != "agent-lab" {
+		t.Errorf("ancestors are proposed: %+v", p)
+	}
+	var k struct {
+		A Keys `json:"a"`
+		B Keys `json:"b"`
+	}
+	if err := json.Unmarshal([]byte(`{"a":"commits","b":["work","forge:o/x"]}`), &k); err != nil || len(k.A) != 1 || k.A[0] != "commits" || len(k.B) != 2 {
+		t.Fatalf("keys: %+v %v", k, err)
 	}
 }

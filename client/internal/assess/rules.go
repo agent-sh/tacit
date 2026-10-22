@@ -104,6 +104,34 @@ func Enforce(c Candidate, d Decision, env Checked) []string {
 			ps = append(ps, fmt.Sprintf("%s is the canonical name of this repository (check: %s): the other names fold into it, never it into %s", name, why, into))
 		}
 	}
+	// Find the ancestor: a folder related to others is presumed part of one;
+	// it stands alone only on the independence evidence code found, cited.
+	if len(c.Ancestors) > 0 && into == "" && strings.TrimSpace(d.OwnerQuote) == "" {
+		var anc []string
+		for _, an := range c.Ancestors {
+			anc = append(anc, an.Folder)
+		}
+		keys := map[string]bool{}
+		for _, in := range c.Independence {
+			keys[in.Key] = true
+		}
+		cited := 0
+		for _, k := range d.Independent {
+			if keys[strings.TrimSpace(k)] {
+				cited++
+			}
+		}
+		switch {
+		case len(c.Independence) == 0:
+			ps = append(ps, fmt.Sprintf("%s is related to %s: it is presumed part of one of code's ancestor candidates (%s), and code found no evidence of an identity of its own (no own commits, no remote or forge repository of its own, no work in a folder of its own name), so it cannot be %s %s on its own: set suppressed_by to %s, or to another of them the evidence supports", name, anc[0], strings.Join(anc, ", "), d.Kind, d.Status, anc[0]))
+		case cited == 0:
+			var ks []string
+			for _, in := range c.Independence {
+				ks = append(ks, in.Key)
+			}
+			ps = append(ps, fmt.Sprintf("%s is related to %s (code's ancestor candidates: %s): it stands alone only on evidence of its own identity: cite the independence item(s) it rests on in independent (code's keys: %s), or set suppressed_by to %s, or to another of them the evidence supports", name, anc[0], strings.Join(anc, ", "), strings.Join(ks, ", "), anc[0]))
+		}
+	}
 	if strings.HasPrefix(into, "projects/") && env.Repo != nil {
 		t := strings.TrimPrefix(into, "projects/")
 		tc := env.Repo(t)
@@ -264,6 +292,12 @@ func Fingerprint(c Candidate) string {
 	}
 	sort.Strings(names)
 	b.WriteString("proposed " + strings.Join(names, " ") + "\n")
+	for _, an := range c.Ancestors {
+		fmt.Fprintf(&b, "ancestor %s %s\n", an.Folder, strings.Join(an.Sources, "+"))
+	}
+	for _, in := range c.Independence {
+		b.WriteString("independence " + in.Key + "\n")
+	}
 	for _, l := range c.Context {
 		if !strings.HasPrefix(l, "owner's turn (") {
 			b.WriteString(l + "\n")
