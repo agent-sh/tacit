@@ -404,6 +404,7 @@ const maxReal = 5
 func (a *assessor) realRepos(folder, name string, rc check.RepoCheck) []assess.RealRepo {
 	score := map[string]int{}
 	why := map[string][]string{}
+	stable := map[string]bool{} // named by evidence the live file system does not move
 	note := func(n, w string, s int) {
 		n = strings.ToLower(n)
 		if n == "" || n == name {
@@ -412,8 +413,12 @@ func (a *assessor) realRepos(folder, name string, rc check.RepoCheck) []assess.R
 		score[n] += s
 		why[n] = append(why[n], w)
 	}
+	noteStable := func(n, w string, s int) {
+		note(n, w, s)
+		stable[strings.ToLower(n)] = true
+	}
 	if rc.Renamed != "" {
-		note(rc.Renamed, "the forge's current name of "+name, 1000)
+		noteStable(rc.Renamed, "the forge's current name of "+name, 1000)
 	}
 	sessions := map[string]string{}
 	var live []*fact.Fact
@@ -429,7 +434,7 @@ func (a *assessor) realRepos(folder, name string, rc check.RepoCheck) []assess.R
 		}
 	}
 	for n, k := range a.sessionCounts(sessions) {
-		note(n, fmt.Sprintf("%d of %d session(s) that filed its notes worked in its checkout", k, len(sessions)), 100*k)
+		noteStable(n, fmt.Sprintf("%d of %d session(s) that filed its notes worked in its checkout", k, len(sessions)), 100*k)
 	}
 	paths, remotes, applies := map[string]int{}, map[string]int{}, map[string]int{}
 	cache := repoid.NewCache(a.home)
@@ -469,13 +474,13 @@ func (a *assessor) realRepos(folder, name string, rc check.RepoCheck) []assess.R
 		}
 	}
 	for n, k := range applies {
-		note(n, fmt.Sprintf("%d of its %d live fact(s) name it in applies_to.repos", k, len(live)), 20*k)
+		noteStable(n, fmt.Sprintf("%d of its %d live fact(s) name it in applies_to.repos", k, len(live)), 20*k)
 	}
 	for n, k := range paths {
 		note(n, fmt.Sprintf("%d of its %d live fact(s) name paths in its checkout", k, len(live)), 20*k)
 	}
 	for n, k := range remotes {
-		note(n, fmt.Sprintf("%d of its live fact(s) name its remote", k), 20*k)
+		noteStable(n, fmt.Sprintf("%d of its live fact(s) name its remote", k), 20*k)
 	}
 	pool := map[string]bool{}
 	for _, n := range a.catalog.Names() {
@@ -527,11 +532,12 @@ func (a *assessor) realRepos(folder, name string, rc check.RepoCheck) []assess.R
 			if out[i].Name == n {
 				out[i].Score += sc
 				out[i].Why = append(out[i].Why, ws...)
+				out[i].Volatile = out[i].Volatile && !stable[k]
 				merged = true
 			}
 		}
 		if !merged {
-			out = append(out, assess.RealRepo{Name: n, Why: ws, Score: sc})
+			out = append(out, assess.RealRepo{Name: n, Why: ws, Score: sc, Volatile: !stable[k]})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
