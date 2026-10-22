@@ -199,25 +199,47 @@ func (c Candidate) Shape() string {
 	return fmt.Sprintf("name %s, absent %v, belongs to %s", v, c.Absent(), real)
 }
 
-// Fingerprint is a hash of the evidence the model reads of a candidate
-// (why it was asked and the record it had aside): the same fingerprint is
-// the same question (a refused folder, or one left for review, waits until
-// it changes).
-//
-// The owner's turns that mention the folder are left out: they are the
-// newest mentions in a history that grows with every session, so they would
-// change it with nothing about the folder changed. Their words reach the
-// quote ledger, whose lines count.
+// Fingerprint is a hash of the evidence the model reads of a candidate:
+// the same fingerprint is the same question (a refused folder, or one left
+// for review, waits until it changes). Why it was asked and the record it
+// had are left out, and so is what moves with nothing about the folder
+// changed: the owner's newest turns that mention it (a history that grows
+// with every session; their words reach the quote ledger, whose lines
+// count), and of code's checks and proposals, the wording (which owners the
+// forge was asked under, how many facts name a candidate) where only the
+// verdicts and the names matter.
 func Fingerprint(c Candidate) string {
-	c.Reason, c.Old = "", nil
-	var ctx []string
-	for _, l := range c.Context {
-		if !strings.HasPrefix(l, "owner's turn (") {
-			ctx = append(ctx, l)
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n%s\n%s\n", c.Folder, c.Kind, strings.Join(c.Sessions, " "))
+	for _, e := range c.Evidence {
+		if l := evidenceLine(e); l != "" {
+			b.WriteString("evidence " + l + "\n")
 		}
 	}
-	c.Context = ctx
-	h := sha256.Sum256([]byte(Render([]Candidate{c})))
+	if c.Name != nil {
+		fmt.Fprintf(&b, "name %s %s %s\n", c.Name.Verdict, c.Name.Renamed, c.Name.Forge)
+		for _, r := range c.Name.Results {
+			fmt.Fprintf(&b, "check %s %s %s\n", r.Source, r.Verdict, r.Value)
+		}
+	}
+	for _, r := range c.Same {
+		b.WriteString("same " + r.Value + "\n")
+	}
+	var names []string
+	for _, r := range c.Proposed() {
+		names = append(names, r.Name)
+	}
+	sort.Strings(names)
+	b.WriteString("proposed " + strings.Join(names, " ") + "\n")
+	for _, l := range c.Context {
+		if !strings.HasPrefix(l, "owner's turn (") {
+			b.WriteString(l + "\n")
+		}
+	}
+	for _, l := range c.Similar {
+		b.WriteString(l + "\n")
+	}
+	h := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(h[:12])
 }
 
