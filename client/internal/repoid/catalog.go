@@ -29,6 +29,9 @@ type Catalog struct {
 	home    string
 	mains   *Mains
 	work    map[string][]Work // root -> evidence (the registry's)
+	// checkouts are the directory names of the repositories' linked
+	// worktrees and separate clones (checkouts.go), by name.
+	checkouts map[string]checkoutName
 }
 
 // RegistryFile is the registry's name in the state directory.
@@ -45,6 +48,10 @@ type registry struct {
 	// Folders is the same evidence for folders of the projects directory
 	// that are no git repository, by the folder's path.
 	Folders map[string][]Work `json:"folders,omitempty"`
+	// Checkouts are the linked worktrees and separate clones seen, by the
+	// checkout's root, with the repository each belongs to (checkouts.go):
+	// kept after the checkout is gone, so its ancestor stays known.
+	Checkouts map[string]Checkout `json:"checkouts,omitempty"`
 }
 
 // Work is one session's evidence of real work in a checkout: By is "edit"
@@ -252,8 +259,9 @@ func LoadCatalog(home, registryPath, projects string) *Catalog {
 	}
 	cache := NewCache(home)
 	cache.Mains = c.mains
+	reg := registry{}
 	if registryPath != "" {
-		reg := readRegistry(registryPath)
+		reg = readRegistry(registryPath)
 		c.work = reg.Work
 		for _, slug := range sortedKeys(reg.Repos) {
 			e := reg.Repos[slug]
@@ -267,6 +275,7 @@ func LoadCatalog(home, registryPath, projects string) *Catalog {
 			}
 		}
 	}
+	c.loadCheckouts(reg)
 	return c
 }
 
@@ -366,6 +375,21 @@ func (c *Catalog) AliasOf(alias string) string {
 		return ""
 	}
 	return c.aliases[a]
+}
+
+// AliasNames lists the other names the catalog's repositories go by, sorted.
+func (c *Catalog) AliasNames() []string {
+	if c == nil {
+		return nil
+	}
+	out := make([]string, 0, len(c.aliases))
+	for a := range c.aliases {
+		if _, own := c.repos[a]; !own {
+			out = append(out, a)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Names lists the catalog's repository slugs, sorted.

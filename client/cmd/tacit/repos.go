@@ -31,7 +31,18 @@ func recordWindowRepos(home string, ws []dream.Window) {
 			repos = append(repos, r)
 		}
 	}
-	_ = repoid.Record(filepath.Join(platform.StateDir(home), repoid.RegistryFile), repos...)
+	reg := filepath.Join(platform.StateDir(home), repoid.RegistryFile)
+	_ = repoid.Record(reg, repos...)
+	// The checkouts that are no main checkout (a linked worktree, a separate
+	// clone), recorded with the repository they belong to while they exist,
+	// so a folder of their name keeps its ancestor after they are removed.
+	var checkouts []repoid.Repo
+	for _, w := range ws {
+		if w.Checkout.Root != "" {
+			checkouts = append(checkouts, w.Checkout)
+		}
+	}
+	_ = repoid.RecordCheckouts(reg, repoid.LoadMains(home, repoid.ProjectsDir(home)), checkouts...)
 }
 
 // acceptPendingRepos counts the evidence of work in each window's pending

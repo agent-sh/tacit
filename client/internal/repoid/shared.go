@@ -42,6 +42,11 @@ type SharedRepo struct {
 	OwnCommits  *int   `json:"own_commits,omitempty"`
 	FirstCommit string `json:"first_commit,omitempty"`
 	LastCommit  string `json:"last_commit,omitempty"`
+	// Checkouts are the directory names (never the paths) of the
+	// repository's linked worktrees and separate clones the machine has
+	// seen (Catalog.CheckoutOwner): a folder of one of these names is part
+	// of this repository.
+	Checkouts []string `json:"checkouts,omitempty"`
 }
 
 type sharedFile struct {
@@ -72,6 +77,7 @@ func (c *Catalog) SharedWith(commits func(root string) (Commits, bool)) []byte {
 			}
 		}
 		e.WorkSessions, e.FirstWork, e.LastWork = WorkSummary(c.work[r.Root])
+		e.Checkouts = c.checkoutNamesOf(slug)
 		if commits != nil {
 			if cm, ok := commits(r.Root); ok {
 				n := cm.Own
@@ -108,6 +114,9 @@ func (c *Catalog) AddShared(b []byte) bool {
 			r.URLs = addURL(r.URLs, u)
 		}
 		c.add(r)
+		for _, n := range e.Checkouts {
+			c.addCheckoutName(n, slug, CheckoutAny)
+		}
 	}
 	return true
 }

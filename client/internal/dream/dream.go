@@ -250,10 +250,14 @@ type Window struct {
 	// evidence of work in that folder ("" for none).
 	WorkRoot   string
 	WorkFolder string
-	Lines      []string
-	Start      int64
-	End        int64
-	Part       int
+	// Checkout is the cwd's checkout when that is no main checkout (a linked
+	// worktree, a separate clone), as repoid resolved it: the caller records
+	// its relation to the repository (repoid.RecordCheckouts) while it exists.
+	Checkout repoid.Repo
+	Lines    []string
+	Start    int64
+	End      int64
+	Part     int
 	// Why is the reason a selecting run took the transcript: "idle" or
 	// "compacted" (Select.Idle), empty otherwise.
 	Why string
@@ -689,10 +693,28 @@ func repoOf(raw []byte, home string, mains *repoid.Mains) (r repoid.Repo, cwd st
 		ids := repoid.NewCache(home)
 		ids.Mains = mains
 		cwd = cwdPath(string(m[1]))
-		r, _ = ids.Of(cwd)
+		var ok bool
+		if r, ok = ids.Of(cwd); !ok {
+			r = recordedRepo(ids, cwd, home)
+		}
 		return r, cwd
 	}
 	return repoid.Repo{}, ""
+}
+
+// recordedRepo is the repository of a cwd whose checkout is gone (a removed
+// worktree or clone) by the relation the registry recorded while it existed
+// (repoid.RecordCheckouts): its main checkout, while that is still one.
+func recordedRepo(ids *repoid.Cache, cwd, home string) repoid.Repo {
+	_, c, ok := repoid.RecordedCheckout(filepath.Join(platform.StateDir(home), repoid.RegistryFile), repoid.RealPath(cwd))
+	if !ok || c.Main == "" {
+		return repoid.Repo{}
+	}
+	r, ok := ids.Of(c.Main)
+	if !ok || r.Slug() != c.Repo {
+		return repoid.Repo{}
+	}
+	return r
 }
 
 // windowsOf chunks a delta's lines into windows (mk fills each one's
@@ -712,6 +734,11 @@ func windowsOf(lines []string, cwdRepo repoid.Repo, cwd, home string, mains *rep
 	var out []Window
 	for part, c := range chunk(lines, maxWindowChars) {
 		w := mk(part, c)
+		for _, r := range []repoid.Repo{cwdRepo, pending} {
+			if r.Root != "" && (r.Clone != "" || r.Worktree != r.Root || !mains.In(r.Root)) {
+				w.Checkout = r
+			}
+		}
 		w.Repo, w.RepoRoot = cwdRepo.Name, cwdRepo.Root
 		if w.Repo == "" {
 			w.Repo = windowRepo(c, resolver)
