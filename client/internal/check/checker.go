@@ -189,8 +189,13 @@ func (c *Checker) repo(ctx context.Context, name string) RepoCheck {
 			}
 		}
 	}
-	for n, hs := range c.Shared {
-		for _, h := range hs {
+	sharedNames := make([]string, 0, len(c.Shared))
+	for n := range c.Shared {
+		sharedNames = append(sharedNames, n)
+	}
+	sort.Strings(sharedNames) // one order every run
+	for _, n := range sharedNames {
+		for _, h := range c.Shared[n] {
 			hosts[h.Host] = true
 			for _, a := range h.Aliases {
 				if a == name && n != name && h.Host != c.Host {

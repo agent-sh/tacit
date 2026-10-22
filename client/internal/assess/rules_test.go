@@ -169,3 +169,18 @@ func TestEnforceOneLiveFolderPerRepository(t *testing.T) {
 		t.Fatalf("no other record: %v", ps)
 	}
 }
+
+func TestFingerprintIgnoresTheReasonTheRecordAndNewOwnerTurns(t *testing.T) {
+	c := Candidate{Folder: "projects/x", Reason: "a", Context: []string{"facts: 2 live", `owner's turn (claude:s1): "x is fine"`}}
+	fp := Fingerprint(c)
+	d := c
+	d.Reason, d.Old = "b", &record.Record{Kind: "repo", Status: "needs-review"}
+	d.Context = []string{"facts: 2 live", `owner's turn (claude:s9): "x again"`}
+	if Fingerprint(d) != fp {
+		t.Fatal("the fingerprint moved with nothing about the folder changed")
+	}
+	d.Context = []string{"facts: 3 live"}
+	if Fingerprint(d) == fp {
+		t.Fatal("new evidence kept the fingerprint")
+	}
+}
