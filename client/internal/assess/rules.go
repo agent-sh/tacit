@@ -205,9 +205,10 @@ func (c Candidate) Shape() string {
 // had are left out, and so is what moves with nothing about the folder
 // changed: the owner's newest turns that mention it (a history that grows
 // with every session; their words reach the quote ledger, whose lines
-// count), and of code's checks and proposals, the wording (which owners the
+// count), of code's checks and proposals the wording (which owners the
 // forge was asked under, how many facts name a candidate) where only the
-// verdicts and the names matter.
+// verdicts and the names matter, and the proposals only the live file
+// system makes (Volatile).
 func Fingerprint(c Candidate) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n%s\n%s\n", c.Folder, c.Kind, strings.Join(c.Sessions, " "))
@@ -227,7 +228,9 @@ func Fingerprint(c Candidate) string {
 	}
 	var names []string
 	for _, r := range c.Proposed() {
-		names = append(names, r.Name)
+		if !r.Volatile {
+			names = append(names, r.Name)
+		}
 	}
 	sort.Strings(names)
 	b.WriteString("proposed " + strings.Join(names, " ") + "\n")

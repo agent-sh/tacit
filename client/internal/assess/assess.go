@@ -103,6 +103,10 @@ type RealRepo struct {
 	// Score orders the proposals: sessions that worked in its checkout
 	// weigh most, then facts that name its paths, then a near name.
 	Score int
+	// Volatile: only the live file system names it (the checkouts its facts'
+	// paths resolve to now, a near name among today's checkouts), which
+	// agents change all day; a fingerprint leaves it out.
+	Volatile bool
 }
 
 // Absent reports a folder whose name, as a repository, code verified exists
