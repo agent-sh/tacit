@@ -149,6 +149,8 @@ type cacheEntry struct {
 	FullName string `json:"full_name,omitempty"`
 	Archived bool   `json:"archived,omitempty"`
 	At       string `json:"at"`
+	// Activity is a repository's Activity (Cache.Activity's entries).
+	Activity *Activity `json:"activity,omitempty"`
 }
 
 // Default times to live of the forge's answers.
