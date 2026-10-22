@@ -410,6 +410,10 @@ func (c *Checker) Canonical(ctx context.Context, name, other string) Result {
 		r.Verdict, r.Output, r.Value = Fails, where, other
 	case cn != "" && co != "" && cn != co:
 		r.Verdict, r.Output = Fails, "they are names of two repositories: "+where
+	case cn != "" && cn != name && co == "":
+		// The main checkout's directory is a third name, or the other name
+		// is one no catalog has.
+		r.Verdict, r.Output, r.Value = Fails, where+"; no catalog has "+other, cn
 	case cn == name && co == "":
 		rc := c.Repo(ctx, other)
 		r.Source = "checkouts+forge"

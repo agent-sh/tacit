@@ -513,7 +513,7 @@ func (a *assessor) canonicalName(c assess.Candidate) (string, []string) {
 		group = append(group, c.Name.Renamed)
 	}
 	if a.decisions == nil {
-		a.decisions = ownerDecisions(a.dir, a.facts, a.local)
+		a.decisions = ownerDecisions(a.dir, a.facts, a.local, sameRepo(a.ctx, a.checker))
 	}
 	for _, n := range group {
 		if d, ok := a.decisions[n]; ok {
