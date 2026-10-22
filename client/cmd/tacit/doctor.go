@@ -149,6 +149,8 @@ func doctorChecks(models bool, role string) ([]doctorCheck, bool) {
 		}
 	}
 	add("tacit", "info", fmt.Sprintf("binary %s, writes store format %d", version, ledger.FormatVersion))
+	st, detail := staleProcsCheck()
+	add("tacit processes", st, detail)
 	if s, err := store.Default(); err == nil && s.Exists() {
 		switch f, ok, err := ledger.ReadFormat(s.Dir); {
 		case err != nil:
