@@ -165,22 +165,86 @@ func TestReviewLabelModeHasNoOwnerWrites(t *testing.T) {
 // --no-open and no terminal the server does not start.
 func TestOwnerLinkOnlyOnATerminal(t *testing.T) {
 	var b bytes.Buffer
-	url := announceOwner(&b, "review", "127.0.0.1:7448", "s3cret", false)
+	url := announceOwner(&b, "review", "127.0.0.1:7448", "s3cret", "", false)
 	if url != "http://127.0.0.1:7448/?t=s3cret" || strings.Contains(b.String(), "s3cret") || !strings.Contains(b.String(), "http://127.0.0.1:7448/") {
 		t.Fatalf("pipe: %q %q", url, b.String())
 	}
 	b.Reset()
-	announceOwner(&b, "review", "127.0.0.1:7448", "s3cret", true)
+	announceOwner(&b, "review", "127.0.0.1:7448", "s3cret", "", true)
 	if !strings.Contains(b.String(), "http://127.0.0.1:7448/?t=s3cret") {
 		t.Fatalf("terminal: %q", b.String())
 	}
 	old := stdoutIsTerminal
 	stdoutIsTerminal = func() bool { return false }
 	defer func() { stdoutIsTerminal = old }()
-	if code := serveOwner("review", "127.0.0.1:0", "s3cret", true, http.NotFoundHandler()); code != 2 {
+	if code := serveOwner("review", "127.0.0.1:0", "s3cret", "", true, http.NotFoundHandler()); code != 2 {
 		t.Fatalf("--no-open without a terminal: %d", code)
 	}
-	if code := serveOwner("review", "0.0.0.0:0", "s3cret", false, http.NotFoundHandler()); code != 2 {
+	if code := serveOwner("review", "0.0.0.0:0", "s3cret", "", false, http.NotFoundHandler()); code != 2 {
 		t.Fatalf("a non-loopback address: %d", code)
+	}
+}
+
+// tacit review --fact <name> (and tacit app --browser --fact): the link the
+// terminal shows carries the fact after the token, as a fragment the server
+// never sees; through a pipe neither the token nor the link is printed. A
+// name the store does not hold still opens the page (which says so), with a
+// line on stderr. --fact needs the owner's page: label mode and the desktop
+// window refuse it.
+func TestOwnerLinkOpensOnANamedFact(t *testing.T) {
+	if got := ownerURL("127.0.0.1:7448", "s3cret", "rule"); got != "http://127.0.0.1:7448/?t=s3cret#fact=rule" {
+		t.Fatalf("link %q", got)
+	}
+	if got := ownerURL("127.0.0.1:7448", "s3cret", "a b/c"); got != "http://127.0.0.1:7448/?t=s3cret#fact=a%20b%2Fc" {
+		t.Fatalf("an odd name is escaped: %q", got)
+	}
+	var b bytes.Buffer
+	link := announceOwner(&b, "review", "127.0.0.1:7448", "s3cret", "rule", true)
+	if link != "http://127.0.0.1:7448/?t=s3cret#fact=rule" || !strings.Contains(b.String(), link) {
+		t.Fatalf("terminal: %q %q", link, b.String())
+	}
+	b.Reset()
+	announceOwner(&b, "review", "127.0.0.1:7448", "s3cret", "rule", false)
+	if strings.Contains(b.String(), "s3cret") || strings.Contains(b.String(), "#fact") {
+		t.Fatalf("pipe: %q", b.String())
+	}
+
+	_, clone := ownerFixture(t)
+	rs := clone("open")
+	for _, name := range []string{"", "rule", "engine-retries", "note"} {
+		if note := openFactNote(rs, name); note != "" {
+			t.Errorf("%q: %q", name, note)
+		}
+	}
+	if note := openFactNote(rs, "no-such-rule"); !strings.Contains(note, "no fact is named no-such-rule") || !strings.Contains(note, "the page opens and says so") {
+		t.Fatalf("unknown fact: %q", note)
+	}
+	// The page asks Fact for the name; an unknown one is the error the page turns into its message.
+	if _, err := rs.factDetail(ctxT(t), "no-such-rule"); err == nil || !strings.HasPrefix(err.Error(), "no fact named no-such-rule") {
+		t.Fatalf("Fact of an unknown name: %v", err)
+	}
+
+	// The page itself is served the same with or without a fragment: the
+	// browser keeps #fact=... and the token rules do not change.
+	rs.token = "tok"
+	srv := httptest.NewServer(rs.handler())
+	defer srv.Close()
+	for path, want := range map[string]int{"/?t=tok#fact=rule": http.StatusOK, "/#fact=rule": http.StatusForbidden, "/?t=wrong#fact=rule": http.StatusForbidden} {
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		page, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != want || (want == http.StatusOK && !strings.Contains(string(page), `id="top-q"`)) {
+			t.Errorf("GET %s: %d, want %d", path, resp.StatusCode, want)
+		}
+	}
+
+	if code := runApp([]string{"--fact", "rule"}); code != 2 {
+		t.Errorf("app --fact without --browser: %d", code)
+	}
+	if code := runReview([]string{"--fact", "rule", "--label", "sample.json"}); code != 2 {
+		t.Errorf("review --fact in label mode: %d", code)
 	}
 }

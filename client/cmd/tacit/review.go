@@ -1098,7 +1098,7 @@ func runReviewApply(files []string) int {
 	return 0
 }
 
-// runReview implements `tacit review [--addr 127.0.0.1:7448] [--no-open]`
+// runReview implements `tacit review [--addr 127.0.0.1:7448] [--no-open] [--fact NAME]`
 // and `tacit review apply FILE...`.
 func runReview(args []string) int {
 	if len(args) > 0 && args[0] == "apply" {
@@ -1109,7 +1109,12 @@ func runReview(args []string) int {
 	noOpen := fsf.Bool("no-open", false, "do not open a browser")
 	sample := fsf.String("label", "", "label mode: JSON array of {id} samples; marks go to --labels, never to the store")
 	labels := fsf.String("labels", "", "label mode: JSONL file that receives the owner's marks (default ~/.local/state/tacit/labels/<sample>.jsonl)")
+	openFact := fsf.String("fact", "", "open the page on the fact of this name")
 	fsf.Parse(args)
+	if *openFact != "" && *sample != "" {
+		fmt.Fprintln(os.Stderr, "review: --fact opens the owner's page, which label mode does not serve")
+		return 2
+	}
 	host, _, err := net.SplitHostPort(*addr)
 	if err != nil || (host != "127.0.0.1" && host != "localhost" && host != "::1") {
 		fmt.Fprintln(os.Stderr, "review: --addr must be a loopback address")
@@ -1167,7 +1172,10 @@ func runReview(args []string) int {
 			cancel()
 		}
 	}()
-	return serveOwner("review", *addr, rs.token, *noOpen, rs.handler())
+	if note := openFactNote(rs, *openFact); note != "" {
+		fmt.Fprintln(os.Stderr, "review:", note)
+	}
+	return serveOwner("review", *addr, rs.token, *openFact, *noOpen, rs.handler())
 }
 
 // handler is what tacit review serves. Outside label mode it is the owner's

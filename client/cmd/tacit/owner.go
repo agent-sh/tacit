@@ -474,6 +474,7 @@ type factDetail struct {
 	CanEdit       bool        `json:"can_edit"`
 	CanRetire     bool        `json:"can_retire"`
 	CanRestore    bool        `json:"can_restore"`
+	CanReplace    bool        `json:"can_replace"`   // Replace with a new rule is offered: a live fact the owner may change
 	Why           string      `json:"why,omitempty"` // why it cannot be edited or retired here
 	Undo          undoView    `json:"undo"`
 }
@@ -554,6 +555,7 @@ func (rs *reviewServer) factDetail(ctx context.Context, ref string) (*factDetail
 		d.CanEdit = true
 		d.CanRetire = f.Meta.Retired == "" && f.Meta.SupersededBy == ""
 		d.CanRestore = f.Meta.Retired != ""
+		d.CanReplace = d.CanRetire
 		if f.Meta.SupersededBy != "" && f.Meta.Retired == "" {
 			d.Why = "Replaced by " + f.Meta.SupersededBy + ", so it already does not reach agents. Change that answer in Needs you."
 		}
@@ -562,7 +564,7 @@ func (rs *reviewServer) factDetail(ctx context.Context, ref string) (*factDetail
 	d.Undo = undoOf(d)
 	if rs.viewOnly != "" {
 		// Nothing is offered: no edit, retire, restore, undo or rule.
-		d.CanEdit, d.CanRetire, d.CanRestore, d.CanMine, d.CanNotMine = false, false, false, false, false
+		d.CanEdit, d.CanRetire, d.CanRestore, d.CanReplace, d.CanMine, d.CanNotMine = false, false, false, false, false, false
 		d.Undo = undoView{Why: rs.viewOnly}
 		d.Why = rs.viewOnly
 	}
@@ -612,7 +614,8 @@ func undoOf(d *factDetail) undoView {
 	if !strings.HasPrefix(h.Subject, ownerCommit) {
 		return undoView{Why: fmt.Sprintf("The last change (%s, %s) is not one you made here.", h.Who, h.When)}
 	}
-	if strings.HasPrefix(h.Subject, ownerCommit+"new ruling ") {
+	// The rule's own first commit; the fact a new rule replaced can be put back.
+	if strings.HasPrefix(h.Subject, ownerCommit+"new ruling "+d.Name+" ") {
 		return undoView{Why: "You wrote this rule here; retire it to stop it reaching agents."}
 	}
 	return undoView{Can: true, Subject: strings.TrimPrefix(h.Subject, ownerCommit), When: h.When}
@@ -1063,6 +1066,10 @@ type rulingDraft struct {
 	Body        string `json:"body"`
 	Scope       string `json:"scope"`
 	Origin      string `json:"origin"` // the inbox note it was promoted from, if any
+	// Replaces: a live fact the new rule takes the place of. It gets
+	// superseded_by the new rule in the same commit, so it stops reaching
+	// agents and stays in history; Undo on it puts it back.
+	Replaces string `json:"replaces,omitempty"`
 }
 
 // firstSentence is the description a ruling gets when the form left it empty.
@@ -1077,7 +1084,8 @@ func firstSentence(body string) string {
 }
 
 // newRuling writes the owner's own words as a curated fact: source.kind user,
-// type user_standard, the scope the owner chose.
+// type user_standard, the scope the owner chose. With Replaces, the fact it
+// names is replaced by the new rule in the same commit.
 func (rs *reviewServer) newRuling(ctx context.Context, d rulingDraft) (*saveResult, error) {
 	return rs.ownerWrite(ctx, func() (*ownerChange, error) {
 		sn, err := rs.snapshot(ctx)
@@ -1120,11 +1128,33 @@ func (rs *reviewServer) newRuling(ctx context.Context, d rulingDraft) (*saveResu
 		if err != nil {
 			return nil, err
 		}
-		msg := fmt.Sprintf("%snew ruling %s (%s)\n\nWritten by the owner in tacit app.", ownerCommit, name, scope)
+		write := map[string][]byte{nf.Path: b}
+		msg := fmt.Sprintf("%snew ruling %s (%s)", ownerCommit, name, scope)
+		if old := strings.TrimSpace(d.Replaces); old != "" {
+			f, data, err := rs.ownerFact(ctx, old)
+			if err != nil {
+				return nil, err
+			}
+			switch {
+			case f.Meta.Retired != "":
+				return nil, fmt.Errorf("%s was retired on %s; restore it first, or write the rule without replacing it", f.Meta.Name, f.Meta.Retired)
+			case f.Meta.SupersededBy != "":
+				return nil, fmt.Errorf("%s is already replaced by %s", f.Meta.Name, f.Meta.SupersededBy)
+			}
+			c := *f
+			c.Meta.SupersededBy, c.Meta.Updated = name, today()
+			ob, err := fact.PatchRelations(data, &c)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", f.Path, err)
+			}
+			write[f.Path] = ob
+			msg += ", replacing " + f.Meta.Name
+		}
+		msg += "\n\nWritten by the owner in tacit app."
 		if m.Origin != "" {
 			msg += " Promoted from the inbox note " + m.Origin + "."
 		}
-		return &ownerChange{name: name, write: map[string][]byte{nf.Path: b}, msg: msg}, nil
+		return &ownerChange{name: name, write: write, msg: msg}, nil
 	})
 }
 

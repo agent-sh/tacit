@@ -1,7 +1,8 @@
 // tacit app: the places beside Needs you. Your rules, What agents believe you
 // prefer, All facts and Inbox are search first; a fact opens with what it says, where it applies and what can
-// be done, its details folded. The owner edits, retires, restores, undoes theirs
-// last change and writes new rules. Needs you is app.js, with the broken links
+// be done, its details folded. The owner edits, retires, restores, replaces with
+// a new rule, undoes their last change and writes new rules. The box at the top
+// finds any fact from every place (/), and #fact=<name> opens the page on one. Needs you is app.js, with the broken links
 // in their rules added. Design: DESIGN.md.
 "use strict";
 const desk = {
@@ -287,6 +288,7 @@ function factSheet() {
       (d.not_mine ? btn("act-undonotmine", "undo", "Undo Not mine", "x") : "") +
       btn("act-edit", "edit", "Edit", "e", { primary: d.can_edit && !d.believed, off: !d.can_edit }) +
       (d.can_restore ? btn("act-restore", "unarchive", "Restore", "r") : btn("act-retire", "archive", "Retire", "r", { off: !d.can_retire })) +
+      (d.can_replace ? btn("act-replace", "take", "Replace with a new rule", "") : "") +
       (d.undo && d.undo.can ? btn("act-undo", "undo", "Undo last change", "u") : "");
   const why = d.why || (!d.inbox && d.undo && d.undo.can ? `Undo puts back what was there before your last change, ${plainDate(d.undo.when)}.` : "");
   el.innerHTML = `
@@ -301,7 +303,7 @@ function factSheet() {
     <details class="more" id="fact-more"><summary>Details</summary>${detailsHTML(d)}</details>`;
   const on = (id, fn) => { const b = $(id); if (b) b.onclick = fn; };
   on("act-edit", () => startEdit()); on("act-retire", () => retire(true)); on("act-restore", () => retire(false));
-  on("act-undo", () => undo()); on("act-promote", () => promote()); on("act-ismine", () => mine()); on("act-notmine", () => notMine()); on("act-undonotmine", () => undoNotMine(d.name));
+  on("act-undo", () => undo()); on("act-promote", () => promote()); on("act-replace", () => replaceWith()); on("act-ismine", () => mine()); on("act-notmine", () => notMine()); on("act-undonotmine", () => undoNotMine(d.name));
   // What git shows is read when the details are opened: it is slow, and most visits do not need it.
   const more = $("fact-more");
   if (more && more.addEventListener) more.addEventListener("toggle", () => { if (more.open) factTimeline(d); });
@@ -551,7 +553,7 @@ function openRuling(prefill = {}) {
   if (deskViewOnly()) { slip(deskViewOnly()); return; }
   const d = desk.detail;
   const repo = prefill.repo ?? (desk.view !== "needs" ? (desk.lists[desk.view] || {}).q?.repo || (d && !d.inbox ? repoOfScope(d.scope) : "") : "");
-  desk.ruling = { body: prefill.body || "", description: prefill.description || "", name: prefill.name || "", repo, scope: repo ? "projects/" + repo : "", origin: prefill.origin || "", nameEdited: !!prefill.name, descEdited: !!prefill.description };
+  desk.ruling = { body: prefill.body || "", description: prefill.description || "", name: prefill.name || "", repo, scope: prefill.scope || (repo ? "projects/" + repo : ""), origin: prefill.origin || "", replaces: prefill.replaces || "", nameEdited: !!prefill.name, descEdited: !!prefill.description };
   desk.back = desk.view;
   if (desk.view === "needs") setView("rules", { then: () => {} });
   desk.mode = "ruling";
@@ -570,8 +572,9 @@ function scopeChoices(r, typed = "The one you typed.") {
 function rulingSheet() {
   const r = desk.ruling, el = $("fact-sheet");
   el.innerHTML = `
-    <p class="crumb">New rule</p>
+    <p class="crumb">${r.replaces ? "New rule, replacing another fact" : "New rule"}</p>
     <h2 class="fact-text">What is the rule?</h2>
+    ${r.replaces ? `<p class="where">It replaces ${factLink(r.replaces, "live")}. Its words are here to start from; change them to what holds now.</p>` : ""}
     <p class="hint">Agents read it as a rule in force, and no agent may change or retire it. Keep it as narrow as it is true.</p>
     <form class="form" id="ruling-form" novalidate aria-label="New rule">
       <label class="field"><span class="flabel">In your words</span><textarea id="r-body" class="text" rows="5" placeholder="Say it the way you would say it to an agent.">${esc(r.body)}</textarea></label>
@@ -582,13 +585,13 @@ function rulingSheet() {
       <details class="more"><summary>File name</summary><label class="field"><span class="flabel">Name</span><input id="r-name" value="${esc(r.name)}" spellcheck="false" autocomplete="off"></label><p class="tl-sub" id="r-folio"></p></details>
       <div class="problem" id="r-problem" role="alert"></div>
       <div class="actions">${btn("act-save", "check", "Save rule", "ctrl ↵", { primary: true })}${btn("act-cancel", "x", "Cancel", "esc")}</div>
-      <p class="hint">${r.origin ? `Made from the inbox note ${esc(r.origin)}; the note stays as it is.` : "Saving makes one commit in your name. If tacit's checks fail, nothing is saved and your draft stays."}</p>
+      <p class="hint">${r.replaces ? `Saving makes one commit in your name: the new rule, and the fact it replaces marked as replaced by it. That fact stops reaching agents and stays in history; Undo on it brings it back.` : r.origin ? `Made from the inbox note ${esc(r.origin)}; the note stays as it is.` : "Saving makes one commit in your name. If tacit's checks fail, nothing is saved and your draft stays."}</p>
     </form>`;
   const sync = () => {
     r.body = $("r-body").value;
     r.repo = slugify($("r-repo").value) === $("r-repo").value.trim() ? $("r-repo").value.trim() : slugify($("r-repo").value);
     if (!r.descEdited) { const s = firstSentence(r.body); $("r-desc").value = s; r.description = s; } else r.description = $("r-desc").value;
-    if (!r.nameEdited) { const s = slugify(r.description); $("r-name").value = s; r.name = s; } else r.name = $("r-name").value.trim();
+    if (!r.nameEdited) { let s = slugify(r.description); if (s && s === r.replaces) s = (s.length > 57 ? s.slice(0, 57).replace(/-+$/, "") : s) + "-v2"; $("r-name").value = s; r.name = s; } else r.name = $("r-name").value.trim();
     paintRulingHints();
   };
   $("r-body").oninput = sync;
@@ -597,6 +600,8 @@ function rulingSheet() {
   $("r-name").oninput = () => { r.nameEdited = true; sync(); };
   $("act-save").onclick = saveRuling; $("act-cancel").onclick = cancelRuling;
   $("ruling-form").onsubmit = (e) => { e.preventDefault(); saveRuling(); };
+  // A form that starts from words (Replace with a new rule) names itself from them.
+  if (r.body && !r.nameEdited && !r.name) sync();
   paintScopes(); paintRulingHints();
   el.querySelectorAll("textarea").forEach(grow);
   $("r-body").focus();
@@ -624,10 +629,10 @@ async function saveRuling() {
   if (!r.scope) { problem("r-problem", "Choose who it reaches first."); return; }
   await guarded(async () => {
     try {
-      const res = await tacitCall("NewRuling", { name: r.name, description: r.description, body: r.body, scope: r.scope, origin: r.origin });
+      const res = await tacitCall("NewRuling", { name: r.name, description: r.description, body: r.body, scope: r.scope, origin: r.origin, replaces: r.replaces });
       if (res.lint && res.lint.length) { problem("r-problem", res.note, res.lint); slip(res.note, { error: true }); return; }
       desk.ruling = null; desk.mode = "show";
-      slip("Saved your rule.");
+      slip(r.replaces ? `Saved your rule. ${r.replaces} is replaced by it and stops reaching agents.` : "Saved your rule.");
       if (desk.view !== "rules") setView("rules", { noList: true });
       await refreshAfterWrite(res.name);
     } catch (e) { problem("r-problem", e.message + ". Your draft is kept."); fail(e); }
@@ -637,6 +642,12 @@ function cancelRuling() {
   desk.ruling = null; desk.mode = "show";
   const back = desk.back;
   if (back === "needs") setView("needs"); else if (desk.detail) factSheet(); else browse();
+}
+// Replace with a new rule: the rule form starts from this fact's words and
+// scope; saving replaces this fact with the new rule in one commit.
+function replaceWith() {
+  const d = desk.detail; if (!d || !d.can_replace || desk.mode !== "show") return;
+  openRuling({ body: d.body || d.description, scope: d.scope, repo: repoOfScope(d.scope), replaces: d.name });
 }
 function promote() {
   const d = desk.detail; if (!d || !d.inbox) return;
@@ -674,6 +685,106 @@ async function applyLink(it) {
   });
 }
 
+// --- find any fact, from every place ---
+
+// The box at the top searches every fact, the owner's rules among them, and
+// the retired and replaced ones too when its box is ticked. A result opens in
+// All facts with its actions; the list beside it holds the same search.
+// The retired-and-replaced box sits at the head of the results, so it is
+// drawn with them; finder.gone keeps its state between draws.
+const finder = { rows: [], matched: 0, cur: -1, seq: 0, timer: null, gone: false };
+const findGone = () => { const g = $("top-gone"); if (g && typeof g.checked === "boolean") finder.gone = g.checked; return finder.gone; };
+function findQuery(text, gone, limit) {
+  return { q: text, status: gone ? "all" : "live", where: "curated", scope: "", repo: "", type: "", kind: "", rulings: false, believed: false, limit };
+}
+function focusFind() { const q = $("top-q"); if (!q) return; q.focus(); if (q.select) q.select(); }
+function findSoon() { clearTimeout(finder.timer); finder.timer = setTimeout(() => findNow(), 140); }
+async function findNow() {
+  const q = $("top-q"); if (!q) return;
+  const text = q.value.trim(), seq = ++finder.seq;
+  if (!text) { finder.rows = []; finder.cur = -1; paintFind(); return; }
+  try {
+    const r = await tacitCall("Browse", findQuery(text, findGone(), 12));
+    if (seq !== finder.seq) return;
+    finder.rows = r.rows || []; finder.matched = r.matched || finder.rows.length; finder.cur = finder.rows.length ? 0 : -1;
+    paintFind();
+  } catch (e) { if (seq === finder.seq) fail(e); }
+}
+function closeFind() {
+  const ul = $("top-results"); if (!ul) return;
+  ul.hidden = true; ul.innerHTML = "";
+  $("top-q").setAttribute("aria-expanded", "false"); $("top-q").removeAttribute("aria-activedescendant");
+}
+function paintFind() {
+  const ul = $("top-results"), q = $("top-q"); if (!ul || !q) return;
+  const text = q.value.trim();
+  if (!text) { closeFind(); return; }
+  const n = (x) => Number(x || 0).toLocaleString("en-GB");
+  const rows = finder.rows.map((r, i) => {
+    const meta = [r.name, cap(whereWords(r.scope)), r.ruling ? "your rule" : "", r.retired ? "retired" : r.superseded_by ? "replaced" : ""].filter(Boolean).join(", ");
+    return `<li role="option" id="top-r-${i}" data-i="${i}" aria-selected="${i === finder.cur}" class="${i === finder.cur ? "active" : ""}${r.retired || r.superseded_by ? " gone" : ""}"><span class="row-text">${esc(r.description || r.name)}</span><span class="row-meta">${esc(meta)}</span></li>`;
+  }).join("");
+  const none = finder.rows.length ? "" : `<li class="none">No fact matches “${esc(text)}”${findGone() ? "" : ". Retired and replaced facts are left out; tick Retired and replaced too to search them"}.</li>`;
+  const more = finder.matched > finder.rows.length ? `<li class="more" data-all="1">All ${n(finder.matched)} in All facts</li>` : "";
+  const opts = `<li class="find-opts"><label class="find-gone"><input type="checkbox" id="top-gone"${finder.gone ? " checked" : ""}> Retired and replaced too</label></li>`;
+  const onBox = document.activeElement && document.activeElement.id === "top-gone";
+  ul.innerHTML = opts + rows + none + more;
+  if (onBox && $("top-gone")) $("top-gone").focus();
+  ul.hidden = false;
+  q.setAttribute("aria-expanded", "true");
+  { const g = $("top-gone"); if (g) g.checked = finder.gone; }
+  if (finder.cur >= 0) { q.setAttribute("aria-activedescendant", "top-r-" + finder.cur); const a = ul.querySelector && ul.querySelector(".active"); if (a && a.scrollIntoView) a.scrollIntoView({ block: "nearest" }); }
+  else q.removeAttribute("aria-activedescendant");
+}
+// Open a result (or, with none chosen, the whole search) in All facts.
+function pickFind(i) {
+  const q = $("top-q"), text = q ? q.value.trim() : "";
+  if (!text) return;
+  const row = i >= 0 ? finder.rows[i] : null;
+  closeFind();
+  showFound(text, row ? row.path : "", findGone() || !!(row && (row.retired || row.superseded_by)));
+}
+// All facts, searched for text; path, when given, is the fact that opens.
+function showFound(text, path, gone, then) {
+  const L = desk.lists.facts;
+  Object.assign(L.q, findQuery(text, gone));
+  delete L.q.limit;
+  L.cur = 0;
+  if (desk.view !== "facts") desk.back = desk.view;
+  setView("facts", { then: () => {
+    const j = path ? L.rows.findIndex((r) => r.path === path) : -1;
+    if (j >= 0) L.cur = j;
+    factLedger();
+    if (then) then();
+    else if (path) openFact(path, { focus: true });
+    else if (L.rows.length) openFact(L.rows[L.cur].path);
+    else blankSheet();
+  } });
+}
+// #fact=<name> (the link tacit review --fact prints): the page opens on that
+// fact, or says plainly that the store has none of that name.
+function factOfHash() {
+  const h = typeof location !== "undefined" && location ? String(location.hash || "") : "";
+  const m = /^#fact=(.+)$/.exec(h);
+  if (!m) return "";
+  try { return decodeURIComponent(m[1]).trim(); } catch (_) { return m[1].trim(); }
+}
+async function openFromHash() {
+  const name = factOfHash(); if (!name) return;
+  let d;
+  try { d = await tacitCall("Fact", name); } catch (e) { noSuchFact(name, e.message); return; }
+  showFound(d.name, d.path, !!(d.retired || d.superseded_by), () => openFact(d.path, { focus: true }));
+}
+function noSuchFact(name, why) {
+  const missing = /^no fact named /i.test(String(why || ""));
+  showFound(name, "", true, () => {
+    $("fact-sheet").innerHTML = missing
+      ? `<div class="done"><h2>No fact is named ${esc(name)}.</h2><p>The link asked for ${esc(name)}, and the store has no fact of that name: not in use, not retired, not replaced. ${desk.lists.facts.rows.length ? "The facts beside this are the ones the search finds for it." : "The search finds nothing for it either."} Find any fact from the box at the top (/).</p></div>`
+      : `<div class="done"><h2>${esc(name)} could not be opened.</h2><p>${esc(why || "No answer from tacit.")}</p></div>`;
+    desk.detail = null;
+  });
+}
+
 // --- keys, start ---
 
 document.addEventListener("click", (e) => {
@@ -686,6 +797,11 @@ const PLACES = { 1: "needs", 2: "rules", 3: "believed", 4: "facts", 5: "inbox", 
 document.addEventListener("keydown", (e) => {
   const t = e.target instanceof Element ? e.target : document.body;
   const typing = t.matches("input, select, textarea");
+  // The finder at the top keeps its own keys, whatever the place is doing (a draft stays as it is).
+  if (t.id === "top-q") {
+    if (e.key === "Escape") { if (t.value) { t.value = ""; t.dispatchEvent(new Event("input", { bubbles: true })); } closeFind(); t.blur(); }
+    return;
+  }
   if (desk.mode === "edit" || desk.mode === "ruling") {
     const conflict = desk.mode === "edit" && $("act-mine");
     if (isCombo(e)) { e.preventDefault(); if (!conflict) desk.mode === "edit" ? saveEdit() : saveRuling(); return; }
@@ -707,6 +823,7 @@ document.addEventListener("keydown", (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   // Keys every place takes.
   if (PLACES[e.key]) { setView(PLACES[e.key]); e.preventDefault(); return; }
+  if (e.key === "/") { focusFind(); e.preventDefault(); return; }
   if (e.key === "n" && desk.mode !== "ruling") { openRuling(); e.preventDefault(); return; }
   if (desk.view === "needs") {
     const it = view[cur];
@@ -729,7 +846,6 @@ document.addEventListener("keydown", (e) => {
     case "p": promote(); break;
     case "m": if (d && d.can_mine) mine(); else return; break;
     case "x": if (d && d.can_not_mine) notMine(); else if (d && d.not_mine && desk.mode === "show") undoNotMine(d.name); else return; break;
-    case "/": $("q").focus(); break;
     case "d": lights(); break;
     case "Escape": if (desk.back && desk.back !== desk.view) setView(desk.back); else return; break;
     default: return;
@@ -746,7 +862,30 @@ for (const [id, k] of [["f-status", "status"], ["f-where", "where"], ["f-scope",
   $(id).addEventListener("change", (e) => { L().q[k] = e.target.value; L().cur = 0; paintFilters(); browse(); });
 }
 for (const sel of document.querySelectorAll(".filter-panel select")) upgradeSelect(sel);
+{
+  const q = $("top-q"), ul = $("top-results");
+  if (q && ul) {
+    q.addEventListener("input", findSoon);
+    q.addEventListener("focus", () => { if (q.value.trim()) findNow(); });
+    // The results close when focus leaves the box and its results (Tab reaches their checkbox).
+    const box = $("find-all") || q;
+    box.addEventListener("focusout", () => setTimeout(() => { if (!(box.contains && box.contains(document.activeElement))) closeFind(); }, 0));
+    q.addEventListener("keydown", (e) => {
+      const n = finder.rows.length;
+      if (e.key === "ArrowDown" && n) { finder.cur = (finder.cur + 1) % n; paintFind(); e.preventDefault(); }
+      else if (e.key === "ArrowUp" && n) { finder.cur = (finder.cur - 1 + n) % n; paintFind(); e.preventDefault(); }
+      else if (e.key === "Enter") { clearTimeout(finder.timer); e.preventDefault(); if (n || !q.value.trim()) pickFind(finder.cur); else findNow().then(() => pickFind(finder.cur)); }
+    });
+    // Focus stays in the box while a result or the checkbox is clicked.
+    ul.addEventListener("mousedown", (e) => e.preventDefault());
+    ul.addEventListener("click", (e) => { const li = e.target instanceof Element && e.target.closest("li"); if (!li) return; if (li.dataset.i !== undefined) pickFind(+li.dataset.i); else if (li.dataset.all) pickFind(-1); });
+    ul.addEventListener("change", (e) => { if (e.target && e.target.id === "top-gone") { finder.gone = !!e.target.checked; findNow(); } });
+    ul.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); closeFind(); q.focus(); } });
+  }
+}
+if (typeof window !== "undefined" && window.addEventListener) window.addEventListener("hashchange", () => openFromHash());
 (async () => {
   try { desk.meta = await tacitCall("Meta"); } catch (e) { fail(e); }
   paintViewOnly();
+  await openFromHash();
 })();
