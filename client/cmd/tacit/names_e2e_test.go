@@ -140,8 +140,16 @@ func TestPlannedRenameAndForgeRename(t *testing.T) {
 		Description: "2026-10-15 owner ruling \"pikadon is the name, move what needed\": references follow the pikadon name.", Type: "user_standard", Scope: "projects/pikadon",
 		Source: fact.Source{Harness: "curator", Host: "box", Kind: "user", OwnerQuote: "pikadon is the name, move what needed", OwnerQuoteFrom: "claude:s9"}, Created: "2026-10-16"},
 		Body: "On 2026-10-15 the owner said \"pikadon is the name, move what needed\".\n"})
+	// A newer ruling whose words name the repository in passing, with a typo:
+	// the model misreads a canonical claim from it, which the checks refute.
+	wt := "instead of 88 acumulated stale wt that we got now on pikdon(ginza)"
+	writeFactFile(t, w.s.Dir, &fact.Fact{Path: "projects/pikadon/ruling-worktrees-stale.md", Meta: fact.Meta{Name: "ruling-worktrees-stale",
+		Description: "Owner ruling: stale worktrees are marked and removed, " + wt, Type: "design_decision", Scope: "projects/pikadon",
+		Source: fact.Source{Harness: "curator", Host: "box", Kind: "user", OwnerQuote: wt, OwnerQuoteFrom: "claude:s8"}, Created: "2026-10-19"},
+		Body: "The owner said \"" + wt + "\".\n"})
 	ql, _ := os.ReadFile(filepath.Join(w.s.Dir, ledger.QuotesPath))
 	ql = append(ql, ledger.Quote{Name: "ruling-pikadon-is-the-name", Quote: "pikadon is the name, move what needed", From: "claude:s9", TurnHash: "h9", At: "2026-10-16"}.Line()...)
+	ql = append(ql, ledger.Quote{Name: "ruling-worktrees-stale", Quote: wt, From: "claude:s8", TurnHash: "h8", At: "2026-10-19"}.Line()...)
 	os.MkdirAll(filepath.Join(w.s.Dir, "review"), 0o755)
 	os.WriteFile(filepath.Join(w.s.Dir, ledger.QuotesPath), ql, 0o644)
 	w.commit("an older store")
@@ -152,16 +160,26 @@ func TestPlannedRenameAndForgeRename(t *testing.T) {
 	var asked []string
 	statementsRun = func(_ context.Context, _, prompt string) (string, float64, error) {
 		asked = append(asked, prompt)
-		return `[{"name":"ruling-pikadon-is-the-name","says":"choice","claims":[{"kind":"canonical","name":"pikadon"}]}]`, 0.01, nil
+		return `[{"name":"ruling-pikadon-is-the-name","says":"choice","claims":[{"kind":"canonical","name":"pikadon"}]},` +
+			`{"name":"ruling-worktrees-stale","says":"instruction","claims":[{"kind":"canonical","name":"ginza","other":"pikdon"}]}]`, 0.01, nil
 	}
 	if _, errs := statementsStep(context.Background(), w.s, statementsOpts{model: "opus"}, &curate.Report{}); errs != 0 {
 		t.Fatalf("statements: %d errors", errs)
 	}
-	if len(asked) != 1 || !strings.Contains(asked[0], "### ruling=ruling-pikadon-is-the-name") {
+	if len(asked) != 1 || !strings.Contains(asked[0], "### ruling=ruling-pikadon-is-the-name") || !strings.Contains(asked[0], "### ruling=ruling-worktrees-stale") {
 		t.Fatalf("the ruling was not read: %v", asked)
 	}
-	if d := ownerDecisions(w.s.Dir, factsList(t, w.s.Dir), false); d["pikadon"].Canonical != "pikadon" {
+	if d := ownerDecisions(w.s.Dir, factsList(t, w.s.Dir), false, nil); d["pikadon"].Canonical != "pikadon" {
 		t.Fatalf("the owner's decision: %+v", d)
+	}
+	// Unchecked, the misread claim would name ginza; the checks drop it (pikdon
+	// is no name of the repository).
+	if d := ownerDecisions(w.s.Dir, factsList(t, w.s.Dir), false, nil); d["ginza"].Canonical != "ginza" {
+		t.Fatalf("unchecked: %+v", d)
+	}
+	ch := storeChecker(context.Background(), w.s.Dir, false)
+	if d := ownerDecisions(w.s.Dir, factsList(t, w.s.Dir), false, sameRepo(context.Background(), ch)); d["ginza"].Fact != "" {
+		t.Fatalf("a misread claim counted: %+v", d["ginza"])
 	}
 
 	// The model first keeps ginza (the checkout's directory); code refuses it

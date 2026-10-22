@@ -357,12 +357,26 @@ func statementsStep(ctx context.Context, s *store.Store, o statementsOpts, rep *
 	}
 	errs := 0
 	var newLog []statement.Entry
+	// Batches of statementsBatch; a batch the model fails on is asked again
+	// one item at a time, so one item it refuses does not hold the others.
+	var batches [][]statement.Ask
 	for i := 0; i < len(asks); i += statementsBatch {
-		batch := asks[i:min(i+statementsBatch, len(asks))]
+		batches = append(batches, asks[i:min(i+statementsBatch, len(asks))])
+	}
+	for len(batches) > 0 {
+		batch := batches[0]
+		batches = batches[1:]
 		prompt := fmt.Sprintf(statement.Prompt, statement.Render(batch))
 		res, cost, err := statementsRun(ctx, o.model, prompt)
 		rep.CostUSD += cost
 		if err != nil {
+			if len(batch) > 1 && ctx.Err() == nil {
+				fmt.Fprintf(os.Stderr, "statements: model: %v; asking its %d item(s) one at a time\n", err, len(batch))
+				for _, a := range batch {
+					batches = append(batches, []statement.Ask{a})
+				}
+				continue
+			}
 			fmt.Fprintln(os.Stderr, "statements: model:", err)
 			errs++
 			continue
@@ -771,15 +785,20 @@ func unionCap(a, b []string) []string {
 }
 
 // ownerDecisions are the folder names the owner's live decisions settle,
-// read from the statements log: for each canonical claim of a promoted
-// decision that is still live and a ruling, every name it names maps to
-// the real name, with the decision (its name, words and where).
+// read from the statements log: for each canonical claim of a decision code
+// promoted, or of a ruling the step read, that is still live and theirs,
+// the names it names map to the real name, with the decision (its name,
+// words and where). A claim whose other name is not, by the checks, a name
+// of the same repository (same: nil checks nothing) is the model's misreading
+// and counts for nothing. When live decisions name two real names for one
+// name, the one more of them name wins, then the newer.
 type ownerDecision struct {
 	Fact, Words, From, Canonical string
 	Names                        []string
+	Day                          string
 }
 
-func ownerDecisions(dir string, facts []*fact.Fact, local bool) map[string]ownerDecision {
+func ownerDecisions(dir string, facts []*fact.Fact, local bool, same func(a, b string) bool) map[string]ownerDecision {
 	byName := map[string]*fact.Fact{}
 	for _, f := range facts {
 		byName[f.Meta.Name] = f
@@ -790,7 +809,6 @@ func ownerDecisions(dir string, facts []*fact.Fact, local bool) map[string]owner
 		lb, _ := os.ReadFile(filepath.Join(overlay.Dir(), overlay.CuratedDir, filepath.FromSlash(ledger.StatementsPath)))
 		b = append(append([]byte(nil), b...), lb...)
 	}
-	out := map[string]ownerDecision{}
 	log := statement.ReadLog(b)
 	judged := statement.Judgements(log)
 	type src struct {
@@ -814,29 +832,77 @@ func ownerDecisions(dir string, facts []*fact.Fact, local bool) map[string]owner
 			srcs = append(srcs, src{n, judged[n].Claims})
 		}
 	}
+	cands := map[string][]ownerDecision{} // name -> the decisions that name it
+	seen := map[string]bool{}
 	for _, sc := range srcs {
 		f := byName[sc.fact]
 		if !liveFact(f) || !(fact.IsRuling(f) || overlay.IsRuling(f)) {
 			continue
 		}
 		for _, cl := range sc.claims {
-			if cl.Kind != "canonical" {
+			if cl.Kind != "canonical" || len(cl.Valid()) > 0 {
 				continue
 			}
 			c, o := strings.ToLower(cl.Name), strings.ToLower(cl.Other)
-			d := ownerDecision{Fact: f.Meta.Name, Words: f.Meta.Source.OwnerQuote, From: f.Meta.Source.OwnerQuoteFrom, Canonical: c, Names: []string{c}}
-			if o != "" {
+			if o != "" && same != nil && !same(c, o) {
+				continue
+			}
+			d := ownerDecision{Fact: f.Meta.Name, Words: f.Meta.Source.OwnerQuote, From: f.Meta.Source.OwnerQuoteFrom, Canonical: c, Names: []string{c}, Day: f.Meta.Created}
+			if o != "" && o != c {
 				d.Names = append(d.Names, o)
 			}
 			for _, n := range d.Names {
-				if prev, ok := out[n]; ok && prev.Canonical != c {
-					continue // the first (oldest in the log) decision of a name stands; the owner's newer one supersedes it through the step
+				if k := n + "\x00" + d.Fact; !seen[k] {
+					seen[k] = true
+					cands[n] = append(cands[n], d)
 				}
-				out[n] = d
 			}
 		}
 	}
+	out := map[string]ownerDecision{}
+	for n, ds := range cands {
+		count := map[string]int{}
+		newest := map[string]ownerDecision{}
+		for _, d := range ds {
+			count[d.Canonical]++
+			if cur, ok := newest[d.Canonical]; !ok || d.Day > cur.Day || d.Day == cur.Day && d.Fact < cur.Fact {
+				newest[d.Canonical] = d
+			}
+		}
+		best := ""
+		for c := range count {
+			switch {
+			case best == "", count[c] > count[best]:
+				best = c
+			case count[c] == count[best] && (newest[c].Day > newest[best].Day || newest[c].Day == newest[best].Day && c < best):
+				best = c
+			}
+		}
+		out[n] = newest[best]
+	}
 	return out
+}
+
+// sameRepo reports two names the checks prove are one repository: one
+// main checkout's directory for both, another name of a checkout (Same),
+// or the forge's rename of one to the other.
+func sameRepo(ctx context.Context, ch *check.Checker) func(a, b string) bool {
+	return func(a, b string) bool {
+		if a == b {
+			return true
+		}
+		ca, _ := ch.CheckoutName(a)
+		cb, _ := ch.CheckoutName(b)
+		if ca != "" && ca == cb {
+			return true
+		}
+		for _, r := range ch.Same(a) {
+			if strings.EqualFold(r.Value, b) {
+				return true
+			}
+		}
+		return ch.Repo(ctx, a).Renamed == b || ch.Repo(ctx, b).Renamed == a
+	}
 }
 
 // namingQuestion reports text that names, as a whole word, a repository
