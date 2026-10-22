@@ -62,7 +62,7 @@
       case "create": d = { action: "create", folder: r.folder, kind: el("kd-" + i).value, description: el("ds-" + i).value, status: el("st-" + i).value }; break;
       case "create-new": {
         const f = el("new-folder").value.trim();
-        d = { action: "create", folder: f, kind: /^topics\/|\/topics\//.test(f) ? "topic" : "area", description: el("new-desc").value };
+        d = { action: "create", folder: f, kind: /^(?:topics\/|areas\/[^/]+\/topics\/)/.test(f) ? "topic" : "area", description: el("new-desc").value };
         break;
       }
       default: return;
