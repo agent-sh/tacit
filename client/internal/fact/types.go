@@ -13,6 +13,9 @@ type TypeDoc struct {
 	InboxOnly bool
 	// UserScope: allowed only in the user scope.
 	UserScope bool
+	// Owner: written by code only, from the owner's own words it verified
+	// (a statement): a model or an agent never gives the type itself.
+	Owner bool
 }
 
 // TypeDocs is the defined list of types, in the order prompts show them.
@@ -31,6 +34,7 @@ var TypeDocs = []TypeDoc{
 	{Name: "result", Doc: "generated from git: measured numbers a repo's history records, quotable by hooks", Generated: true},
 	{Name: "result_ref", Doc: "generated from git: measured numbers only search finds", Generated: true},
 	{Name: "unclassified", Doc: "an inbox note not typed yet; the curator assigns a real type", InboxOnly: true},
+	{Name: StatementType, Doc: "the owner's own words, said once: verbatim, with the day, the session and what was being discussed; written by code from their verified words, never a rule", Owner: true},
 }
 
 // TypeDocOf is the documentation of a type, and whether it is a known one.
@@ -47,7 +51,7 @@ func TypeDocOf(name string) (TypeDoc, bool) {
 func ModelTypes() []string {
 	var out []string
 	for _, d := range TypeDocs {
-		if !d.Generated && !d.InboxOnly {
+		if !d.Generated && !d.InboxOnly && !d.Owner {
 			out = append(out, d.Name)
 		}
 	}
@@ -59,7 +63,7 @@ func ModelTypes() []string {
 func ModelTypeLines() string {
 	var b strings.Builder
 	for _, d := range TypeDocs {
-		if !d.Generated && !d.InboxOnly {
+		if !d.Generated && !d.InboxOnly && !d.Owner {
 			b.WriteString("  - " + d.Name + ": " + d.Doc + "\n")
 		}
 	}

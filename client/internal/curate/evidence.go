@@ -77,3 +77,63 @@ func ApplyEvidence(f *fact.Fact, e Entry, note *fact.Fact, where Where) (ledger.
 	}
 	return ledger.Quote{}, false
 }
+
+// KindStatement is a split entry's kind for a statement of the owner's
+// (SPEC.md, "Statements"): their words, said once, not sure to be a
+// standing rule.
+const KindStatement = "statement"
+
+// ApplyStatement settles a split entry of kind statement. When its quote is
+// in the note it came from and is a statement of the owner's (the note is
+// one they wrote in the app, or where finds the words in their turns, not
+// asked, not negated), f becomes their statement: type statement, kind
+// observed, their words in owner_words and owner_words_from, created on
+// the note's day (the day the dreamer read the session), and the body code
+// writes: their words verbatim and dated, the context, the model's reading
+// labelled as its own (fact.StatementBody). With statements false (a store
+// whose format marker predates statements) the words stay on an observed
+// fact of the entry's type, as owner_words, which every binary reads.
+// Otherwise f stays an observed fact with no words of theirs. It returns the
+// quote ledger entry (a words entry) and whether the words are theirs.
+func ApplyStatement(f *fact.Fact, e Entry, note *fact.Fact, where Where, statements bool) (ledger.Quote, bool) {
+	src := &f.Meta.Source
+	src.OwnerQuote, src.OwnerQuoteFrom, src.Endorsed, src.OwnerWords, src.OwnerWordsFrom = "", "", "", "", ""
+	src.Kind = "observed"
+	q := strings.Join(strings.Fields(e.OwnerQuote), " ")
+	if note == nil || q == "" {
+		return ledger.Quote{}, false
+	}
+	if !ownerwords.In(note.Meta.Description+"\n"+note.Body, q) {
+		return ledger.Quote{}, false
+	}
+	from, hash := "", ""
+	switch {
+	case fact.OwnerWrote(note):
+		if w := OwnerWordsOf(note); ownerwords.In(w, q) {
+			from, hash = "note:"+note.Meta.Name, ledger.TurnHash(ownerwords.Normalize(w))
+		}
+	case where != nil:
+		from, hash = where(q, note.Meta.Source.Session)
+	}
+	if from == "" {
+		return ledger.Quote{}, false
+	}
+	day := f.Meta.Created
+	if fact.IsDate(note.Meta.Created) && note.Meta.Created < day {
+		day = note.Meta.Created
+	}
+	context := strings.Join(strings.Fields(e.Context), " ")
+	if context == "" {
+		context = strings.Join(strings.Fields(e.Description), " ")
+	}
+	if statements {
+		f.Meta.Type = fact.StatementType
+		f.Meta.Created = day
+		f.Meta.Description = fact.ClipDescription(context, 200)
+		f.Body = fact.StatementBody(day, q, context, e.Body)
+	} else if !ownerwords.In(f.Meta.Description+"\n"+f.Body, q) {
+		f.Body = strings.TrimRight(f.Body, "\n") + fmt.Sprintf(" In the owner's words, said once (%s): \"%s\"\n", day, q)
+	}
+	src.OwnerWords, src.OwnerWordsFrom = q, from
+	return ledger.Quote{Name: f.Meta.Name, Quote: q, From: from, TurnHash: hash, At: f.Meta.Created, Words: true}, true
+}

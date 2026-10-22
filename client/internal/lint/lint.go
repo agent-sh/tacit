@@ -39,6 +39,7 @@ func Run(root string) ([]Finding, error) {
 		out = append(out, Finding{"L1", path, strings.Join(strings.Fields(msg), " ")})
 	}
 	ev := readEvidence(root)
+	format, _, _ := ledger.ReadFormat(root)
 	names := map[string]bool{}
 	for _, f := range facts {
 		names[f.Meta.Name] = true
@@ -46,6 +47,7 @@ func Run(root string) ([]Finding, error) {
 	for _, f := range facts {
 		out = append(out, check(f, names)...)
 		out = append(out, ownerEvidence(f, ev)...)
+		out = append(out, statementRules(f, format)...)
 	}
 	out = append(out, records(root, facts)...)
 	out = append(out, overviews(root, names)...)
@@ -274,6 +276,44 @@ func ownerEvidence(f *fact.Fact, ev evidence) []Finding {
 	}
 	if s.Kind == "user" && !f.InInbox() && f.Audited && !fact.HasEvidence(f) {
 		add("source.kind user without the owner's words: no owner_quote, no endorsement, not written by them (tacit rulings audit)")
+	}
+	return out
+}
+
+// statementRules is L20 (SPEC.md, "Statements"): a fact of type statement is
+// curated (code writes it, never a note), in a store whose format marker
+// says every machine reads statements (format 2) or in this machine's local
+// layer, of kind observed (their words, never a ruling), with the owner's
+// words and where (owner_words, owner_words_from, which L15 checks against
+// the ledger), and its body opens with "You said once (<day>): "<their
+// words>"".
+func statementRules(f *fact.Fact, format ledger.Format) []Finding {
+	if f.Meta.Type != fact.StatementType {
+		return nil
+	}
+	var out []Finding
+	add := func(msg string) { out = append(out, Finding{"L20", f.Path, msg}) }
+	s := f.Meta.Source
+	if f.InInbox() {
+		add("a statement is written by code on a curated fact, never on an inbox note")
+	}
+	if !strings.HasPrefix(f.Path, "local/") && !format.Statements() {
+		add(fmt.Sprintf("a statement in a store whose format marker is not %d or newer (%s): an older binary does not read statements", ledger.StatementsFormat, ledger.FormatPath))
+	}
+	if s.Kind != "observed" {
+		add("a statement is source.kind observed (the owner's words, never a ruling), got " + s.Kind)
+	}
+	if s.OwnerWords == "" || s.OwnerWordsFrom == "" {
+		add("a statement carries the owner's words: source.owner_words and source.owner_words_from")
+	}
+	day, words, ok := fact.StatementLine(f.Body)
+	switch {
+	case !ok:
+		add(`the body does not open with "You said once (YYYY-MM-DD): \"<their words>\""`)
+	case strings.Join(strings.Fields(words), " ") != strings.Join(strings.Fields(s.OwnerWords), " "):
+		add("the body's quoted words are not source.owner_words")
+	case f.Meta.Created != "" && day > f.Meta.Created:
+		add("the day they said it is after the fact's created date")
 	}
 	return out
 }

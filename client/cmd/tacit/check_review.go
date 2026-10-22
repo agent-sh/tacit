@@ -10,7 +10,10 @@ package main
 //	  Proof: ...
 //
 // The page lists each as one finding about one fact, beside the stale
-// checks, with the same choices: still true, or outdated.
+// checks, with the same choices: still true, or outdated. The statements
+// step writes the same lines (review/<date>-statements.md) for a statement
+// a check disagrees with (outcome=misread) or one that differs from a
+// decision that stands (outcome=differs): optional items.
 
 import (
 	"bufio"
@@ -23,6 +26,9 @@ import (
 const kindCheck = "check"
 
 var reCheckLine = regexp.MustCompile(`^- check\? \[\[([^\]]+)\]\] \(([^)]*)\) outcome=([a-z]+) on=(\d{4}-\d{2}-\d{2})`)
+
+// optionalOutcome reports the statements step's items: shown, never owed.
+func optionalOutcome(o string) bool { return o == "misread" || o == "differs" }
 
 // checkLine is a question's first line.
 func checkLine(name, scope, outcome, on string) string {
@@ -97,7 +103,10 @@ func (rs *reviewServer) checkItems() []staleItem {
 			it.Stale = d.Action == "retire" && it.State != "retired"
 		}
 		it.Allowed = rs.allowedStale(it)
-		it.NeedsOwner = it.State == "live" && it.Decision == nil
+		// A statement's flag (a check disagrees, maybe misread) or its
+		// difference from a decision that stands is optional: listed, never
+		// waiting on the owner (SPEC.md, "Statements").
+		it.NeedsOwner = it.State == "live" && it.Decision == nil && !optionalOutcome(r.outcome)
 		out = append(out, it)
 	}
 	return out

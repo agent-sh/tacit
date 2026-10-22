@@ -119,8 +119,12 @@ func ParseChecked(text string) ([]Entry, error) {
 		switch {
 		case entry.Kind == "derived":
 			bad("kind", "derived is for generated facts only")
+		case entry.Kind == KindStatement:
+			if strings.TrimSpace(entry.OwnerQuote) == "" {
+				bad("owner_quote", "a statement is the owner's exact words: owner_quote is empty")
+			}
 		case !fact.SourceKinds[entry.Kind]:
-			bad("kind", "not user, observed or web")
+			bad("kind", "not user, observed, web or statement")
 		}
 		if p := entry.Propose; p != nil {
 			switch {

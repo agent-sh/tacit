@@ -29,12 +29,22 @@ import (
 // returned file. The real forge (check.NewGitHub) is the checks' forge.
 func fakeGH(t *testing.T, user string, repos map[string]string) (log string) {
 	t.Helper()
+	return fakeGHAccounts(t, user, repos, nil)
+}
+
+// fakeGHAccounts is fakeGH that also answers `gh api users/<name>` from
+// accounts (name -> type: User or Organization; any other is a 404).
+func fakeGHAccounts(t *testing.T, user string, repos, accounts map[string]string) (log string) {
+	t.Helper()
 	bin := filepath.Join(t.TempDir(), "bin")
 	os.MkdirAll(bin, 0o755)
 	log = filepath.Join(bin, "calls.log")
 	var cases strings.Builder
 	for k, v := range repos {
 		fmt.Fprintf(&cases, "  'api repos/%s') echo '{\"full_name\":\"%s\"}'; exit 0;;\n", k, v)
+	}
+	for k, v := range accounts {
+		fmt.Fprintf(&cases, "  'api users/%s') echo '{\"login\":\"%s\",\"type\":\"%s\"}'; exit 0;;\n", k, k, v)
 	}
 	script := "#!/bin/sh\necho \"$*\" >> '" + log + "'\ncase \"$*\" in\n  'auth status') exit 0;;\n  'api user --jq .login') echo " + user + "; exit 0;;\n" + cases.String() +
 		"esac\necho '{\"message\":\"Not Found\",\"status\":\"404\"}'\necho 'gh: Not Found (HTTP 404)' >&2\nexit 1\n"

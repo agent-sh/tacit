@@ -1142,6 +1142,16 @@ func Block(hits []Hit, title string) string {
 		if h.Rule() {
 			line = "- RULE " + h.Name
 			desc = asRule(desc)
+		} else if day, words, ok := statementOf(h); ok {
+			// The owner's words said once: in their words, dated, with the
+			// context, never as a rule (SPEC.md, "Statements").
+			desc = "you said once (" + day + "): \"" + words + "\""
+			if c := strings.TrimRight(strings.Join(strings.Fields(h.Description), " "), "."); c != "" {
+				desc += "; context: " + c
+			}
+			if len(fact.CheckFlags(h.Body)) > 0 {
+				desc += " (a check disagrees, maybe misread)"
+			}
 		}
 		if h.Inbox {
 			line += " (unreviewed)"
@@ -1158,6 +1168,15 @@ func Block(hits []Hit, title string) string {
 		b.WriteString(line + ": " + desc + "\n")
 	}
 	return b.String()
+}
+
+// statementOf reads a statement hit's day and the owner's words from its
+// body (fact.StatementLine); ok is false for any other hit.
+func statementOf(h Hit) (day, words string, ok bool) {
+	if h.Type != fact.StatementType || h.Inbox {
+		return "", "", false
+	}
+	return fact.StatementLine(h.Body)
 }
 
 // ownerPrefix matches "Owner 2026-09-10:" and the same with a name from

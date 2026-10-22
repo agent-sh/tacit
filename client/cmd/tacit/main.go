@@ -52,6 +52,7 @@ func usage() {
   tacit curate [--model M] [--dry-run] [--max-batches N] [--budget D] [--recheck-conflicts --since D] inbox notes -> curated one-fact entries, conflict check, index, push; then the derive step
   tacit curate --quick [--min-interval D] [--env-file F]   the last day's notes only, no derive, results, links or staleness step; nothing within D (30m) of the last quick run
   tacit assess [--model M] [--max N] [--dry-run]   folders with no record (repositories, project folders) and records whose evidence changed -> the curator's model decides kind and status, code checks, records written (a step of curate)
+  tacit statements [--model M] [--dry-run]   the owner's statements (their words said once) -> the curator's model reads each new one once, code checks its dry claims and promotes: the same point in another session (decision; preference, then rule), or one statement a check agrees with (decision); a disagreeing check flags it (a step of curate, before assess)
   tacit folder create|status|alias|suppress|tools --folder F [--kind K] [--desc D] [--status S] [--why W] [--alias A] [--into F] [--tools a,b] [--commands c,d]   an agent's change to a folder record, as the curator (by opus; the owner's channel is tacit review)
   tacit migrate [--dry-run] [--max N] [--commits N]   the facts of suppressed folders -> copies in the folder that replaces each (or absorbed by a fact there), the old ones superseded; a ruling moves with its quote, held for the owner only with a reason (a step of curate; no model)
   tacit rescope --plan FILE [--dry-run] [--max N]   move the facts a plan names (JSON lines: name or path, and to) the same way
@@ -147,6 +148,8 @@ func main() {
 		os.Exit(runFormat(os.Args[2:]))
 	case "assess":
 		os.Exit(runAssess(os.Args[2:]))
+	case "statements":
+		os.Exit(runStatements(os.Args[2:]))
 	case "folder":
 		os.Exit(runFolder(os.Args[2:]))
 	case "migrate":
