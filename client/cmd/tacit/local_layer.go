@@ -444,7 +444,22 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 			}
 			env.RepoPaths(&f.Meta)
 			f.Path = overlay.Prefix + overlay.CuratedDir + "/" + f.Meta.Scope + "/" + f.Meta.Name + ".md"
-			q, ruling := curate.ApplyEvidence(f, e, noteByName[e.Origin], where)
+			// The Mac's statements stay in its overlay, whatever the store's
+			// format: no other machine reads it.
+			var q ledger.Quote
+			ruling, said := false, false
+			if e.Kind == curate.KindStatement {
+				q, said = curate.ApplyStatement(f, e, noteByName[e.Origin], where, true)
+				if !said && noOwnerCorpus {
+					invalidBatch, unbackedRuling = true, true
+					break
+				}
+				if !said {
+					notWords++
+				}
+			} else {
+				q, ruling = curate.ApplyEvidence(f, e, noteByName[e.Origin], where)
+			}
 			if !ruling && e.Kind == "user" {
 				if noOwnerCorpus {
 					invalidBatch, unbackedRuling = true, true
@@ -468,6 +483,10 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 			}
 			if ruling {
 				nRulings++
+				ledgerLines = append(ledgerLines, q.Line()...)
+			}
+			if said {
+				rep.Statements++
 				ledgerLines = append(ledgerLines, q.Line()...)
 			}
 			inBatch.Add(f, ruling)
@@ -567,6 +586,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 	if !o.quick {
 		// The folders of this machine's layer: records decided on its own
 		// evidence, and the facts of suppressed folders moved, in the overlay.
+		rep.Errors += curateStatementsStep(ctx, s, o.model, o.dry, &rep)
 		rep.Errors += curateAssessStep(ctx, s, o.model, o.dry, &rep)
 		rep.Errors += curateMigrateStep(ctx, s, o.dry)
 		// Overviews of this machine's own folders, and the rotation of its own

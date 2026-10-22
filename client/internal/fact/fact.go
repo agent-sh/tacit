@@ -18,7 +18,7 @@ import (
 
 // Types, scopes and source kinds the spec allows.
 var (
-	Types = set("user_standard", "design_decision", "past_mistake", "machine_fact", "code_change", "hot_spot", "structure", "history", "user", "reference", "result", "result_ref", "unclassified")
+	Types = set("user_standard", "design_decision", "past_mistake", "machine_fact", "code_change", "hot_spot", "structure", "history", "user", "reference", "result", "result_ref", "unclassified", StatementType)
 	// Harnesses name key ids (<harness>@<host>) and inbox directories. The
 	// server keeps the same list (server/lib/tacit_server/auth/key_id.ex).
 	// "reader" is a key that only reads (the Mac over the public path): the

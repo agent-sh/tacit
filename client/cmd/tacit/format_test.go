@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,7 +47,7 @@ func TestFormatMarkerCommand(t *testing.T) {
 	if _, ok, _ := ledger.ReadFormat(dir); !ok {
 		t.Fatal("no marker after --set")
 	}
-	if msg := gitIn(t, dir, "log", "-1", "--format=%s"); !strings.HasPrefix(msg, "curator: format: store format 1") {
+	if msg := gitIn(t, dir, "log", "-1", "--format=%s"); !strings.HasPrefix(msg, fmt.Sprintf("curator: format: store format %d", ledger.FormatVersion)) {
 		t.Fatalf("commit %q", msg)
 	}
 	set := gitIn(t, dir, "rev-parse", "HEAD")

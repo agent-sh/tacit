@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/overlay"
 	"github.com/agent-sh/tacit/client/internal/search"
 )
@@ -90,7 +91,7 @@ func tier(h search.Hit) int {
 	switch {
 	case h.Ruling || h.Type == "user_standard":
 		return 0
-	case h.Type == "design_decision" || h.Type == "past_mistake":
+	case h.Type == "design_decision" || h.Type == "past_mistake" || h.Type == fact.StatementType:
 		return 1
 	}
 	return 2

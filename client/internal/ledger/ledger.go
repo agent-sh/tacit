@@ -28,6 +28,11 @@ const (
 	// FoldersPath is the curator's folder log: proposals of areas and
 	// topics, and the questions for the owner a folder step left open.
 	FoldersPath = "review/folders.jsonl"
+	// StatementsPath is the statements step's log: its model's reading of
+	// each statement (what kind of point, how it relates to earlier ones,
+	// its dry claims), code's checks of those claims, and every promotion,
+	// supersession and flag it made (SPEC.md, "Statements").
+	StatementsPath = "review/statements.jsonl"
 )
 
 // Decision actions that only the owner records in the app.
@@ -252,8 +257,15 @@ func (m Marker) Encode() []byte {
 // decoder refuses last_checked, it reads _record.md as a broken fact), so
 // no writer of this binary writes any of them until the store holds the
 // marker, which the owner sets once every machine runs a binary that knows
-// the format.
-const FormatVersion = 1
+// the format. Version 2 adds statements (SPEC.md, "Statements": facts of
+// type statement) and orgs (SPEC.md, "Orgs": orgs/<name> folders with
+// records of kind org, and a project record's org and forge fields), which
+// an older binary's strict decoders and its lint do not know.
+const FormatVersion = 2
+
+// StatementsFormat is the first format whose stores hold statements and
+// orgs.
+const StatementsFormat = 2
 
 // Format is review/format.json, the store's format marker: the format
 // version every machine that writes the store can read, set by the owner's
@@ -301,6 +313,14 @@ func ReadFormat(root string) (f Format, ok bool, err error) {
 // into a store with this marker: the marker is set and names a version
 // this binary knows (a newer one is a newer binary's store).
 func (f Format) Writes() bool { return f.Version >= 1 && f.Version <= FormatVersion }
+
+// Statements reports a store whose writers may write statements: every
+// machine reads format 2.
+func (f Format) Statements() bool { return f.Writes() && f.Version >= StatementsFormat }
+
+// Orgs reports a store whose writers may write org folders and a project
+// record's org and forge fields: every machine reads format 2.
+func (f Format) Orgs() bool { return f.Statements() }
 
 // Encode renders the marker.
 func (f Format) Encode() []byte {

@@ -47,7 +47,7 @@ const (
 	maxReadBytes   = 4 << 20 // per file per run; the rest waits (cursor stays)
 )
 
-// Prompt is v5. Versions (measurements in eval/VALUE.md):
+// Prompt is v6. Versions (measurements in eval/VALUE.md):
 //   - v4 (2026-10-11, eval/dream/dream_recall.py): v2 plus one rule, skip what
 //     holds only inside the task in progress, never a failure and its fix or a
 //     rule of the owner. On two samples of 30 windows it cut the facts 25 and
@@ -55,18 +55,22 @@ const (
 //     truth gaps 58 and 58 at least partial against v2's 60 and 61.
 //   - v5 (2026-10-18): v4 plus the owner's exact words in "quote" for a ruling
 //     ("Dreamed rulings keep the owner's words").
+//   - v6 (2026-10-22): v5 plus statements (SPEC.md, "Statements"): owner
+//     words said once that may not be a standing rule are kind "statement",
+//     with their exact words and a line of context. Not measured on a
+//     replay yet.
 const Prompt = `You are the dreamer of tacit, a fact store shared by coding agents on one owner's machines.
 Below is a digest of part of an agent session (U: owner, H: harness-injected text, A: agent, T: tool call, E: tool error).
 Your job is to write down what nobody wrote down. Extract EVERY durable fact another agent would need next time, in these classes:
 1. Every failed command or tool call (E: lines, and A: lines that report an error) together with what fixed it or what to do instead. Each distinct failure is one fact: name the command, the exact error text, the host, and the working alternative. These are the most valuable facts; do not drop them as noise.
-2. Owner rulings and standards, from U: lines only, with the date if visible. For each one, copy the owner's exact words from the U: line into "quote": verbatim, typos included, at least the words that state the rule. Without the owner's own words a ruling cannot be told from an agent's guess.
+2. Owner rulings and standards, from U: lines only, with the date if visible. For each one, copy the owner's exact words from the U: line into "quote": verbatim, typos included, at least the words that state the rule. Without the owner's own words a ruling cannot be told from an agent's guess. When you are not sure the owner means it as a standing rule (a choice about a name, a plan or a design for the matter at hand, a remark that something is so, an instruction that may hold only for now), it is a statement: kind "statement", the same exact words in "quote", and in "context" one line saying what was being discussed.
 3. Machine facts: paths that exist or are gone, tools and their quirks, services, ports, hosts, aliases, what is dead on this box.
 4. Past mistakes: a wrong assumption and its correction.
 5. Design decisions with their reason.
 Skip anything derivable from the code or from git log, and plain narrative of what the agent did.
 Skip facts that hold only inside the task in progress: the status of one PR, review round, rebase or run; where one task's worktree, scratch files, contract, receipts or logs are; an instruction addressed to one task id, round or worktree. A failure and what fixed it, and a rule or preference of the owner, are never task-only, even when they came up inside one task. Keep what the next task, in another session, would act on.
-Each fact: one or two sentences another agent can act on, with the concrete path, command, host or number. Mark the source kind: user (the owner said it), observed (the agent found it out).
-Output ONLY a JSON array: [{"description": "...", "type": "user_standard|machine_fact|past_mistake|design_decision|structure|history", "kind": "user|observed", "quote": "<kind user only: the owner's exact words>", "applies_to": {"paths": [], "repos": [], "hosts": [], "commands": []}}]
+Each fact: one or two sentences another agent can act on, with the concrete path, command, host or number. Mark the source kind: user (the owner said it as a rule), statement (the owner said it once; see 2), observed (the agent found it out).
+Output ONLY a JSON array: [{"description": "...", "type": "user_standard|machine_fact|past_mistake|design_decision|structure|history", "kind": "user|statement|observed", "quote": "<kind user or statement only: the owner's exact words>", "context": "<kind statement only: what was being discussed>", "applies_to": {"paths": [], "repos": [], "hosts": [], "commands": []}}]
 
 Repo: %s  Host: %s
 DIGEST:
@@ -167,13 +171,15 @@ func DefaultSources(home string) []Source {
 
 // Extracted is one fact as the model returned it.
 type Extracted struct {
-	Description string           `json:"description"`
-	Type        string           `json:"type"`
-	Kind        string           `json:"kind"`
-	Quote       Quote            `json:"quote,omitempty"` // kind user: the owner's exact words
-	AppliesTo   map[string][]any `json:"applies_to"`
-	Extra       map[string]any   `json:"-"`
-	Session     string           `json:"-"`
+	Description string `json:"description"`
+	Type        string `json:"type"`
+	Kind        string `json:"kind"`
+	Quote       Quote  `json:"quote,omitempty"` // kind user or statement: the owner's exact words
+	// Context is a statement's line of context: what was being discussed.
+	Context   string           `json:"context,omitempty"`
+	AppliesTo map[string][]any `json:"applies_to"`
+	Extra     map[string]any   `json:"-"`
+	Session   string           `json:"-"`
 }
 
 // Quote is the model's "quote": a string, or a list of strings (parts of the
@@ -884,11 +890,25 @@ func body(x Extracted, kind string) string {
 		}
 		q = strings.ToValidUTF8(q[:cut], "") + " ..."
 	}
-	if kind == "user" && q != "" {
+	if (kind == "user" || kind == kindStatement) && q != "" {
 		b += ` Quoted from the session: "` + q + `"`
+	}
+	if kind == kindStatement && q != "" {
+		// Said once: the curator keeps it as a statement of theirs, not a rule.
+		b += " Said once"
+		if c := strings.Join(strings.Fields(x.Context), " "); c != "" {
+			b += "; context: " + strings.TrimRight(c, ".")
+		}
+		b += "."
 	}
 	return b + "\n"
 }
+
+// kindStatement is the model's kind for the owner's words said once
+// (SPEC.md, "Statements"). The note is kind user (their words, which the
+// curator checks); its text marks them "Said once", and the curator keeps
+// them as a statement.
+const kindStatement = "statement"
 
 // ToFact converts an extraction into an inbox fact for writer dreamer@host.
 func ToFact(x Extracted, repo, host, session string) *fact.Fact {
@@ -897,7 +917,10 @@ func ToFact(x Extracted, repo, host, session string) *fact.Fact {
 		typ = "unclassified"
 	}
 	kind := x.Kind
-	if !fact.SourceKinds[kind] || kind == "derived" {
+	said := kind == kindStatement && strings.TrimSpace(string(x.Quote)) != ""
+	if said {
+		kind = "user"
+	} else if !fact.SourceKinds[kind] || kind == "derived" {
 		kind = "observed"
 	}
 	scope := "user"
@@ -924,7 +947,7 @@ func ToFact(x Extracted, repo, host, session string) *fact.Fact {
 			Source:  fact.Source{Harness: "dreamer", Host: host, Kind: kind, Session: session},
 			Created: time.Now().Format("2006-01-02"),
 		},
-		Body: body(x, kind),
+		Body: body(x, map[bool]string{true: kindStatement, false: kind}[said]),
 	}
 }
 

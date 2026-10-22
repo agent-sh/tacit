@@ -127,3 +127,19 @@ func TestIndexMarksInTaskRulings(t *testing.T) {
 		t.Fatalf("block:\n%s", block)
 	}
 }
+
+// A statement is printed in their words, dated, with its context, never as
+// a RULE; a flag of a check that disagrees is said beside it.
+func TestBlockPrintsAStatementInTheirWords(t *testing.T) {
+	h := Hit{Name: "pikadon-name", Type: "statement", Description: "The name of the pikadon repository.",
+		Body: "You said once (2026-10-21): \"the real name is pikadon, ginza is a name for now\"\nContext: The name of the pikadon repository.\n"}
+	got := Block([]Hit{h}, "# t")
+	want := "- pikadon-name: you said once (2026-10-21): \"the real name is pikadon, ginza is a name for now\"; context: The name of the pikadon repository\n"
+	if !strings.HasSuffix(got, want) || strings.Contains(got, "RULE") {
+		t.Fatalf("%q", got)
+	}
+	h.Body += "> check disagrees 2026-10-22: pikadon is the real name: fails\n"
+	if got := Block([]Hit{h}, "# t"); !strings.Contains(got, "(a check disagrees, maybe misread)") {
+		t.Fatalf("%q", got)
+	}
+}

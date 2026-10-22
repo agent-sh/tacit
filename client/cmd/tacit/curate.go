@@ -271,6 +271,7 @@ func runCurate(args []string) int {
 		}
 	}
 	env := curateEnv(s.Dir, false) // the metadata checks: this machine's checkouts, the store's folders and writers
+	statementsOK := statementsWrite(s.Dir)
 	var pending []*fact.Fact
 	heldBack := 0 // notes that failed alone maxNoteFailures times
 	noteByName := map[string]*fact.Fact{}
@@ -528,8 +529,22 @@ func runCurate(args []string) int {
 			}
 			env.RepoPaths(&f.Meta)
 			// A ruling is the owner's own words: kind user stays only with their
-			// quote found in the note and in their turns or notes.
-			q, ruling := curate.ApplyEvidence(f, e, noteByName[e.Origin], where)
+			// quote found in the note and in their turns or notes. A statement
+			// (their words said once) is kept verbatim on the same evidence.
+			var q ledger.Quote
+			ruling, said := false, false
+			if e.Kind == curate.KindStatement {
+				q, said = curate.ApplyStatement(f, e, noteByName[e.Origin], where, statementsOK)
+				if !said && noOwnerCorpus {
+					invalidBatch, unbackedRuling = true, true
+					break
+				}
+				if !said {
+					notWords++
+				}
+			} else {
+				q, ruling = curate.ApplyEvidence(f, e, noteByName[e.Origin], where)
+			}
 			if !ruling && e.Kind == "user" {
 				if noOwnerCorpus {
 					invalidBatch, unbackedRuling = true, true
@@ -556,6 +571,10 @@ func runCurate(args []string) int {
 			}
 			if ruling {
 				nRulings++
+				ledgerLines = append(ledgerLines, q.Line()...)
+			}
+			if said {
+				rep.Statements++
 				ledgerLines = append(ledgerLines, q.Line()...)
 			}
 			inBatch.Add(f, ruling)
@@ -729,6 +748,9 @@ func runCurate(args []string) int {
 	}
 
 	if !*quick {
+		// The owner's statements: promotions by evidence, before the folders
+		// read the decisions (statements.go).
+		rep.Errors += curateStatementsStep(ctx, s, *model, *dry, &rep)
 		// The folders: records for repositories and project folders, decided
 		// by the model on code's evidence (assess.go), before derive.
 		rep.Errors += curateAssessStep(ctx, s, *model, *dry, &rep)
