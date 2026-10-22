@@ -298,35 +298,55 @@ func (s *Store) RemoteAhead(ctx context.Context) (bool, error) {
 
 // IntegrateLocked moves the working tree to origin/main: a fast-forward, or
 // a rebase of local unpushed commits. The caller holds WithLock.
+//
+// The local steps run on their own deadline, never the caller's (see
+// integrate.go): a checkout is not cut off half way. A caller whose time
+// left is too short for the update gets a *Deferred and an untouched clone.
+// A clone an interrupted update left dirty toward origin/main is finished;
+// other dirt is refused.
 func (s *Store) IntegrateLocked(ctx context.Context) error {
-	if s.Local(ctx) {
+	lctx, cancel := localCtx(ctx)
+	defer cancel()
+	if s.Local(lctx) {
 		return nil
 	}
-	if _, err := git(ctx, s.Dir, "merge", "--ff-only", "--no-overwrite-ignore", "--quiet", "origin/main"); err == nil {
+	if err := s.clearStaleLocks(time.Now()); err != nil {
+		return err
+	}
+	if err := s.deferUpdate(ctx, "origin/main"); err != nil {
+		return err
+	}
+	if _, err := s.checkout(lctx, "merge", "--ff-only", "--no-overwrite-ignore", "--quiet", "origin/main"); err == nil {
 		return nil
 	}
 	// Rebase and hard reset can overwrite ignored or untracked files. Once
-	// a fast-forward fails, leave a dirty working tree for its owner to fix.
-	if err := s.requireClean(ctx); err != nil {
+	// a fast-forward fails, dirt is either an interrupted update, which is
+	// finished, or its owner's to fix.
+	ok, why, err := s.recoverDirty(lctx)
+	if err != nil {
 		return err
 	}
-	_, err := git(ctx, s.Dir, "rebase", "--quiet", "origin/main")
+	if !ok {
+		return s.dirtyError(why)
+	}
+	if _, err := s.checkout(lctx, "merge", "--ff-only", "--no-overwrite-ignore", "--quiet", "origin/main"); err == nil {
+		return nil
+	}
+	_, err = s.checkout(lctx, "rebase", "--quiet", "origin/main")
 	if err == nil {
 		return nil
 	}
 	s.cleanup("rebase", "--abort")
 	// Local commits that cannot be rebased would block every later sync.
 	// Keep them on a ref a person can inspect, and follow the server.
-	cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	if derr := s.requireClean(cctx); derr != nil {
+	if derr := s.requireClean(lctx); derr != nil {
 		return fmt.Errorf("the clone has local commits that conflict with the server and uncommitted changes; fix %s by hand: %w", s.Dir, err)
 	}
 	ref := fmt.Sprintf("refs/tacit/stranded/%d", time.Now().Unix())
-	if _, uerr := git(cctx, s.Dir, "update-ref", ref, "HEAD"); uerr != nil {
+	if _, uerr := git(lctx, s.Dir, "update-ref", ref, "HEAD"); uerr != nil {
 		return err
 	}
-	if _, rerr := git(cctx, s.Dir, "reset", "--quiet", "--hard", "origin/main"); rerr != nil {
+	if _, rerr := s.checkout(lctx, "reset", "--quiet", "--hard", "origin/main"); rerr != nil {
 		return rerr
 	}
 	return &Stranded{Ref: ref}
@@ -335,12 +355,12 @@ func (s *Store) IntegrateLocked(ctx context.Context) error {
 // requireClean includes untracked and ignored files, neither of which is
 // recoverable from a stranded commit ref.
 func (s *Store) requireClean(ctx context.Context) error {
-	out, err := git(ctx, s.Dir, "status", "--porcelain", "--untracked-files=all", "--ignored")
+	ds, err := s.status(ctx)
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(out) != "" {
-		return fmt.Errorf("the clone has uncommitted, untracked or ignored files; fix %s by hand before syncing", s.Dir)
+	if len(ds) > 0 {
+		return s.dirtyError("")
 	}
 	return nil
 }
@@ -761,6 +781,12 @@ func gitEnv(ctx context.Context, dir string, env []string, args ...string) (stri
 // gitEnvInput shares gitEnv's environment, cancellation and process-group
 // handling while keeping free-form input separate from command arguments.
 func gitEnvInput(ctx context.Context, dir string, env []string, input string, args ...string) (string, error) {
+	return gitRun(ctx, dir, env, input, nil, args...)
+}
+
+// gitRun is gitEnvInput with started, when set, called with git's pid once
+// it runs and before it is waited on (the local checkout's marker).
+func gitRun(ctx context.Context, dir string, env []string, input string, started func(pid int), args ...string) (string, error) {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 60*time.Second)
@@ -776,7 +802,14 @@ func gitEnvInput(ctx context.Context, dir string, env []string, input string, ar
 	cmd.WaitDelay = 2 * time.Second
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
+	err := cmd.Start()
+	if err == nil {
+		if started != nil {
+			started(cmd.Process.Pid)
+		}
+		err = cmd.Wait()
+	}
+	if err != nil {
 		msg := strings.TrimSpace(errb.String())
 		if msg == "" {
 			msg = err.Error()
