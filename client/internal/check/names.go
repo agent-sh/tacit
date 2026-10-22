@@ -541,7 +541,8 @@ func (g *GitHub) Contents(ctx context.Context, owner, name, path string) error {
 	if !ValidRepo(owner, name) || !relPathRx.MatchString(path) {
 		return ErrNotFound
 	}
-	out, errb, err := g.run(ctx, g.Bin, "api", "repos/"+owner+"/"+name+"/contents/"+path, "--jq", ".type")
+	// A folder's contents are a list: its type is "dir".
+	out, errb, err := g.run(ctx, g.Bin, "api", "repos/"+owner+"/"+name+"/contents/"+path, "--jq", `if type == "array" then "dir" else .type end`)
 	if err != nil {
 		all := string(out) + string(errb)
 		if strings.Contains(all, "HTTP 404") || strings.Contains(all, `"status":"404"`) {

@@ -358,8 +358,11 @@ func (a *assessor) codeDecisionOf(c assess.Candidate, recs func(string) *record.
 		return assess.Decision{Folder: c.Folder, Kind: record.KindRepo, Status: record.StatusDead, Why: why + a.factCite(c.Folder, ""),
 			Description: fmt.Sprintf("The old name of %s on the forge (renamed to %s).", path.Base(w), c.Name.Forge), SuppressedBy: w}, true, false
 	}
-	pointed, n, example := a.factsPoint(c)
-	if len(pointed) != 1 {
+	pointed, n, nLive, example := a.factsPoint(c)
+	// At least half of its live facts point, and all of them at one
+	// repository: a fact or two that name another checkout's path in a big
+	// folder of other things is no evidence of what the folder is.
+	if len(pointed) != 1 || 2*n < nLive {
 		return assess.Decision{}, false, false
 	}
 	var r string
@@ -398,9 +401,9 @@ func (a *assessor) factCite(folder, example string) string {
 }
 
 // factsPoint are the repositories the folder's live facts point at by their
-// own evidence (see codeDecision), with how many facts point and one that
-// does (the first by name).
-func (a *assessor) factsPoint(c assess.Candidate) (map[string]bool, int, string) {
+// own evidence (see codeDecision), with how many facts point, how many are
+// live, and one that points (the first by name).
+func (a *assessor) factsPoint(c assess.Candidate) (map[string]bool, int, int, string) {
 	if a.refiler == nil {
 		a.refiler = newRefiler(a.home, a.catalog, a.recs)
 	}
@@ -427,7 +430,7 @@ func (a *assessor) factsPoint(c assess.Candidate) (map[string]bool, int, string)
 	all := map[string]bool{}
 	n, example := 0, ""
 	for _, f := range facts {
-		set := pointedRepos(cache, a.catalog, f)
+		set := pointedRepos(cache, a.catalog, a.recs, f)
 		for repo := range a.relPathRepos(f, roots) {
 			set[repo] = true
 		}
@@ -445,7 +448,7 @@ func (a *assessor) factsPoint(c assess.Candidate) (map[string]bool, int, string)
 			all[k] = true
 		}
 	}
-	return all, n, example
+	return all, n, len(facts), example
 }
 
 // pathSource is where a repository's paths are read: its checkout here,
@@ -454,8 +457,9 @@ type pathSource struct{ root, forge string }
 
 // relPathRepos are the repositories among roots whose HEAD (a checkout's,
 // else the forge's default branch) holds a repository-relative path f
-// names (applies_to.paths, backticked paths), with a folder in it and no
-// glob, when exactly one of them holds it.
+// names (applies_to.paths, backticked paths: a file path with a folder in
+// it, or a folder "<dir>/**" of five letters or more, never another glob),
+// when two or more of them were checked and exactly one holds it.
 func (a *assessor) relPathRepos(f *fact.Fact, roots map[string]pathSource) map[string]bool {
 	out := map[string]bool{}
 	if len(roots) == 0 {
@@ -477,10 +481,16 @@ func (a *assessor) relPathRepos(f *fact.Fact, roots map[string]pathSource) map[s
 	sort.Strings(names)
 	for _, p := range rels {
 		p = strings.Trim(strings.TrimPrefix(strings.TrimSpace(p), "./"), "/")
-		if !strings.Contains(p, "/") || strings.ContainsAny(p, "*?[{~$") || strings.HasPrefix(p, ".") || len(p) < 4 {
+		if d, ok := strings.CutSuffix(p, "/**"); ok && len(d) >= 5 && !strings.ContainsAny(d, "*?[{~$/") {
+			p = d // a folder of the repository
+		} else if !strings.Contains(p, "/") || len(p) < 4 {
+			continue
+		}
+		if strings.ContainsAny(p, "*?[{~$") || strings.HasPrefix(p, ".") {
 			continue
 		}
 		var hold []string
+		checked := 0
 		for _, n := range names {
 			src := roots[n]
 			var r check.Result
@@ -489,11 +499,14 @@ func (a *assessor) relPathRepos(f *fact.Fact, roots map[string]pathSource) map[s
 			} else {
 				r = a.checker.ForgePath(a.ctx, n, src.forge, p)
 			}
+			if r.Verdict != check.Unknown {
+				checked++
+			}
 			if r.Verdict == check.Holds {
 				hold = append(hold, n)
 			}
 		}
-		if len(hold) == 1 {
+		if len(hold) == 1 && checked >= 2 {
 			out[hold[0]] = true
 		}
 	}
