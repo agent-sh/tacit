@@ -83,7 +83,7 @@ func TestRepoCheckSourcesAndVerdicts(t *testing.T) {
 	}
 	// A name nothing local has: every owner asked, all 404: fails.
 	g := c.Repo(context.Background(), "ghost")
-	if g.Verdict != Fails || !strings.Contains(g.Results[2].Output, "not found: owner/ghost, acme/ghost") {
+	if g.Verdict != Fails || !strings.Contains(g.Results[2].Output, "not found: owner/ghost, acme/ghost (asked as owner, who sees their own private repositories)") {
 		t.Fatalf("ghost %+v", g)
 	}
 	// The forge follows a rename: the old name fails, with the new one.
