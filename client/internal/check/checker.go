@@ -316,6 +316,12 @@ func (c *Checker) repo(ctx context.Context, name string) RepoCheck {
 			switch {
 			case unavailable == 0 && len(missing) > 0:
 				fr.Verdict, fr.Output = Fails, "not found: "+strings.Join(missing, ", ")
+				if u := strings.ToLower(f.User(ctx)); u != "" {
+					// The forge answers as the account, private repositories it
+					// can see included: a 404 under its own name is no
+					// "probably private".
+					fr.Output += " (asked as " + u + ", who sees their own private repositories)"
+				}
 			case len(owners) == 0:
 				fr.Verdict, fr.Output = Unknown, "no owner on the forge to look under"
 			default:
