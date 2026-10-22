@@ -620,7 +620,8 @@ document.addEventListener("keydown", (e) => {
     case "w": if (can(view[cur] || {}, "wrong")) decide("wrong"); else return; break;
     case "z": if (it && it.decision) decide("reopen"); else reopenLast(); break;
     case "o": if (labelling && it && !it.decision) toggleOnly(); else return; break;
-    case "/": toggleFilter(true); break;
+    // The owner's page finds any fact from the box at the top; the review page alone folds out its filter.
+    case "/": if ($("top-q")) { $("top-q").focus(); if ($("top-q").select) $("top-q").select(); } else toggleFilter(true); break;
     case "d": lights(); break;
     default: return;
   }

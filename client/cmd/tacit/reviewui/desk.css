@@ -126,3 +126,21 @@ mark.theirs { background: none; color: inherit; text-decoration: underline 1.5px
 .fact-inner > details.whole > summary { font-size: var(--t-1); }
 /* View only (no curator key here, or a read-only clone): no way to write is offered. Edit and Retire stay, disabled, with the reason under them. */
 body.view-only #new-ruling, body.view-only #act-promote, body.view-only #act-undonotmine, body.view-only #act-ismine, body.view-only #act-notmine, body.view-only #act-undo { display: none; }
+
+/* Find any fact: at the top of every place. Its results drop under it; one opens in All facts with its actions. */
+.find-all { position: relative; flex: 0 1 24rem; min-width: 10rem; display: flex; align-items: center; }
+.find-all .search { flex: 1; }
+.find-all .search kbd { font: 600 var(--t-1)/1 var(--operate); color: var(--ink-3); }
+.find-results li.find-opts { cursor: default; padding: 6px 14px 8px; border-bottom: 1px solid var(--line); }
+.find-gone { font-size: var(--t-1); color: var(--ink-2); display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+.find-results { position: absolute; z-index: 40; left: 0; right: 0; min-width: 22rem; top: calc(100% + 6px); margin: 0; padding: 4px 0; list-style: none; max-height: min(420px, 70vh); overflow: auto;
+  background: var(--galley); border: 1px solid var(--line-2); }
+.find-results li { display: grid; gap: 2px; padding: 8px 14px; cursor: pointer; color: var(--ink); }
+.find-results li.active { background: var(--stock); box-shadow: inset 2px 0 0 var(--ink); }
+.find-results li.gone .row-text { color: var(--ink-3); }
+.find-results li.none, .find-results li.more { color: var(--ink-3); font-size: var(--t-1); cursor: default; }
+.find-results li.more { cursor: pointer; text-decoration: underline 1px var(--line-2); text-underline-offset: 3px; }
+@media (max-width: 900px) {
+  .find-all { order: 2; max-width: none; flex-basis: 100%; }
+  .find-all .search kbd { display: none; }
+}

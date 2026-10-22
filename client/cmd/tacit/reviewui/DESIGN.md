@@ -57,7 +57,7 @@ Five places in one top bar, the current one in ink with an underline: Needs you 
 - A stale check sets the card on the left and what git shows on the right: what was deleted, where, when and in which commit, read from the finding's own lines.
 - Every pair also offers Neither is true (w, an x): both facts stop reaching agents, both cards grey on hover, and Change this answer brings both back exactly.
 - Under the choices, Add a note (optional): their words, sent with whatever the owner answers, or alone with Comment without answering (a speech bubble), which leaves the finding open. Their notes show on the finding as Your notes; an answered one shows "Your note:" under "You answered".
-- Filter (/) folds out find, the kinds that have something open, the scope, and Needs you, Past answers or Everything. An answered finding shows "You answered: ..." with Change this answer (z).
+- Find any fact (/) sits at the top of every place: every fact, the owner's rules among them, the retired and replaced ones when "Retired and replaced too" is ticked; a result opens in All facts with its actions (Edit, Retire or Restore, Replace with a new rule, Undo). A link ending `#fact=<name>` opens on that fact, or says plainly that no fact has that name. In Needs you, Filter folds out find, the kinds that have something open, the scope, and Needs you, Past answers or Everything. An answered finding shows "You answered: ..." with Change this answer (z).
 - When nothing is left: "Nothing needs you." and See past answers.
 
 | Kind | Question | Choices |

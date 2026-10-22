@@ -435,6 +435,68 @@ func TestOwnerNewRuling(t *testing.T) {
 	clean(t, rs)
 }
 
+// Replace with a new rule: one owner commit writes the rule and marks the
+// fact it replaces superseded_by it; that fact is offered no second replace,
+// and Undo on it puts it back. A retired, generated or inbox fact, or one
+// already replaced, is not replaced.
+func TestOwnerReplaceWithANewRule(t *testing.T) {
+	bare, clone := ownerFixture(t)
+	rs := clone("one")
+	ctx := ctxT(t)
+	d, err := rs.factDetail(ctx, "engine-retries")
+	if err != nil || !d.CanReplace {
+		t.Fatalf("a live fact offers no replace: %+v %v", d, err)
+	}
+	if g, _ := rs.factDetail(ctx, "x-hot-spots"); g.CanReplace {
+		t.Error("a generated fact offers replace")
+	}
+	if n, _ := rs.factDetail(ctx, "note"); n.CanReplace {
+		t.Error("an inbox note offers replace")
+	}
+	res, err := rs.newRuling(ctx, rulingDraft{Name: "engine-retries-five", Body: "The engine retries five times since the pool rewrite.", Scope: "projects/x", Replaces: "engine-retries"})
+	if err != nil || !res.Saved {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if subj := strings.TrimSpace(git(t, bare, "log", "-1", "--format=%s")); subj != "owner: new ruling engine-retries-five (projects/x), replacing engine-retries" {
+		t.Fatalf("subject %q", subj)
+	}
+	if files := strings.Fields(git(t, bare, "show", "--name-only", "--format=", "HEAD")); !contains(files, "projects/x/engine-retries.md") || !contains(files, "projects/x/engine-retries-five.md") {
+		t.Fatalf("one commit holds both: %v", files)
+	}
+	old := readRel(t, rs, "projects/x/engine-retries.md")
+	if !strings.Contains(old, "superseded_by: engine-retries-five") || !strings.Contains(old, "updated: "+today()) || !strings.Contains(old, "The engine retries three times.") {
+		t.Fatalf("the replaced fact:\n%s", old)
+	}
+	d, _ = rs.factDetail(ctx, "engine-retries")
+	if d.CanReplace || d.CanRetire || !d.Undo.Can {
+		t.Fatalf("after replace: replace %v retire %v undo %+v", d.CanReplace, d.CanRetire, d.Undo)
+	}
+	if nd, _ := rs.factDetail(ctx, "engine-retries-five"); !nd.Ruling {
+		t.Fatal("the new rule is not the owner's rule")
+	}
+	if _, err := rs.newRuling(ctx, rulingDraft{Name: "again", Body: "x", Scope: "projects/x", Replaces: "engine-retries"}); err == nil || !strings.Contains(err.Error(), "already replaced") {
+		t.Errorf("a replaced fact was replaced again: %v", err)
+	}
+	for _, ref := range []string{"x-hot-spots", "note", "no-such-fact"} {
+		if _, err := rs.newRuling(ctx, rulingDraft{Name: "r-" + ref, Body: "x", Scope: "projects/x", Replaces: ref}); err == nil {
+			t.Errorf("replaced %s", ref)
+		}
+	}
+	if r, err := rs.setRetired(ctx, "a", true); err != nil || !r.Saved {
+		t.Fatal(r, err)
+	}
+	if _, err := rs.newRuling(ctx, rulingDraft{Name: "r-a", Body: "x", Scope: "system", Replaces: "a"}); err == nil || !strings.Contains(err.Error(), "retired") {
+		t.Errorf("a retired fact was replaced: %v", err)
+	}
+	if r, err := rs.undoLast(ctx, "engine-retries"); err != nil || !r.Saved {
+		t.Fatal(r, err)
+	}
+	if got := readRel(t, rs, "projects/x/engine-retries.md"); strings.Contains(got, "superseded_by") {
+		t.Fatalf("undo left it replaced:\n%s", got)
+	}
+	clean(t, rs)
+}
+
 // The queue holds the pairs, the stale checks and the dead links in rulings;
 // applying a link fix writes the curator's text into the ruling and settles it.
 func TestQueueHoldsLinkAndStaleAndAppliesALinkFix(t *testing.T) {
@@ -693,5 +755,118 @@ new Function("document", "localStorage", "matchMedia", "fetch", "els", "calls", 
 		if !strings.Contains(got.Link, want) {
 			t.Errorf("link sheet lacks %q:\n%s", want, got.Link)
 		}
+	}
+}
+
+// The page finds any fact from the box at the top (/ in every place, the
+// retired and replaced when asked), opens #fact=<name> on that fact with its
+// actions, Replace among them, says plainly when the store has no fact of
+// that name, and sends Replace with a new rule with the fact it replaces.
+func TestAppPageFindsAnyFactAndOpensANamedOne(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node")
+	}
+	_, clone := ownerFixture(t)
+	rs := clone("one")
+	ctx := ctxT(t)
+	d, err := rs.factDetail(ctx, "rule")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, err := rs.browse(ctx, browseQuery{Q: "rule", Status: "all"})
+	if err != nil || len(found.Rows) == 0 {
+		t.Fatalf("browse: %+v %v", found, err)
+	}
+	rawD, _ := json.Marshal(d)
+	rawF, _ := json.Marshal(found)
+	script := `
+const fs = require("fs");
+const src = fs.readFileSync("reviewui/api.js", "utf8") + ";" + fs.readFileSync("reviewui/app.js", "utf8") + ";" + fs.readFileSync("reviewui/desk.js", "utf8");
+class Element { matches() { return false; } closest() { return null; } }
+const els = {};
+const el = (id) => els[id] || (els[id] = Object.assign(new Element(), { id, innerHTML: "", textContent: "", value: "", hidden: false, checked: false, dataset: {}, style: {}, attrs: {}, querySelectorAll: () => [], querySelector: () => null, contains: () => false, addEventListener() {}, removeAttribute(k) { delete this.attrs[k]; }, setAttribute(k, v) { this.attrs[k] = v; }, focus() { document.activeElement = this; }, blur() {}, scrollIntoView() {} }));
+const keys = [];
+const document = { querySelector: () => ({ content: "tok" }), querySelectorAll: () => [], getElementById: el, addEventListener(k, f) { if (k === "keydown") keys.push(f); }, documentElement: { dataset: {} }, body: Object.assign(new Element(), { dataset: {}, style: {} }), activeElement: null };
+const location = { hash: "#fact=rule" };
+const D = ` + string(rawD) + `, F = ` + string(rawF) + `;
+const calls = [];
+const answer = (m, args) => m === "Queue" ? { ok: true, v: { items: [], host: "h" } } : m === "Meta" ? { ok: true, v: { host: "h", scopes: ["system", "projects/x"], repos: ["x"], types: [], kinds: [], owned_types: ["user_standard"], facts: 5, inbox: 1 } }
+  : m === "Fact" ? (args[0] === "nope" ? { ok: false, v: "no fact named nope" } : { ok: true, v: D }) : m === "Browse" ? { ok: true, v: F } : m === "NewRuling" ? { ok: true, v: { saved: true, name: args[0].name } } : { ok: true, v: { events: [] } };
+const fetchStub = async (url, opts) => { const m = String(url).split("/").pop(); const args = opts && opts.body ? JSON.parse(opts.body) : []; calls.push({ m, args }); const a = answer(m, args); return { ok: a.ok, json: async () => (a.ok ? { result: a.v } : { error: a.v }) }; };
+const press = (key) => { const e = { key, target: document.body, ctrlKey: false, metaKey: false, altKey: false, preventDefault() {} }; for (const f of keys) f(e); };
+const body = src + ";return (async () => {" + process.argv[1] + "})()";
+new Function("document", "localStorage", "matchMedia", "fetch", "els", "calls", "location", "Element", "press", body)(document, { setItem() {}, getItem() {} }, () => ({ matches: false }), fetchStub, els, calls, location, Element, press).then((o) => console.log(o), (e) => { console.error(e); process.exit(1); });
+`
+	checks := `
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  await wait(60);
+  const out = { view: desk.view, listQ: desk.lists.facts.q.q, listStatus: desk.lists.facts.q.status, opened: els["fact-sheet"].innerHTML };
+  // / from Needs you and from a place beside it focuses the box at the top.
+  setView("needs"); document.activeElement = null; press("/"); out.slashNeeds = document.activeElement && document.activeElement.id;
+  setView("folders"); document.activeElement = null; press("/"); out.slashFolders = document.activeElement && document.activeElement.id;
+  document.getElementById("top-q").value = "rule"; await findNow();
+  out.results = els["top-results"].innerHTML; out.resultsHidden = els["top-results"].hidden;
+  out.liveStatus = calls.filter((c) => c.m === "Browse").pop().args[0].status;
+  document.getElementById("top-gone").checked = true; await findNow();
+  out.goneStatus = calls.filter((c) => c.m === "Browse").pop().args[0].status;
+  pickFind(0); await wait(30);
+  out.pickedView = desk.view; out.pickedQ = desk.lists.facts.q.q; out.picked = els["fact-sheet"].innerHTML; out.closed = els["top-results"].hidden;
+  els["top-q"].value = "zzz"; finder.rows = []; finder.matched = 0; els["top-gone"].checked = false; paintFind(); out.none = els["top-results"].innerHTML;
+  location.hash = "#fact=nope"; await openFromHash(); await wait(30);
+  out.missing = els["fact-sheet"].innerHTML;
+  // Replace with a new rule starts from the fact's words and sends what it replaces.
+  location.hash = ""; desk.detail = D; desk.mode = "show"; factSheet();
+  document.getElementById("r-body").value = D.body; document.getElementById("r-repo").value = "x";
+  replaceWith(); out.form = els["fact-sheet"].innerHTML;
+  await saveRuling(); await wait(30);
+  out.sent = calls.filter((c) => c.m === "NewRuling").map((c) => c.args[0]);
+  return JSON.stringify(out);
+`
+	cmd := exec.Command(node, "-e", script, checks)
+	raw, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("node: %v\n%s", err, raw)
+	}
+	var got struct {
+		View, ListQ, ListStatus, Opened, SlashNeeds, SlashFolders, Results, LiveStatus, GoneStatus string
+		PickedView, PickedQ, Picked, None, Missing, Form                                           string
+		ResultsHidden, Closed                                                                      bool
+		Sent                                                                                       []map[string]any
+	}
+	if err := json.Unmarshal(raw[strings.LastIndex(strings.TrimSpace(string(raw)), "\n")+1:], &got); err != nil {
+		t.Fatalf("%v\n%s", err, raw)
+	}
+	if got.View != "facts" || got.ListQ != "rule" || got.ListStatus != "live" {
+		t.Errorf("#fact=rule opened %s searched %q (%s)", got.View, got.ListQ, got.ListStatus)
+	}
+	for _, want := range []string{"Always ask first", "Your rule", "Edit", "Retire", "Replace with a new rule"} {
+		if !strings.Contains(got.Opened, want) {
+			t.Errorf("the named fact lacks %q:\n%s", want, got.Opened)
+		}
+	}
+	if got.SlashNeeds != "top-q" || got.SlashFolders != "top-q" {
+		t.Errorf("/ focused %q in Needs you, %q in Folders", got.SlashNeeds, got.SlashFolders)
+	}
+	if got.ResultsHidden || !strings.Contains(got.Results, "fact rule") || !strings.Contains(got.Results, "your rule") || !strings.Contains(got.Results, `role="option"`) {
+		t.Errorf("results:\n%s", got.Results)
+	}
+	if got.LiveStatus != "live" || got.GoneStatus != "all" {
+		t.Errorf("statuses %q, %q", got.LiveStatus, got.GoneStatus)
+	}
+	if got.PickedView != "facts" || got.PickedQ != "rule" || !got.Closed || !strings.Contains(got.Picked, "Retire") {
+		t.Errorf("a picked result: %s %q closed %v\n%s", got.PickedView, got.PickedQ, got.Closed, got.Picked)
+	}
+	if !strings.Contains(got.None, "No fact matches") || !strings.Contains(got.None, "Retired and replaced too") {
+		t.Errorf("no result:\n%s", got.None)
+	}
+	if !strings.Contains(got.Missing, "No fact is named nope.") || !strings.Contains(got.Missing, "box at the top") {
+		t.Errorf("an unknown name:\n%s", got.Missing)
+	}
+	if !strings.Contains(got.Form, "It replaces") || !strings.Contains(got.Form, `data-fact="rule"`) {
+		t.Errorf("the replace form:\n%s", got.Form)
+	}
+	if len(got.Sent) != 1 || got.Sent[0]["replaces"] != "rule" || got.Sent[0]["scope"] != "projects/x" || got.Sent[0]["name"] != "always-ask-first" {
+		t.Errorf("sent %v", got.Sent)
 	}
 }

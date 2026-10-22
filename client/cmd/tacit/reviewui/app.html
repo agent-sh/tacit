@@ -26,6 +26,10 @@
     <button type="button" class="place" data-view="inbox" aria-pressed="false">Inbox</button>
     <button type="button" class="place" data-view="folders" aria-pressed="false">Folders</button>
   </nav>
+  <div class="find-all" id="find-all" role="search">
+    <label class="search"><span class="ic-slot" data-icon="search"></span><input id="top-q" type="search" class="find" placeholder="Find any fact or rule" aria-label="Find any fact or rule" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-controls="top-results" aria-autocomplete="list"><kbd>/</kbd></label>
+    <ul class="find-results" id="top-results" role="listbox" aria-label="Facts found" hidden></ul>
+  </div>
   <div class="top-actions">
     <button type="button" class="btn ghost" id="new-ruling" data-icon="plus"><span class="label">New rule</span><kbd>n</kbd></button>
     <button type="button" class="btn ghost" id="lights"></button>
@@ -39,7 +43,7 @@
       <div class="nav-btns">
         <button type="button" class="btn ghost" id="prev" data-icon="prev"><span class="label">Previous</span><kbd>k</kbd></button>
         <button type="button" class="btn ghost" id="next" data-icon="next"><span class="label">Next</span><kbd>j</kbd></button>
-        <button type="button" class="btn ghost" id="filter-btn" data-icon="filter" aria-expanded="false" aria-controls="filter-panel"><span class="label">Filter</span><kbd>/</kbd></button>
+        <button type="button" class="btn ghost" id="filter-btn" data-icon="filter" aria-expanded="false" aria-controls="filter-panel"><span class="label">Filter</span></button>
       </div>
     </div>
     <div class="filter-panel" id="filter-panel" hidden>

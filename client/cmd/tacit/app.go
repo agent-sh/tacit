@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -335,8 +336,30 @@ func newToken() string {
 }
 
 // ownerURL is the URL that opens the owner's page: the token rides on it.
-func ownerURL(addr, token string) string {
-	return "http://" + addr + "/?" + tokenQuery + "=" + token
+// With a fact's name the page opens on that fact (#fact=<name>): the
+// fragment stays in the browser and never reaches the server.
+func ownerURL(addr, token, factName string) string {
+	u := "http://" + addr + "/?" + tokenQuery + "=" + token
+	if factName != "" {
+		u += "#fact=" + url.PathEscape(factName)
+	}
+	return u
+}
+
+// openFactNote says what the terminal line adds when --fact names no fact in
+// the store; the page opens anyway and says so in its own words.
+func openFactNote(rs *reviewServer, name string) string {
+	if name == "" {
+		return ""
+	}
+	sn, err := rs.snapshot(context.Background())
+	if err != nil {
+		return "could not read the store to find " + name + " (" + shortErr(err) + "); the page tries again"
+	}
+	if sn.lookup(name) != nil {
+		return ""
+	}
+	return "no fact is named " + name + "; the page opens and says so, with the facts whose names are like it"
 }
 
 // stdoutIsTerminal reports whether this process prints to a terminal. An
@@ -352,14 +375,14 @@ var openBrowser = openURL
 
 // announceOwner prints the line that says where the owner's page is and
 // returns its URL with the token. The token is printed only to a terminal.
-func announceOwner(w io.Writer, name, addr, token string, tty bool) string {
-	url := ownerURL(addr, token)
+func announceOwner(w io.Writer, name, addr, token, factName string, tty bool) string {
+	link := ownerURL(addr, token, factName)
 	if tty {
-		fmt.Fprintf(w, "tacit %s: %s (Ctrl-C to stop)\n", name, url)
+		fmt.Fprintf(w, "tacit %s: %s (Ctrl-C to stop)\n", name, link)
 	} else {
 		fmt.Fprintf(w, "tacit %s: http://%s/ opened in your browser; the link with its token is shown only on a terminal (Ctrl-C to stop)\n", name, addr)
 	}
-	return url
+	return link
 }
 
 // serveOwner listens on addr (loopback only) and serves h, the owner's page
@@ -368,7 +391,8 @@ func announceOwner(w io.Writer, name, addr, token string, tty bool) string {
 // the command through a pipe sees the address without the token, and the
 // page and its API refuse it. With --no-open and no terminal there is no
 // one to give the link to, so it refuses to start.
-func serveOwner(name, addr, token string, noOpen bool, h http.Handler) int {
+// factName, when set, is the fact the page opens on (--fact).
+func serveOwner(name, addr, token, factName string, noOpen bool, h http.Handler) int {
 	if noOpen && !stdoutIsTerminal() {
 		fmt.Fprintf(os.Stderr, "%s: --no-open needs a terminal to print the page's link to (the link carries the page's token, which is never printed where an agent reads it)\n", name)
 		return 2
@@ -378,9 +402,9 @@ func serveOwner(name, addr, token string, noOpen bool, h http.Handler) int {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
 		return 2
 	}
-	url := announceOwner(os.Stdout, name, ln.Addr().String(), token, stdoutIsTerminal())
+	link := announceOwner(os.Stdout, name, ln.Addr().String(), token, factName, stdoutIsTerminal())
 	if !noOpen {
-		openBrowser(runtime.GOOS, url)
+		openBrowser(runtime.GOOS, link)
 	}
 	if err := http.Serve(ln, browserHandler(h)); err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
@@ -389,13 +413,18 @@ func serveOwner(name, addr, token string, noOpen bool, h http.Handler) int {
 	return 0
 }
 
-// runApp implements `tacit app [--browser [--addr 127.0.0.1:7450] [--no-open]]`.
+// runApp implements `tacit app [--browser [--addr 127.0.0.1:7450] [--no-open] [--fact NAME]]`.
 func runApp(args []string) int {
 	fsf := flag.NewFlagSet("app", flag.ExitOnError)
 	browser := fsf.Bool("browser", false, "serve the app page in a browser tab instead of the desktop window")
 	addr := fsf.String("addr", "127.0.0.1:7450", "with --browser: listen address (loopback only)")
 	noOpen := fsf.Bool("no-open", false, "with --browser: do not open a browser")
+	openFact := fsf.String("fact", "", "with --browser: open the page on the fact of this name")
 	fsf.Parse(args)
+	if *openFact != "" && !*browser {
+		fmt.Fprintln(os.Stderr, "app: --fact works with --browser; the desktop window opens on Needs you, and its search box finds the fact")
+		return 2
+	}
 	if *browser {
 		if host, _, err := net.SplitHostPort(*addr); err != nil || (host != "127.0.0.1" && host != "localhost" && host != "::1") {
 			fmt.Fprintln(os.Stderr, "app: --addr must be a loopback address")
@@ -440,7 +469,10 @@ func runApp(args []string) int {
 		}
 		return 0
 	}
-	return serveOwner("app", *addr, token, *noOpen, app.uiHandler(token))
+	if note := openFactNote(rs, *openFact); note != "" {
+		fmt.Fprintln(os.Stderr, "app:", note)
+	}
+	return serveOwner("app", *addr, token, *openFact, *noOpen, app.uiHandler(token))
 }
 
 // listenLoopback listens on addr only when it is a loopback address.
