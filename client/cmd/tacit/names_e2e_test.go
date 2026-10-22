@@ -13,6 +13,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/lint"
+	"github.com/agent-sh/tacit/client/internal/overlay"
 	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/record"
 )
@@ -289,5 +290,85 @@ func TestDeletedRepositoryFoldsByItsFacts(t *testing.T) {
 	}
 	if fs, err := lint.Run(w.s.Dir); err != nil || len(fs) != 0 {
 		t.Fatalf("lint %v %v", fs, err)
+	}
+}
+
+// A work org on the Mac lives only in its overlay: on a read-only clone
+// with the local layer, the overlay's project folder named for a forge org
+// becomes orgs/<org> in the overlay, its facts go to the repository their
+// paths name or stay in the org, all in the overlay; the clone and the
+// server are untouched.
+func TestLocalOrgLivesInTheOverlay(t *testing.T) {
+	r := newLocalRig(t)
+	seed := filepath.Join(r.root, "seed2")
+	gitIn(t, r.root, "clone", "-q", r.bare, seed)
+	os.MkdirAll(filepath.Join(seed, "review"), 0o755)
+	os.WriteFile(filepath.Join(seed, filepath.FromSlash(ledger.FormatPath)), ledger.Format{Version: ledger.FormatVersion, At: "x"}.Encode(), 0o644)
+	gitIn(t, seed, "add", "-A")
+	gitIn(t, seed, "commit", "-q", "-m", "format")
+	gitIn(t, seed, "push", "-q", "origin", "HEAD:main")
+	if err := r.s.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	r.serverHead = gitIn(t, r.bare, "rev-parse", "main")
+	r.cloneHead = gitIn(t, r.s.Dir, "rev-parse", "HEAD")
+	r.cloneFiles = treeBytes(t, r.s.Dir)
+	fakeGHAccounts(t, "owner", map[string]string{"workco/billing": "workco/billing"}, map[string]string{"workco": "Organization", "owner": "User"})
+	billing := filepath.Join(r.root, "projects", "billing")
+	os.MkdirAll(billing, 0o755)
+	gitIn(t, billing, "init", "-q", "-b", "main")
+	os.WriteFile(filepath.Join(billing, "main.go"), []byte("x"), 0o644)
+	gitIn(t, billing, "add", "main.go")
+	gitIn(t, billing, "commit", "-q", "-m", "c")
+	gitIn(t, billing, "remote", "add", "origin", "https://github.com/workco/billing.git")
+	for name, desc := range map[string]string{
+		"workco-reviews": "Every workco change needs two reviewers",
+		"billing-config": "The billing service reads " + filepath.ToSlash(filepath.Join(billing, "config.yaml")),
+	} {
+		b := rotFile(name, "projects/workco", "design_decision", desc, desc+".", "2026-10-10", "")
+		if err := overlay.Write(r.local, r.s.Dir, overlay.CuratedDir+"/projects/workco/"+name+".md", []byte(b)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fa := &fakeAssessor{first: map[string]assess.Decision{
+		"projects/billing": aDecision("projects/billing", "repo", "dormant", "no session touched it"),
+	}}
+	fa.install(t)
+	if code := runAssess(nil); code != 0 {
+		t.Fatalf("assess %d", code)
+	}
+	if code := runMigrate(nil); code != 0 {
+		t.Fatalf("migrate %d", code)
+	}
+	if got := gitIn(t, r.bare, "rev-parse", "main"); got != r.serverHead {
+		t.Fatal("the server moved")
+	}
+	if got := gitIn(t, r.s.Dir, "rev-parse", "HEAD"); got != r.cloneHead {
+		t.Fatal("the clone's HEAD moved")
+	}
+	if out := gitIn(t, r.s.Dir, "status", "--porcelain", "--ignored"); out != "" {
+		t.Fatalf("the clone changed:\n%s", out)
+	}
+	cur := filepath.Join(r.local, overlay.CuratedDir)
+	b, err := os.ReadFile(filepath.Join(cur, "orgs", "workco", record.FileName))
+	if err != nil {
+		t.Fatalf("no org record in the overlay: %v", err)
+	}
+	if o, err := record.Parse("orgs/workco", b); err != nil || o.Kind != record.KindOrg {
+		t.Fatalf("org %+v %v", o, err)
+	}
+	pb, _ := os.ReadFile(filepath.Join(cur, "projects", "workco", record.FileName))
+	if p, err := record.Parse("projects/workco", pb); err != nil || p.SuppressedBy != "orgs/workco" {
+		t.Fatalf("projects/workco %+v %v", p, err)
+	}
+	where := map[string]string{}
+	lf, _ := overlay.Load(r.local)
+	for _, f := range lf {
+		if overlay.IsCurated(f.Path) && f.Meta.SupersededBy == "" && f.Meta.Origin != "" {
+			where[f.Meta.Origin] = f.Meta.Scope
+		}
+	}
+	if where["workco-reviews"] != "orgs/workco" || where["billing-config"] != "projects/billing" {
+		t.Fatalf("where the org folder's facts went: %v", where)
 	}
 }
