@@ -75,6 +75,10 @@ type Candidate struct {
 	// folded into, each existing by code's check: proposed with the others,
 	// filled in when its batch is rendered.
 	Alike []RealRepo
+	// ProposedKey are the names Real's stable evidence gave (sessions,
+	// applies_to, remotes, a rename), before the cut to the best and the
+	// checks of today's checkouts: what a fingerprint reads of Real.
+	ProposedKey []string
 }
 
 // Proposed are code's candidate repositories for the folder: from its own
@@ -103,10 +107,6 @@ type RealRepo struct {
 	// Score orders the proposals: sessions that worked in its checkout
 	// weigh most, then facts that name its paths, then a near name.
 	Score int
-	// Volatile: only the live file system names it (the checkouts its facts'
-	// paths resolve to now, a near name among today's checkouts), which
-	// agents change all day; a fingerprint leaves it out.
-	Volatile bool
 }
 
 // Absent reports a folder whose name, as a repository, code verified exists

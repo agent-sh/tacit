@@ -186,20 +186,21 @@ func TestFingerprintIgnoresTheReasonTheRecordAndNewOwnerTurns(t *testing.T) {
 }
 
 func TestFingerprintKeepsVerdictsAndNamesNotWording(t *testing.T) {
-	c := Candidate{Folder: "projects/x", Name: repoCheck("x", check.Fails, ""), Real: []RealRepo{{Name: "a", Why: []string{"2 facts"}}, {Name: "b", Why: []string{"near"}}}}
+	c := Candidate{Folder: "projects/x", Name: repoCheck("x", check.Fails, ""), Real: []RealRepo{{Name: "a", Why: []string{"2 facts"}}, {Name: "b", Why: []string{"near"}}}, ProposedKey: []string{"a"}}
 	fp := Fingerprint(c)
 	d := c
 	d.Name = repoCheck("x", check.Fails, "")
 	d.Name.Results[0].Output = "not found: o/x, p/x"
-	d.Real = []RealRepo{{Name: "b", Why: []string{"near"}}, {Name: "a", Why: []string{"3 facts"}}}
+	// Proposals the live file system makes (b, near), and the cut, move nothing.
+	d.Real = []RealRepo{{Name: "a", Why: []string{"3 facts"}}, {Name: "z", Why: []string{"near"}}}
 	if Fingerprint(d) != fp {
 		t.Fatal("wording moved the fingerprint")
 	}
-	d.Real = append(d.Real, RealRepo{Name: "c"})
+	d.ProposedKey = []string{"a", "c"}
 	if Fingerprint(d) == fp {
-		t.Fatal("a new candidate kept it")
+		t.Fatal("a new candidate from stable evidence kept it")
 	}
-	d.Real = c.Real
+	d.ProposedKey = c.ProposedKey
 	d.Name = repoCheck("x", check.Holds, "")
 	if Fingerprint(d) == fp {
 		t.Fatal("a new verdict kept it")
