@@ -502,12 +502,14 @@ func (s *Store) commitPush(ctx context.Context, rels []string, message, writer s
 	if _, err := git(ctx, s.Dir, args...); err != nil {
 		return err
 	}
-	commit := []string{"commit", "--quiet", "-m", message}
+	// Keep free-form owner/model text out of git's option channel. The
+	// message is data on stdin, never part of the command arguments.
+	commit := []string{"commit", "--quiet", "--file=-"}
 	if only {
 		// Name the files: whatever else is staged in the clone stays out of this commit.
 		commit = append(append(commit, "--only", "--"), rels...)
 	}
-	if _, err := gitEnv(ctx, s.Dir, []string{"GIT_AUTHOR_NAME=" + writer, "GIT_COMMITTER_NAME=" + writer}, commit...); err != nil {
+	if _, err := gitEnvInput(ctx, s.Dir, []string{"GIT_AUTHOR_NAME=" + writer, "GIT_COMMITTER_NAME=" + writer}, message, commit...); err != nil {
 		s.cleanup(append([]string{"reset", "--quiet", "--"}, rels...)...)
 		return err
 	}
@@ -753,12 +755,19 @@ func Git(ctx context.Context, dir string, args ...string) (string, error) {
 // group when the context ends, WaitDelay so a helper holding the pipes
 // cannot keep Run waiting.
 func gitEnv(ctx context.Context, dir string, env []string, args ...string) (string, error) {
+	return gitEnvInput(ctx, dir, env, "", args...)
+}
+
+// gitEnvInput shares gitEnv's environment, cancellation and process-group
+// handling while keeping free-form input separate from command arguments.
+func gitEnvInput(ctx context.Context, dir string, env []string, input string, args ...string) (string, error) {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
 	}
 	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Stdin = strings.NewReader(input)
 	if dir != "" {
 		cmd.Dir = dir
 	}
