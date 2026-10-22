@@ -76,7 +76,23 @@ var (
 		return m
 	}()
 	toolRx = regexp.MustCompile(`^[A-Za-z0-9_*?.\-]+$`)
+	// forgeRx is a normalized forge URL of one repository: host/owner/name.
+	forgeRx = regexp.MustCompile(`^[a-z0-9.-]+\.[a-z]{2,}/[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`)
 )
+
+// OrgChecked reports an org record whose evidence holds the forge's check
+// that its name is an organization (check.KindAccount, holds, value
+// Organization): what an org record rests on.
+func OrgChecked(r *Record) bool {
+	for _, e := range r.Evidence {
+		for _, c := range e.Checks {
+			if c.Kind == "account" && c.Verdict == "holds" && strings.EqualFold(c.Value, "Organization") && strings.EqualFold(c.Inputs["name"], r.Name) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // Cites are the session, note and commit citations in text: <harness>:<id>,
 // note:<name> or commit:<sha>, in the order they appear, once each.
@@ -146,9 +162,9 @@ func Validate(old, rec *Record, by string, env Env) []Problem {
 	allowed := FolderKinds(folder)
 	switch {
 	case len(allowed) == 0:
-		add("folder", "is no folder that holds a record", fmt.Sprintf("%q; records live in projects/<name>, areas/<name>, areas/<area>/topics/<name> and topics/<name>", folder))
+		add("folder", "is no folder that holds a record", fmt.Sprintf("%q; records live in projects/<name>, areas/<name>, areas/<area>/topics/<name>, topics/<name> and orgs/<name>", folder))
 	case !kinds[rec.Kind]:
-		add("kind", "not repo, folder, area or topic", fmt.Sprintf("got %q", rec.Kind))
+		add("kind", "not repo, folder, area, topic or org", fmt.Sprintf("got %q", rec.Kind))
 	case !contains(allowed, rec.Kind):
 		add("kind", "does not match the folder", fmt.Sprintf("%s holds kind %s, got %q", folder, strings.Join(allowed, " or "), rec.Kind))
 	}
@@ -265,7 +281,13 @@ func Validate(old, rec *Record, by string, env Env) []Problem {
 			// no session to cite: a status that says so, and claims no work,
 			// rests on that evidence itself.
 			quietOK := noSessions(rec) && (rec.Status == StatusDead || rec.Status == StatusDormant || rec.Status == StatusNeedsReview)
-			if known == 0 && !quietOK {
+			// An org is the forge's answer: code makes it from a check that
+			// holds, which its evidence keeps.
+			orgOK := rec.Kind == KindOrg && OrgChecked(rec)
+			if t := env.Records[rec.SuppressedBy]; rec.SuppressedBy != "" && OrgFolds(rec, t) && OrgChecked(t) {
+				orgOK = true // the folder named for an org, folded into it by code
+			}
+			if known == 0 && !quietOK && !orgOK {
 				add("was[0].why", "cites no session, note or commit code can find", "cite the session ids (claude:<id>, codex:<id>), note:<name> or the folder's own commits (commit:<sha>, as the evidence lists them) the decision rests on; a git date alone is no reason; a folder whose evidence shows no session at all may only be dead, dormant or needs-review")
 			}
 		}
@@ -338,8 +360,11 @@ func Validate(old, rec *Record, by string, env Env) []Problem {
 			add("suppressed_by", "names a folder with no record", fmt.Sprintf("%s; give it a record first", s))
 		case !target.Live():
 			add("suppressed_by", "names a folder that is itself suppressed: no chains", fmt.Sprintf("%s is suppressed by %s; point at that", s, target.SuppressedBy))
+		case rec.Kind == KindOrg:
+			add("suppressed_by", "an org folder is never folded into another folder", fmt.Sprintf("%s is a forge organization; its repositories' facts move to them, its own stay", folder))
+		case OrgFolds(rec, target):
 		case Broad(target.Kind) != Broad(rec.Kind):
-			add("suppressed_by", "names a folder of another kind", fmt.Sprintf("a %s folds into a project, an area or topic into an area or topic; %s is a %s", rec.Kind, s, target.Kind))
+			add("suppressed_by", "names a folder of another kind", fmt.Sprintf("a %s folds into a project, an area or topic into an area or topic (and only a project folder named for an org into that org); %s is a %s", rec.Kind, s, target.Kind))
 		}
 		for f, o := range env.Records {
 			if f != folder && o != nil && o.SuppressedBy == folder {
@@ -357,6 +382,12 @@ func Validate(old, rec *Record, by string, env Env) []Problem {
 	}
 	if rec.Kind != KindFolder && len(rec.Roots) > 0 {
 		add("roots", "only a folder of kind folder has roots", "")
+	}
+	if rec.Org != "" && (Broad(rec.Kind) != "project" || !fact.IsSlug(rec.Org)) {
+		add("org", "only a project has an org, and it is the organization's name (a slug)", fmt.Sprintf("got %q on a %s", rec.Org, rec.Kind))
+	}
+	if rec.Forge != "" && (Broad(rec.Kind) != "project" || !forgeRx.MatchString(rec.Forge)) {
+		add("forge", "only a project has a forge name, a normalized URL host/owner/name", fmt.Sprintf("got %q on a %s", rec.Forge, rec.Kind))
 	}
 	sessions := rec.Sessions()
 	for _, t := range rec.Tools {

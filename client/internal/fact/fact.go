@@ -25,7 +25,7 @@ var (
 	// server refuses its pushes, and no fact is ever written as it.
 	Harnesses   = set("claude", "codex", "pi", "hermes", "grok", "muse", "agy", "dreamer", "import", "curator", "human", "reader")
 	SourceKinds = set("user", "observed", "web", "derived")
-	ScopeRoots  = set("system", "user", "projects", "machines", "derived", "areas", "topics")
+	ScopeRoots  = set("system", "user", "projects", "machines", "derived", "areas", "topics", "orgs")
 )
 
 var (
@@ -349,8 +349,8 @@ func IsSlug(s string) bool { return slugRe.MatchString(s) }
 func IsDate(s string) bool { return dateRe.MatchString(s) }
 
 // ValidScope accepts `system`, `user`, `projects/<repo>`, `machines/<host>`,
-// `derived/<repo>`, `areas/<area>`, `areas/<area>/topics/<topic>` and
-// `topics/<topic>`: the one scope deeper than two parts is a topic an area
+// `derived/<repo>`, `areas/<area>`, `areas/<area>/topics/<topic>`,
+// `topics/<topic>` and `orgs/<org>`: the one scope deeper than two parts is a topic an area
 // owns. The parts after the root are slugs for the new roots; the older
 // roots keep their shape check (one part, not empty).
 func ValidScope(s string) bool {
@@ -370,7 +370,7 @@ func ValidScope(s string) bool {
 			return IsSlug(parts[0]) && parts[1] == "topics" && IsSlug(parts[2])
 		}
 		return false
-	case "topics":
+	case "topics", "orgs":
 		return has && IsSlug(rest)
 	default:
 		return has && rest != "" && !strings.Contains(rest, "/")
@@ -378,11 +378,16 @@ func ValidScope(s string) bool {
 }
 
 // NewRoot reports a scope under the roots of the folder records format
-// (areas/, topics/): written only into a store with the format marker.
+// (areas/, topics/, and format 2's orgs/): written only into a store with
+// the format marker (orgs/: of format 2, OrgRoot).
 func NewRoot(scope string) bool {
 	root, _, _ := strings.Cut(scope, "/")
-	return root == "areas" || root == "topics"
+	return root == "areas" || root == "topics" || root == "orgs"
 }
+
+// OrgRoot reports a scope under orgs/, a forge organization's folder:
+// written only into a store whose format marker is 2 or newer.
+func OrgRoot(scope string) bool { return strings.HasPrefix(scope, "orgs/") }
 
 // IndexFile is the generated index file of a store folder (internal/tree).
 // Its name starts with an underscore, which a fact's name (a slug) cannot,

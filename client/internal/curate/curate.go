@@ -182,7 +182,7 @@ type Folder struct {
 // still get the proposal rule.
 func FoldersSection(folders []Folder) string {
 	var b strings.Builder
-	b.WriteString("\nAREAS AND TOPICS:\nAn area is an ongoing system or practice of the owner's (the ticketing system, the on-call), a topic a bounded work stream (a migration, a launch). An entry about one may take its folder as its scope, exactly as listed; code refuses any other area or topic scope. When the notes are about an area or topic none of these fits, file the entry as you would anyway and add to it \"propose\": {\"kind\": \"area\"|\"topic\", \"name\": \"<slug>\", \"area\": \"<the area a topic belongs to, if one does>\", \"description\": \"<one line>\"}; a folder is made only once notes of two different sessions propose it.\n")
+	b.WriteString("\nAREAS AND TOPICS:\nAn area is an ongoing system or practice of the owner's (the ticketing system, the on-call), a topic a bounded work stream (a migration, a launch). An entry about one may take its folder as its scope, exactly as listed; code refuses any other area or topic scope. When the notes are about an area or topic none of these fits, file the entry as you would anyway and add to it \"propose\": {\"kind\": \"area\"|\"topic\", \"name\": \"<slug>\", \"area\": \"<the area a topic belongs to, if one does>\", \"description\": \"<one line>\"}; a folder is made only once notes of two different sessions propose it. An org (kind org) is an organization on the forge: an entry takes its folder as its scope only when it holds across the org's repositories, naming two or more of the repos listed for it or the org itself; code checks that, and refuses an org scope for a fact about one repository.\n")
 	if len(folders) == 0 {
 		b.WriteString("(none yet)\n")
 	}
@@ -289,7 +289,7 @@ func Parse(result string) []Entry {
 	return out
 }
 
-var scopeRx = regexp.MustCompile(`^(user|system|projects/[a-z0-9-]+|machines/[a-z0-9-]+|areas/[a-z0-9][a-z0-9-]*(/topics/[a-z0-9][a-z0-9-]*)?|topics/[a-z0-9][a-z0-9-]*)$`)
+var scopeRx = regexp.MustCompile(`^(user|system|projects/[a-z0-9-]+|machines/[a-z0-9-]+|areas/[a-z0-9][a-z0-9-]*(/topics/[a-z0-9][a-z0-9-]*)?|topics/[a-z0-9][a-z0-9-]*|orgs/[a-z0-9][a-z0-9-]*)$`)
 
 // ToFact turns an entry into a curated fact; taken dedupes names.
 func ToFact(e Entry, host string, taken map[string]bool) *fact.Fact {

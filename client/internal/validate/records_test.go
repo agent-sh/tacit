@@ -111,3 +111,49 @@ func TestInterimRuleBehindTheMarker(t *testing.T) {
 		t.Errorf("an area in a store without the marker: %v", p)
 	}
 }
+
+// An org scope needs format 2 and the org's record; a model's fact goes up
+// to an org only when it names two of the org's repositories (the records'
+// org) or the org itself.
+func TestOrgScopes(t *testing.T) {
+	home, _ := filepath.EvalSymlinks(t.TempDir())
+	store := filepath.Join(home, "store")
+	write(t, filepath.Join(store, filepath.FromSlash(ledger.FormatPath)), string(ledger.Format{Version: 1, At: "x"}.Encode()))
+	putRecord(t, store, newRec(record.KindOrg, "orgs/agent-sh"))
+	for _, n := range []string{"tower-crane", "agnix"} {
+		r := newRec(record.KindRepo, "projects/"+n)
+		r.Org = "agent-sh"
+		putRecord(t, store, r)
+	}
+	putRecord(t, store, newRec(record.KindRepo, "projects/pikadon"))
+	cat := repoid.LoadCatalog(home, "", "")
+	if p := NewEnv(store, "", cat, "box").Scope("orgs/agent-sh"); p == nil || !strings.Contains(p.Rule, "format marker is 2") {
+		t.Fatalf("format 1: %v", p)
+	}
+	write(t, filepath.Join(store, filepath.FromSlash(ledger.FormatPath)), string(ledger.Format{Version: 2, At: "x"}.Encode()))
+	e := NewEnv(store, "", cat, "box")
+	if p := e.Scope("orgs/agent-sh"); p != nil {
+		t.Fatalf("an org with a record: %v", p)
+	}
+	if p := e.Scope("orgs/valkey-io"); p == nil {
+		t.Fatal("an org with no record")
+	}
+	if got := strings.Join(e.OrgMembers("agent-sh"), ","); got != "agnix,tower-crane" {
+		t.Fatalf("members %s", got)
+	}
+	m := fact.Meta{Scope: "orgs/agent-sh", Description: "tower-crane builds with cargo", Type: "design_decision"}
+	if p := e.OrgFact(m, "Its CI runs on every push."); p == nil || !strings.Contains(p.Hint, "names 1 of agnix, tower-crane") {
+		t.Fatalf("one repository's fact: %v", p)
+	}
+	m.AppliesTo.Repos = []string{"agnix"}
+	if p := e.OrgFact(m, "The same holds in agnix."); p != nil {
+		t.Fatalf("two of its repositories: %v", p)
+	}
+	m = fact.Meta{Scope: "orgs/agent-sh", Description: "Every agent-sh repository releases from a signed tag", Type: "user_standard"}
+	if p := e.OrgFact(m, ""); p != nil {
+		t.Fatalf("the org itself: %v", p)
+	}
+	if ps := e.Meta(fact.Meta{Scope: "orgs/agent-sh", Description: "pikadon listens on 7781", Type: "machine_fact", Source: fact.Source{Kind: "observed"}}, "x", false, false); len(ps) == 0 {
+		t.Fatal("Meta lets a one-repository fact into the org")
+	}
+}

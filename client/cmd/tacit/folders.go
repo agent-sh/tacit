@@ -152,6 +152,24 @@ func splitPrompt(env validate.Env, host string, batch []*fact.Fact) string {
 		}
 		folders = append(folders, curate.Folder{Scope: f, Kind: r.Kind, Description: r.Description, Tools: r.Tools, Commands: r.Commands, Repos: r.Repos})
 	}
+	// The orgs of the batch's repositories (the records' org, from the
+	// forge): an entry that holds across one may go up to its folder.
+	if env.Format2 {
+		for _, f := range sortedRecordFolders(env.Records) {
+			r := env.Records[f]
+			if r.Kind != record.KindOrg || !r.Live() {
+				continue
+			}
+			members := env.OrgMembers(r.Name)
+			tied := false
+			for _, m := range members {
+				tied = tied || repos[m]
+			}
+			if tied {
+				folders = append(folders, curate.Folder{Scope: f, Kind: r.Kind, Description: r.Description, Repos: members})
+			}
+		}
+	}
 	return p + curate.FoldersSection(folders)
 }
 

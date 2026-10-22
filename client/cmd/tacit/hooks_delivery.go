@@ -190,6 +190,8 @@ func repoStartHits(ctx context.Context, ix *search.Index, sit search.Situation) 
 	if c := deliveryInt("START_CEILING", startCeiling); len(keep) > c {
 		keep = keep[:c]
 	}
+	// The repository's org: its rules and standards, lightly.
+	keep = append(keep, orgStartHits(ctx, ix, sit, keep)...)
 	return keep, true, nil
 }
 

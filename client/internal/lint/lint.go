@@ -353,6 +353,19 @@ func records(root string, facts []*fact.Fact) []Finding {
 			}
 		}
 	}
+	if haveFormat && !format.Orgs() {
+		// Format 2's orgs: an older binary's strict decoder refuses them.
+		for f, r := range recs {
+			if r.Kind == record.KindOrg || r.Org != "" || r.Forge != "" {
+				add(record.Rel(f), fmt.Sprintf("an org record, or a record's org or forge, in a store whose format marker is not %d or newer", ledger.StatementsFormat))
+			}
+		}
+		for _, f := range facts {
+			if !f.InInbox() && fact.OrgRoot(f.Meta.Scope) {
+				add(f.Path, fmt.Sprintf("a fact in %s in a store whose format marker is not %d or newer", f.Meta.Scope, ledger.StatementsFormat))
+			}
+		}
+	}
 	ql, _ := os.ReadFile(filepath.Join(root, filepath.FromSlash(ledger.QuotesPath)))
 	env := record.Env{Static: true, Records: recs, QuoteBacked: ledger.Backing(ql)}
 	folders := make([]string, 0, len(recs))
