@@ -145,7 +145,7 @@ func TestNeedsReviewIsWorkedNotParked(t *testing.T) {
 	if b == nil || b.Status != record.StatusActive || !strings.Contains(b.Was[0].Why, "commit:0123456789ab") {
 		t.Fatalf("beacon after its re-attempt: %+v", b)
 	}
-	if rep2.ReviewRetried != 1 || rep2.ReviewSettled != 1 || rep2.AssessCandidates != 1 {
+	if rep2.ReviewRetried != 1 || rep2.ReviewSettled != 1 || rep2.AssessCandidates != 1 || rep2.ReviewWaiting != 1 {
 		t.Fatalf("run 2 report: %+v", rep2)
 	}
 	logb, _ := os.ReadFile(filepath.Join(platform.StateDir(home), reviewAttemptsLog))
