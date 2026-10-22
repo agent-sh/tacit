@@ -45,7 +45,7 @@ func runMCP(args []string) int {
 		fmt.Fprintln(os.Stderr, "mcp:", err)
 		return 2
 	}
-	if err := storeServer(s, harness).Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+	if err := serveMCP(storeServer(s, harness)); err != nil {
 		fmt.Fprintln(os.Stderr, "mcp:", err)
 		return 1
 	}
@@ -172,7 +172,7 @@ func runProbeMCP() int {
 		}
 		return text(out), nil, nil
 	})
-	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+	if err := serveMCP(server); err != nil {
 		fmt.Fprintln(os.Stderr, "mcp:", err)
 		return 1
 	}
