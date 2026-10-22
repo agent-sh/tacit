@@ -57,6 +57,7 @@ func fakeGH(t *testing.T, user string, repos map[string]string) (log string) {
 type evidenceModel struct {
 	prompts  []string
 	stubborn map[string]bool
+	review   map[string]bool // answered needs-review
 }
 
 var (
@@ -79,6 +80,10 @@ func (m *evidenceModel) run(_ context.Context, _, prompt string) (string, float6
 		d := assess.Decision{Folder: folder, Kind: "repo", Status: "active", Description: "what " + folder + " is"}
 		if m.stubborn[folder] {
 			d.Why = "busy lately"
+			return d
+		}
+		if m.review[folder] {
+			d.Status, d.Why = "needs-review", "nothing places it, "+citeInRx.FindString(body)
 			return d
 		}
 		if strings.Contains(body, "paths ~/") && !strings.Contains(body, "git_root true") {
@@ -200,6 +205,11 @@ func checkedHome(t *testing.T) (home string, s *store.Store, ghLog string) {
 		add(fmt.Sprintf("projects/kv-%d-g1", i), fmt.Sprintf("kv-%d-task-note", i), "history", id, kvTopics[i-1])
 		work = append(work, repoid.WorkItem{Root: widget, Session: id, By: "edit"})
 	}
+	// One more task folder whose session the registry never saw: only the
+	// folders alike say where it belongs.
+	add("projects/kv-13-g1", "kv-13-task-note", "history", "s-kv13", "The importer skips rows whose checksum column is empty")
+	// A folder nothing places: the model leaves it for review.
+	add("projects/puzzle", "puzzle-note", "history", "s-pz", "The puzzle solver caches boards by their canonical hash")
 	add("projects/gizmo", "gizmo-flags", "design_decision", "s-z1", "Feature flags are read once at start from flags.toml")
 	add("projects/widget-pr7", "pr7-review", "history", "s-z2", "The review of change seven asked for a smaller diff")
 	work = append(work, repoid.WorkItem{Root: widget, Session: "s-z1", By: "edit"}, repoid.WorkItem{Root: filepath.Join(p, "widget-pr7"), Session: "s-z2", By: "edit"})
@@ -230,7 +240,7 @@ func checkedHome(t *testing.T) (home string, s *store.Store, ghLog string) {
 // once per name (its answers are cached).
 func TestChecksResolveFoldersFromEvidence(t *testing.T) {
 	home, s, ghLog := checkedHome(t)
-	m := &evidenceModel{stubborn: map[string]bool{"projects/stubborn": true}}
+	m := &evidenceModel{stubborn: map[string]bool{"projects/stubborn": true}, review: map[string]bool{"projects/puzzle": true}}
 	prev := assessRun
 	assessRun = m.run
 	t.Cleanup(func() { assessRun = prev })
@@ -256,6 +266,12 @@ func TestChecksResolveFoldersFromEvidence(t *testing.T) {
 	}
 	if folded != 12 {
 		t.Errorf("%d of 12 alike folders folded alike", folded)
+	}
+	if r := recs["projects/kv-13-g1"]; r == nil || r.SuppressedBy != "projects/widget" {
+		t.Errorf("the alike folder with no evidence of its own: %+v", r)
+	}
+	if r := recs["projects/puzzle"]; r == nil || r.Status != "needs-review" {
+		t.Errorf("puzzle: %+v", r)
 	}
 	if r := recs["projects/old-gadget"]; r == nil || r.SuppressedBy != "projects/gadget" {
 		t.Errorf("old-gadget: %+v", r)
@@ -298,6 +314,7 @@ func TestChecksResolveFoldersFromEvidence(t *testing.T) {
 		"decided before on", "suppressed into projects/widget",
 		"check: gizmo and widget are one repository: holds", "have one origin, github.com/owner/widget",
 		"is the same repository as projects/widget, which has a live record",
+		"folder(s) of the same name pattern kv-#-g# are suppressed into it",
 	} {
 		if !strings.Contains(all, want) {
 			t.Errorf("the prompts lack %q", want)
@@ -329,7 +346,7 @@ func TestChecksResolveFoldersFromEvidence(t *testing.T) {
 			live[f.Meta.Scope]++
 		}
 	}
-	if live["projects/widget"] != 15 || live["projects/gadget"] != 1 || live["projects/widgit"] != 0 || live["projects/gizmo"] != 0 {
+	if live["projects/widget"] != 16 || live["projects/gadget"] != 1 || live["projects/widgit"] != 0 || live["projects/gizmo"] != 0 {
 		t.Fatalf("live facts by folder: %v", live)
 	}
 
@@ -362,6 +379,8 @@ func TestChecksResolveFoldersFromEvidence(t *testing.T) {
 		t.Fatalf("run 3 asked the waiting folder: %+v, %d prompts", rep3, len(m.prompts)-asked)
 	}
 	// New evidence (a new fact in the folder) asks it again.
+	writeFactFile(t, s.Dir, &fact.Fact{Path: "projects/puzzle/puzzle-two.md", Meta: fact.Meta{Name: "puzzle-two", Description: "The puzzle solver moved its cache to the shared disk",
+		Type: "history", Scope: "projects/puzzle", Source: fact.Source{Harness: "curator", Host: "box", Session: "s-pz2", Kind: "observed"}, Created: "2026-10-12"}, Body: "y.\n"})
 	writeFactFile(t, s.Dir, &fact.Fact{Path: "projects/stubborn/stubborn-two.md", Meta: fact.Meta{Name: "stubborn-two", Description: "The stubborn tool now reads its config from the repo root",
 		Type: "history", Scope: "projects/stubborn", Source: fact.Source{Harness: "curator", Host: "box", Session: "s-st2", Kind: "observed"}, Created: "2026-10-12"}, Body: "x.\n"})
 	facts, _, _ = fact.Walk(s.Dir)
@@ -370,7 +389,7 @@ func TestChecksResolveFoldersFromEvidence(t *testing.T) {
 	gitIn(t, s.Dir, "commit", "-q", "-m", "a new fact")
 	rep4 := &curate.Report{}
 	assessStep(context.Background(), s, assessOpts{model: "opus"}, rep4)
-	if rep4.AssessHeld != 0 || rep4.AssessCandidates != 1 {
+	if rep4.AssessHeld != 0 || rep4.AssessCandidates != 2 {
 		t.Fatalf("run 4 after new evidence: %+v", rep4)
 	}
 	if fs, err := lint.Run(s.Dir); err != nil || len(fs) != 0 {

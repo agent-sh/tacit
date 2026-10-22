@@ -71,6 +71,29 @@ type Candidate struct {
 	// repository's names make, so they are decided in one batch.
 	Same  []check.Result
 	Group string
+	// Alike are the repositories folders alike (the same name pattern) were
+	// folded into, each existing by code's check: proposed with the others,
+	// filled in when its batch is rendered.
+	Alike []RealRepo
+}
+
+// Proposed are code's candidate repositories for the folder: from its own
+// evidence, then where folders alike went.
+func (c Candidate) Proposed() []RealRepo {
+	out := append([]RealRepo(nil), c.Real...)
+	for _, r := range c.Alike {
+		dup := false
+		for i := range out {
+			if out[i].Name == r.Name {
+				out[i].Why = append(append([]string(nil), out[i].Why...), r.Why...)
+				dup = true
+			}
+		}
+		if !dup {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // RealRepo is a repository code proposes a folder belongs to, with why.
@@ -190,9 +213,9 @@ func Render(cands []Candidate) string {
 		for _, r := range c.Same {
 			b.WriteString("check: " + r.Line() + "\n")
 		}
-		if len(c.Real) > 0 {
+		if real := c.Proposed(); len(real) > 0 {
 			var parts []string
-			for _, r := range c.Real {
+			for _, r := range real {
 				parts = append(parts, fmt.Sprintf("%s (%s)", r.Name, strings.Join(r.Why, "; ")))
 			}
 			b.WriteString("candidate real repositories (code's, each exists by its check): " + strings.Join(parts, ", ") + "\n")

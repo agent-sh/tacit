@@ -33,13 +33,14 @@ func Enforce(c Candidate, d Decision, env Checked) []string {
 	into := strings.TrimSpace(d.SuppressedBy)
 	// The name exists nowhere, or is an old name the forge renamed: no
 	// status of its own under it.
-	if c.Absent() && into == "" && d.Status != record.StatusNeedsReview && !(d.Kind == KindNone && len(c.Real) == 0) {
+	proposed := c.Proposed()
+	if c.Absent() && into == "" && d.Status != record.StatusNeedsReview && !(d.Kind == KindNone && len(proposed) == 0) {
 		what := "no checkout or other name of one on any machine, no remote, and the forge has no repository of that name"
 		if c.Name.Renamed != "" {
 			what = "the forge says it was renamed: it is " + c.Name.Forge + " now"
 		}
 		var cands []string
-		for _, r := range c.Real {
+		for _, r := range proposed {
 			cands = append(cands, "projects/"+r.Name)
 		}
 		if c.Name.Renamed != "" && !contains(cands, "projects/"+c.Name.Renamed) {
@@ -192,16 +193,18 @@ func (c Candidate) Shape() string {
 		v = c.Name.Verdict
 	}
 	real := "-"
-	if len(c.Real) > 0 {
-		real = c.Real[0].Name
+	if p := c.Proposed(); len(p) > 0 {
+		real = p[0].Name
 	}
 	return fmt.Sprintf("name %s, absent %v, belongs to %s", v, c.Absent(), real)
 }
 
-// Fingerprint is a hash of everything the model reads of a candidate: the
-// same fingerprint is the same question (a refused folder waits until it
-// changes).
+// Fingerprint is a hash of the evidence the model reads of a candidate
+// (why it was asked and the record it had aside): the same fingerprint is
+// the same question (a refused folder, or one left for review, waits until
+// it changes).
 func Fingerprint(c Candidate) string {
+	c.Reason, c.Old = "", nil
 	h := sha256.Sum256([]byte(Render([]Candidate{c})))
 	return hex.EncodeToString(h[:12])
 }

@@ -136,6 +136,7 @@ type assessor struct {
 	checker                *check.Checker
 	commitsShown           map[string][]string // folder -> the own commits its evidence lists
 	checkRefused           int                 // decisions a check refuted
+	held                   *heldState          // refused and review-waiting folders' fingerprints
 }
 
 func newAssessor(ctx context.Context, s *store.Store, local bool) (*assessor, error) {
@@ -310,6 +311,17 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 			seen[f] = true
 			c.Reason = why
 			out = append(out, c)
+			continue
+		}
+		// A folder left for review is asked again once its evidence changed
+		// (what the model reads of it: new facts, candidates, decisions on
+		// folders alike), and not before.
+		if a.held != nil && r.Live() && r.Status == record.StatusNeedsReview {
+			if fp := a.fingerprint(c); fp != a.held.Reviewed[f] {
+				seen[f] = true
+				c.Reason = "left for review; its evidence changed since it was decided"
+				out = append(out, c)
+			}
 		}
 	}
 	groupSame(out)
@@ -1365,12 +1377,13 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 		max = assessMax
 	}
 	held := loadHeld(filepath.Join(platform.StateDir(a.home), assessHeldFile))
+	a.held = held
 	all := a.candidates(max+len(held.Folders), o.only)
 	// A folder refused in assessHoldRuns runs on the same evidence waits
 	// until its evidence (what the model reads of it) changes.
 	var cands []assess.Candidate
 	for _, c := range all {
-		c.Similar = a.similar(c, nil)
+		a.refresh(&c, nil)
 		if h, ok := held.Folders[c.Folder]; ok && h.Runs >= assessHoldRuns && h.Fingerprint == assess.Fingerprint(c) {
 			rep.AssessHeld++
 			fmt.Fprintf(os.Stderr, "assess: %s waits: refused in %d runs on the same evidence (%s)\n", c.Folder, h.Runs, clipOne(h.Problems, 300))
@@ -1387,6 +1400,7 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 	var pendingLedger []byte
 	var decidedRun []decidedShape // this run's decisions, for folders alike in later batches
 	var refusedRun []refusedItem  // refused twice in this run
+	var acceptedRun []decided     // decided in this run
 	n := 0
 	for i := 0; i < len(cands); i += len(batchOf(cands, i)) {
 		if ctx.Err() != nil {
@@ -1397,7 +1411,7 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 		batch := batchOf(cands, i)
 		n++
 		for j := range batch {
-			batch[j].Similar = a.similar(batch[j], decidedRun)
+			a.refresh(&batch[j], decidedRun)
 		}
 		prompt := fmt.Sprintf(assess.Prompt, assess.Render(batch))
 		res, cost, err := assessRun(ctx, o.model, prompt)
@@ -1457,6 +1471,7 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 			delete(held.Folders, d.c.Folder)
 			if d.rec != nil && d.rec.Folder == d.c.Folder {
 				decidedRun = append(decidedRun, decidedShape{shape: d.c.Shape(), absent: d.c.Absent(), rec: d.rec})
+				acceptedRun = append(acceptedRun, d)
 			}
 		}
 		// A decision that changes nothing but the evidence still writes the
@@ -1503,10 +1518,18 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 	// The refused folders' fingerprints are taken as the next run will see
 	// them (the records as this run left them), so a folder whose evidence
 	// does not change waits.
+	// A folder left for review keeps the fingerprint of its evidence: it is
+	// asked again when that changes.
+	for _, d := range acceptedRun {
+		if d.rec.Status == record.StatusNeedsReview && d.rec.Live() {
+			held.Reviewed[d.c.Folder] = a.fingerprint(d.c)
+		} else {
+			delete(held.Reviewed, d.c.Folder)
+		}
+	}
 	for _, r := range refusedRun {
 		c := r.c
-		c.Similar = a.similar(c, nil)
-		fp := assess.Fingerprint(c)
+		fp := a.fingerprint(c)
 		h := held.Folders[c.Folder]
 		if h.Fingerprint == fp {
 			h.Runs++
@@ -1547,6 +1570,9 @@ const assessHeldFile = "assess-held.json"
 type heldState struct {
 	path    string
 	Folders map[string]heldFolder `json:"folders"`
+	// Reviewed: folders the model left for review, by the fingerprint of
+	// the evidence it decided on.
+	Reviewed map[string]string `json:"reviewed,omitempty"`
 }
 
 type heldFolder struct {
@@ -1563,6 +1589,9 @@ func loadHeld(path string) *heldState {
 	}
 	if h.Folders == nil {
 		h.Folders = map[string]heldFolder{}
+	}
+	if h.Reviewed == nil {
+		h.Reviewed = map[string]string{}
 	}
 	h.path = path
 	return h
@@ -1581,6 +1610,43 @@ func (h *heldState) save() error {
 		return err
 	}
 	return os.Rename(tmp, h.path)
+}
+
+// refresh fills in what c's batch shows besides its own evidence: the
+// decisions made on folders alike (run: this run's), and, for a name that
+// exists nowhere, the repositories folders alike were folded into.
+func (a *assessor) refresh(c *assess.Candidate, run []decidedShape) {
+	c.Similar = a.similar(*c, run)
+	c.Alike = nil
+	if !c.Absent() || !strings.Contains(c.Pattern, "#") {
+		return
+	}
+	into := map[string]int{}
+	for _, f := range sortedRecordFolders(a.recs) {
+		r := a.recs[f]
+		if f == c.Folder || r.SuppressedBy == "" || !strings.HasPrefix(f, "projects/") || assess.NamePattern(strings.TrimPrefix(f, "projects/")) != c.Pattern {
+			continue
+		}
+		if w, _, err := record.Resolve(a.recs, f); err == nil && strings.HasPrefix(w, "projects/") {
+			into[w]++
+		}
+	}
+	for _, w := range sortedKeysInt(into) {
+		n := strings.TrimPrefix(w, "projects/")
+		if a.checker.Repo(a.ctx, n).Verdict != check.Holds {
+			continue
+		}
+		c.Alike = append(c.Alike, assess.RealRepo{Name: n, Score: 50 * into[w],
+			Why: []string{fmt.Sprintf("%d folder(s) of the same name pattern %s are suppressed into it", into[w], c.Pattern)}})
+	}
+	sort.SliceStable(c.Alike, func(i, j int) bool { return c.Alike[i].Score > c.Alike[j].Score })
+}
+
+// fingerprint is assess.Fingerprint of c as the next run will see it: with
+// the records as they are now.
+func (a *assessor) fingerprint(c assess.Candidate) string {
+	a.refresh(&c, nil)
+	return assess.Fingerprint(c)
 }
 
 // refusedItem is a candidate refused twice in a run, with the last problems.
