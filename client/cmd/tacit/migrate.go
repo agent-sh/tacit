@@ -67,7 +67,7 @@ type moveItem struct {
 type moveResult struct {
 	files                 map[string][]byte // rel (to the root written) -> bytes
 	ledger                []byte            // quote ledger lines to append
-	asks                  []folderEntry     // questions for the owner to append
+	asks                  []folderEntry     // questions for the owner to append, and close lines of the ones a move settled
 	pairs                 []string          // "old -> new" or "old -> absorbed by x", for the message
 	moved, absorbed, held int
 	repointed             map[string]bool // files of facts that pointed at a moved fact, pointed on
@@ -130,7 +130,19 @@ func planMoves(dir, prefix string, facts []*fact.Fact, items []moveItem, quotes 
 		if targets[it.To] == nil {
 			targets[it.To] = liveIn(it.To)
 		}
-		ruling, words := fact.IsRuling(f), fact.OwnerWordsOf(f) != ""
+		// A held fact is tried again on every run: its quote may be in the
+		// ledger under another name (a copy an earlier move made, a rename),
+		// which backs it as well as its own line would.
+		rescued := ledger.Quote{}
+		g := f
+		if !f.QuoteBacked && f.Meta.Source.OwnerQuote != "" {
+			if rescued = ledgerLineFor(ql, f.Meta.Source.OwnerQuote, f.Meta.Source.OwnerQuoteFrom); rescued.Quote != "" {
+				backed := *f
+				backed.QuoteBacked = true
+				g = &backed
+			}
+		}
+		ruling, words := fact.IsRuling(g), fact.OwnerWordsOf(g) != ""
 		ask := func(reason string) {
 			id := folderID("ask", f.Meta.Name, it.To)
 			if open[id] {
@@ -141,15 +153,20 @@ func planMoves(dir, prefix string, facts []*fact.Fact, items []moveItem, quotes 
 			res.held++
 		}
 		if ruling || words {
-			if reason := holdReason(f, targets[it.To]); reason != "" {
+			if reason := holdReason(g, targets[it.To]); reason != "" {
 				ask(reason)
 				continue
 			}
-		} else if f.Meta.Source.Kind == "user" && f.Audited && !fact.HasEvidence(f) {
+		} else if g.Meta.Source.Kind == "user" && g.Audited && !fact.HasEvidence(g) {
 			ask("kind user without the owner's words: lint already flags it, and a copy would carry the claim")
 			continue
 		}
 		n++
+		if id := folderID("ask", f.Meta.Name, it.To); open[id] {
+			// Held before; the reason no longer holds: the question is closed.
+			delete(open, id)
+			res.asks = append(res.asks, folderEntry{Kind: "close", ID: folderID("close", id), At: today, Closes: id, Outcome: "moved: the reason it was held no longer holds"})
+		}
 		c := &fact.Fact{Meta: f.Meta, Body: f.Body, Audited: f.Audited}
 		c.Meta.Scope = it.To
 		c.Meta.SupersededBy, c.Meta.Retired, c.Meta.LastChecked = "", "", ""
@@ -162,6 +179,8 @@ func planMoves(dir, prefix string, facts []*fact.Fact, items []moveItem, quotes 
 		if src.OwnerQuote != "" {
 			if q, ok := ql[ledger.Quote{Name: f.Meta.Name, Quote: src.OwnerQuote, From: src.OwnerQuoteFrom}.Key()]; ok && f.QuoteBacked {
 				lines = append(lines, quoteLine(q, "")...)
+			} else if rescued.Quote != "" {
+				lines = append(lines, quoteLine(rescued, "")...)
 			} else {
 				src.OwnerQuote, src.OwnerQuoteFrom = "", ""
 			}
@@ -176,7 +195,7 @@ func planMoves(dir, prefix string, facts []*fact.Fact, items []moveItem, quotes 
 		if src.Endorsed != "" {
 			src.Endorsed = "" // bound to the old name; a ruling with only an endorsement is held above
 		}
-		c.QuoteBacked, c.WordsBacked, c.WordsRecorded = f.QuoteBacked && src.OwnerQuote != "", f.WordsBacked && src.OwnerWords != "", f.WordsRecorded && src.OwnerWords != ""
+		c.QuoteBacked, c.WordsBacked, c.WordsRecorded = (f.QuoteBacked || rescued.Quote != "") && src.OwnerQuote != "", f.WordsBacked && src.OwnerWords != "", f.WordsRecorded && src.OwnerWords != ""
 		c.Meta.Name = "" // set below; the absorber compares text and scope
 		c.Path = it.To + "/x.md"
 		by := absorber.Restates(c, ruling)
@@ -246,6 +265,22 @@ func planMoves(dir, prefix string, facts []*fact.Fact, items []moveItem, quotes 
 		res.repointed[rel] = true
 	}
 	return res
+}
+
+// ledgerLineFor is a quote ledger line with quote's words (spaces aside)
+// from the same place, under any fact's name; none is a zero Quote.
+func ledgerLineFor(ql map[string]ledger.Quote, quote, from string) ledger.Quote {
+	want := strings.Join(strings.Fields(quote), " ")
+	var best ledger.Quote
+	for _, q := range ql {
+		if q.Words || q.From != from || strings.Join(strings.Fields(q.Quote), " ") != want {
+			continue
+		}
+		if best.Quote == "" || q.Name < best.Name {
+			best = q // one choice every run
+		}
+	}
+	return best
 }
 
 // holdReason is why a ruling or a fact with the owner's words waits for the
@@ -657,6 +692,10 @@ func migrateStep(ctx context.Context, s *store.Store, max, commits int, dry bool
 				fmt.Println("- " + p)
 			}
 			for _, a := range res.asks {
+				if a.Kind == "close" {
+					fmt.Printf("- no longer held: %s\n", a.Closes)
+					continue
+				}
 				fmt.Printf("- held: %s (%s): %s\n", a.Fact, a.Folder, a.Reason)
 			}
 		}
@@ -722,6 +761,10 @@ func migrateMessage(res moveResult, rescope bool) string {
 	}
 	body := append([]string(nil), res.pairs...)
 	for _, a := range res.asks {
+		if a.Kind == "close" {
+			body = append(body, fmt.Sprintf("%s: %s", a.Closes, a.Outcome))
+			continue
+		}
 		body = append(body, fmt.Sprintf("%s held for the owner: %s", a.Fact, a.Reason))
 	}
 	return subj + "\n\n" + strings.Join(body, "\n")
@@ -746,7 +789,9 @@ func migrateRoute(res moveResult) (string, string) {
 		}
 	}
 	for _, a := range res.asks {
-		from[a.Folder], to[a.To] = true, true
+		if a.Kind != "close" {
+			from[a.Folder], to[a.To] = true, true
+		}
 	}
 	name := func(m map[string]bool) string {
 		var xs []string

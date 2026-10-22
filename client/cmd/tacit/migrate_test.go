@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -193,4 +194,66 @@ func readFile(t *testing.T, p string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// A held fact is tried again on every run, not left for the owner: once
+// the contradiction that held it is gone (the verifier settled it) it moves
+// and its question is closed; a ruling whose quote the ledger holds under
+// another fact's name is backed by that line and moves on the first run.
+func TestMigrateKeepsTryingHeldFacts(t *testing.T) {
+	s := migrateHome(t)
+	ctx := context.Background()
+	q := "cache the widget builds for a day"
+	writeFactFile(t, s.Dir, &fact.Fact{Path: "projects/widget-old/old-cache-rule.md", Meta: fact.Meta{Name: "old-cache-rule", Description: "Cache the widget builds for a day",
+		Type: "user_standard", Scope: "projects/widget-old", Created: "2026-10-01",
+		Source: fact.Source{Harness: "curator", Host: "box", Kind: "user", OwnerQuote: q, OwnerQuoteFrom: "claude:s9"}}, Body: "The owner: \"" + q + "\".\n"})
+	lp := filepath.Join(s.Dir, filepath.FromSlash(ledger.QuotesPath))
+	cur, _ := os.ReadFile(lp)
+	os.WriteFile(lp, append(cur, ledger.Quote{Name: "cache-rule-earlier-name", Quote: q, From: "claude:s9", TurnHash: "dd", At: "2026-10-01"}.Line()...), 0o644)
+	facts, _, _ := fact.Walk(s.Dir)
+	writeIndexesForTest(t, s.Dir, facts)
+	gitIn(t, s.Dir, "add", "-A")
+	gitIn(t, s.Dir, "commit", "-q", "-m", "a ruling whose ledger line has another name")
+
+	rep, err := migrateStep(ctx, s, migrateBatch, migrateCommits, false, nil)
+	if err != nil || rep.Held != 1 {
+		t.Fatalf("run 1: %+v %v", rep, err)
+	}
+	fs := factsByName(t, s.Dir)
+	rule := fs[fs["old-cache-rule"].Meta.SupersededBy]
+	if rule == nil || !fact.IsRuling(rule) || !rule.QuoteBacked {
+		t.Fatalf("the rescued ruling's copy: %+v", rule)
+	}
+	// The verifier settles the contradiction; the next run moves the held
+	// ruling and closes its question.
+	wq := filepath.Join(s.Dir, "projects", "widget", "widget-queue.md")
+	b, _ := os.ReadFile(wq)
+	settled := *fs["widget-queue"]
+	settled.Meta.ConflictsWith = nil
+	nb, err := fact.PatchRelations(b, &settled)
+	if err != nil || strings.Contains(string(nb), "old-tenant-queues") {
+		t.Fatalf("fixture: %v\n%s", err, nb)
+	}
+	os.WriteFile(wq, nb, 0o644)
+	gitIn(t, s.Dir, "commit", "-q", "-am", "verifier: no contradiction")
+	rep, err = migrateStep(ctx, s, migrateBatch, migrateCommits, false, nil)
+	if err != nil || rep.Moved != 1 || rep.Held != 0 {
+		t.Fatalf("run 2: %+v %v", rep, err)
+	}
+	if asks := openFolderAsks(s.Dir); len(asks) != 0 {
+		t.Fatalf("the question is still open: %+v", asks)
+	}
+	if !strings.Contains(readFile(t, filepath.Join(s.Dir, filepath.FromSlash(ledger.FoldersPath))), "moved: the reason it was held no longer holds") {
+		t.Fatal("no close line")
+	}
+	// The fixture's own finding (its ledger line has another name) is all.
+	fl, err := lint.Run(s.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range fl {
+		if !strings.Contains(fmt.Sprint(f), "projects/widget-old/old-cache-rule.md") {
+			t.Errorf("lint: %v", f)
+		}
+	}
 }
