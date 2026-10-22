@@ -79,6 +79,12 @@ type Candidate struct {
 	// applies_to, remotes, a rename), before the cut to the best and the
 	// checks of today's checkouts: what a fingerprint reads of Real.
 	ProposedKey []string
+	// Canonical is the name code makes canonical among the names this
+	// repository goes by (the owner's decision, else the main checkout's
+	// directory, else the forge's name), CanonicalWhy its evidence; "" when
+	// none says.
+	Canonical    string
+	CanonicalWhy []string
 }
 
 // Proposed are code's candidate repositories for the folder: from its own
@@ -169,7 +175,7 @@ Dry claims are checked by code, not judged. Whether a repository of a name exist
 - A project folder whose name exists nowhere (no checkout or other name of one, no remote, the forge has no such repository) is no repository under that name: it cannot be active, dormant, shipped or dead as it is. Set suppressed_by to the real repository its facts belong to (code lists candidates with their evidence: the checkouts its sessions worked in, repositories whose paths or remotes its facts name, near names; pick the one the evidence supports), or answer needs-review when the evidence picks none. Only when code lists no candidate may it be kind none.
 - A name the forge says was renamed is an old name: fold it into the current name, never the current name into it.
 - Never set suppressed_by to a repository whose name exists nowhere.
-- Names code proved are one repository (another name of a checkout, a symlink's or the origin remote's; clones with one origin) get one live folder: the others set suppressed_by to it, or answer needs-review. Which name it goes by is yours to decide from the evidence (the owner's words, the forge's name, where the work is); they come in one batch, so decide them together.
+- Names code proved are one repository (another name of a checkout, a symlink's or the origin remote's; clones with one origin) get one live folder: the others set suppressed_by to it, or answer needs-review. They come in one batch, so decide them together. Which name it goes by is code's when a line "check: the canonical name of this repository is X" says so (the owner's decision first, then the main checkout's directory, then the forge's name): X is the live folder and the other names fold into it; code refuses the other direction. Without such a line it is yours to decide from the evidence. The forge's current name is kept on the record and shown beside the folder's name, so a repository whose GitHub name differs needs no folder of that name.
 Folders whose names follow one pattern (kv-013-g1, kv-140-g2) come together, with the decisions already made on folders like them: decide alike folders alike, and when one differs say in why what in its evidence differs.
 
 Output ONLY a JSON array, one object per folder, no prose, no code fence:
@@ -216,6 +222,9 @@ func Render(cands []Candidate) string {
 		}
 		for _, r := range c.Same {
 			b.WriteString("check: " + r.Line() + "\n")
+		}
+		if c.Canonical != "" && (len(c.Same) > 0 || c.Canonical != c.Folder[strings.LastIndex(c.Folder, "/")+1:]) {
+			fmt.Fprintf(&b, "check: the canonical name of this repository is %s (%s)\n", c.Canonical, strings.Join(c.CanonicalWhy, "; "))
 		}
 		if real := c.Proposed(); len(real) > 0 {
 			var parts []string

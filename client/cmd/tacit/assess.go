@@ -137,6 +137,8 @@ type assessor struct {
 	commitsShown           map[string][]string // folder -> the own commits its evidence lists
 	checkRefused           int                 // decisions a check refuted
 	held                   *heldState          // refused and review-waiting folders' fingerprints
+	refiler                *refiler            // where facts' own evidence points (codeDecision)
+	decisions              map[string]ownerDecision
 }
 
 func newAssessor(ctx context.Context, s *store.Store, local bool) (*assessor, error) {
@@ -285,8 +287,8 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 	// Records whose evidence changed materially.
 	for _, f := range sortedRecordFolders(a.recs) {
 		r := a.recs[f]
-		if seen[f] || (only != nil && !only[f]) || r.Kind != record.KindRepo && r.Kind != record.KindFolder {
-			continue
+		if seen[f] || (only != nil && !only[f]) || r.Kind != record.KindRepo && r.Kind != record.KindFolder || strings.HasPrefix(r.SuppressedBy, "orgs/") {
+			continue // an org's folder is code's (orgFolders)
 		}
 		c := a.candidate(f, "", r)
 		ev := c.Evidence
@@ -346,6 +348,7 @@ func (a *assessor) candidate(folder, reason string, old *record.Record) assess.C
 		c.Evidence = append(c.Evidence, record.Evidence{Gathered: a.today, Checks: rc.Results})
 		c.Pattern = assess.NamePattern(name)
 		c.Same = a.checker.Same(name)
+		c.Canonical, c.CanonicalWhy = a.canonicalName(c)
 		if rc.Verdict != check.Holds || rc.Renamed != "" {
 			c.Real, c.ProposedKey = a.realRepos(folder, name, rc)
 			c.Context = append(c.Context, a.namedElsewhere(folder, name, 3)...)
@@ -919,7 +922,13 @@ func (a *assessor) ownerWords(name string) []string {
 		if dup {
 			continue
 		}
-		out = append(out, fmt.Sprintf("owner's words (quote ledger, %s): %q", q.From, q.Quote))
+		if q.Words {
+			// A statement of theirs (said once) or other words of theirs a fact
+			// holds: evidence, strong but soft.
+			out = append(out, fmt.Sprintf("owner's statement, said once (quote ledger, %s, %s): %q", q.From, q.At, q.Quote))
+		} else {
+			out = append(out, fmt.Sprintf("owner's words (quote ledger, %s): %q", q.From, q.Quote))
+		}
 		if len(out) == 3 {
 			break
 		}
@@ -1013,6 +1022,13 @@ func (a *assessor) verifyOwner(folder string, d assess.Decision) (*assess.Owner,
 	if q == "" || from == "" {
 		return nil, nil, "owner_quote and owner_quote_from go together"
 	}
+	// The words of a live ruling or decision of theirs that the quote ledger
+	// backs (a promoted statement, a ruling from another machine's session)
+	// are theirs without this machine's history.
+	if hash, ok := a.ledgerDecision(q, from); ok {
+		line := ledger.Quote{Name: ledger.RecordQuoteName(folder), Quote: q, From: from, TurnHash: hash, At: a.today}.Line()
+		return &assess.Owner{Quote: q, From: from}, line, ""
+	}
 	if a.corpus == nil {
 		return nil, nil, "no owner history on this machine to check owner_quote against: leave it out and cite the words in why"
 	}
@@ -1022,6 +1038,27 @@ func (a *assessor) verifyOwner(folder string, d assess.Decision) (*assess.Owner,
 	}
 	line := ledger.Quote{Name: ledger.RecordQuoteName(folder), Quote: q, From: from, TurnHash: m.TurnHash, At: a.today}.Line()
 	return &assess.Owner{Quote: q, From: from}, line, ""
+}
+
+// ledgerDecision reports words of the owner's that a live ruling or decision
+// of the store (or the layer) holds as its quote, recorded in the quote
+// ledger for it, with the turn hash the ledger keeps.
+func (a *assessor) ledgerDecision(q, from string) (string, bool) {
+	norm := strings.Join(strings.Fields(q), " ")
+	byName := map[string]*fact.Fact{}
+	for _, f := range a.facts {
+		byName[f.Meta.Name] = f
+	}
+	for _, l := range ledger.Quotes(a.ledgerBytes) {
+		if l.Words || l.From != from || strings.Join(strings.Fields(l.Quote), " ") != norm {
+			continue
+		}
+		f := byName[l.Name]
+		if f != nil && liveFact(f) && (fact.IsRuling(f) || overlay.IsRuling(f)) && strings.Join(strings.Fields(f.Meta.Source.OwnerQuote), " ") == norm {
+			return l.TurnHash, true
+		}
+	}
+	return "", false
 }
 
 // decided is one accepted decision.
@@ -1430,6 +1467,9 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 	}
 	held := loadHeld(filepath.Join(platform.StateDir(a.home), assessHeldFile))
 	a.held = held
+	// Code's own decisions first: the folders named for forge organizations
+	// become their orgs' folders.
+	errs0 := a.codeSteps(ctx, s, "a forge organization's folder", a.orgFolders(o.only), o.dry, rep)
 	all := a.candidates(max+len(held.Folders), o.only)
 	// A folder refused in assessHoldRuns runs on the same evidence waits
 	// until its evidence (what the model reads of it) changes.
@@ -1447,78 +1487,15 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 	}
 	cands = append(cands, a.proposalCandidates(max-len(cands), o.only)...)
 	rep.AssessCandidates += len(cands)
-	errs := 0
+	errs := errs0
 	pending := map[string]*record.Record{}
 	var pendingLedger []byte
 	var decidedRun []decidedShape // this run's decisions, for folders alike in later batches
 	var refusedRun []refusedItem  // refused twice in this run
 	var acceptedRun []decided     // decided in this run
+	deferred := map[string]bool{} // waiting for the repository they fold into
 	n := 0
-	for i := 0; i < len(cands); i += len(batchOf(cands, i)) {
-		if ctx.Err() != nil {
-			fmt.Fprintln(os.Stderr, "assess:", ctx.Err())
-			errs++
-			break
-		}
-		batch := batchOf(cands, i)
-		n++
-		for j := range batch {
-			a.refresh(&batch[j], decidedRun)
-		}
-		prompt := fmt.Sprintf(assess.Prompt, assess.Render(batch))
-		res, cost, err := assessRun(ctx, o.model, prompt)
-		rep.CostUSD += cost
-		fmt.Fprintf(os.Stderr, "assess: batch %d of %d folder(s): $%.3f\n", n, len(batch), cost)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "assess: model:", err)
-			errs++
-			continue
-		}
-		ds, perr := assess.Parse(res)
-		acc, refused := []decided(nil), []assess.Refusal(nil)
-		if perr == nil {
-			acc, refused = a.check(batch, ds, pending, &pendingLedger)
-		} else {
-			for _, c := range batch {
-				refused = append(refused, assess.Refusal{Folder: c.Folder, Problems: []string{perr.Error()}})
-			}
-		}
-		if len(refused) > 0 {
-			rep.Retries++
-			for _, r := range refused {
-				for _, p := range r.Problems {
-					rep.InvalidEntries = append(rep.InvalidEntries, "assess (sent back): "+r.Folder+": "+firstClause(p))
-				}
-			}
-			res2, c2, err := assessRun(ctx, o.model, assess.RetryPrompt(prompt, res, refused))
-			rep.CostUSD += c2
-			fmt.Fprintf(os.Stderr, "assess: batch %d retry for %d folder(s): $%.3f\n", n, len(refused), c2)
-			if err == nil {
-				if ds2, perr := assess.Parse(res2); perr == nil {
-					var left []assess.Candidate
-					done := map[string]bool{}
-					for _, d := range acc {
-						done[d.c.Folder] = true
-					}
-					for _, c := range batch {
-						if !done[c.Folder] {
-							left = append(left, c)
-						}
-					}
-					more, still := a.check(left, ds2, pending, &pendingLedger)
-					acc = append(acc, more...)
-					refused = still
-				}
-			}
-			rep.AssessRefused += len(refused)
-			for _, r := range refused {
-				for _, c := range batch {
-					if c.Folder == r.Folder {
-						refusedRun = append(refusedRun, refusedItem{c: c, problems: strings.Join(r.Problems, "; ")})
-					}
-				}
-			}
-		}
+	finish := func(acc []decided) {
 		for _, d := range acc {
 			delete(held.Folders, d.c.Folder)
 			if d.rec != nil && d.rec.Folder == d.c.Folder {
@@ -1547,10 +1524,10 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 				}
 				fmt.Printf("- %s: %s, %s: %s\n", d.rec.Folder, d.rec.Kind, d.rec.Status, d.rec.Was[0].Why)
 			}
-			continue
+			return
 		}
 		if len(write) == 0 {
-			continue
+			return
 		}
 		n, err := a.write(ctx, s, write)
 		rep.AssessRecords += n
@@ -1566,6 +1543,52 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 		a.ledgerBytes = append(a.ledgerBytes, pendingLedger...)
 		pendingLedger = nil
 		pending = map[string]*record.Record{}
+	}
+	for i := 0; i < len(cands); {
+		if ctx.Err() != nil {
+			fmt.Fprintln(os.Stderr, "assess:", ctx.Err())
+			errs++
+			break
+		}
+		batch := batchOf(cands, i)
+		i += len(batch) // before any candidate waits to the end of the run
+		n++
+		for j := range batch {
+			a.refresh(&batch[j], decidedRun)
+		}
+		// The candidates the checks settle are decided by code; the rest go to
+		// the model.
+		batch, codeAcc, later := a.codeDecided(batch, pending, &pendingLedger, deferred)
+		cands = append(cands, later...)
+		if len(codeAcc) > 0 {
+			// Code's decisions are a commit of their own, before the model reads
+			// the rest of the batch with them among the decisions on folders alike.
+			finish(codeAcc)
+			for j := range batch {
+				a.refresh(&batch[j], decidedRun)
+			}
+		}
+		var acc []decided
+		if len(batch) > 0 {
+			var refused []assess.Refusal
+			var err error
+			acc, refused, err = a.askModel(ctx, o, rep, n, batch, acc, pending, &pendingLedger)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "assess: model:", err)
+				errs++
+			}
+			if len(refused) > 0 {
+				rep.AssessRefused += len(refused)
+				for _, r := range refused {
+					for _, c := range batch {
+						if c.Folder == r.Folder {
+							refusedRun = append(refusedRun, refusedItem{c: c, problems: strings.Join(r.Problems, "; ")})
+						}
+					}
+				}
+			}
+		}
+		finish(acc)
 	}
 	// The refused folders' fingerprints are taken as the next run will see
 	// them (the records as this run left them), so a folder whose evidence
@@ -1596,6 +1619,10 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 		}
 		fmt.Fprintf(os.Stderr, "assess: %s refused twice, %s: %s\n", c.Folder, next, r.problems)
 	}
+	// The forge's current names and orgs of the live projects, by code.
+	if ctx.Err() == nil {
+		errs += a.codeSteps(ctx, s, "the forge's name and org", a.forgeNames(o.only), o.dry, rep)
+	}
 	_ = a.commits.Save()
 	_ = a.checker.Forge.Save()
 	rep.CheckRefused += a.checkRefused
@@ -1605,6 +1632,94 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 		}
 	}
 	return errs
+}
+
+// askModel puts a batch to the model and checks its answer, with at most
+// one retry for the refused: it returns acc with the accepted decisions,
+// and the folders refused twice.
+func (a *assessor) askModel(ctx context.Context, o assessOpts, rep *curate.Report, n int, batch []assess.Candidate, acc []decided, pending map[string]*record.Record, pendingLedger *[]byte) ([]decided, []assess.Refusal, error) {
+	prompt := fmt.Sprintf(assess.Prompt, assess.Render(batch))
+	res, cost, err := assessRun(ctx, o.model, prompt)
+	rep.CostUSD += cost
+	fmt.Fprintf(os.Stderr, "assess: batch %d of %d folder(s): $%.3f\n", n, len(batch), cost)
+	if err != nil {
+		return acc, nil, err
+	}
+	ds, perr := assess.Parse(res)
+	var refused []assess.Refusal
+	if perr == nil {
+		more, r := a.check(batch, ds, pending, pendingLedger)
+		acc, refused = append(acc, more...), r
+	} else {
+		for _, c := range batch {
+			refused = append(refused, assess.Refusal{Folder: c.Folder, Problems: []string{perr.Error()}})
+		}
+	}
+	if len(refused) > 0 {
+		rep.Retries++
+		for _, r := range refused {
+			for _, p := range r.Problems {
+				rep.InvalidEntries = append(rep.InvalidEntries, "assess (sent back): "+r.Folder+": "+firstClause(p))
+			}
+		}
+		res2, c2, err := assessRun(ctx, o.model, assess.RetryPrompt(prompt, res, refused))
+		rep.CostUSD += c2
+		fmt.Fprintf(os.Stderr, "assess: batch %d retry for %d folder(s): $%.3f\n", n, len(refused), c2)
+		if err == nil {
+			if ds2, perr := assess.Parse(res2); perr == nil {
+				var left []assess.Candidate
+				done := map[string]bool{}
+				for _, d := range acc {
+					done[d.c.Folder] = true
+				}
+				for _, c := range batch {
+					if !done[c.Folder] {
+						left = append(left, c)
+					}
+				}
+				more, still := a.check(left, ds2, pending, pendingLedger)
+				acc = append(acc, more...)
+				refused = still
+			}
+		}
+	}
+	return acc, refused, nil
+}
+
+// codeDecided splits a batch into the candidates code decides on its own
+// (codeDecision), each checked like any decision (a refused one goes to the
+// model), and the rest, for the model.
+func (a *assessor) codeDecided(batch []assess.Candidate, pending map[string]*record.Record, pendingLedger *[]byte, deferred map[string]bool) (rest []assess.Candidate, acc []decided, later []assess.Candidate) {
+	get := func(f string) *record.Record {
+		if r := pending[f]; r != nil {
+			return r
+		}
+		return a.recs[f]
+	}
+	for _, c := range batch {
+		d, ok, wait := a.codeDecision(c, get)
+		if !ok {
+			if wait && !deferred[c.Folder] {
+				// The repository it folds into is decided later in this run.
+				deferred[c.Folder] = true
+				later = append(later, c)
+				continue
+			}
+			rest = append(rest, c)
+			continue
+		}
+		got, refused := a.check([]assess.Candidate{c}, []assess.Decision{d}, pending, pendingLedger)
+		if len(refused) > 0 || len(got) == 0 {
+			for _, r := range refused {
+				fmt.Fprintf(os.Stderr, "assess: %s: code's decision refused, the model decides: %s\n", r.Folder, clipOne(strings.Join(r.Problems, "; "), 300))
+			}
+			rest = append(rest, c)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "assess: %s: decided by code: %s\n", c.Folder, clipOne(d.Why, 300))
+		acc = append(acc, got...)
+	}
+	return rest, acc, later
 }
 
 // assessHoldRuns is how many runs a folder may be refused in, on the same

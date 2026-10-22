@@ -20,6 +20,21 @@ type Checked struct {
 	Record func(folder string) *record.Record
 }
 
+// sameGroup reports a folder among the names code proved are c's
+// repository (Same, the forge's current name, the canonical name).
+func sameGroup(c Candidate, folder string) bool {
+	n, ok := strings.CutPrefix(folder, "projects/")
+	if !ok {
+		return false
+	}
+	for _, r := range c.Same {
+		if strings.EqualFold(r.Value, n) {
+			return true
+		}
+	}
+	return c.Name != nil && c.Name.Renamed == n || n == c.Canonical
+}
+
 // Enforce is code's refusal of a decision a check refutes (the owner's
 // rule: dry claims are checked, not judged). It returns the problems, each
 // with the check output that refutes the decision; none when no check
@@ -74,6 +89,19 @@ func Enforce(c Candidate, d Decision, env Checked) []string {
 			}
 			sort.Strings(ws)
 			ps = append(ps, fmt.Sprintf("%s is the same repository as %s, which has a live record (check: %s): one repository has one live folder: set suppressed_by to %s, or status needs-review", name, strings.Join(ws, ", "), strings.Join(lines, " | "), ws[0]))
+		}
+	}
+	// The canonical name among one repository's names is code's: the owner's
+	// decision, else the main checkout's directory, else the forge's name. The
+	// other names fold into it, never it into them.
+	if canon := c.Canonical; canon != "" && env.Record != nil {
+		why := strings.Join(c.CanonicalWhy, " | ")
+		target := liveWinner(env.Record, "projects/"+canon)
+		switch {
+		case canon != name && d.Status != record.StatusNeedsReview && into != "projects/"+canon && (target == "" || into != target):
+			ps = append(ps, fmt.Sprintf("%s is another name of %s, the canonical name of this repository (check: %s): set suppressed_by to projects/%s, or status needs-review", name, canon, why, canon))
+		case canon == name && into != "" && sameGroup(c, into):
+			ps = append(ps, fmt.Sprintf("%s is the canonical name of this repository (check: %s): the other names fold into it, never it into %s", name, why, into))
 		}
 	}
 	if strings.HasPrefix(into, "projects/") && env.Repo != nil {
@@ -226,6 +254,9 @@ func Fingerprint(c Candidate) string {
 	}
 	for _, r := range c.Same {
 		b.WriteString("same " + r.Value + "\n")
+	}
+	if c.Canonical != "" {
+		b.WriteString("canonical " + c.Canonical + "\n")
 	}
 	names := append([]string(nil), c.ProposedKey...)
 	for _, r := range c.Alike {
