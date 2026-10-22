@@ -68,7 +68,8 @@ func quickHome(t *testing.T) (home string, prompts func() []string) {
 	fake := filepath.Join(home, "fake-cli")
 	script := `#!/bin/sh
 in=$(cat)
-printf '%s\n\x1e\n' "$in" >> "$FIXTURE_PROMPTS"
+# POSIX printf uses octal escapes; dash prints \\x1e literally.
+printf '%s\n\036\n' "$in" >> "$FIXTURE_PROMPTS"
 case "$in" in
 *"name=bad-note"*) printf '%s\n' '{"result":"not an answer","total_cost_usd":0.01}' ;;
 *"name=late-note"*) printf '%s\n' "$FIXTURE_LATE" ;;
