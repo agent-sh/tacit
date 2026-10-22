@@ -315,12 +315,21 @@ func TestChecksResolveFoldersFromEvidence(t *testing.T) {
 	if forge == nil || forge.Verdict != check.Fails || !strings.Contains(forge.Output, "not found: owner/widgit") || forge.At == "" {
 		t.Fatalf("the forge check in the evidence: %+v", forge)
 	}
+	// The checks settle widgit, old-gadget and the twelve task folders whose
+	// sessions the registry knows: code folds them, the model never sees them.
+	if why := recs["projects/widgit"].Was[0].Why; !strings.HasPrefix(why, "code: widgit exists nowhere") || !strings.Contains(why, "point at widget") || recs["projects/widgit"].Status != "dead" {
+		t.Errorf("widgit's code decision: %q", why)
+	}
+	if why := recs["projects/old-gadget"].Was[0].Why; !strings.Contains(why, "renamed to owner/gadget") {
+		t.Errorf("old-gadget's code decision: %q", why)
+	}
 	all := strings.Join(m.prompts, "\n=====\n")
+	for _, never := range []string{"### folder=projects/widgit\n", "### folder=projects/old-gadget\n", "### folder=projects/kv-1-g1\n"} {
+		if strings.Contains(all, never) {
+			t.Errorf("the model was asked about a folder the checks settle: %q", never)
+		}
+	}
 	for _, want := range []string{
-		"check: repository widgit has a checkout: fails",
-		"candidate real repositories (code's, each exists by its check): widget (1 of 1 session(s) that filed its notes worked in its checkout",
-		"the name widgit exists nowhere as a repository",
-		"was renamed: it is owner/gadget now",
 		"decided before on", "suppressed into projects/widget",
 		"check: gizmo and widget are one repository: holds", "have one origin, github.com/owner/widget",
 		"is the same repository as projects/widget, which has a live record",
@@ -330,16 +339,16 @@ func TestChecksResolveFoldersFromEvidence(t *testing.T) {
 			t.Errorf("the prompts lack %q", want)
 		}
 	}
-	// The twelve alike folders: the second batch with them is shown the
-	// decisions on the first's.
+	// The thirteenth alike folder, whose session nothing places, goes to the
+	// model with the decisions code made on the twelve.
 	var kvBatches []string
 	for _, p := range m.prompts {
 		if strings.Contains(p, "### folder=projects/kv-") && !strings.Contains(p, "CODE REFUSED") {
 			kvBatches = append(kvBatches, p)
 		}
 	}
-	if len(kvBatches) != 2 || !strings.Contains(kvBatches[1], "alike (the same name pattern kv-#-g#)") {
-		t.Fatalf("%d batches with the alike folders; second:\n%s", len(kvBatches), kvBatches[len(kvBatches)-1])
+	if len(kvBatches) != 1 || !strings.Contains(kvBatches[0], "### folder=projects/kv-13-g1") || !strings.Contains(kvBatches[0], "alike (the same name pattern kv-#-g#)") {
+		t.Fatalf("%d batches with the alike folders:\n%s", len(kvBatches), strings.Join(kvBatches, "\n====\n"))
 	}
 	if rep.CheckRefused == 0 || rep.AssessRefused != 1 {
 		t.Fatalf("report %+v", rep)

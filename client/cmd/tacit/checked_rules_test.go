@@ -228,7 +228,9 @@ func TestAssessDecidesOneRepositorysNamesTogether(t *testing.T) {
 	if len(acc) != 0 || len(refused) != 2 || pending["projects/widget-old"] != nil {
 		t.Fatalf("accepted %d, refused %+v", len(acc), refused)
 	}
-	if !strings.Contains(strings.Join(refused[1].Problems, " "), "decide them together") {
+	// widget-old waits with widget, or is refused outright: widget is the
+	// canonical name (the main checkout's directory), so widget-old folds.
+	if p := strings.Join(refused[1].Problems, " "); !strings.Contains(p, "decide them together") && !strings.Contains(p, "the canonical name of this repository") {
 		t.Fatalf("%+v", refused)
 	}
 }
