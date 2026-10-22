@@ -5,10 +5,11 @@ package main
 //
 //   - A project folder named for a forge organization (projects/agent-sh,
 //     the forge says agent-sh is an Organization whose repositories the
-//     catalogs' remotes hold) becomes that org's folder: orgs/<name> gets a
-//     record of kind org, and the project folder is folded into it, so the
-//     migration moves each fact to the one repository its own paths name,
-//     or keeps it in the org.
+//     catalogs' remotes hold), and no machine's checkout or remote of that
+//     name (helicone/helicone is a repository), becomes that org's folder:
+//     orgs/<name> gets a record of kind org, and the project folder is
+//     folded into it, so the migration moves each fact to the one
+//     repository its own paths name, or keeps it in the org.
 //   - Every live project record carries its current forge name and its
 //     forge organization, read from the forge for its origin's URL (the
 //     forge follows renames). An org that two or more of them belong to
@@ -89,6 +90,12 @@ func (a *assessor) orgFolders(only map[string]bool) []decided {
 		}
 		old := a.recs[folder]
 		if old != nil && old.SuppressedBy == orgF {
+			continue
+		}
+		// A checkout or a remote of this name makes it a repository's folder
+		// (helicone/helicone): only a name no machine holds as a repository
+		// is the org's.
+		if rc := a.checker.Repo(a.ctx, name); rc.Checkout != "" || (len(rc.Results) > 1 && rc.Results[1].Verdict == check.Holds) {
 			continue
 		}
 		isOrg, res := a.checker.IsOrg(a.ctx, name)
