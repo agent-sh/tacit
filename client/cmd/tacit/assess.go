@@ -497,7 +497,13 @@ func (a *assessor) realRepos(folder, name string, rc check.RepoCheck) []assess.R
 		}
 	}
 	var out []assess.RealRepo
-	for k, sc := range score {
+	keys := make([]string, 0, len(score))
+	for k := range score {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // one order every run: the same evidence renders the same
+	for _, k := range keys {
+		sc := score[k]
 		// The live folder that holds it now.
 		n, folderN := k, "projects/"+k
 		ws := append([]string(nil), why[k]...)
@@ -746,7 +752,12 @@ func (a *assessor) evidence(folder string) (ev []record.Evidence, gitRoot bool, 
 		for id := range sessions {
 			ids = append(ids, id)
 		}
-		sort.Slice(ids, func(i, j int) bool { return sessions[ids[i]] > sessions[ids[j]] })
+		sort.Slice(ids, func(i, j int) bool {
+			if sessions[ids[i]] != sessions[ids[j]] {
+				return sessions[ids[i]] > sessions[ids[j]]
+			}
+			return ids[i] < ids[j] // one order every run
+		})
 		if len(ids) > 6 {
 			ids = ids[:6]
 		}
@@ -760,7 +771,12 @@ func (a *assessor) evidence(folder string) (ev []record.Evidence, gitRoot bool, 
 		}
 	}
 	if live+gone > 0 {
-		sort.Slice(newest, func(i, j int) bool { return newest[i].Meta.Created > newest[j].Meta.Created })
+		sort.Slice(newest, func(i, j int) bool {
+			if newest[i].Meta.Created != newest[j].Meta.Created {
+				return newest[i].Meta.Created > newest[j].Meta.Created
+			}
+			return newest[i].Meta.Name < newest[j].Meta.Name
+		})
 		l := fmt.Sprintf("facts: %d live (%d owner rulings), %d superseded or retired", live, rulings, gone)
 		lines = append(lines, l)
 		for i, f := range newest {

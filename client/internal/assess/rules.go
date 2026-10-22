@@ -203,8 +203,20 @@ func (c Candidate) Shape() string {
 // (why it was asked and the record it had aside): the same fingerprint is
 // the same question (a refused folder, or one left for review, waits until
 // it changes).
+//
+// The owner's turns that mention the folder are left out: they are the
+// newest mentions in a history that grows with every session, so they would
+// change it with nothing about the folder changed. Their words reach the
+// quote ledger, whose lines count.
 func Fingerprint(c Candidate) string {
 	c.Reason, c.Old = "", nil
+	var ctx []string
+	for _, l := range c.Context {
+		if !strings.HasPrefix(l, "owner's turn (") {
+			ctx = append(ctx, l)
+		}
+	}
+	c.Context = ctx
 	h := sha256.Sum256([]byte(Render([]Candidate{c})))
 	return hex.EncodeToString(h[:12])
 }
