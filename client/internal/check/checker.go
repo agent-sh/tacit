@@ -621,14 +621,19 @@ func (c *Checker) Same(name string) []Result {
 		out = append(out, Result{Kind: KindRepo, Claim: fmt.Sprintf("%s and %s are one repository", name, other), Source: "checkouts",
 			Inputs: inputs("name", name, "other", other), Output: output, Verdict: Holds, Value: other, At: now})
 	}
+	// Other machines' catalogs: their checkouts' names and aliases.
+	c.sharedSame(name, add)
 	own, ok := c.Catalog.Repo(name)
 	if !ok || own.Root == "" {
 		if x := c.Catalog.AliasOf(name); x != "" {
-			add(x, fmt.Sprintf("%s is another name (a symlink's or the origin remote's) of the checkout %s on %s", name, x, c.Host))
+			if xr, xok := c.Catalog.Repo(x); xok && xr.Root != "" {
+				add(x, fmt.Sprintf("%s is another name (a symlink's or the origin remote's) of the checkout %s on %s", name, x, c.Host))
+			}
 			own, ok = c.Catalog.Repo(x)
 		}
 	}
 	if !ok || own.Root == "" {
+		sort.Slice(out, func(i, j int) bool { return out[i].Value < out[j].Value })
 		return out
 	}
 	for _, a := range own.Aliases {

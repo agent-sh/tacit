@@ -82,9 +82,9 @@ func (r Result) Line() string {
 func (r Result) Valid() []string {
 	var ps []string
 	switch r.Kind {
-	case KindRepo, KindPath, KindVersion:
+	case KindRepo, KindPath, KindVersion, KindAccount:
 	default:
-		ps = append(ps, fmt.Sprintf("kind %q is not repo, path or version", r.Kind))
+		ps = append(ps, fmt.Sprintf("kind %q is not repo, path, version or account", r.Kind))
 	}
 	switch r.Verdict {
 	case Holds, Fails, Unknown:
