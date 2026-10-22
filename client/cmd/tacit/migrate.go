@@ -68,6 +68,7 @@ type moveResult struct {
 	asks                  []folderEntry     // questions for the owner to append
 	pairs                 []string          // "old -> new" or "old -> absorbed by x", for the message
 	moved, absorbed, held int
+	repointed             map[string]bool // files of facts that pointed at a moved fact, pointed on
 }
 
 // planMoves plans up to max items over the facts of the root at dir
@@ -111,6 +112,7 @@ func planMoves(dir, prefix string, facts []*fact.Fact, items []moveItem, quotes 
 		return out
 	}
 	targets := map[string]map[string]*fact.Fact{}
+	movedTo := map[string]string{} // a fact moved in this batch -> its copy or the fact that absorbed it
 	n := 0
 	for _, it := range items {
 		if n >= max {
@@ -214,6 +216,32 @@ func planMoves(dir, prefix string, facts []*fact.Fact, items []moveItem, quotes 
 			continue
 		}
 		res.files[rel] = patched
+		movedTo[f.Meta.Name] = old.Meta.SupersededBy
+	}
+	// A fact that pointed at a fact moved now points at where it went, so
+	// no chain of replacements grows by the move.
+	for _, f := range curated {
+		to, ok := movedTo[f.Meta.SupersededBy]
+		rel := strings.TrimPrefix(f.Path, prefix)
+		if !ok || res.files[rel] != nil || to == f.Meta.Name {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil {
+			continue
+		}
+		y := *f
+		y.Meta.SupersededBy, y.Meta.Updated = to, today
+		patched, err := fact.PatchRelations(data, &y)
+		if err != nil {
+			continue
+		}
+		res.files[rel] = patched
+		res.pairs = append(res.pairs, f.Meta.Name+" -> "+to+" (was -> "+f.Meta.SupersededBy+")")
+		if res.repointed == nil {
+			res.repointed = map[string]bool{}
+		}
+		res.repointed[rel] = true
 	}
 	return res
 }
@@ -600,6 +628,9 @@ func migrateMessage(res moveResult, rescope bool) string {
 func migrateRoute(res moveResult) (string, string) {
 	from, to := map[string]bool{}, map[string]bool{}
 	for rel, b := range res.files {
+		if res.repointed[rel] {
+			continue
+		}
 		f, err := fact.Parse(rel, b)
 		if err != nil {
 			continue
