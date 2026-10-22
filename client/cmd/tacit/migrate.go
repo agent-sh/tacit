@@ -422,7 +422,7 @@ func newRefiler(home string, catalog *repoid.Catalog, recs map[string]*record.Re
 // pointed are the repositories f's own evidence names (pointedRepos): the
 // paths and forge URLs it names, else the checkouts its session worked in.
 func (r *refiler) pointed(f *fact.Fact) map[string]bool {
-	if set := pointedRepos(r.cache, r.catalog, f); len(set) > 0 {
+	if set := pointedRepos(r.cache, r.catalog, r.recs, f); len(set) > 0 {
 		return set
 	}
 	return r.sessions[f.Meta.Source.Session]
@@ -476,10 +476,13 @@ var projectsPathRx = regexp.MustCompile(`(?:^|/)projects/([A-Za-z0-9._-]+)(?:/([
 // applies_to.paths and commands), each the repository repoid makes of it on
 // this machine, or, for a path of another machine (no git root here), the
 // checkout a projects directory path names that some machine's catalog
-// lists (by name or another name of it); and the repositories of the forge
-// URLs it names (github.com/<owner>/<name>) that a catalog lists. Names are
-// the catalogs' (a checkout's own name, lower case).
-func pointedRepos(cache *repoid.Cache, catalog *repoid.Catalog, f *fact.Fact) map[string]bool {
+// lists (by name or another name of it), or a project folder whose record
+// the path's name is (an old name the forge renamed, its folder suppressed
+// into the current one: a checked pointer code may follow); and the
+// repositories of the forge URLs it names (github.com/<owner>/<name>) that
+// a catalog lists. Names are the catalogs' (a checkout's own name, lower
+// case), or the live folder a record resolves to.
+func pointedRepos(cache *repoid.Cache, catalog *repoid.Catalog, recs map[string]*record.Record, f *fact.Fact) map[string]bool {
 	text := f.Meta.Description + "\n" + f.Body + "\n" + strings.Join(f.Meta.AppliesTo.Paths, "\n") + "\n" + strings.Join(f.Meta.AppliesTo.Commands, "\n")
 	set := map[string]bool{}
 	known := func(n string) string {
@@ -490,7 +493,18 @@ func pointedRepos(cache *repoid.Cache, catalog *repoid.Catalog, f *fact.Fact) ma
 		if catalog.Has(n) {
 			return n
 		}
-		return ""
+		if !fact.IsSlug(n) {
+			return ""
+		}
+		folder := record.RepoOwner(recs, n)
+		if folder == "" {
+			return ""
+		}
+		w, _, err := record.Resolve(recs, folder)
+		if r := recs[w]; err != nil || r == nil || !r.Live() || r.Quiet() || record.Broad(r.Kind) != "project" || notProject(r) || !strings.HasPrefix(w, "projects/") {
+			return ""
+		}
+		return path.Base(w)
 	}
 	for _, m := range machinePathRx.FindAllStringSubmatch(text, 40) {
 		p := strings.TrimRight(m[1], ".,;:)")

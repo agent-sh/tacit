@@ -25,7 +25,7 @@ import (
 // a repository; a session in a member reads the org's standards; a model's
 // fact goes up to the org only when it names two of its repositories.
 func TestOrgFolderFromAnOrgNamedProjectFolder(t *testing.T) {
-	w := newNamesWorld(t, map[string]string{"agent-sh/tower-crane": "agent-sh/tower-crane", "agent-sh/agnix": "agent-sh/agnix", "helicone/helicone": "helicone/helicone"},
+	w := newNamesWorld(t, map[string]string{"agent-sh/tower-crane": "agent-sh/tower-crane", "agent-sh/agnix": "agent-sh/agnix", "helicone/helicone": "helicone/helicone", "agent-sh/old-crane": "agent-sh/tower-crane"},
 		map[string]string{"agent-sh": "Organization", "owner": "User", "helicone": "Organization"})
 	tc := w.git("tower-crane", "https://github.com/agent-sh/tower-crane.git", "ci/test.sh")
 	w.git("agnix", "git@github.com:agent-sh/agnix.git")
@@ -36,6 +36,10 @@ func TestOrgFolderFromAnOrgNamedProjectFolder(t *testing.T) {
 	w.fact("projects/agent-sh", "tower-crane-ci", "design_decision", "s2", "CI runs ~/projects/tower-crane/ci/test.sh before a merge")
 	w.fact("projects/agent-sh", "agnix-issues", "reference", "s3", "Bugs go to https://github.com/agent-sh/agnix/issues")
 	w.fact("projects/agent-sh", "both-repos", "design_decision", "s4", "~/projects/tower-crane and ~/projects/agnix share one lint config")
+	// A path under the old name the forge renamed (old-crane, folded into
+	// tower-crane by code): the record's pointer places it.
+	w.fact("projects/agent-sh", "old-crane-lock", "machine_fact", "s7", "The lock file is ~/projects/agent-sh/old-crane/.lock")
+	w.fact("projects/old-crane", "old-crane-ci", "design_decision", "s8", "The crane's CI runs nightly")
 	w.fact("projects/tower-crane", "tc-port", "machine_fact", "s5", "tower-crane listens on 7790")
 	w.commit("an older store")
 	fa := &fakeAssessor{first: map[string]assess.Decision{
@@ -76,7 +80,7 @@ func TestOrgFolderFromAnOrgNamedProjectFolder(t *testing.T) {
 			live[f.Meta.Scope] = append(live[f.Meta.Scope], f.Meta.Origin+f.Meta.Name)
 		}
 	}
-	want := map[string]int{"orgs/agent-sh": 2, "projects/tower-crane": 2, "projects/agnix": 1, "projects/agent-sh": 0}
+	want := map[string]int{"orgs/agent-sh": 2, "projects/tower-crane": 4, "projects/agnix": 1, "projects/agent-sh": 0, "projects/old-crane": 0}
 	for scope, n := range want {
 		if len(live[scope]) != n {
 			t.Errorf("%s: %d live facts, want %d: %v", scope, len(live[scope]), n, live)
@@ -232,18 +236,21 @@ func TestPlannedRenameAndForgeRename(t *testing.T) {
 }
 
 // A deleted repository: the forge 404s for valkey-reviewer, no machine has
-// a checkout or a remote of it, and its facts' paths exist only in the live
-// repository valkey-review-bot's checkout: code folds it there, dead, with
-// the check's output; the forge's wording says the account sees its own
+// a checkout or a remote of it, and two of its three facts name paths that,
+// of the repositories proposed for it, only valkey-review-bot's checkout
+// holds: code folds it there, dead, with the check's output; the forge's wording says the account sees its own
 // private repositories. A name the forge renamed folds into the current
 // one the same way.
 func TestDeletedRepositoryFoldsByItsFacts(t *testing.T) {
-	w := newNamesWorld(t, map[string]string{"valkey-io/valkey-review-bot": "valkey-io/valkey-review-bot", "owner/gishra": "owner/tower-crane", "owner/tower-crane": "owner/tower-crane"},
+	w := newNamesWorld(t, map[string]string{"valkey-io/valkey-review-bot": "valkey-io/valkey-review-bot", "owner/gishra": "owner/tower-crane", "owner/tower-crane": "owner/tower-crane", "valkey-io/valkey": "valkey-io/valkey"},
 		map[string]string{"owner": "User", "valkey-io": "Organization"})
 	w.git("valkey-review-bot", "https://github.com/valkey-io/valkey-review-bot.git", "infra/cdk.json", "infra/bin/infra.ts")
+	// Another candidate (a near name), without the paths.
+	w.git("valkey", "https://github.com/valkey-io/valkey.git", "src/server.c")
 	w.git("tower-crane", "https://github.com/owner/tower-crane.git")
 	w.fact("projects/valkey-reviewer", "vr-cdk", "structure", "", "The infra is a CDK app; infra/cdk.json runs ts-node", "infra/cdk.json", "infra/bin/*.ts")
-	w.fact("projects/valkey-reviewer", "vr-pins", "reference", "", "The model pins are dated 2026-08-03")
+	w.fact("projects/valkey-reviewer", "vr-pins", "reference", "", "The model pins are dated 2026-08-03", "infra/**")
+	w.fact("projects/valkey-reviewer", "vr-topology", "design_decision", "", "A recall-strong model reviews first")
 	w.fact("projects/valkey-review-bot", "vrb-ci", "design_decision", "s1", "The bot's CI runs on every PR")
 	w.fact("projects/gishra", "gishra-ci", "design_decision", "s2", "The crane's CI runs nightly")
 	w.fact("projects/tower-crane", "tc-port", "machine_fact", "s3", "tower-crane listens on 7790")
@@ -251,6 +258,7 @@ func TestDeletedRepositoryFoldsByItsFacts(t *testing.T) {
 	fa := &fakeAssessor{first: map[string]assess.Decision{
 		"projects/valkey-review-bot": aDecision("projects/valkey-review-bot", "repo", "active", "session:s1"),
 		"projects/tower-crane":       aDecision("projects/tower-crane", "repo", "active", "session:s3"),
+		"projects/valkey":            aDecision("projects/valkey", "repo", "dormant", "an upstream checkout"),
 	}}
 	w.assess(fa)
 	for _, p := range fa.prompts {
@@ -275,8 +283,9 @@ func TestDeletedRepositoryFoldsByItsFacts(t *testing.T) {
 	if vrb := recs["projects/valkey-review-bot"]; vrb.Org != "valkey-io" {
 		t.Fatalf("valkey-review-bot's org %q", vrb.Org)
 	}
-	if recs["orgs/valkey-io"] != nil {
-		t.Fatal("an org folder for one member")
+	// Two live projects of the org valkey-io: its folder, by code.
+	if o := recs["orgs/valkey-io"]; o == nil || o.Kind != record.KindOrg || recs["projects/valkey"].Org != "valkey-io" {
+		t.Fatalf("the org of two members: %+v", o)
 	}
 	if fs, err := lint.Run(w.s.Dir); err != nil || len(fs) != 0 {
 		t.Fatalf("lint %v %v", fs, err)
