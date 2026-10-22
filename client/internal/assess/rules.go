@@ -53,6 +53,28 @@ func Enforce(c Candidate, d Decision, env Checked) []string {
 		}
 		ps = append(ps, fmt.Sprintf("the name %s exists nowhere as a repository (%s; check: %s): it cannot be %s %s; %s", name, what, strings.Join(c.Name.Lines(), " | "), d.Kind, d.Status, fix))
 	}
+	// One repository, one live folder: a name code proved is the same
+	// repository as a folder that is live (and not suppressed into this one)
+	// folds into it, or waits for review.
+	if env.Record != nil && len(c.Same) > 0 {
+		winners := map[string]bool{}
+		var lines []string
+		for _, r := range c.Same {
+			w := liveWinner(env.Record, "projects/"+r.Value)
+			if w != "" && w != c.Folder {
+				winners[w] = true
+				lines = append(lines, r.Line())
+			}
+		}
+		if len(winners) > 0 && !winners[into] && d.Status != record.StatusNeedsReview {
+			var ws []string
+			for w := range winners {
+				ws = append(ws, w)
+			}
+			sort.Strings(ws)
+			ps = append(ps, fmt.Sprintf("%s is the same repository as %s, which has a live record (check: %s): one repository has one live folder: set suppressed_by to %s, or status needs-review", name, strings.Join(ws, ", "), strings.Join(lines, " | "), ws[0]))
+		}
+	}
 	if strings.HasPrefix(into, "projects/") && env.Repo != nil {
 		t := strings.TrimPrefix(into, "projects/")
 		tc := env.Repo(t)
@@ -70,6 +92,22 @@ func Enforce(c Candidate, d Decision, env Checked) []string {
 		}
 	}
 	return ps
+}
+
+// liveWinner is the live folder that holds folder's content (folder itself,
+// or the end of its suppression), "" when it has no record.
+func liveWinner(get func(string) *record.Record, folder string) string {
+	for i := 0; i < 8; i++ {
+		r := get(folder)
+		if r == nil {
+			return ""
+		}
+		if r.SuppressedBy == "" {
+			return folder
+		}
+		folder = r.SuppressedBy
+	}
+	return ""
 }
 
 func contains(xs []string, x string) bool {

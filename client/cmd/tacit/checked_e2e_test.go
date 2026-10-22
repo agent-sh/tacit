@@ -62,7 +62,7 @@ type evidenceModel struct {
 var (
 	blockRx      = regexp.MustCompile(`(?ms)^### folder=(\S+)\n(.*?)(?:\n\n|\z)`)
 	citeInRx     = regexp.MustCompile(`\b(session:[A-Za-z0-9._-]+|commit:[0-9a-f]{7,})`)
-	candidateRx  = regexp.MustCompile(`code's candidates: (projects/[a-z0-9-]+)`)
+	candidateRx  = regexp.MustCompile(`(?:code's candidates: |set suppressed_by to )(projects/[a-z0-9-]+)`)
 	commitCiteRx = regexp.MustCompile(`\bcommit:[0-9a-f]{7,}`)
 )
 
@@ -174,6 +174,11 @@ func checkedHome(t *testing.T) (home string, s *store.Store, ghLog string) {
 	widget := mkGit("widget", "https://github.com/owner/widget.git")
 	gadget := mkGit("gadget", "git@github.com:owner/gadget.git")
 	stubborn := mkGit("stubborn", "")
+	// widget under two more names: a symlink, and a clone with its origin.
+	if err := os.Symlink("widget", filepath.Join(p, "gizmo")); err != nil {
+		t.Fatal(err)
+	}
+	mkGit("widget-pr7", "https://github.com/owner/widget")
 	notes := filepath.Join(p, "notes")
 	os.MkdirAll(notes, 0o755)
 	if code := runInit(nil); code != 0 {
@@ -195,6 +200,9 @@ func checkedHome(t *testing.T) (home string, s *store.Store, ghLog string) {
 		add(fmt.Sprintf("projects/kv-%d-g1", i), fmt.Sprintf("kv-%d-task-note", i), "history", id, kvTopics[i-1])
 		work = append(work, repoid.WorkItem{Root: widget, Session: id, By: "edit"})
 	}
+	add("projects/gizmo", "gizmo-flags", "design_decision", "s-z1", "Feature flags are read once at start from flags.toml")
+	add("projects/widget-pr7", "pr7-review", "history", "s-z2", "The review of change seven asked for a smaller diff")
+	work = append(work, repoid.WorkItem{Root: widget, Session: "s-z1", By: "edit"}, repoid.WorkItem{Root: filepath.Join(p, "widget-pr7"), Session: "s-z2", By: "edit"})
 	add("projects/stubborn", "stubborn-note", "history", "s-st", "The stubborn tool keeps its cache in the build folder")
 	work = append(work, repoid.WorkItem{Root: stubborn, Session: "s-st", By: "edit"})
 	add("projects/notes", "notes-plan", "design_decision", "s-n1", "The notes folder keeps the launch plan in one page per quarter")
@@ -252,6 +260,12 @@ func TestChecksResolveFoldersFromEvidence(t *testing.T) {
 	if r := recs["projects/old-gadget"]; r == nil || r.SuppressedBy != "projects/gadget" {
 		t.Errorf("old-gadget: %+v", r)
 	}
+	// One repository, one live folder: the symlink's name and the clone fold.
+	for _, f := range []string{"projects/gizmo", "projects/widget-pr7"} {
+		if r := recs[f]; r == nil || r.SuppressedBy != "projects/widget" {
+			t.Errorf("%s: %+v", f, r)
+		}
+	}
 	w := recs["projects/widget"]
 	if w == nil || w.Status != "active" || !strings.Contains(w.Was[0].Why, "commit:") {
 		t.Fatalf("widget active on its own commits: %+v", w)
@@ -282,6 +296,8 @@ func TestChecksResolveFoldersFromEvidence(t *testing.T) {
 		"the name widgit exists nowhere as a repository",
 		"was renamed: it is owner/gadget now",
 		"decided before on", "suppressed into projects/widget",
+		"check: gizmo and widget are one repository: holds", "have one origin, github.com/owner/widget",
+		"is the same repository as projects/widget, which has a live record",
 	} {
 		if !strings.Contains(all, want) {
 			t.Errorf("the prompts lack %q", want)
@@ -313,7 +329,7 @@ func TestChecksResolveFoldersFromEvidence(t *testing.T) {
 			live[f.Meta.Scope]++
 		}
 	}
-	if live["projects/widget"] != 13 || live["projects/gadget"] != 1 || live["projects/widgit"] != 0 {
+	if live["projects/widget"] != 15 || live["projects/gadget"] != 1 || live["projects/widgit"] != 0 || live["projects/gizmo"] != 0 {
 		t.Fatalf("live facts by folder: %v", live)
 	}
 

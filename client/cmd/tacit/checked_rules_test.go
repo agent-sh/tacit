@@ -186,3 +186,48 @@ func TestAssessRefusesRootsCodeCannotConfirm(t *testing.T) {
 		t.Fatalf("no roots refused: %v", ps)
 	}
 }
+
+// A folder may fold into one its batch decides after it: decisions that
+// suppress come after the others.
+func TestAssessFoldsIntoALaterFolderOfItsBatch(t *testing.T) {
+	_, s := assessHome(t)
+	a, err := newAssessor(context.Background(), s, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := a.candidate("projects/widget-old", "", nil)
+	w := a.candidate("projects/widget", "", nil)
+	dOld := aDecision("projects/widget-old", "repo", "active", "the symlink's name of widget, session:s-one")
+	dOld.SuppressedBy = "projects/widget"
+	var lines []byte
+	acc, refused := a.check([]assess.Candidate{old, w}, []assess.Decision{dOld, aDecision("projects/widget", "repo", "active", "worked in session:s-one")}, map[string]*record.Record{}, &lines)
+	if len(refused) != 0 || len(acc) != 2 {
+		t.Fatalf("accepted %d, refused %+v", len(acc), refused)
+	}
+	// Two live folders for one repository: the second is refused with the check.
+	acc, refused = a.check([]assess.Candidate{w, old}, []assess.Decision{aDecision("projects/widget-old", "repo", "active", "session:s-one"), aDecision("projects/widget", "repo", "active", "worked in session:s-one")}, map[string]*record.Record{}, &lines)
+	if len(acc) != 1 || len(refused) != 1 || refused[0].Folder != "projects/widget-old" || !strings.Contains(strings.Join(refused[0].Problems, " "), "same repository as projects/widget") {
+		t.Fatalf("accepted %d, refused %+v", len(acc), refused)
+	}
+}
+
+// When one name of a repository is refused, a live decision for another of
+// its names in the same answer waits too: they are decided together.
+func TestAssessDecidesOneRepositorysNamesTogether(t *testing.T) {
+	_, s := assessHome(t)
+	a, err := newAssessor(context.Background(), s, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := a.candidate("projects/widget-old", "", nil)
+	w := a.candidate("projects/widget", "", nil)
+	var lines []byte
+	pending := map[string]*record.Record{}
+	acc, refused := a.check([]assess.Candidate{w, old}, []assess.Decision{aDecision("projects/widget", "repo", "active", "no citation"), aDecision("projects/widget-old", "repo", "active", "session:s-one")}, pending, &lines)
+	if len(acc) != 0 || len(refused) != 2 || pending["projects/widget-old"] != nil {
+		t.Fatalf("accepted %d, refused %+v", len(acc), refused)
+	}
+	if !strings.Contains(strings.Join(refused[1].Problems, " "), "decide them together") {
+		t.Fatalf("%+v", refused)
+	}
+}

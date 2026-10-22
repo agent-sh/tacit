@@ -234,3 +234,34 @@ func TestGitHubForgeReadsGh(t *testing.T) {
 		t.Fatal(u)
 	}
 }
+
+func TestSameNamesOneRepository(t *testing.T) {
+	home, _ := machine(t)
+	// A clone of widget under another name (same origin), and a symlink.
+	clone := filepath.Join(home, "projects", "widget-pr7")
+	os.MkdirAll(clone, 0o755)
+	gitRun(t, clone, "init", "-q", "-b", "main")
+	gitRun(t, clone, "remote", "add", "origin", "https://github.com/acme/widget")
+	os.Symlink("widget", filepath.Join(home, "projects", "gizmo"))
+	other := filepath.Join(home, "projects", "other")
+	os.MkdirAll(other, 0o755)
+	gitRun(t, other, "init", "-q", "-b", "main")
+	cat := repoid.LoadCatalog(home, "", filepath.Join(home, "projects"))
+	c := &Checker{Host: "box", Catalog: cat}
+	names := func(rs []Result) string {
+		var out []string
+		for _, r := range rs {
+			out = append(out, r.Value)
+		}
+		return strings.Join(out, " ")
+	}
+	if got := names(c.Same("widget")); got != "gizmo widget-pr7" {
+		t.Fatalf("widget: %q", got)
+	}
+	if got := names(c.Same("gizmo")); got != "widget widget-pr7" {
+		t.Fatalf("gizmo: %q", got)
+	}
+	if got := names(c.Same("other")); got != "" {
+		t.Fatalf("other: %q", got)
+	}
+}
