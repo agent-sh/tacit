@@ -66,7 +66,10 @@ type rotationOpts struct {
 
 type rotationStats struct {
 	Due, Checked, Still, Stale, Superseded, Fixed, Compressed, Unknown, Asked, Refused, Unanswered, Batches int
-	Cost                                                                                                    float64
+	// Folders: the folders left for review the rotation found due (asked
+	// again with extra evidence), Settled: of those, decided otherwise.
+	Folders, Settled int
+	Cost             float64
 }
 
 func (st rotationStats) String() string {
@@ -74,8 +77,8 @@ func (st rotationStats) String() string {
 	if st.Checked > 0 {
 		per = st.Cost / float64(st.Checked)
 	}
-	return fmt.Sprintf("%d due, %d checked (%d still, %d stale, %d superseded, %d fixed, %d compressed, %d unknown, %d asked the owner, %d refused), %d unanswered, $%.3f ($%.4f a fact)",
-		st.Due, st.Checked, st.Still, st.Stale, st.Superseded, st.Fixed, st.Compressed, st.Unknown, st.Asked, st.Refused, st.Unanswered, st.Cost, per)
+	return fmt.Sprintf("%d due, %d checked (%d still, %d stale, %d superseded, %d fixed, %d compressed, %d unknown, %d asked the owner, %d refused), %d unanswered, %d folder(s) left for review asked again (%d settled), $%.3f ($%.4f a fact)",
+		st.Due, st.Checked, st.Still, st.Stale, st.Superseded, st.Fixed, st.Compressed, st.Unknown, st.Asked, st.Refused, st.Unanswered, st.Folders, st.Settled, st.Cost, per)
 }
 
 func envInt(key string, def int) int {
@@ -251,7 +254,64 @@ func rotationStep(ctx context.Context, s *store.Store, o rotationOpts, rep *cura
 		st.add(b)
 		fmt.Fprintf(os.Stderr, "rotation: batch %d: %d fact(s), $%.3f\n", st.Batches, len(items), cost)
 	}
+	if o.only == nil && ctx.Err() == nil {
+		errs += rotateReviewFolders(ctx, s, local, o, &st, rep)
+	}
 	return st, errs
+}
+
+// rotationAssessStep is the rotation's assessment of the folders left for
+// review it found due; tests substitute it.
+var rotationAssessStep = assessStep
+
+// rotateReviewFolders puts the folders left for review that are due (never
+// asked with extra evidence, or last decided a week or more ago) back to
+// the assessment, which gathers more evidence for each: needs-review is in
+// the rotation's due set, as a fact checked long ago is.
+func rotateReviewFolders(ctx context.Context, s *store.Store, local bool, o rotationOpts, st *rotationStats, rep *curate.Report) int {
+	if ok, _ := fact.FormatWrites(s.Dir); !ok {
+		return 0
+	}
+	home, _ := os.UserHomeDir()
+	held := loadHeld(filepath.Join(platform.StateDir(home), assessHeldFile))
+	recs, _ := record.Walk(s.Dir)
+	if local {
+		recs = localRecords()
+	}
+	due := reviewFoldersDue(recs, held, time.Now().Format("2006-01-02"))
+	if len(due) == 0 {
+		return 0
+	}
+	only := map[string]bool{}
+	for _, f := range due {
+		only[f] = true
+	}
+	st.Folders = len(due)
+	arep := &curate.Report{ModelCalls: rep.ModelCalls}
+	errs := rotationAssessStep(ctx, s, assessOpts{model: o.model, max: len(due), dry: o.dry, only: only, retry: true}, arep)
+	st.Settled = arep.ReviewSettled
+	st.Cost += arep.CostUSD
+	rep.CostUSD += arep.CostUSD
+	fmt.Fprintf(os.Stderr, "rotation: %d folder(s) left for review asked again with extra evidence: %d settled, $%.3f\n", len(due), arep.ReviewSettled, arep.CostUSD)
+	return errs
+}
+
+// reviewFoldersDue are the live project folders left for review that the
+// rotation asks again: never asked with extra evidence, or last decided
+// reviewRetryDays or more before today.
+func reviewFoldersDue(recs map[string]*record.Record, held *heldState, today string) []string {
+	var out []string
+	for _, f := range sortedRecordFolders(recs) {
+		r := recs[f]
+		if !r.Live() || r.Status != record.StatusNeedsReview || (r.Kind != record.KindRepo && r.Kind != record.KindFolder) {
+			continue
+		}
+		if st, ok := held.Review[f]; ok && !retryDue(st.At, today) {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 func (st *rotationStats) add(b rotationStats) {

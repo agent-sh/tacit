@@ -54,6 +54,9 @@ type assessOpts struct {
 	dry   bool
 	// only, when set, limits the run to these folders (tests, a re-run).
 	only map[string]bool
+	// retry: the rotation's run on the folders left for review it found due;
+	// they are asked whatever their fingerprint.
+	retry bool
 }
 
 // runAssess implements `tacit assess [--model M] [--max N] [--dry-run]`:
@@ -95,7 +98,7 @@ func runAssess(args []string) int {
 		}
 	}
 	errs := assessStep(ctx, s, assessOpts{model: *model, max: *max, dry: *dry}, rep)
-	fmt.Printf("assess: %d candidate(s), %d record(s) written, %d refused, %d waiting on unchanged evidence, %d decision(s) refuted by a check, %s, %d error(s)\n", rep.AssessCandidates, rep.AssessRecords, rep.AssessRefused, rep.AssessHeld, rep.CheckRefused, rep.ModelCalls.CostSummary(rep.CostUSD), errs)
+	fmt.Printf("assess: %d candidate(s), %d record(s) written, %d refused, %d waiting on unchanged evidence, %d decision(s) refuted by a check, %d left for review asked again (%d settled, %d still for review), %s, %d error(s)\n", rep.AssessCandidates, rep.AssessRecords, rep.AssessRefused, rep.AssessHeld, rep.CheckRefused, rep.ReviewRetried, rep.ReviewSettled, rep.ReviewRetried-rep.ReviewSettled, rep.ModelCalls.CostSummary(rep.CostUSD), errs)
 	if errs > 0 {
 		return 1
 	}
@@ -139,6 +142,9 @@ type assessor struct {
 	held                   *heldState          // refused and review-waiting folders' fingerprints
 	refiler                *refiler            // where facts' own evidence points (codeDecision)
 	decisions              map[string]ownerDecision
+	lowText                map[*fact.Fact]string // facts' lowered text, for the re-attempts' store search
+	retry                  bool                  // assessOpts.retry
+	attempts               []reviewAttempt       // this run's re-attempts, for the log
 }
 
 func newAssessor(ctx context.Context, s *store.Store, local bool) (*assessor, error) {
@@ -312,16 +318,21 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 		if why := materialChange(r, ev, a.host); why != "" {
 			seen[f] = true
 			c.Reason = why
+			if a.held != nil && r.Live() && r.Status == record.StatusNeedsReview {
+				st := a.held.Review[f]
+				a.deepen(&c, st.Attempts+1, st.Keys, st.At)
+			}
 			out = append(out, c)
 			continue
 		}
-		// A folder left for review is asked again once its evidence changed
-		// (what the model reads of it: new facts, candidates, decisions on
-		// folders alike), and not before.
+		// A folder left for review is worked on, not parked: each run it is
+		// asked again with more evidence than it had (assess_deep.go), and it
+		// waits only when that wider search found nothing new, until the
+		// weekly retry.
 		if a.held != nil && r.Live() && r.Status == record.StatusNeedsReview {
-			if fp := a.fingerprint(c); fp != a.held.Reviewed[f] {
+			if why, ok := a.reviewDue(&c); ok {
 				seen[f] = true
-				c.Reason = "left for review; its evidence changed since it was decided"
+				c.Reason = why
 				out = append(out, c)
 			}
 		}
@@ -1461,6 +1472,7 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 		fmt.Fprintln(os.Stderr, "assess:", err)
 		return 1
 	}
+	a.retry = o.retry
 	max := o.max
 	if max <= 0 {
 		max = assessMax
@@ -1476,10 +1488,22 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 	var cands []assess.Candidate
 	for _, c := range all {
 		a.refresh(&c, nil)
-		if h, ok := held.Folders[c.Folder]; ok && h.Runs >= assessHoldRuns && h.Fingerprint == assess.Fingerprint(c) {
-			rep.AssessHeld++
-			fmt.Fprintf(os.Stderr, "assess: %s waits: refused in %d runs on the same evidence (%s)\n", c.Folder, h.Runs, clipOne(h.Problems, 300))
-			continue
+		if h, ok := held.Folders[c.Folder]; ok {
+			// A refused folder is asked again with more evidence, and waits
+			// only when that found nothing new, until the weekly retry.
+			if c.Attempt == 0 {
+				n := h.Attempts
+				if h.Runs > n {
+					n = h.Runs
+				}
+				a.deepen(&c, n+1, h.Keys, h.At)
+			}
+			if h.Runs >= assessHoldRuns && h.Fingerprint == assess.Fingerprint(c) && !a.retry && !retryDue(h.At, a.today) {
+				rep.AssessHeld++
+				a.attempts = append(a.attempts, attemptOf(c, a.today, "refused on the same evidence", "waits"))
+				fmt.Fprintf(os.Stderr, "assess: %s waits: refused in %d runs on the same evidence, and its wider search found nothing new; asked again on %s (%s)\n", c.Folder, h.Runs, nextRetry(h.At), clipOne(h.Problems, 300))
+				continue
+			}
 		}
 		if len(cands) < max {
 			cands = append(cands, c)
@@ -1596,10 +1620,26 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 	// A folder left for review keeps the fingerprint of its evidence: it is
 	// asked again when that changes.
 	for _, d := range acceptedRun {
+		f := d.c.Folder
+		_, had := held.Review[f]
+		if d.c.Attempt > 0 || had {
+			rep.ReviewRetried++
+			if d.rec.Status != record.StatusNeedsReview || !d.rec.Live() {
+				rep.ReviewSettled++
+			}
+			outcome := d.rec.Status
+			if d.rec.SuppressedBy != "" {
+				outcome += " (suppressed by " + d.rec.SuppressedBy + ")"
+			}
+			a.attempts = append(a.attempts, attemptOf(d.c, a.today, d.c.Reason, outcome))
+			if d.c.NewExtra() > 0 || d.c.Attempt > 0 {
+				fmt.Fprintf(os.Stderr, "assess: %s: re-attempt %d with %d extra item(s), %d new: %s\n", f, d.c.Attempt, len(d.c.ExtraKeys()), d.c.NewExtra(), outcome)
+			}
+		}
 		if d.rec.Status == record.StatusNeedsReview && d.rec.Live() {
-			held.Reviewed[d.c.Folder] = a.fingerprint(d.c)
+			held.Review[f] = reviewState{Fingerprint: a.fingerprint(d.c), At: a.today, Attempts: d.c.Attempt, Keys: d.c.ExtraKeys()}
 		} else {
-			delete(held.Reviewed, d.c.Folder)
+			delete(held.Review, f)
 		}
 	}
 	for _, r := range refusedRun {
@@ -1609,13 +1649,15 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 		if h.Fingerprint == fp {
 			h.Runs++
 		} else {
-			h = heldFolder{Fingerprint: fp, Runs: 1}
+			h = heldFolder{Fingerprint: fp, Runs: 1, Attempts: h.Attempts}
 		}
-		h.Problems, h.At = r.problems, a.today
+		h.Attempts++
+		h.Problems, h.At, h.Keys = r.problems, a.today, c.ExtraKeys()
+		a.attempts = append(a.attempts, attemptOf(c, a.today, c.Reason, "refused"))
 		held.Folders[c.Folder] = h
-		next := "asked again next run"
+		next := "asked again next run, with wider evidence"
 		if h.Runs >= assessHoldRuns {
-			next = fmt.Sprintf("refused in %d runs on the same evidence: it waits until that changes", h.Runs)
+			next = fmt.Sprintf("refused in %d runs: asked again when a wider search finds something new, and on %s in any case", h.Runs, nextRetry(h.At))
 		}
 		fmt.Fprintf(os.Stderr, "assess: %s refused twice, %s: %s\n", c.Folder, next, r.problems)
 	}
@@ -1627,9 +1669,11 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 	_ = a.checker.Forge.Save()
 	rep.CheckRefused += a.checkRefused
 	if !o.dry {
+		held.Reviewed = nil // v0.9.1's: by fingerprint alone, now held.Review
 		if err := held.save(); err != nil {
 			fmt.Fprintln(os.Stderr, "assess: held folders:", err)
 		}
+		a.logAttempts(a.attempts)
 	}
 	return errs
 }
@@ -1737,9 +1781,12 @@ const assessHeldFile = "assess-held.json"
 type heldState struct {
 	path    string
 	Folders map[string]heldFolder `json:"folders"`
-	// Reviewed: folders the model left for review, by the fingerprint of
-	// the evidence it decided on.
+	// Reviewed: v0.9.1's folders left for review, by fingerprint alone; read
+	// and dropped (each is asked again with extra evidence).
 	Reviewed map[string]string `json:"reviewed,omitempty"`
+	// Review: the folders left for review, with what they were last decided
+	// on (assess_deep.go).
+	Review map[string]reviewState `json:"review,omitempty"`
 }
 
 type heldFolder struct {
@@ -1747,6 +1794,10 @@ type heldFolder struct {
 	Runs        int    `json:"runs"`        // runs it was refused in with that fingerprint
 	Problems    string `json:"problems"`    // the last refusal
 	At          string `json:"at"`
+	// Attempts counts every run it was refused in (the search widens with
+	// it); Keys are the extra items the last attempt was shown.
+	Attempts int      `json:"attempts,omitempty"`
+	Keys     []string `json:"keys,omitempty"`
 }
 
 func loadHeld(path string) *heldState {
@@ -1759,6 +1810,9 @@ func loadHeld(path string) *heldState {
 	}
 	if h.Reviewed == nil {
 		h.Reviewed = map[string]string{}
+	}
+	if h.Review == nil {
+		h.Review = map[string]reviewState{}
 	}
 	h.path = path
 	return h
