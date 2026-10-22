@@ -189,6 +189,9 @@ func TestDreamRecoveryFlushesRetainedRemoteCommit(t *testing.T) {
 func TestDreamRecoverySyncsRemoteAdvanceAndIgnoresQuarantine(t *testing.T) {
 	root := t.TempDir()
 	dir, push := newPair(t, root)
+	// Recovery commits through Store, not gitIn's synthetic identity env.
+	gitIn(t, dir, "config", "user.name", "fixture")
+	gitIn(t, dir, "config", "user.email", "fixture@example.invalid")
 	s := &store.Store{Dir: dir}
 	host := store.ShortHost()
 	f := dream.ToFact(dream.Extracted{Description: "Pending race fixture note", Type: "machine_fact", Kind: "observed"}, "demo", host, "fixture")

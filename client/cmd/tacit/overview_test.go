@@ -23,6 +23,7 @@ var promptFactRx = regexp.MustCompile(`(?m)^- \[\[([a-z0-9-]+)\]\]`)
 // a refused one back once, writes nothing more while the folder holds still,
 // and writes it again on a material change.
 func TestOverviewStepWritesCheckedOverviews(t *testing.T) {
+	stubScrump(t) // Synthetic facts; exercise redaction without an installed scrump.
 	r := newRig(t, rigOpts{repos: []string{"widget"}})
 	for _, n := range []string{"widget-port", "widget-build", "widget-deploy"} {
 		os.WriteFile(filepath.Join(r.clone, "projects", "widget", n+".md"), []byte(rotFile(n, "projects/widget", "design_decision", "the "+n+" fact", "the "+n+" fact", "2026-09-01", "")), 0o644)

@@ -118,6 +118,7 @@ func runRotationStep(t *testing.T, r *rig, o rotationOpts) rotationStats {
 // last_checked on every fact the model answered, and writes one commit per
 // batch; a second run finds nothing due.
 func TestRotationAppliesCheckedVerdictsAndStamps(t *testing.T) {
+	stubScrump(t) // Synthetic proof; exercise redaction without an installed scrump.
 	r := rotationRig(t)
 	fr := &fakeRotator{answer: func(it rotation.Item) (rotation.Verdict, bool) {
 		first := ""
