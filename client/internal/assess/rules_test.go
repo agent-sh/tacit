@@ -184,3 +184,24 @@ func TestFingerprintIgnoresTheReasonTheRecordAndNewOwnerTurns(t *testing.T) {
 		t.Fatal("new evidence kept the fingerprint")
 	}
 }
+
+func TestFingerprintKeepsVerdictsAndNamesNotWording(t *testing.T) {
+	c := Candidate{Folder: "projects/x", Name: repoCheck("x", check.Fails, ""), Real: []RealRepo{{Name: "a", Why: []string{"2 facts"}}, {Name: "b", Why: []string{"near"}}}}
+	fp := Fingerprint(c)
+	d := c
+	d.Name = repoCheck("x", check.Fails, "")
+	d.Name.Results[0].Output = "not found: o/x, p/x"
+	d.Real = []RealRepo{{Name: "b", Why: []string{"near"}}, {Name: "a", Why: []string{"3 facts"}}}
+	if Fingerprint(d) != fp {
+		t.Fatal("wording moved the fingerprint")
+	}
+	d.Real = append(d.Real, RealRepo{Name: "c"})
+	if Fingerprint(d) == fp {
+		t.Fatal("a new candidate kept it")
+	}
+	d.Real = c.Real
+	d.Name = repoCheck("x", check.Holds, "")
+	if Fingerprint(d) == fp {
+		t.Fatal("a new verdict kept it")
+	}
+}
