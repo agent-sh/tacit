@@ -25,10 +25,13 @@ import (
 // a repository; a session in a member reads the org's standards; a model's
 // fact goes up to the org only when it names two of its repositories.
 func TestOrgFolderFromAnOrgNamedProjectFolder(t *testing.T) {
-	w := newNamesWorld(t, map[string]string{"agent-sh/tower-crane": "agent-sh/tower-crane", "agent-sh/agnix": "agent-sh/agnix"},
-		map[string]string{"agent-sh": "Organization", "owner": "User"})
+	w := newNamesWorld(t, map[string]string{"agent-sh/tower-crane": "agent-sh/tower-crane", "agent-sh/agnix": "agent-sh/agnix", "helicone/helicone": "helicone/helicone"},
+		map[string]string{"agent-sh": "Organization", "owner": "User", "helicone": "Organization"})
 	tc := w.git("tower-crane", "https://github.com/agent-sh/tower-crane.git", "ci/test.sh")
 	w.git("agnix", "git@github.com:agent-sh/agnix.git")
+	// A repository named like its org: its folder is the repository's.
+	w.git("helicone", "https://github.com/helicone/helicone.git")
+	w.fact("projects/helicone", "helicone-proxy", "machine_fact", "s6", "The helicone proxy listens on 8787")
 	w.fact("projects/agent-sh", "release-from-signed-tags", "user_standard", "s1", "Every agent-sh repository releases from a signed tag")
 	w.fact("projects/agent-sh", "tower-crane-ci", "design_decision", "s2", "CI runs ~/projects/tower-crane/ci/test.sh before a merge")
 	w.fact("projects/agent-sh", "agnix-issues", "reference", "s3", "Bugs go to https://github.com/agent-sh/agnix/issues")
@@ -38,6 +41,7 @@ func TestOrgFolderFromAnOrgNamedProjectFolder(t *testing.T) {
 	fa := &fakeAssessor{first: map[string]assess.Decision{
 		"projects/tower-crane": aDecision("projects/tower-crane", "repo", "active", "worked in session:s5"),
 		"projects/agnix":       aDecision("projects/agnix", "repo", "dormant", "no session lately"),
+		"projects/helicone":    aDecision("projects/helicone", "repo", "dormant", "an upstream clone, session:s6"),
 	}}
 	w.assess(fa)
 	for _, p := range fa.prompts {
@@ -52,6 +56,9 @@ func TestOrgFolderFromAnOrgNamedProjectFolder(t *testing.T) {
 	}
 	if p := recs["projects/agent-sh"]; p == nil || p.SuppressedBy != "orgs/agent-sh" || p.Status != record.StatusDead {
 		t.Fatalf("projects/agent-sh: %+v", p)
+	}
+	if recs["orgs/helicone"] != nil || recs["projects/helicone"] == nil || !recs["projects/helicone"].Live() || recs["projects/helicone"].Org != "helicone" {
+		t.Fatalf("helicone, a repository named like its org: %+v %+v", recs["orgs/helicone"], recs["projects/helicone"])
 	}
 	for _, f := range []string{"projects/tower-crane", "projects/agnix"} {
 		r := recs[f]
