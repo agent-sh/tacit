@@ -239,7 +239,7 @@ For each statement answer:
     {"kind": "renamed", "from": "<old name>", "to": "<new name>"}
     {"kind": "path", "repo": "<name>", "path": "<repo-relative path>"}
     {"kind": "version", "repo": "<name>", "version": "<vX.Y.Z>"}
-  Only what the words themselves claim, never what you infer; none when they claim nothing such. Code checks each one: a claim a check confirms makes the statement a decision, and one a check refutes flags it for the owner.
+  Only what the words themselves claim, never what you infer; none when they claim nothing such. A statement shown with an earlier reading's claim that a check disagrees with is read again: that reading may have taken a name for another or a claim the words do not make. Read the words afresh and give the claims they make; give the same claim again only when the words do make it. Code checks each one: a claim a check confirms makes the statement a decision, and one a check refutes flags it for the owner.
 
 Output ONLY a JSON array, one object per statement, no prose, no code fence:
   {"name": "<the statement's or ruling's name>", "says": "choice|instruction", "same": [{"name": "<earlier item>", "relation": "same|changes"}], "claims": []}
@@ -252,6 +252,10 @@ STATEMENTS:
 type Ask struct {
 	S       Item
 	Earlier []Item
+	// Recheck: the statement was read before and a check disagrees with that
+	// reading's claims (these lines); it is read again, since the earlier
+	// reading may have misread the words.
+	Recheck []string
 }
 
 // Render writes the statements section of the prompt.
@@ -264,6 +268,9 @@ func Render(asks []Ask) string {
 			continue
 		}
 		fmt.Fprintf(&b, "### statement=%s (%s)\nyou said once (%s, %s): %q\ncontext: %s\n", s.Name, s.Scope, s.Day, s.From, s.Words, s.Context)
+		for _, l := range a.Recheck {
+			fmt.Fprintf(&b, "an earlier reading's claim was checked by code and the check disagrees: %s\n", l)
+		}
 		if len(a.Earlier) == 0 {
 			b.WriteString("earlier: none found\n")
 		}

@@ -205,11 +205,31 @@ func TestStatementsEndToEnd(t *testing.T) {
 		t.Fatalf("rules:\n%s", out)
 	}
 
-	// A second run judges nothing again and writes nothing.
-	head := gitIn(t, w.s.Dir, "rev-parse", "HEAD")
+	// A flagged statement is not left for the owner: the second run reads it
+	// again, alone, with the check that disagrees; the reading stands (the
+	// same claim), so nothing is flagged twice.
 	n := len(stmtPrompts)
+	reviewText := func() string {
+		b, _ := os.ReadFile(filepath.Join(w.s.Dir, "review", time.Now().Format("2006-01-02")+"-statements.md"))
+		return string(b)
+	}
+	before := reviewText()
+	sr2, errs := statementsStep(context.Background(), w.s, statementsOpts{model: "opus"}, &curate.Report{})
+	if errs != 0 || len(stmtPrompts) != n+1 || sr2.Reread != 1 || sr2.Flagged != 0 {
+		t.Fatalf("a second run: %d errors, %d prompts, %+v", errs, len(stmtPrompts)-n, sr2)
+	}
+	p := stmtPrompts[n]
+	if !strings.Contains(p, "### statement=gz-statement ") || strings.Count(p, "### statement=") != 1 || !strings.Contains(p, "an earlier reading's claim was checked by code and the check disagrees: ") {
+		t.Fatalf("the re-read prompt:\n%s", p)
+	}
+	if reviewText() != before {
+		t.Fatal("the re-read flagged the statement again")
+	}
+	// The third run, the same week, asks and writes nothing.
+	head := gitIn(t, w.s.Dir, "rev-parse", "HEAD")
+	n = len(stmtPrompts)
 	if _, errs := statementsStep(context.Background(), w.s, statementsOpts{model: "opus"}, &curate.Report{}); errs != 0 || len(stmtPrompts) != n || gitIn(t, w.s.Dir, "rev-parse", "HEAD") != head {
-		t.Fatalf("a second run: %d errors, %d prompts", errs, len(stmtPrompts)-n)
+		t.Fatalf("a third run: %d errors, %d prompts", errs, len(stmtPrompts)-n)
 	}
 	if fs, err := lint.Run(w.s.Dir); err != nil || len(fs) != 0 {
 		t.Fatalf("lint %v %v", fs, err)

@@ -57,10 +57,12 @@ type statementsOpts struct {
 // stmtReport is what one run of the step did.
 type stmtReport struct {
 	Judged, Decisions, Preferences, Rules, Superseded, Flagged, Differs, Refused int
+	// Reread: statements a check had flagged, read again (agents keep trying).
+	Reread int
 }
 
 func (r stmtReport) String() string {
-	return fmt.Sprintf("%d judged, %d decision(s), %d preference(s), %d rule(s) promoted, %d superseded, %d flagged by a check, %d differ from a decision, %d answer(s) refused", r.Judged, r.Decisions, r.Preferences, r.Rules, r.Superseded, r.Flagged, r.Differs, r.Refused)
+	return fmt.Sprintf("%d judged (%d flagged before, read again), %d decision(s), %d preference(s), %d rule(s) promoted, %d superseded, %d flagged by a check, %d differ from a decision, %d answer(s) refused", r.Judged, r.Reread, r.Decisions, r.Preferences, r.Rules, r.Superseded, r.Flagged, r.Differs, r.Refused)
 }
 
 // runStatements implements `tacit statements [--model M] [--dry-run]
@@ -338,11 +340,7 @@ func statementsStep(ctx context.Context, s *store.Store, o statementsOpts, rep *
 	sort.Slice(pool, func(i, j int) bool { return pool[i].Name < pool[j].Name })
 	judged := statement.Judgements(w.log)
 	asks := append([]statement.Ask(nil), rulingAsks...)
-	for _, n := range sortedStmtNames(own) {
-		if _, ok := judged[n]; ok {
-			continue
-		}
-		s := own[n]
+	earlierOf := func(s statement.Item) []statement.Item {
 		var earlier []statement.Item
 		for _, it := range pool {
 			if it.Name == s.Name {
@@ -353,7 +351,47 @@ func statementsStep(ctx context.Context, s *store.Store, o statementsOpts, rep *
 			}
 			earlier = append(earlier, it)
 		}
-		asks = append(asks, statement.Ask{S: s, Earlier: statement.Candidates(s, earlier, names)})
+		return statement.Candidates(s, earlier, names)
+	}
+	for _, n := range sortedStmtNames(own) {
+		if _, ok := judged[n]; ok {
+			continue
+		}
+		asks = append(asks, statement.Ask{S: own[n], Earlier: earlierOf(own[n])})
+	}
+	// A statement a check flagged is not left for the owner: it is read
+	// again, with the disagreeing check, once after the flag and then on the
+	// weekly retry while a check still disagrees with its reading.
+	lastFlag, lastRead := map[string]int{}, map[string]int{}
+	for i, e := range w.log {
+		switch e.Kind {
+		case statement.LogFlagged:
+			lastFlag[e.Name] = i
+		case statement.LogJudged:
+			lastRead[e.Name] = i
+		}
+	}
+	for _, n := range sortedStmtNames(own) {
+		fi, flagged := lastFlag[n]
+		ri, read := lastRead[n]
+		if !flagged || !read || (ri > fi && !retryDue(w.log[ri].At, w.today)) {
+			continue
+		}
+		var rs []check.Result
+		for _, cl := range w.log[ri].Claims {
+			rs = append(rs, ch.Claim(ctx, cl, claimRoot(ch, cl)))
+		}
+		if statement.Verdict(rs) != check.Fails {
+			continue // no check disagrees now: the plan settles it
+		}
+		var lines []string
+		for _, r := range rs {
+			if r.Verdict == check.Fails {
+				lines = append(lines, r.Line())
+			}
+		}
+		asks = append(asks, statement.Ask{S: own[n], Earlier: earlierOf(own[n]), Recheck: lines})
+		sr.Reread++
 	}
 	errs := 0
 	var newLog []statement.Entry
@@ -422,11 +460,7 @@ func statementsStep(ctx context.Context, s *store.Store, o statementsOpts, rep *
 	checks := map[string][]check.Result{}
 	for n := range own {
 		for _, cl := range judged[n].Claims {
-			root := ""
-			if cl.Kind == "path" || cl.Kind == "version" {
-				_, root = factRepo(ch.Catalog, &fact.Fact{Meta: fact.Meta{Scope: "projects/" + strings.ToLower(cl.Repo)}})
-			}
-			checks[n] = append(checks[n], ch.Claim(ctx, cl, root))
+			checks[n] = append(checks[n], ch.Claim(ctx, cl, claimRoot(ch, cl)))
 		}
 	}
 	prom = w.promoted() // with the rulings read this run
@@ -445,6 +479,16 @@ func statementsStep(ctx context.Context, s *store.Store, o statementsOpts, rep *
 		errs++
 	}
 	return sr, errs
+}
+
+// claimRoot is the checkout a path or version claim is checked in, "" for
+// none or another kind of claim.
+func claimRoot(ch *check.Checker, cl check.Claim) string {
+	if cl.Kind != "path" && cl.Kind != "version" {
+		return ""
+	}
+	_, root := factRepo(ch.Catalog, &fact.Fact{Meta: fact.Meta{Scope: "projects/" + strings.ToLower(cl.Repo)}})
+	return root
 }
 
 func describeAct(a statement.Action) string {
@@ -664,7 +708,7 @@ func (w *stmtWorld) apply(ctx context.Context, s *store.Store, acts []statement.
 		}
 		fresh.log = w.log
 		*w = *fresh
-		*sr = stmtReport{Judged: sr.Judged, Refused: sr.Refused}
+		*sr = stmtReport{Judged: sr.Judged, Refused: sr.Refused, Reread: sr.Reread}
 		p, err := plan()
 		if err != nil {
 			return nil, "", err
