@@ -140,3 +140,32 @@ func TestSimilarLinesGroupDecisions(t *testing.T) {
 		t.Fatalf("%q", ls)
 	}
 }
+
+func TestEnforceOneLiveFolderPerRepository(t *testing.T) {
+	same := []check.Result{{Kind: check.KindRepo, Claim: "ginza and pikadon are one repository", Source: "checkouts", Output: "ginza is another name of the checkout pikadon", Verdict: check.Holds, Value: "pikadon"}}
+	c := Candidate{Folder: "projects/ginza", Name: repoCheck("ginza", check.Holds, ""), Same: same}
+	recs := map[string]*record.Record{"projects/pikadon": {Folder: "projects/pikadon", Kind: record.KindRepo, Status: "active"}}
+	env := Checked{Repo: func(n string) check.RepoCheck { return *repoCheck(n, check.Holds, "") }, Record: func(f string) *record.Record { return recs[f] }}
+	ps := Enforce(c, Decision{Kind: "repo", Status: "active"}, env)
+	if len(ps) != 1 || !strings.Contains(ps[0], "same repository as projects/pikadon") || !strings.Contains(ps[0], "another name of the checkout pikadon") {
+		t.Fatalf("a second live folder: %v", ps)
+	}
+	if ps := Enforce(c, Decision{Kind: "none", Status: "dead"}, env); len(ps) != 1 {
+		t.Fatalf("none for another name of a project: %v", ps)
+	}
+	for _, d := range []Decision{{Kind: "repo", Status: "active", SuppressedBy: "projects/pikadon"}, {Kind: "repo", Status: "needs-review"}} {
+		if ps := Enforce(c, d, env); len(ps) != 0 {
+			t.Errorf("%+v refused: %v", d, ps)
+		}
+	}
+	// The other way round: pikadon folded into ginza leaves ginza the live one.
+	recs["projects/pikadon"].SuppressedBy = "projects/ginza"
+	if ps := Enforce(c, Decision{Kind: "repo", Status: "active"}, env); len(ps) != 0 {
+		t.Fatalf("the winner refused: %v", ps)
+	}
+	// No record of the other name yet: nothing to fold into.
+	delete(recs, "projects/pikadon")
+	if ps := Enforce(c, Decision{Kind: "repo", Status: "active"}, env); len(ps) != 0 {
+		t.Fatalf("no other record: %v", ps)
+	}
+}

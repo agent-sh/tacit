@@ -65,6 +65,12 @@ type Candidate struct {
 	// shape), one line each, filled in when its batch is rendered.
 	Pattern string
 	Similar []string
+	// Same are code's checks that other names are this repository (another
+	// name of its checkout, a clone with its origin): one repository has one
+	// live folder. Group is the name of the set of candidates one
+	// repository's names make, so they are decided in one batch.
+	Same  []check.Result
+	Group string
 }
 
 // RealRepo is a repository code proposes a folder belongs to, with why.
@@ -124,7 +130,7 @@ For each folder decide:
 - why: one or two sentences. It MUST cite the sessions, notes or commits the decision rests on, as code shows them for THIS folder (session:<id>, claude:<id>, codex:<id>, note:<name>, or commit:<sha> for the folder's own commits under the owner's git identity, which code lists); never cite a session that is not about this folder just to have a citation. Recent own commits are evidence of work: "active" may rest on them. Code refuses a why that cites none it can find; a git date alone is no reason. A folder whose evidence shows no session at all (no work sessions, no fact sessions) needs no citation, and its status can then only be dead, dormant or needs-review: say that no session touched it.
 - description: one line (at most 200 characters) saying what the folder is.
 - body: optional, a few sentences: why the folder exists and what belongs in it.
-- aliases: optional, other names the same project is known by, only names no other folder has.
+- aliases: optional, other names the same project is known by, only names no other folder has: never the name of another folder listed here or holding facts (that folder gets its own decision with suppressed_by instead).
 - suppressed_by: optional, the folder that replaces this one when its facts belong to another project: the same project under another name (a symlink's or a remote's name, a rename), or a task worktree, clone or subfolder of another project. Give such a folder kind repo or folder (not none) with suppressed_by that project's folder, so its facts move there. The target must have or get a record and not itself be replaced. Only when the evidence shows it.
 - roots: kind folder only, optional: [{"host": ..., "path": ...}] where it lives.
 - tools, commands: an area only: tool-name patterns (globs such as "mcp__*__Ticketing*") and command prefixes its sessions used, only ones the evidence lists.
@@ -136,6 +142,7 @@ Dry claims are checked by code, not judged. Whether a repository of a name exist
 - A project folder whose name exists nowhere (no checkout or other name of one, no remote, the forge has no such repository) is no repository under that name: it cannot be active, dormant, shipped or dead as it is. Set suppressed_by to the real repository its facts belong to (code lists candidates with their evidence: the checkouts its sessions worked in, repositories whose paths or remotes its facts name, near names; pick the one the evidence supports), or answer needs-review when the evidence picks none. Only when code lists no candidate may it be kind none.
 - A name the forge says was renamed is an old name: fold it into the current name, never the current name into it.
 - Never set suppressed_by to a repository whose name exists nowhere.
+- Names code proved are one repository (another name of a checkout, a symlink's or the origin remote's; clones with one origin) get one live folder: the others set suppressed_by to it, or answer needs-review. Which name it goes by is yours to decide from the evidence (the owner's words, the forge's name, where the work is); they come in one batch, so decide them together.
 Folders whose names follow one pattern (kv-013-g1, kv-140-g2) come together, with the decisions already made on folders like them: decide alike folders alike, and when one differs say in why what in its evidence differs.
 
 Output ONLY a JSON array, one object per folder, no prose, no code fence:
@@ -179,6 +186,9 @@ func Render(cands []Candidate) string {
 				fmt.Fprintf(&b, " (the forge has it as %s now)", c.Name.Forge)
 			}
 			b.WriteString("\n")
+		}
+		for _, r := range c.Same {
+			b.WriteString("check: " + r.Line() + "\n")
 		}
 		if len(c.Real) > 0 {
 			var parts []string
@@ -413,11 +423,12 @@ func Same(a, b *record.Record) bool {
 	return string(ea) == string(eb)
 }
 
-// SortCandidates puts first the folders other folders may be suppressed
-// into: a repository's own name before a folder that is only another name
-// of one (aliasOf names its repository), and a name that exists before one
-// that exists nowhere; then the folders of one name pattern together (so a
-// batch decides alike folders at once), then by folder.
+// SortCandidates puts a name that exists before one that exists nowhere
+// (the folders others may be suppressed into first), then the names of one
+// repository together (Group) and the folders of one name pattern together,
+// so a batch decides them at once, a repository's own name before a folder
+// that is only another name of one (aliasOf names its repository), then by
+// folder.
 func SortCandidates(cands []Candidate, aliasOf func(folder string) string) {
 	count := map[string]int{}
 	for _, c := range cands {
@@ -427,16 +438,15 @@ func SortCandidates(cands []Candidate, aliasOf func(folder string) string) {
 	}
 	// Pattern keys are per root (projects/kv-#-g#).
 	key := func(c Candidate) string {
+		if c.Group != "" {
+			return c.Folder[:strings.LastIndex(c.Folder, "/")+1] + c.Group
+		}
 		if c.Pattern != "" && count[c.Pattern] > 1 {
 			return c.Folder[:strings.LastIndex(c.Folder, "/")+1] + c.Pattern
 		}
 		return c.Folder
 	}
 	sort.SliceStable(cands, func(i, j int) bool {
-		ai, aj := aliasOf(cands[i].Folder) != "", aliasOf(cands[j].Folder) != ""
-		if ai != aj {
-			return !ai
-		}
 		bi, bj := cands[i].Absent(), cands[j].Absent()
 		if bi != bj {
 			return !bi
@@ -444,6 +454,10 @@ func SortCandidates(cands []Candidate, aliasOf func(folder string) string) {
 		ki, kj := key(cands[i]), key(cands[j])
 		if ki != kj {
 			return ki < kj
+		}
+		ai, aj := aliasOf(cands[i].Folder) != "", aliasOf(cands[j].Folder) != ""
+		if ai != aj {
+			return !ai
 		}
 		return cands[i].Folder < cands[j].Folder
 	})

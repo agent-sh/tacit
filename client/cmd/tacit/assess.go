@@ -312,6 +312,7 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 			out = append(out, c)
 		}
 	}
+	groupSame(out)
 	assess.SortCandidates(out, func(folder string) string {
 		return a.catalog.AliasOf(strings.TrimPrefix(folder, "projects/"))
 	})
@@ -332,6 +333,7 @@ func (a *assessor) candidate(folder, reason string, old *record.Record) assess.C
 		c.Name = &rc
 		c.Evidence = append(c.Evidence, record.Evidence{Gathered: a.today, Checks: rc.Results})
 		c.Pattern = assess.NamePattern(name)
+		c.Same = a.checker.Same(name)
 		if rc.Verdict != check.Holds || rc.Renamed != "" {
 			c.Real = a.realRepos(folder, name, rc)
 			c.Context = append(c.Context, a.namedElsewhere(folder, name, 3)...)
@@ -524,6 +526,58 @@ func (a *assessor) realRepos(folder, name string, rc check.RepoCheck) []assess.R
 		out = out[:maxReal]
 	}
 	return out
+}
+
+// groupSame names each set of candidates code proved are one repository
+// (Candidate.Same, taken both ways) by its first name, so they sort into one
+// batch.
+func groupSame(cands []assess.Candidate) {
+	parent := map[string]string{}
+	var find func(string) string
+	find = func(x string) string {
+		if p, ok := parent[x]; ok && p != x {
+			r := find(p)
+			parent[x] = r
+			return r
+		}
+		parent[x] = x
+		return x
+	}
+	union := func(a, b string) {
+		ra, rb := find(a), find(b)
+		if ra != rb {
+			if rb < ra {
+				ra, rb = rb, ra
+			}
+			parent[rb] = ra
+		}
+	}
+	in := map[string]bool{}
+	for _, c := range cands {
+		if n, ok := strings.CutPrefix(c.Folder, "projects/"); ok {
+			in[n] = true
+		}
+	}
+	for _, c := range cands {
+		n, ok := strings.CutPrefix(c.Folder, "projects/")
+		if !ok {
+			continue
+		}
+		for _, r := range c.Same {
+			if in[r.Value] {
+				union(n, r.Value)
+			}
+		}
+	}
+	size := map[string]int{}
+	for n := range in {
+		size[find(n)]++
+	}
+	for i := range cands {
+		if n, ok := strings.CutPrefix(cands[i].Folder, "projects/"); ok && size[find(n)] > 1 {
+			cands[i].Group = find(n)
+		}
+	}
 }
 
 // hostWorked reports evidence that host has the folder as a checkout or
@@ -937,11 +991,18 @@ func (a *assessor) check(cands []assess.Candidate, ds []assess.Decision, pending
 		}
 		byFolder[f] = d
 	}
-	for _, c := range cands {
-		d, ok := byFolder[c.Folder]
-		if !ok {
-			continue // no decision: asked again next run
+	// Decisions that suppress a folder into another come after the others,
+	// so a folder may fold into one of its batch decided after it.
+	ordered := make([]assess.Candidate, 0, len(cands))
+	for _, pass := range []bool{false, true} {
+		for _, c := range cands {
+			if d, ok := byFolder[c.Folder]; ok && (strings.TrimSpace(d.SuppressedBy) != "") == pass {
+				ordered = append(ordered, c)
+			}
 		}
+	}
+	for _, c := range ordered {
+		d := byFolder[c.Folder]
 		var ps []string
 		switch d.Kind {
 		case record.KindRepo, record.KindFolder, assess.KindNone:
@@ -1023,7 +1084,42 @@ func (a *assessor) check(cands []assess.Candidate, ds []assess.Decision, pending
 		}
 		acc = append(acc, dd)
 	}
-	return acc, refused
+	return a.waitForSame(acc, refused, pending)
+}
+
+// waitForSame takes back a live decision for one name of a repository when
+// another of its names was refused in the same answer and has no record:
+// the names of one repository are decided together, so the one refused
+// now cannot end up folded into a name decided without it.
+func (a *assessor) waitForSame(acc []decided, refused []assess.Refusal, pending map[string]*record.Record) ([]decided, []assess.Refusal) {
+	open := map[string]string{} // refused folder with no record -> its problems
+	for _, r := range refused {
+		if pending[r.Folder] == nil && a.recs[r.Folder] == nil {
+			open[r.Folder] = strings.Join(r.Problems, " ")
+		}
+	}
+	if len(open) == 0 {
+		return acc, refused
+	}
+	var keep []decided
+	for _, d := range acc {
+		var waiting []string
+		if d.rec != nil && d.rec.Live() && d.rec.Folder == d.c.Folder {
+			for _, r := range d.c.Same {
+				// Not one refused because this decision is the live folder.
+				if p, ok := open["projects/"+r.Value]; ok && !strings.Contains(p, "same repository as "+d.c.Folder+",") && !strings.Contains(p, "same repository as "+d.c.Folder+" ") {
+					waiting = append(waiting, "projects/"+r.Value)
+				}
+			}
+		}
+		if len(waiting) == 0 {
+			keep = append(keep, d)
+			continue
+		}
+		delete(pending, d.c.Folder)
+		refused = append(refused, assess.Refusal{Folder: d.c.Folder, Problems: []string{fmt.Sprintf("%s is the same repository as %s, whose decision was refused: decide them together (one live folder, the others suppressed into it)", strings.TrimPrefix(d.c.Folder, "projects/"), strings.Join(waiting, ", "))}})
+	}
+	return keep, refused
 }
 
 // checkRoots refuses roots code cannot confirm: a root on another machine
@@ -1291,20 +1387,22 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 	var pendingLedger []byte
 	var decidedRun []decidedShape // this run's decisions, for folders alike in later batches
 	var refusedRun []refusedItem  // refused twice in this run
-	for i := 0; i < len(cands); i += assessBatch {
+	n := 0
+	for i := 0; i < len(cands); i += len(batchOf(cands, i)) {
 		if ctx.Err() != nil {
 			fmt.Fprintln(os.Stderr, "assess:", ctx.Err())
 			errs++
 			break
 		}
-		batch := cands[i:min(i+assessBatch, len(cands))]
+		batch := batchOf(cands, i)
+		n++
 		for j := range batch {
 			batch[j].Similar = a.similar(batch[j], decidedRun)
 		}
 		prompt := fmt.Sprintf(assess.Prompt, assess.Render(batch))
 		res, cost, err := assessRun(ctx, o.model, prompt)
 		rep.CostUSD += cost
-		fmt.Fprintf(os.Stderr, "assess: batch %d of %d folder(s): $%.3f\n", i/assessBatch+1, len(batch), cost)
+		fmt.Fprintf(os.Stderr, "assess: batch %d of %d folder(s): $%.3f\n", n, len(batch), cost)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "assess: model:", err)
 			errs++
@@ -1328,7 +1426,7 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 			}
 			res2, c2, err := assessRun(ctx, o.model, assess.RetryPrompt(prompt, res, refused))
 			rep.CostUSD += c2
-			fmt.Fprintf(os.Stderr, "assess: batch %d retry for %d folder(s): $%.3f\n", i/assessBatch+1, len(refused), c2)
+			fmt.Fprintf(os.Stderr, "assess: batch %d retry for %d folder(s): $%.3f\n", n, len(refused), c2)
 			if err == nil {
 				if ds2, perr := assess.Parse(res2); perr == nil {
 					var left []assess.Candidate
@@ -1533,6 +1631,17 @@ func (a *assessor) similar(c assess.Candidate, run []decidedShape) []string {
 		out = append(out, assess.SimilarLines("the same evidence: "+c.Shape(), recs)...)
 	}
 	return out
+}
+
+// batchOf is the batch that starts at cands[i]: assessBatch candidates, and
+// the rest of one repository's names when the batch would cut them apart
+// (at most twice assessBatch in all), so they are decided together.
+func batchOf(cands []assess.Candidate, i int) []assess.Candidate {
+	j := min(i+assessBatch, len(cands))
+	for j < len(cands) && j-i < 2*assessBatch && cands[j].Group != "" && cands[j].Group == cands[j-1].Group {
+		j++
+	}
+	return cands[i:j]
 }
 
 func firstClause(s string) string {

@@ -589,3 +589,48 @@ func less(a, b []int) bool {
 	}
 	return false
 }
+
+// Same is what the catalog proves of name and other repositories: one
+// repository under several names. A name that is another name of a
+// checkout (a symlink's, the origin remote's) is that checkout's; a
+// checkout's other names are its own; two checkouts whose origin remotes
+// have one normalized URL are clones of one repository. One result per
+// other name, its Value the other name; none for none.
+func (c *Checker) Same(name string) []Result {
+	name = strings.ToLower(strings.TrimSpace(name))
+	now := stamp(c.now())
+	var out []Result
+	seen := map[string]bool{name: true}
+	add := func(other, output string) {
+		other = strings.ToLower(other)
+		if other == "" || seen[other] {
+			return
+		}
+		seen[other] = true
+		out = append(out, Result{Kind: KindRepo, Claim: fmt.Sprintf("%s and %s are one repository", name, other), Source: "checkouts",
+			Inputs: inputs("name", name, "other", other), Output: output, Verdict: Holds, Value: other, At: now})
+	}
+	own, ok := c.Catalog.Repo(name)
+	if !ok || own.Root == "" {
+		if x := c.Catalog.AliasOf(name); x != "" {
+			add(x, fmt.Sprintf("%s is another name (a symlink's or the origin remote's) of the checkout %s on %s", name, x, c.Host))
+			own, ok = c.Catalog.Repo(x)
+		}
+	}
+	if !ok || own.Root == "" {
+		return out
+	}
+	for _, a := range own.Aliases {
+		add(a, fmt.Sprintf("%s is another name (a symlink's or the origin remote's) of the checkout %s on %s", a, own.Slug(), c.Host))
+	}
+	if own.Origin != "" {
+		for _, n := range c.Catalog.Names() {
+			r, _ := c.Catalog.Repo(n)
+			if r.Root != "" && r.Root != own.Root && r.Origin == own.Origin {
+				add(n, fmt.Sprintf("the checkouts %s and %s on %s have one origin, %s", own.Slug(), n, c.Host, own.Origin))
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Value < out[j].Value })
+	return out
+}
