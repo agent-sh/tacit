@@ -551,6 +551,7 @@ func (a *assessor) reviewDue(c *assess.Candidate) (string, bool) {
 	case a.retry || retryDue(st.At, a.today):
 		return fmt.Sprintf("left for review on %s; the weekly retry (its wider search found nothing new)", st.At), true
 	}
+	a.reviewWaiting++
 	a.attempts = append(a.attempts, attemptOf(*c, a.today, "left for review", "waits"))
 	fmt.Fprintf(os.Stderr, "assess: %s waits: left for review on %s and its wider search (%d item(s)) found nothing new; asked again on %s\n", c.Folder, st.At, len(c.ExtraKeys()), nextRetry(st.At))
 	return "", false

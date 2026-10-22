@@ -98,7 +98,7 @@ func runAssess(args []string) int {
 		}
 	}
 	errs := assessStep(ctx, s, assessOpts{model: *model, max: *max, dry: *dry}, rep)
-	fmt.Printf("assess: %d candidate(s), %d record(s) written, %d refused, %d waiting on unchanged evidence, %d decision(s) refuted by a check, %d left for review asked again (%d settled, %d still for review), %s, %d error(s)\n", rep.AssessCandidates, rep.AssessRecords, rep.AssessRefused, rep.AssessHeld, rep.CheckRefused, rep.ReviewRetried, rep.ReviewSettled, rep.ReviewRetried-rep.ReviewSettled, rep.ModelCalls.CostSummary(rep.CostUSD), errs)
+	fmt.Printf("assess: %d candidate(s), %d record(s) written, %d refused, %d waiting on unchanged evidence, %d decision(s) refuted by a check, %d left for review asked again (%d settled, %d still for review), %d left for review waiting (their wider search found nothing new), %s, %d error(s)\n", rep.AssessCandidates, rep.AssessRecords, rep.AssessRefused, rep.AssessHeld, rep.CheckRefused, rep.ReviewRetried, rep.ReviewSettled, rep.ReviewRetried-rep.ReviewSettled, rep.ReviewWaiting, rep.ModelCalls.CostSummary(rep.CostUSD), errs)
 	if errs > 0 {
 		return 1
 	}
@@ -145,6 +145,7 @@ type assessor struct {
 	lowText                map[*fact.Fact]string // facts' lowered text, for the re-attempts' store search
 	retry                  bool                  // assessOpts.retry
 	attempts               []reviewAttempt       // this run's re-attempts, for the log
+	reviewWaiting          int                   // folders left for review that wait this run
 }
 
 func newAssessor(ctx context.Context, s *store.Store, local bool) (*assessor, error) {
@@ -1483,6 +1484,7 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 	// become their orgs' folders.
 	errs0 := a.codeSteps(ctx, s, "a forge organization's folder", a.orgFolders(o.only), o.dry, rep)
 	all := a.candidates(max+len(held.Folders), o.only)
+	rep.ReviewWaiting += a.reviewWaiting
 	// A folder refused in assessHoldRuns runs on the same evidence waits
 	// until its evidence (what the model reads of it) changes.
 	var cands []assess.Candidate

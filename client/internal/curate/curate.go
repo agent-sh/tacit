@@ -415,6 +415,7 @@ type Report struct {
 	AssessHeld       int             `json:"assess_held,omitempty"`        // folders refused in assessHoldRuns runs whose wider search found nothing new: not asked until the weekly retry
 	ReviewRetried    int             `json:"review_retried,omitempty"`     // folders left for review (or refused before) asked again with extra evidence
 	ReviewSettled    int             `json:"review_settled,omitempty"`     // of those, decided something other than needs-review
+	ReviewWaiting    int             `json:"review_waiting,omitempty"`     // folders left for review whose wider search found nothing new: asked again on the weekly retry
 	CheckRefused     int             `json:"check_refused,omitempty"`      // decisions a check refuted (sent back once with the check's output)
 	InvalidEntries   []string        `json:"invalid_entries,omitempty"`    // why split and rulings answers failed validation: "split: entry N: field: rule", never the entry's text
 	Retries          int             `json:"validation_retries,omitempty"` // answers refused by the checks and sent back to the model once (curate.SplitChecked)
