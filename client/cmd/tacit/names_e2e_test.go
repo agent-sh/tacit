@@ -257,7 +257,7 @@ func TestDeletedRepositoryFoldsByItsFacts(t *testing.T) {
 	w.fact("projects/tower-crane", "tc-port", "machine_fact", "s3", "tower-crane listens on 7790")
 	w.commit("an older store")
 	fa := &fakeAssessor{first: map[string]assess.Decision{
-		"projects/valkey-review-bot": aDecision("projects/valkey-review-bot", "repo", "active", "session:s1"),
+		"projects/valkey-review-bot": independent(aDecision("projects/valkey-review-bot", "repo", "active", "session:s1"), "commits", "remote:github.com/valkey-io/valkey-review-bot"),
 		"projects/tower-crane":       aDecision("projects/tower-crane", "repo", "active", "session:s3"),
 		"projects/valkey":            aDecision("projects/valkey", "repo", "dormant", "an upstream checkout"),
 	}}

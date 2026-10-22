@@ -94,6 +94,98 @@ type Candidate struct {
 	Attempt int
 	LastAt  string
 	Seen    map[string]bool
+	// Ancestors are the folders code found this one is related to, best
+	// first (the owner's rule: each piece of content that is clearly related
+	// to another tries to find its ancestor). A related folder is presumed
+	// part of one of them; it stands alone only on Independence, the evidence
+	// code found of an identity of its own, which its decision cites.
+	Ancestors    []Ancestor
+	Independence []Independence
+}
+
+// Ancestor is a folder code proposes a candidate is part of, with why.
+type Ancestor struct {
+	// Name is the repository or project folder's name, Folder the live folder
+	// that holds it now.
+	Name, Folder string
+	Why          []string
+	// Sources are the kinds of evidence behind it (SourceGit, ...), sorted.
+	Sources []string
+	Score   int
+}
+
+// Certain reports an ancestor git's own metadata names (a linked worktree or
+// a separate clone of it): code folds the folder on its own.
+func (an Ancestor) Certain() bool {
+	for _, s := range an.Sources {
+		if s == SourceGit {
+			return true
+		}
+	}
+	return false
+}
+
+// Kinds of ancestor evidence.
+const (
+	// SourceGit: the folder's name is a linked worktree's or a separate
+	// clone's directory, recorded from git's metadata while it existed.
+	SourceGit = "git"
+	// SourcePath: paths in facts put a directory of the folder's name inside
+	// the ancestor's tree (or its worktrees directory).
+	SourcePath = "path"
+	// SourceName: the folder's name contains the ancestor's name as whole
+	// words (wt-portfolio-rework-20261004 holds portfolio).
+	SourceName = "name"
+	// SourceSessions: the sessions that filed the folder's facts filed facts
+	// in the ancestor too, and the folder's facts point at it by their own
+	// paths, forge URLs or repository-relative paths.
+	SourceSessions = "sessions"
+	// SourceFacts: at least half of the folder's live facts point at it by
+	// their own paths, forge URLs or repository-relative paths.
+	SourceFacts = "facts"
+	// SourceProposed and SourceNamed rank a related folder's ancestors (they
+	// make no folder related on their own): a repository code proposes for
+	// it (Real), and one its facts name as a word.
+	SourceProposed = "proposed"
+	SourceNamed    = "named"
+)
+
+// Independence is one item of evidence that a folder has an identity of its
+// own: Key is what a decision cites (in independent), Line what the model
+// reads.
+type Independence struct {
+	Key, Line string
+}
+
+// Keys is a list of strings that also reads a lone JSON string.
+type Keys []string
+
+// UnmarshalJSON reads a JSON string or an array of strings.
+func (k *Keys) UnmarshalJSON(b []byte) error {
+	var one string
+	if err := json.Unmarshal(b, &one); err == nil {
+		if strings.TrimSpace(one) == "" {
+			*k = nil
+		} else {
+			*k = Keys{one}
+		}
+		return nil
+	}
+	var many []string
+	if err := json.Unmarshal(b, &many); err != nil {
+		return err
+	}
+	*k = many
+	return nil
+}
+
+// AncestorNames are the ancestors' live folders, in order.
+func (c Candidate) AncestorNames() []string {
+	var out []string
+	for _, an := range c.Ancestors {
+		out = append(out, an.Folder)
+	}
+	return out
 }
 
 // Extra is one item of the evidence a re-attempt gathered: Key names what
@@ -127,10 +219,16 @@ func (c Candidate) ExtraKeys() []string {
 }
 
 // Proposed are code's candidate repositories for the folder: from its own
-// evidence, then where folders alike went.
+// evidence, then where folders alike went, then its ancestors.
 func (c Candidate) Proposed() []RealRepo {
 	out := append([]RealRepo(nil), c.Real...)
-	for _, r := range c.Alike {
+	alike := append([]RealRepo(nil), c.Alike...)
+	for _, an := range c.Ancestors {
+		if n, ok := strings.CutPrefix(an.Folder, "projects/"); ok {
+			alike = append(alike, RealRepo{Name: n, Why: an.Why, Score: an.Score})
+		}
+	}
+	for _, r := range alike {
 		dup := false
 		for i := range out {
 			if out[i].Name == r.Name {
@@ -143,6 +241,13 @@ func (c Candidate) Proposed() []RealRepo {
 		}
 	}
 	return out
+}
+
+// realAndAlike is Proposed without the ancestors (rendered on their own).
+func (c Candidate) realAndAlike() []RealRepo {
+	d := c
+	d.Ancestors = nil
+	return d.Proposed()
 }
 
 // RealRepo is a repository code proposes a folder belongs to, with why.
@@ -191,6 +296,9 @@ type Decision struct {
 	// proposed name as an alias).
 	Reject   bool   `json:"reject,omitempty"`
 	FoldInto string `json:"fold_into,omitempty"`
+	// Independent: for a folder with ancestors that stands alone (no
+	// suppressed_by), the keys of the independence evidence it rests on.
+	Independent Keys `json:"independent,omitempty"`
 }
 
 // Prompt is the assessment prompt; %s is the candidates (Render).
@@ -203,12 +311,15 @@ For each folder decide:
 - description: one line (at most 200 characters) saying what the folder is.
 - body: optional, a few sentences: why the folder exists and what belongs in it.
 - aliases: optional, other names the same project is known by, only names no other folder has: never the name of another folder listed here or holding facts (that folder gets its own decision with suppressed_by instead).
-- suppressed_by: optional, the folder that replaces this one when its facts belong to another project: the same project under another name (a symlink's or a remote's name, a rename), or a task worktree, clone or subfolder of another project. Give such a folder kind repo or folder (not none) with suppressed_by that project's folder, so its facts move there. The target must have or get a record and not itself be replaced. Only when the evidence shows it.
+- suppressed_by: optional, the folder that replaces this one when its facts belong to another project: the same project under another name (a symlink's or a remote's name, a rename), or a task worktree, clone, scratch or task folder or subfolder of another project. Give such a folder kind repo or folder (not none) with suppressed_by that project's folder, so its facts move there. The target must have or get a record and not itself be replaced.
+- independent: for a folder with "ancestor candidates" that stands alone (no suppressed_by), the keys of the "independence" items it rests on, e.g. ["commits"].
 - roots: kind folder only, optional: [{"host": ..., "path": ...}] where it lives.
 - tools, commands: an area only: tool-name patterns (globs such as "mcp__*__Ticketing*") and command prefixes its sessions used, only ones the evidence lists.
 - repos: a topic only, optional: repositories it is tied to.
 - owner_quote, owner_quote_from: only when the owner's own words shown below state the decision for THIS folder (its name or alias in them): copy their words exactly and the ref they came from. Words that only mention the folder are evidence for your why, not a quote here.
 - reject (true) or fold_into ("<existing folder>"): a proposed area or topic only, when it should not be made, with why.
+
+Find the ancestor. A folder that is clearly related to another is part of it: worktrees, clones, scratch folders, task folders and subfolders almost always belong to a project. Code lists such a folder's "ancestor candidates", best first, with the evidence (git metadata of a worktree or clone, paths that put the folder inside the ancestor's tree, a name that contains the ancestor's, sessions that worked in both with facts that point at it). Such a folder is presumed part of one of them: set suppressed_by to the one its evidence supports. It stands alone (any decision without suppressed_by: a status of its own, needs-review or kind none) only on evidence of an identity of its own, which code lists as "independence" items (its own commits, a remote or forge repository of its own that no ancestor has, work done in a folder of its own name across sessions): cite their keys in independent. Code refuses a folder with ancestor candidates that stands alone without such a citation, and when code lists no independence item it must take one of the candidates. Folders that share an ancestor come in one batch: decide them together and alike.
 
 Dry claims are checked by code, not judged. Whether a repository of a name exists and what it is called now has one source of truth: code checked each folder's name against every machine's checkouts, the checkouts' remotes and the forge (lines "check: ..."), and code refuses a decision a check refutes, showing the check:
 - A project folder whose name exists nowhere (no checkout or other name of one, no remote, the forge has no such repository) is no repository under that name: it cannot be active, dormant, shipped or dead as it is. Set suppressed_by to the real repository its facts belong to (code lists candidates with their evidence: the checkouts its sessions worked in, repositories whose paths or remotes its facts name, near names; pick the one the evidence supports), or answer needs-review when the evidence picks none. Only when code lists no candidate may it be kind none.
@@ -219,7 +330,7 @@ A folder left for review comes back on later runs with "extra evidence" code gat
 Folders whose names follow one pattern (kv-013-g1, kv-140-g2) come together, with the decisions already made on folders like them: decide alike folders alike, and when one differs say in why what in its evidence differs.
 
 Output ONLY a JSON array, one object per folder, no prose, no code fence:
-  {"folder": "...", "kind": "...", "status": "...", "why": "...", "description": "...", "body": "...", "aliases": [], "suppressed_by": "", "roots": [], "tools": [], "commands": [], "repos": [], "owner_quote": "", "owner_quote_from": "", "reject": false, "fold_into": ""}
+  {"folder": "...", "kind": "...", "status": "...", "why": "...", "description": "...", "body": "...", "aliases": [], "suppressed_by": "", "roots": [], "tools": [], "commands": [], "repos": [], "owner_quote": "", "owner_quote_from": "", "reject": false, "fold_into": "", "independent": []}
 
 FOLDERS:
 %s
@@ -266,7 +377,7 @@ func Render(cands []Candidate) string {
 		if c.Canonical != "" && (len(c.Same) > 0 || c.Canonical != c.Folder[strings.LastIndex(c.Folder, "/")+1:]) {
 			fmt.Fprintf(&b, "check: the canonical name of this repository is %s (%s)\n", c.Canonical, strings.Join(c.CanonicalWhy, "; "))
 		}
-		if real := c.Proposed(); len(real) > 0 {
+		if real := c.realAndAlike(); len(real) > 0 {
 			var parts []string
 			for _, r := range real {
 				parts = append(parts, fmt.Sprintf("%s (%s)", r.Name, strings.Join(r.Why, "; ")))
@@ -274,6 +385,19 @@ func Render(cands []Candidate) string {
 			b.WriteString("candidate real repositories (code's, each exists by its check): " + strings.Join(parts, ", ") + "\n")
 		} else if c.Absent() {
 			b.WriteString("candidate real repositories: none found in the evidence\n")
+		}
+		if len(c.Ancestors) > 0 {
+			var parts []string
+			for i, an := range c.Ancestors {
+				parts = append(parts, fmt.Sprintf("%d. %s [%s] (%s)", i+1, an.Folder, strings.Join(an.Sources, "+"), strings.Join(an.Why, "; ")))
+			}
+			b.WriteString("ancestor candidates (code's, best first; this folder is presumed part of one of them): " + strings.Join(parts, ", ") + "\n")
+			if len(c.Independence) == 0 {
+				b.WriteString("independence: none found (no own commits, no remote or forge repository of its own, no work in a folder of its own name): it cannot stand alone; set suppressed_by to an ancestor\n")
+			}
+			for _, in := range c.Independence {
+				fmt.Fprintf(&b, "independence [%s]: %s\n", in.Key, in.Line)
+			}
 		}
 		for _, l := range c.Context {
 			b.WriteString(l + "\n")
@@ -517,8 +641,8 @@ func Same(a, b *record.Record) bool {
 }
 
 // SortCandidates puts a name that exists before one that exists nowhere
-// (the folders others may be suppressed into first), then the names of one
-// repository together (Group) and the folders of one name pattern together,
+// (the folders others may be suppressed into first; a group as one), then
+// the names of one repository or the folders of one ancestor together (Group) and the folders of one name pattern together,
 // so a batch decides them at once, a repository's own name before a folder
 // that is only another name of one (aliasOf names its repository), then by
 // folder.
@@ -539,8 +663,22 @@ func SortCandidates(cands []Candidate, aliasOf func(folder string) string) {
 		}
 		return c.Folder
 	}
+	// A group (one repository's names, the folders of one ancestor) sorts as
+	// one: it waits to the end only when every one of them exists nowhere.
+	present := map[string]bool{}
+	for _, c := range cands {
+		if c.Group != "" && !c.Absent() {
+			present[key(c)] = true
+		}
+	}
+	absent := func(c Candidate) bool {
+		if c.Group != "" {
+			return !present[key(c)]
+		}
+		return c.Absent()
+	}
 	sort.SliceStable(cands, func(i, j int) bool {
-		bi, bj := cands[i].Absent(), cands[j].Absent()
+		bi, bj := absent(cands[i]), absent(cands[j])
 		if bi != bj {
 			return !bi
 		}
