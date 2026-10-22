@@ -272,6 +272,11 @@ func Fingerprint(c Candidate) string {
 	for _, l := range c.Similar {
 		b.WriteString(l + "\n")
 	}
+	// What a re-attempt gathered, by its items: a search that found nothing
+	// new leaves the fingerprint as it was.
+	for _, k := range c.ExtraKeys() {
+		b.WriteString("extra " + k + "\n")
+	}
 	h := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(h[:12])
 }

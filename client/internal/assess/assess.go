@@ -85,6 +85,45 @@ type Candidate struct {
 	// none says.
 	Canonical    string
 	CanonicalWhy []string
+	// Extra is the evidence code gathered beyond the first ask's for a folder
+	// left for review (needs-review is not a parking state: each re-attempt
+	// searches wider), each item with a stable key; Attempt is which
+	// re-attempt this is (0: none), LastAt the day it was last decided, and
+	// Seen the keys an earlier attempt already showed (the rest are new).
+	Extra   []Extra
+	Attempt int
+	LastAt  string
+	Seen    map[string]bool
+}
+
+// Extra is one item of the evidence a re-attempt gathered: Key names what
+// it is (a fact, a session, a forge commit, a decision on a folder alike),
+// Line is what the model reads; a header (Key "") groups the items under it.
+type Extra struct {
+	Key, Line string
+}
+
+// NewExtra counts the extra items no earlier attempt showed.
+func (c Candidate) NewExtra() int {
+	n := 0
+	for _, e := range c.Extra {
+		if e.Key != "" && !c.Seen[e.Key] {
+			n++
+		}
+	}
+	return n
+}
+
+// ExtraKeys are the extra items' keys, sorted.
+func (c Candidate) ExtraKeys() []string {
+	var out []string
+	for _, e := range c.Extra {
+		if e.Key != "" {
+			out = append(out, e.Key)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Proposed are code's candidate repositories for the folder: from its own
@@ -176,6 +215,7 @@ Dry claims are checked by code, not judged. Whether a repository of a name exist
 - A name the forge says was renamed is an old name: fold it into the current name, never the current name into it.
 - Never set suppressed_by to a repository whose name exists nowhere.
 - Names code proved are one repository (another name of a checkout, a symlink's or the origin remote's; clones with one origin) get one live folder: the others set suppressed_by to it, or answer needs-review. They come in one batch, so decide them together. Which name it goes by is code's when a line "check: the canonical name of this repository is X" says so (the owner's decision first, then the main checkout's directory, then the forge's name): X is the live folder and the other names fold into it; code refuses the other direction. Without such a line it is yours to decide from the evidence. The forge's current name is kept on the record and shown beside the folder's name, so a repository whose GitHub name differs needs no folder of that name.
+A folder left for review comes back on later runs with "extra evidence" code gathered for it, wider each time: facts in other folders that name it, the sessions behind them, the forge's record of the repository (last push, newest commits with their authors, latest release, archived), and the decisions on folders alike (near names, the same forge owner). needs-review is not a place to park a folder: nobody promises the owner will review it. Decide from that evidence whenever it settles the folder; answer needs-review again only when even it does not, and then say in why what evidence would settle it. Commits the forge lists by the owner's forge account (code says which) are the folder's own commits: cite them as commit:<sha>, as for a checkout's; a session listed there filed a fact naming the folder and may be cited for it. An archived repository was archived by its owner: dormant, shipped or dead by the rest of the evidence, never active.
 Folders whose names follow one pattern (kv-013-g1, kv-140-g2) come together, with the decisions already made on folders like them: decide alike folders alike, and when one differs say in why what in its evidence differs.
 
 Output ONLY a JSON array, one object per folder, no prose, no code fence:
@@ -241,9 +281,26 @@ func Render(cands []Candidate) string {
 		for _, l := range c.Similar {
 			b.WriteString(l + "\n")
 		}
+		if len(c.Extra) > 0 {
+			fmt.Fprintf(&b, "extra evidence code gathered for re-attempt %d (left for review on %s; %d of %d item(s) new since the last attempt):\n", c.Attempt, orDash(c.LastAt), c.NewExtra(), len(c.ExtraKeys()))
+			for _, e := range c.Extra {
+				l := e.Line
+				if e.Key != "" && !c.Seen[e.Key] {
+					l += " [new]"
+				}
+				b.WriteString(l + "\n")
+			}
+		}
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 func evidenceLine(e record.Evidence) string {
