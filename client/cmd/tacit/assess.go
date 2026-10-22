@@ -347,7 +347,7 @@ func (a *assessor) candidate(folder, reason string, old *record.Record) assess.C
 		c.Pattern = assess.NamePattern(name)
 		c.Same = a.checker.Same(name)
 		if rc.Verdict != check.Holds || rc.Renamed != "" {
-			c.Real = a.realRepos(folder, name, rc)
+			c.Real, c.ProposedKey = a.realRepos(folder, name, rc)
 			c.Context = append(c.Context, a.namedElsewhere(folder, name, 3)...)
 		}
 	}
@@ -400,8 +400,9 @@ const maxReal = 5
 // evidence says folder's facts belong to: the forge's current name of a
 // renamed one, the checkouts the sessions that filed its notes worked in,
 // the repositories its facts' paths are in or whose remotes they name, and
-// near names. Best first, at most maxReal.
-func (a *assessor) realRepos(folder, name string, rc check.RepoCheck) []assess.RealRepo {
+// near names. Best first, at most maxReal; and, sorted, every name the
+// evidence the live file system does not move named (the fingerprint's).
+func (a *assessor) realRepos(folder, name string, rc check.RepoCheck) ([]assess.RealRepo, []string) {
 	score := map[string]int{}
 	why := map[string][]string{}
 	stable := map[string]bool{} // named by evidence the live file system does not move
@@ -532,12 +533,11 @@ func (a *assessor) realRepos(folder, name string, rc check.RepoCheck) []assess.R
 			if out[i].Name == n {
 				out[i].Score += sc
 				out[i].Why = append(out[i].Why, ws...)
-				out[i].Volatile = out[i].Volatile && !stable[k]
 				merged = true
 			}
 		}
 		if !merged {
-			out = append(out, assess.RealRepo{Name: n, Why: ws, Score: sc, Volatile: !stable[k]})
+			out = append(out, assess.RealRepo{Name: n, Why: ws, Score: sc})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -549,6 +549,15 @@ func (a *assessor) realRepos(folder, name string, rc check.RepoCheck) []assess.R
 	if len(out) > maxReal {
 		out = out[:maxReal]
 	}
+	return out, sortedKeysBool(stable)
+}
+
+func sortedKeysBool(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
 	return out
 }
 
@@ -886,12 +895,33 @@ func (a *assessor) sessionsWorkedIn(sessions map[string]string, folder string) s
 // that cannot be redacted is left out (fail closed).
 func (a *assessor) ownerWords(name string) []string {
 	var out []string
+	var qs []ledger.Quote
 	for _, q := range ledger.Quotes(a.ledgerBytes) {
 		if record.WholeWord(strings.ToLower(q.Quote), name) {
-			out = append(out, fmt.Sprintf("owner's words (quote ledger, %s): %q", q.From, q.Quote))
-			if len(out) == 3 {
-				break
-			}
+			qs = append(qs, q)
+		}
+	}
+	// Newest first, in one order every run (the ledger is read into a map).
+	sort.Slice(qs, func(i, j int) bool {
+		if qs[i].At != qs[j].At {
+			return qs[i].At > qs[j].At
+		}
+		if qs[i].From != qs[j].From {
+			return qs[i].From < qs[j].From
+		}
+		return qs[i].Quote < qs[j].Quote
+	})
+	for _, q := range qs {
+		dup := false
+		for _, l := range out {
+			dup = dup || strings.HasSuffix(l, fmt.Sprintf("%q", q.Quote))
+		}
+		if dup {
+			continue
+		}
+		out = append(out, fmt.Sprintf("owner's words (quote ledger, %s): %q", q.From, q.Quote))
+		if len(out) == 3 {
+			break
 		}
 	}
 	if a.corpus == nil {

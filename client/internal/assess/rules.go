@@ -207,8 +207,9 @@ func (c Candidate) Shape() string {
 // with every session; their words reach the quote ledger, whose lines
 // count), of code's checks and proposals the wording (which owners the
 // forge was asked under, how many facts name a candidate) where only the
-// verdicts and the names matter, and the proposals only the live file
-// system makes (Volatile).
+// verdicts and the names matter, and of the proposals, all but the names
+// stable evidence gives (ProposedKey: not the ones only the live file system
+// makes, not the cut to the best, not the checks of today's checkouts).
 func Fingerprint(c Candidate) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n%s\n%s\n", c.Folder, c.Kind, strings.Join(c.Sessions, " "))
@@ -226,11 +227,9 @@ func Fingerprint(c Candidate) string {
 	for _, r := range c.Same {
 		b.WriteString("same " + r.Value + "\n")
 	}
-	var names []string
-	for _, r := range c.Proposed() {
-		if !r.Volatile {
-			names = append(names, r.Name)
-		}
+	names := append([]string(nil), c.ProposedKey...)
+	for _, r := range c.Alike {
+		names = append(names, "alike:"+r.Name)
 	}
 	sort.Strings(names)
 	b.WriteString("proposed " + strings.Join(names, " ") + "\n")
