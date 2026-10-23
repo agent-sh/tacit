@@ -480,13 +480,32 @@ func hasDotDot(p string) bool {
 	return false
 }
 
-// attributionRx is wording that says the owner ruled: on a fact that is not
-// their ruling it claims an authority the fact has no evidence for.
-var attributionRx = regexp.MustCompile(`(?i)\bowner(?:'s|’s)?\s+(?:ruling|rule|ruled)\b`)
+// attributionRx is wording that says the owner ruled, said, decided or
+// wants something: on a fact that is not their verified words it claims an
+// authority the fact has no evidence for. It is the one list: writes are
+// refused on it (Attribution) and delivery holds back a stored fact it
+// matches (ClaimsOwner).
+var attributionRx = regexp.MustCompile(`(?i)\bowner(?:'s|’s)?\s+(?:ruling|rulings|rule|rules|ruled|said|says|decided|wants|wanted)\b`)
 
-// Attribution refuses "owner ruling" wording on a fact that is not an owner
-// ruling (no verified quote of theirs): a reading agent would take the
-// agent's statement for the owner's word.
+// negationRx ends text that negates what follows it: "not an", "no",
+// "never the", "isn't an".
+var negationRx = regexp.MustCompile(`(?i)\b(?:not|no|never|isn't|isn’t|nor|without)(?:\s+(?:an?|the|any|one|their|its))?\s+$`)
+
+// ClaimsOwner reports text that claims the owner's authority: it says the
+// owner ruled, said, decided or wants something (attributionRx), other than
+// right after a negation ("this is not an owner ruling"). On a fact that is
+// not the owner's verified words it is a claim without evidence.
+func ClaimsOwner(desc, body string) bool {
+	for _, t := range []string{desc, body} {
+		for _, m := range attributionRx.FindAllStringIndex(t, -1) {
+			if !negationRx.MatchString(t[:m[0]]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // OrgMembers are the live project folders whose record names org as their
 // forge organization (record.Org, filled by code from the forge), by name,
 // sorted.
@@ -537,14 +556,17 @@ func (e Env) OrgFact(m fact.Meta, body string) *Problem {
 	return &Problem{Field: "scope", Rule: fmt.Sprintf("a fact goes up to an org only when it names %d or more of the org's repositories, or the org itself", MinOrgRepos), Hint: fmt.Sprintf("%s: it names %d of %s; file it in the one repository it is about, or in user", m.Scope, len(named), strings.Join(members, ", "))}
 }
 
+// Attribution refuses wording that claims the owner's authority ("owner
+// ruling", "the owner said", "the owner decided", "the owner wants") on a
+// fact that is not the owner's verified words (ruling: their ruling with a
+// verified quote, or a fact whose words of theirs the store backs): a
+// reading agent would take the agent's statement for the owner's word.
+// Delivery holds back a stored fact that fails it (search.Hit.Claim).
 func Attribution(desc, body string, ruling bool) *Problem {
-	if ruling {
+	if ruling || !ClaimsOwner(desc, body) {
 		return nil
 	}
-	if attributionRx.MatchString(desc) || attributionRx.MatchString(body) {
-		return &Problem{Field: "description", Rule: "says the owner ruled, but the fact is not an owner ruling (no verified quote of theirs)", Hint: "state the fact as an agent's observation, without 'owner ruling' or 'owner rule'; keep kind user only with their exact words"}
-	}
-	return nil
+	return &Problem{Field: "description", Rule: "says the owner ruled, said, decided or wants it, but the fact is not the owner's verified words (no verified quote of theirs)", Hint: "state the fact as an agent's observation, without 'owner ruling', 'owner rule', 'the owner said', 'decided' or 'wants'; keep kind user only with their exact words"}
 }
 
 // Meta checks everything a model or an agent wrote on m: scope, type, kind,

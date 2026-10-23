@@ -674,7 +674,7 @@ func TestLocalCurateTakesDreamerNotesAndChecksTheOwnersTurns(t *testing.T) {
 	if !strings.Contains(n.Body, q) {
 		t.Fatalf("the note does not hold the quote: %q", n.Body)
 	}
-	r.split(map[string]any{"origin": n.Meta.Name, "name": "otter-flags-off", "description": "Always ship the otter service with every feature flag disabled first", "type": "user_standard", "scope": "user", "kind": "user", "owner_quote": q, "body": `The owner said "` + q + `".`, "applies_to": map[string]any{}})
+	r.split(map[string]any{"origin": n.Meta.Name, "name": "otter-flags-off", "description": "Always ship the otter service with every feature flag disabled first", "type": "user_standard", "scope": "user", "kind": "user", "owner_quote": q, "body": `From the session: "` + q + `".`, "applies_to": map[string]any{}})
 	if code := runCurate(nil); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
