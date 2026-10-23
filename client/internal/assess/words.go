@@ -198,11 +198,42 @@ func nameIn(text, name string) bool {
 	return false
 }
 
+// listSplitRx splits words into clauses: at sentence and clause marks.
+var listSplitRx = regexp.MustCompile(`[.;:()!?\n]+`)
+
+// listItemRx splits a clause into the items of an enumeration: at commas,
+// "and", "or", "&".
+var listItemRx = regexp.MustCompile(`(?i),|\s+(?:and|or|&)\s+`)
+
+// coListed reports words that list a successor's name and this folder's as
+// items of one enumeration ("deslop, sync-docs, drift-detect ... fold into
+// one tool"): the words retire both, so the one is no successor of the
+// other. An item is short (at most 4 words), as an enumeration's are.
+func coListed(words, folder, succ string) bool {
+	for _, clause := range listSplitRx.Split(words, -1) {
+		self, other := false, false
+		for _, it := range listItemRx.Split(clause, -1) {
+			if len(strings.Fields(it)) > 4 {
+				continue
+			}
+			self = self || nameIn(it, folder)
+			other = other || nameIn(it, succ)
+		}
+		if self && other {
+			return true
+		}
+	}
+	return false
+}
+
 // CheckOwnerWords checks d's owner_status items against the notes code
 // showed for c: each from a note of the owner's tiers among them, its words
 // verbatim in that note, says dead, shipped or dormant, a successor (dead
-// only) named in that note. It returns the verified items, newest first
-// (the newest supersedes the older), and the problems of the others.
+// only) named in the cited words themselves (not elsewhere in the note, and
+// not listed with this folder as one more thing the words retire: then it is
+// no successor, and dead with no successor is what they say). It returns the
+// verified items, newest first (the newest supersedes the older), and the
+// problems of the others.
 func CheckOwnerWords(c Candidate, d Decision) ([]Said, []string) {
 	var ok []Said
 	var ps []string
@@ -241,6 +272,14 @@ func CheckOwnerWords(c Candidate, d Decision) ([]Said, []string) {
 		}
 		if succ != "" && !nameIn(n.Description+"\n"+n.Body, succ) {
 			ps = append(ps, fmt.Sprintf("%s.successor: note:%s does not name %s", label, n.Name, succ))
+			continue
+		}
+		if succ != "" && !nameIn(it.Words, succ) {
+			ps = append(ps, fmt.Sprintf("%s.successor: the words you cite do not name %s; a successor is accepted only where the cited words name it as this folder's replacement (not the rest of the note, not a related plan): cite the words that do, or give no successor (dead with no successor)", label, succ))
+			continue
+		}
+		if folder := strings.TrimPrefix(c.Folder, "projects/"); succ != "" && coListed(it.Words, folder, succ) {
+			ps = append(ps, fmt.Sprintf("%s.successor: the words list %s with %s as things they retire or fold together, so it is no successor: give no successor (dead with no successor) unless other words of the owner's name one", label, succ, folder))
 			continue
 		}
 		it.Successor = succ

@@ -56,7 +56,7 @@ func TestOwnerWordsChecked(t *testing.T) {
 	var d Decision
 	if err := json.Unmarshal([]byte(`{"folder":"projects/oldtool","kind":"repo","status":"dead","why":"a plugin repository","owner_status":[
 		{"says":"dead","words":"Removed for good (2026-09-23): oldtool","from":"note:removed-plugins"},
-		{"says":"dead","words":"decided on 2026-10-06 to delete the plugins oldtool","from":"note:plugins-to-delete","successor":"tower-crane"}]}`), &d); err != nil {
+		{"says":"dead","words":"Tower Crane replaces them","from":"note:plugins-to-delete","successor":"tower-crane"}]}`), &d); err != nil {
 		t.Fatal(err)
 	}
 	said, ps := CheckOwnerWords(c, d)
@@ -80,6 +80,8 @@ func TestOwnerWordsChecked(t *testing.T) {
 		{Says: "dead", Words: "oldtool runs with", From: "note:oldtool-howto"},
 		{Says: "dead", Words: "to delete the plugins", From: "note:elsewhere"},
 		{Says: "dead", Words: "to delete the plugins", From: "note:plugins-to-delete", Successor: "pikadon"},
+		// The note names tower-crane, but not in the words cited.
+		{Says: "dead", Words: "decided on 2026-10-06 to delete the plugins oldtool", From: "note:plugins-to-delete", Successor: "tower-crane"},
 		{Says: "dormant", Words: "to delete the plugins", From: "note:plugins-to-delete", Successor: "tower-crane"},
 		{Says: "active", Words: "to delete the plugins", From: "note:plugins-to-delete"},
 	} {
@@ -92,7 +94,7 @@ func TestOwnerWordsChecked(t *testing.T) {
 func TestWordsOutcome(t *testing.T) {
 	c := wordsCand(record.StatusActive)
 	d := Decision{Folder: c.Folder, Kind: "repo", Status: "active", Why: "the owner's plugin repository",
-		OwnerStatus: OwnerWordsList{{Says: "dead", Words: "to delete the plugins oldtool", From: "note:plugins-to-delete", Successor: "tower-crane"}}}
+		OwnerStatus: OwnerWordsList{{Says: "dead", Words: "Tower Crane replaces them", From: "note:plugins-to-delete", Successor: "tower-crane"}}}
 	said, _ := CheckOwnerWords(c, d)
 	// No real work after the words: dead, replaced by the successor, the words kept.
 	maint := Changes{Maintenance: []Work{{Day: "2026-10-09", Kind: "commit", Cite: "commit:abc1234", Why: "a bot's commit (dependabot[bot])"}}}
@@ -155,5 +157,41 @@ func TestNotesRenderOwnersFirst(t *testing.T) {
 	c.Notes = c.Notes[:1]
 	if Fingerprint(c) == f1 {
 		t.Error("the notes are not in the fingerprint")
+	}
+}
+
+// A successor stands only where the cited words name it, and never one the
+// words retire together with the folder (a plan that folds both into one
+// new tool names no successor): dead with no successor is what they say.
+func TestSuccessorOnlyFromTheCitedWords(t *testing.T) {
+	c := Candidate{Folder: "projects/sync-docs", Notes: []Note{
+		{Name: "single-lint-first-cleanup-tool", Scope: "user", Type: "design_decision", Created: "2026-10-08", Tier: TierDecision,
+			Description: "deslop, sync-docs, drift-detect, simplification and logic dedupe fold into one lint-first cleanup tool, rebuilt from the deslop repo", Body: "Owner 2026-10-06: deslop should use a small agent."},
+		{Name: "sync-docs-dead", Scope: "user", Type: "statement", Created: "2026-10-24", Said: "2026-10-24", Tier: TierStatement,
+			Description: "sync-docs status", Body: "You said once (2026-10-24): \"sync-docs is dead, no successor\""},
+	}, NotesTotal: 2}
+	words := "deslop, sync-docs, drift-detect, simplification and logic dedupe fold into one lint-first cleanup tool, rebuilt from the deslop repo"
+	if said, ps := CheckOwnerWords(c, Decision{OwnerStatus: OwnerWordsList{{Says: "dead", Words: words, From: "note:single-lint-first-cleanup-tool", Successor: "deslop"}}}); len(said) != 0 || len(ps) != 1 || !strings.Contains(ps[0], "no successor") {
+		t.Fatalf("a successor the words retire with the folder: said %+v problems %v", said, ps)
+	}
+	// The same words with no successor: dead, none.
+	said, ps := CheckOwnerWords(c, Decision{OwnerStatus: OwnerWordsList{{Says: "dead", Words: words, From: "note:single-lint-first-cleanup-tool"}}})
+	if len(ps) != 0 || len(said) != 1 || said[0].Successor != "" {
+		t.Fatalf("dead with no successor: said %+v problems %v", said, ps)
+	}
+	// The owner's newer words, dead with no successor, supersede an older
+	// item; nothing carries a successor over from it.
+	said, ps = CheckOwnerWords(c, Decision{OwnerStatus: OwnerWordsList{
+		{Says: "dead", Words: words, From: "note:single-lint-first-cleanup-tool"},
+		{Says: "dead", Words: "sync-docs is dead, no successor", From: "note:sync-docs-dead"}}})
+	if len(ps) != 0 || len(said) != 2 || said[0].Note.Name != "sync-docs-dead" || said[0].Successor != "" {
+		t.Fatalf("newest: said %+v problems %v", said, ps)
+	}
+	nd, _ := WordsOutcome(c, Decision{Folder: c.Folder, Kind: "repo"}, said[0], "", Changes{})
+	if nd.Status != "dead" || nd.Successor != "" || strings.Contains(nd.Why, "replaced by") {
+		t.Fatalf("outcome %+v", nd)
+	}
+	if !coListed("delete the plugins next-task, prepare-delivery and audit-project", "audit-project", "next-task") || coListed("next-task is obsolete. Tower Crane replaces them.", "next-task", "tower-crane") {
+		t.Error("coListed")
 	}
 }
