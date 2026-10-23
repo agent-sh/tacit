@@ -21,6 +21,9 @@ type Commits struct {
 	Own   int    `json:"own"`
 	First string `json:"first,omitempty"`
 	Last  string `json:"last,omitempty"`
+	// Days are the distinct days of those commits, newest first: the
+	// folder's activity days (assess.Activity).
+	Days []string `json:"days,omitempty"`
 }
 
 // gitTimeout bounds one git call of the evidence.
@@ -61,11 +64,16 @@ func CommitEvidence(ctx context.Context, root string) (Commits, bool) {
 		return Commits{}, false
 	}
 	var c Commits
+	seen := map[string]bool{}
 	for _, l := range strings.Split(out, "\n") {
 		if l = strings.TrimSpace(l); !dayRx.MatchString(l) {
 			continue
 		}
 		c.Own++
+		if !seen[l] {
+			seen[l] = true
+			c.Days = append(c.Days, l)
+		}
 		if c.First == "" || l < c.First {
 			c.First = l
 		}
@@ -73,6 +81,7 @@ func CommitEvidence(ctx context.Context, root string) (Commits, bool) {
 			c.Last = l
 		}
 	}
+	sort.Sort(sort.Reverse(sort.StringSlice(c.Days)))
 	return c, true
 }
 
@@ -87,10 +96,16 @@ type CommitCache struct {
 	changed bool
 }
 
+// commitCacheV is the cache entries' form (1: with the commits' days).
+const commitCacheV = 1
+
 // CommitCacheFile is the cache's name in the state directory.
 const CommitCacheFile = "commit-evidence.json"
 
 type cachedCommits struct {
+	// V is the entry's form: commitCacheV reads the commits' days too (an
+	// older entry is read again).
+	V       int     `json:"v,omitempty"`
 	Head    string  `json:"head"`
 	ID      string  `json:"id"`
 	Commits Commits `json:"commits"`
@@ -114,11 +129,11 @@ func LoadCommitCache(path string) *CommitCache {
 func (c *CommitCache) Get(ctx context.Context, root string) (Commits, bool) {
 	head, _ := gitOut(ctx, root, "rev-parse", "--verify", "-q", "HEAD")
 	id := identity(ctx, root)
-	if e, ok := c.entries[root]; ok && e.Head == head && e.ID == id {
+	if e, ok := c.entries[root]; ok && e.Head == head && e.ID == id && e.V >= commitCacheV {
 		return e.Commits, e.OK
 	}
 	cm, ok := CommitEvidence(ctx, root)
-	c.entries[root] = cachedCommits{Head: head, ID: id, Commits: cm, OK: ok}
+	c.entries[root] = cachedCommits{V: commitCacheV, Head: head, ID: id, Commits: cm, OK: ok}
 	c.changed = true
 	return cm, ok
 }
