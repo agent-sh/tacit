@@ -101,6 +101,7 @@ type Cache struct {
 	alias string // home as given, when that differs (a symlinked home)
 	dirs  map[string]found
 	reals map[string]string // directory -> its real path
+	files map[string]string // a path in a real directory -> its real path
 	stats int               // file system lookups made
 	// MaxDirs caps the directories one Cache stats (0 is no cap); a lookup
 	// past it finds no repository. Stop, when set, is asked before each new
@@ -119,7 +120,7 @@ type found struct {
 
 // NewCache resolves paths under home (cleaned, symlinks resolved).
 func NewCache(home string) *Cache {
-	c := &Cache{home: realPath(home), dirs: map[string]found{}, reals: map[string]string{}}
+	c := &Cache{home: realPath(home), dirs: map[string]found{}, reals: map[string]string{}, files: map[string]string{}}
 	if h := filepath.Clean(home); home != "" && h != c.home {
 		c.alias = h
 	}
@@ -150,11 +151,16 @@ func (c *Cache) real(p string) string {
 		return rd
 	}
 	cand := filepath.Join(rd, base)
-	c.stats++
-	if fi, err := os.Lstat(cand); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-		return realPath(cand)
+	if r, ok := c.files[cand]; ok {
+		return r
 	}
-	return cand
+	c.stats++
+	r := cand
+	if fi, err := os.Lstat(cand); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		r = realPath(cand)
+	}
+	c.files[cand] = r
+	return r
 }
 
 // Expand makes path absolute and clean: a "~" prefix is home, and a path
