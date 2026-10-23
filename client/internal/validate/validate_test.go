@@ -277,3 +277,21 @@ func TestMetaJoinsEveryCheck(t *testing.T) {
 		t.Errorf("a clean note refused: %v", err)
 	}
 }
+
+// The one list covers saying, deciding and wanting too, and a negated
+// mention is no claim.
+func TestClaimsOwnerWording(t *testing.T) {
+	for _, d := range []string{"The owner said to rebase", "Owner decided on 2026-10-06 to delete them", "the owner wants tables", "Per the owner's ruling, tags are signed", "Owner wanted it kept"} {
+		if !ClaimsOwner(d, "") || Attribution(d, "", false) == nil {
+			t.Errorf("%q is no claim", d)
+		}
+	}
+	for _, d := range []string{"This is what git recorded, not an owner ruling.", "It is no owner rule", "never the owner's rule, an agent's", "The owner prefers tables", "needs an owner decision"} {
+		if ClaimsOwner(d, "") {
+			t.Errorf("%q is a claim", d)
+		}
+	}
+	if !ClaimsOwner("not an owner ruling, but the owner said it", "") {
+		t.Error("a claim after a negated mention passed")
+	}
+}
