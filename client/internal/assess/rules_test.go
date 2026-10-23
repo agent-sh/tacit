@@ -276,3 +276,24 @@ func TestAncestorsRenderAndFingerprint(t *testing.T) {
 		t.Fatalf("keys: %+v %v", k, err)
 	}
 }
+
+// The folders of one ancestor sort together, the ancestor first, so it has
+// a record before they fold into it.
+func TestSortPutsTheAncestorFirstInItsGroup(t *testing.T) {
+	absent := repoCheck("x", check.Fails, "")
+	cands := []Candidate{
+		{Folder: "projects/kv-2-g1", Group: "pikadon", Name: absent},
+		{Folder: "projects/ginza", Group: "pikadon"},
+		{Folder: "projects/kv-1-g1", Group: "pikadon", Name: absent},
+		{Folder: "projects/pikadon", Group: "pikadon"},
+		{Folder: "projects/alpha"},
+	}
+	SortCandidates(cands, func(string) string { return "" })
+	var got []string
+	for _, c := range cands {
+		got = append(got, c.Folder)
+	}
+	if want := "projects/alpha projects/pikadon projects/ginza projects/kv-1-g1 projects/kv-2-g1"; strings.Join(got, " ") != want {
+		t.Fatalf("order %v", got)
+	}
+}
