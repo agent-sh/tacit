@@ -110,6 +110,10 @@ type Candidate struct {
 	// what it is: code's outcome is needs-review, unless the decision cites
 	// evidence code showed (a note, the owner's words).
 	NoEvidence bool
+	// Activity is the checkable evidence of the folder's life code gathered
+	// before its first ask (activity.go): the owner's activity days, the
+	// forge's record, and code's status from them. nil: none gathered.
+	Activity *Activity
 }
 
 // Ancestor is a folder code proposes a candidate is part of, with why.
@@ -318,8 +322,8 @@ const Prompt = `You are the curator of tacit, a fact store shared by coding agen
 
 For each folder decide:
 - kind: "repo" (a git repository that is the owner's project), "folder" (a project folder of the owner's that is no git repository), or "none" (not a project of the owner's: an upstream or tool clone nobody works in, a folder that only holds other checkouts, the home directory, a scratch or task directory). For a proposed area or topic: "area" or "topic", or set reject or fold_into.
-- status: "active" (being worked), "dormant" (real work, nobody on it lately), "shipped" (done and delivered), "dead" (abandoned or gone), or "needs-review" (the evidence does not settle it). Status comes from the owner's words and from sessions: git says whether a folder is real work and whose, never whether it is shipped, dormant or dead.
-- why: one or two sentences. It MUST cite the sessions, notes or commits the decision rests on, as code shows them for THIS folder (session:<id>, claude:<id>, codex:<id>, note:<name>, or commit:<sha> for the folder's own commits under the owner's git identity, which code lists); never cite a session that is not about this folder just to have a citation. Recent own commits are evidence of work: "active" may rest on them. Code refuses a why that cites none it can find; a git date alone is no reason. A folder whose evidence shows no session at all (no work sessions, no fact sessions) needs no citation, and its status can then only be dead, dormant or needs-review: say that no session touched it.
+- status: "active" (being worked), "dormant" (real work, nobody on it lately), "shipped" (done and delivered), "dead" (abandoned or gone), or "needs-review" (the evidence does not settle what the folder is). Active or dormant is a question of dates, and code answers it: a folder with a line "status (code's): ..." has the status code set from the owner's activity days (its own commits here and on the forge, other machines' catalogs, the sessions that worked in it or filed its notes), measured against the folder's own rhythm; answer that status, which code writes in any case. Dates never make a folder dead or shipped: answer "dead" only on explicit evidence your why cites (the forge has it archived or deleted, a note shown for this folder that says it was removed or abandoned, as note:<name>, or the owner's words in owner_quote), and "shipped" only on a release, package or deploy shown for it together with the owner's statement or decision shown for it, cited by its ref; without that evidence code keeps its own status. Answer needs-review for such a folder only when what it is is not settled; for one with the owner's own commits git settles that (real work, theirs), so code keeps its status there too. A folder with no "status (code's)" line has no activity day code could find: its status comes from the owner's words and the notes; git says whether a folder is real work and whose, never whether it is shipped, dormant or dead.
+- why: one or two sentences. For a folder with code's status, say what the folder is (its kind, its ancestor or its own identity, and for dead or shipped the evidence): code writes the reason of its status itself. Otherwise it MUST cite the sessions, notes or commits the decision rests on, as code shows them for THIS folder (session:<id>, claude:<id>, codex:<id>, note:<name>, or commit:<sha> for the folder's own commits under the owner's git identity or by the owner's forge account, which code lists); never cite a session that is not about this folder just to have a citation. Code refuses a why that cites none it can find; a git date alone is no reason. A folder whose evidence shows no session at all (no work sessions, no fact sessions) needs no citation, and its status can then only be dead, dormant or needs-review: say that no session touched it.
 - description: one line (at most 200 characters) saying what the folder is.
 - body: optional, a few sentences: why the folder exists and what belongs in it.
 - aliases: optional, other names the same project is known by, only names no other folder has: never the name of another folder listed here or holding facts (that folder gets its own decision with suppressed_by instead).
@@ -340,7 +344,8 @@ Dry claims are checked by code, not judged. Whether a repository of a name exist
 - A name the forge says was renamed is an old name: fold it into the current name, never the current name into it.
 - Never set suppressed_by to a repository whose name exists nowhere.
 - Names code proved are one repository (another name of a checkout, a symlink's or the origin remote's; clones with one origin) get one live folder: the others set suppressed_by to it, or answer needs-review. They come in one batch, so decide them together. Which name it goes by is code's when a line "check: the canonical name of this repository is X" says so (the owner's decision first, then the main checkout's directory, then the forge's name): X is the live folder and the other names fold into it; code refuses the other direction. Without such a line it is yours to decide from the evidence. The forge's current name is kept on the record and shown beside the folder's name, so a repository whose GitHub name differs needs no folder of that name.
-A folder left for review comes back on later runs with "extra evidence" code gathered for it, wider each time: facts in other folders that name it, the sessions behind them, the forge's record of the repository (last push, newest commits with their authors, latest release, archived), and the decisions on folders alike (near names, the same forge owner). needs-review is not a place to park a folder: nobody promises the owner will review it. Decide from that evidence whenever it settles the folder; answer needs-review again only when even it does not, and then say in why what evidence would settle it. Commits the forge lists by the owner's forge account (code says which) are the folder's own commits: cite them as commit:<sha>, as for a checkout's; a session listed there filed a fact naming the folder and may be cited for it. An archived repository was archived by its owner: dormant, shipped or dead by the rest of the evidence, never active.
+Code checked the forge for each folder's repository before asking ("forge (checked)" lines: last push, archived, latest release, the newest commits with their authors' accounts). Commits the forge lists by the owner's forge account (code says which) are the folder's own commits: cite them as commit:<sha>, as for a checkout's. An archived repository was archived by its owner: dormant, shipped or dead by the rest of the evidence, never active.
+A folder left for review comes back on later runs with "extra evidence" code gathered for it, wider each time: facts in other folders that name it, the sessions behind them, the decisions on folders alike (near names, the same forge owner) and the owner's turns that name it. needs-review is not a place to park a folder: nobody promises the owner will review it. Decide from that evidence whenever it settles the folder; answer needs-review again only when even it does not, and then say in why what evidence would settle it. A session listed there filed a fact naming the folder and may be cited for it.
 Folders whose names follow one pattern (kv-013-g1, kv-140-g2) come together, with the decisions already made on folders like them: decide alike folders alike, and when one differs say in why what in its evidence differs.
 
 Output ONLY a JSON array, one object per folder, no prose, no code fence:
@@ -387,6 +392,11 @@ func Render(cands []Candidate) string {
 		}
 		for _, r := range c.Same {
 			b.WriteString("check: " + r.Line() + "\n")
+		}
+		if c.Activity != nil {
+			for _, l := range c.Activity.Lines() {
+				b.WriteString(l + "\n")
+			}
 		}
 		if c.Canonical != "" && (len(c.Same) > 0 || c.Canonical != c.Folder[strings.LastIndex(c.Folder, "/")+1:]) {
 			fmt.Fprintf(&b, "check: the canonical name of this repository is %s (%s)\n", c.Canonical, strings.Join(c.CanonicalWhy, "; "))

@@ -63,7 +63,8 @@ func fakeGHAccounts(t *testing.T, user string, repos, accounts map[string]string
 // session or own commit its evidence lists; a folder with paths is a folder.
 // Sent back, it reads code's refusal: a name that exists nowhere is folded
 // into the first candidate code lists. It is told nothing about the right
-// answers. stubborn folders are answered active with no citation, always.
+// answers. stubborn folders are answered with a root on another machine,
+// always (a status alone no longer refuses a dated folder: code sets it).
 type evidenceModel struct {
 	prompts  []string
 	stubborn map[string]bool
@@ -89,7 +90,7 @@ func (m *evidenceModel) run(_ context.Context, _, prompt string) (string, float6
 		body := blocks[folder]
 		d := assess.Decision{Folder: folder, Kind: "repo", Status: "active", Description: "what " + folder + " is"}
 		if m.stubborn[folder] {
-			d.Why = "busy lately"
+			d.Why, d.Roots = "busy lately", []record.Root{{Host: "elsewhere", Path: "/srv/stubborn"}}
 			return d
 		}
 		if m.review[folder] {

@@ -304,6 +304,8 @@ func (a *assessor) codeSteps(ctx context.Context, s *store.Store, what string, d
 // codeDecision is the decision code makes for a candidate on its own, when
 // the checks settle it (ok false: the model decides):
 //
+//   - a record of the model's whose dates moved it across its window
+//     (statusDrift) gets code's status from them (assess.Activity);
 //   - a name the forge says was renamed folds into the current name, which
 //     exists by its check and has a live record;
 //   - a name that exists nowhere (Candidate.Absent) whose live facts point at
@@ -324,6 +326,15 @@ func (a *assessor) codeDecision(c assess.Candidate, recs func(string) *record.Re
 }
 
 func (a *assessor) codeDecisionOf(c assess.Candidate, recs func(string) *record.Record) (assess.Decision, bool, bool) {
+	// A record whose dates moved it across its window: code's status, the
+	// rest of the record as it was (it stood alone on its independence).
+	if r := c.Old; r != nil && statusDrift(r, c.CodeStatus()) {
+		var ind []string
+		for _, in := range c.Independence {
+			ind = append(ind, in.Key)
+		}
+		return assess.Decision{Folder: c.Folder, Kind: r.Kind, Status: c.CodeStatus(), Why: c.Activity.StatusWhy(), Description: r.Description, Independent: ind}, true, false
+	}
 	if c.Kind != "" || c.Name == nil || !strings.HasPrefix(c.Folder, "projects/") {
 		return assess.Decision{}, false, false
 	}
