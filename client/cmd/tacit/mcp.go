@@ -108,7 +108,7 @@ func storeServer(s *store.Store, harness string) *mcp.Server {
 		if err != nil {
 			return nil, nil, err
 		}
-		return text(out), nil, nil
+		return text(withProvenance(s, out)), nil, nil
 	})
 
 	type addArgs struct {

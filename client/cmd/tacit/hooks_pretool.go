@@ -155,6 +155,7 @@ func preTool(s *store.Store, in hookInput) {
 		ah, lines, pushed = areaPush(ctx, ix, recs, in.ToolName, command, withSeen(seen, hits))
 		hits = append(hits, ah...)
 	}
+	hits = withoutClaims(hits)
 	if ctx.Err() != nil || (len(hits) == 0 && len(pushed) == 0) {
 		return
 	}

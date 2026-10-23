@@ -79,6 +79,11 @@ func TestSearchFollowsSuppressionAndFactItsSuccessor(t *testing.T) {
 		t.Errorf("another folder in the answer:\n%s", out)
 	}
 	out = callTool(t, "tacit_fact", map[string]any{"name": "queue-old"})
+	// First whose each fact shown is (an agent's note here), then the text.
+	if !strings.HasPrefix(out, "# whose: queue-new is agent note (2026-10-08)\n# whose: queue-old is agent note (2026-10-08)\n") {
+		t.Errorf("tacit_fact's provenance lines:\n%s", out)
+	}
+	_, out, _ = strings.Cut(out, "# whose: queue-old is agent note (2026-10-08)\n")
 	if !strings.HasPrefix(out, "queue-old was superseded by queue-new") || strings.Index(out, "ring buffer") > strings.Index(out, "was a list") {
 		t.Errorf("tacit_fact of a replaced fact:\n%s", out)
 	}

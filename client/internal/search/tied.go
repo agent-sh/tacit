@@ -8,7 +8,7 @@ import (
 )
 
 // liveColumns is the column list the scans below read, in Hit order.
-const liveColumns = `path, name, scope, type, description, body, inbox, kind, conflicts, ruling, intask, words, local, coalesce(applies, ''), coalesce(created, ''), coalesce(quiet, 0)`
+const liveColumns = `path, name, scope, type, description, body, inbox, kind, conflicts, ruling, intask, words, local, coalesce(applies, ''), coalesce(created, ''), coalesce(quiet, 0), coalesce(claim, 0)`
 
 // Tied returns every live curated fact tied to one of the repo names: its
 // scope is projects/<name> (and its applies_to.repos, when set, names one of
@@ -39,13 +39,35 @@ func (ix *Index) Tied(ctx context.Context, names []string) ([]Hit, error) {
 	return ix.scan(ctx, q, map[string]any{"names": string(b)})
 }
 
+// Named returns the facts of the index with one of names, by name (a
+// store fact before a local note of the same name), superseded and retired
+// ones too: what tacit_fact and the tree say of whose each is.
+func (ix *Index) Named(ctx context.Context, names []string) (map[string]Hit, error) {
+	out := map[string]Hit{}
+	if len(names) == 0 {
+		return out, nil
+	}
+	b, _ := json.Marshal(names)
+	hits, err := ix.scan(ctx, `SELECT `+liveColumns+` FROM facts f WHERE f.name IN (SELECT value FROM json_each(:names)) ORDER BY f.id`, map[string]any{"names": string(b)})
+	if err != nil {
+		return nil, err
+	}
+	for _, h := range hits {
+		if _, have := out[h.Name]; !have {
+			out[h.Name] = h
+		}
+	}
+	return out, nil
+}
+
 // MetaFacts returns every live curated fact whose applies_to names paths or
 // commands, for matching against the paths and commands of a prompt or a
-// tool call. Derived facts, inbox notes, superseded or retired facts and
-// the facts of a dead or shipped folder (quiet: hooks only) are left out.
+// tool call. Derived facts, inbox notes, superseded or retired facts, the
+// facts of a dead or shipped folder (quiet) and claims of the owner's
+// authority without their words (claim) are left out: hooks only.
 func (ix *Index) MetaFacts(ctx context.Context) ([]Hit, error) {
 	q := `SELECT ` + liveColumns + ` FROM facts f
-		WHERE f.superseded = 0 AND f.inbox = 0 AND f.type != 'result_ref' AND f.scope NOT LIKE 'derived/%' AND f.quiet = 0
+		WHERE f.superseded = 0 AND f.inbox = 0 AND f.type != 'result_ref' AND f.scope NOT LIKE 'derived/%' AND f.quiet = 0 AND f.claim = 0
 		AND (coalesce(json_array_length(f.applies, '$.Paths'), 0) > 0 OR coalesce(json_array_length(f.applies, '$.Commands'), 0) > 0)
 		ORDER BY f.path`
 	return ix.scan(ctx, q, nil)
@@ -64,13 +86,13 @@ func (ix *Index) scan(ctx context.Context, q string, named map[string]any) ([]Hi
 	var out []Hit
 	for rows.Next() {
 		var h Hit
-		var inbox, ruling, intask, words, local, quiet int
+		var inbox, ruling, intask, words, local, quiet, claim int
 		var conflicts, applies string
-		if err := rows.Scan(&h.Path, &h.Name, &h.Scope, &h.Type, &h.Description, &h.Body, &inbox, &h.Kind, &conflicts, &ruling, &intask, &words, &local, &applies, &h.Created, &quiet); err != nil {
+		if err := rows.Scan(&h.Path, &h.Name, &h.Scope, &h.Type, &h.Description, &h.Body, &inbox, &h.Kind, &conflicts, &ruling, &intask, &words, &local, &applies, &h.Created, &quiet, &claim); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(applies), &h.Applies)
-		h.Inbox, h.Ruling, h.InTask, h.Words, h.Local, h.Quiet = inbox == 1, ruling == 1, intask == 1, words == 1, local == 1, quiet == 1
+		h.Inbox, h.Ruling, h.InTask, h.Words, h.Local, h.Quiet, h.Claim = inbox == 1, ruling == 1, intask == 1, words == 1, local == 1, quiet == 1, claim == 1
 		if conflicts != "" {
 			h.Conflicts = strings.Split(conflicts, ",")
 		}

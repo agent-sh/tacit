@@ -29,6 +29,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/overlay"
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
 	"github.com/agent-sh/tacit/client/internal/record"
+	"github.com/agent-sh/tacit/client/internal/validate"
 )
 
 // Hit is one ranked fact.
@@ -44,7 +45,12 @@ type Hit struct {
 	Ruling      bool // an owner ruling: their own words (fact.IsRuling); no agent may supersede it
 	InTask      bool // a ruling whose quote is an instruction in its task (ownerwords.InTask): guarded as a ruling, delivered as an ordinary fact (Rule)
 	Words       bool // holds backed words of theirs (fact.OwnerWordsOf); no agent supersedes it without asking them
-	Conflicts   []string
+	// Claim: its text says the owner ruled, said, decided or wants something
+	// (validate.ClaimsOwner, the check new writes get) while it is not the
+	// owner's verified words (no ruling, statement or backed words). No hook
+	// delivers it; search and the tree show it marked (SPEC.md, Provenance).
+	Claim     bool `json:",omitempty"`
+	Conflicts []string
 	// Local is a note in this machine's overlay (internal/overlay): written
 	// by a harness here on a read-only clone, never pushed, never reviewed.
 	Local bool
@@ -96,8 +102,10 @@ const (
 // 11: the records' roots (where a folder of kind folder lives, so a session
 // there reads its facts). 12: the records' org and forge (a repository's
 // forge organization and its current forge name, store format 2). 13: the
-// records' successor (a dead project's replacement, store format 3).
-const schemaVersion = 13
+// records' successor (a dead project's replacement, store format 3). 14:
+// the claim column (Hit.Claim: a fact whose text claims the owner's authority
+// without their verified words, which hooks hold back).
+const schemaVersion = 14
 
 // Open returns the index for the store at head, building it when missing:
 // the exact index, for callers that must not read an older one (the
@@ -419,7 +427,7 @@ func build(ctx context.Context, storeDir, localDir, path, base string) error {
 		}
 	}
 	stmts := []string{
-		`CREATE TABLE facts(id INTEGER PRIMARY KEY, path TEXT, name TEXT, scope TEXT, type TEXT, description TEXT, body TEXT, inbox INT, superseded INT, applies TEXT, kind TEXT, conflicts TEXT, ruling INT, intask INT, words INT, local INT, created TEXT, quiet INT)`,
+		`CREATE TABLE facts(id INTEGER PRIMARY KEY, path TEXT, name TEXT, scope TEXT, type TEXT, description TEXT, body TEXT, inbox INT, superseded INT, applies TEXT, kind TEXT, conflicts TEXT, ruling INT, intask INT, words INT, local INT, created TEXT, quiet INT, claim INT)`,
 		// The folder records (internal/record), so a reader needs no file
 		// beyond the index: kinds, statuses, suppression, an area's tools.
 		`CREATE TABLE records(folder TEXT PRIMARY KEY, kind TEXT, name TEXT, status TEXT, suppressed_by TEXT, aliases TEXT, tools TEXT, commands TEXT, repos TEXT, description TEXT, local INT, roots TEXT, org TEXT, forge TEXT, successor TEXT)`,
@@ -441,7 +449,7 @@ func build(ctx context.Context, storeDir, localDir, path, base string) error {
 	if err != nil {
 		return err
 	}
-	ins, err := tx.PrepareContext(ctx, `INSERT INTO facts(path, name, scope, type, description, body, inbox, superseded, applies, kind, conflicts, ruling, intask, words, local, created, quiet) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+	ins, err := tx.PrepareContext(ctx, `INSERT INTO facts(path, name, scope, type, description, body, inbox, superseded, applies, kind, conflicts, ruling, intask, words, local, created, quiet, claim) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
@@ -481,7 +489,15 @@ func build(ctx context.Context, storeDir, localDir, path, base string) error {
 			ruling, words, inbox = overlay.IsRuling(f), false, overlay.IsInbox(f.Path)
 		}
 		intask := ruling && inTaskRuling(f)
-		if _, err := ins.ExecContext(ctx, f.Path, f.Meta.Name, f.Meta.Scope, f.Meta.Type, f.Meta.Description, strings.TrimSpace(f.Body), b2i(inbox), b2i(f.Meta.SupersededBy != "" || f.Meta.Retired != ""), string(applies), f.Meta.Source.Kind, strings.Join(f.Meta.ConflictsWith, ","), b2i(ruling), b2i(intask), b2i(words), b2i(isLocal), f.Meta.Created, b2i(quietScope(all, f.Meta.Scope))); err != nil {
+		// A statement is written by code only, from their verified words
+		// (a model's or an agent's type statement is refused): theirs.
+		// So is a fact code generates from git (derived/, results): no agent's.
+		gen := strings.HasPrefix(f.Meta.Scope, "derived/") || f.Meta.Source.Kind == "derived"
+		if d, ok := fact.TypeDocOf(f.Meta.Type); ok && d.Generated {
+			gen = true
+		}
+		claim := !gen && ClaimsWithoutEvidence(f.Meta.Description, f.Body, ruling, words || (f.Meta.Type == fact.StatementType && !inbox))
+		if _, err := ins.ExecContext(ctx, f.Path, f.Meta.Name, f.Meta.Scope, f.Meta.Type, f.Meta.Description, strings.TrimSpace(f.Body), b2i(inbox), b2i(f.Meta.SupersededBy != "" || f.Meta.Retired != ""), string(applies), f.Meta.Source.Kind, strings.Join(f.Meta.ConflictsWith, ","), b2i(ruling), b2i(intask), b2i(words), b2i(isLocal), f.Meta.Created, b2i(quietScope(all, f.Meta.Scope)), b2i(claim)); err != nil {
 			return err
 		}
 	}
@@ -940,6 +956,7 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	}
 	if sit.RestrictRepos {
 		inboxClause += " AND f.quiet = 0" // hook delivery: nothing from a dead or shipped folder
+		inboxClause += " AND f.claim = 0" // nor a claim of the owner's authority without their words
 	}
 	if sit.Type != "" {
 		inboxClause += " AND f.type = :onlyType"
@@ -1039,7 +1056,7 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	if allowRelationRouting && sit.PromptRelevance && !sit.OnlyDerived {
 		scopeClause = "(" + scopeClause + " OR (f.scope LIKE 'projects/%' AND (" + route + ")))"
 	}
-	q := fmt.Sprintf(`SELECT f.path, f.name, f.scope, f.type, f.description, f.body, f.inbox, f.kind, f.conflicts, f.ruling, f.intask, f.words, f.local, coalesce(f.applies, ''), coalesce(f.created, ''), -bm25(fts, 6.0, 6.0, 1.0) AS score %s
+	q := fmt.Sprintf(`SELECT f.path, f.name, f.scope, f.type, f.description, f.body, f.inbox, f.kind, f.conflicts, f.ruling, f.intask, f.words, f.local, coalesce(f.applies, ''), coalesce(f.created, ''), coalesce(f.claim, 0), -bm25(fts, 6.0, 6.0, 1.0) AS score %s
 		FROM fts JOIN facts f ON f.id = fts.rowid
 		WHERE fts MATCH :query AND f.superseded = 0 AND %s %s
 		ORDER BY score DESC LIMIT :candidateLimit`, selectCoverage, scopeClause, inboxClause)
@@ -1052,10 +1069,10 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	var hits []Hit
 	for rows.Next() {
 		var h Hit
-		var inbox, ruling, intask, words, local int
+		var inbox, ruling, intask, words, local, claim int
 		var conflicts, applies string
 		matched := make([]int, len(coverage))
-		dest := []any{&h.Path, &h.Name, &h.Scope, &h.Type, &h.Description, &h.Body, &inbox, &h.Kind, &conflicts, &ruling, &intask, &words, &local, &applies, &h.Created, &h.Score}
+		dest := []any{&h.Path, &h.Name, &h.Scope, &h.Type, &h.Description, &h.Body, &inbox, &h.Kind, &conflicts, &ruling, &intask, &words, &local, &applies, &h.Created, &claim, &h.Score}
 		for i := range matched {
 			dest = append(dest, &matched[i])
 		}
@@ -1069,7 +1086,7 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 		}
 		h.Evidence = evidence[h.Path]
 		_ = json.Unmarshal([]byte(applies), &h.Applies)
-		h.Inbox, h.Ruling, h.InTask, h.Words, h.Local = inbox == 1, ruling == 1, intask == 1, words == 1, local == 1
+		h.Inbox, h.Ruling, h.InTask, h.Words, h.Local, h.Claim = inbox == 1, ruling == 1, intask == 1, words == 1, local == 1, claim == 1
 		if conflicts != "" {
 			h.Conflicts = strings.Split(conflicts, ",")
 		}
@@ -1135,12 +1152,96 @@ func dropConflictPartners(hits []Hit) []Hit {
 	return out
 }
 
+// ClaimsWithoutEvidence reports a fact whose text fails the owner-attribution
+// check new writes get (validate.Attribution: it says the owner ruled, said,
+// decided or wants something) while it is not the owner's verified words:
+// not a ruling (ruling), and no words of theirs the store backs (words, which
+// every statement has). Hooks hold it back (Hit.Claim).
+func ClaimsWithoutEvidence(desc, body string, ruling, words bool) bool {
+	return validate.Attribution(desc, body, ruling || words) != nil
+}
+
+// ClaimMark is how search and the tree mark a held-back claim.
+const ClaimMark = "claims owner authority without evidence"
+
+// Provenance is who a delivered line is from, read from code-checked fields
+// only (SPEC.md, Provenance): "rule" (an owner rule, a RULE line),
+// "statement" (their words said once), "owner" (another verified ruling of
+// theirs: a quote in its task, a decision code made of their statements, a
+// rule they wrote), "words" (an agent's note holding words of theirs the
+// ledger backs), "derived" (computed from git), "claim" (an agent's note that
+// claims their authority without evidence) or "agent" (any other: an agent's
+// note).
+func (h Hit) Provenance() string {
+	switch {
+	case h.Rule():
+		return "rule"
+	case h.Ruling:
+		return "owner"
+	case h.Type == fact.StatementType && !h.Inbox:
+		return "statement"
+	case h.Kind == "derived" || strings.HasPrefix(h.Scope, "derived/"):
+		return "derived"
+	case h.Claim:
+		return "claim"
+	case h.Words:
+		return "words"
+	}
+	return "agent"
+}
+
+// ProvenanceLabel is Provenance in the words a reader sees: "owner rule",
+// "you said (<day>)", "you said once", "agent note holding your words
+// (<day>)", "computed from git", "agent note (<day>; claims owner authority
+// without evidence)" or "agent note (<day>)". tacit_fact's first line and
+// the tree's fact lines carry it.
+func (h Hit) ProvenanceLabel() string {
+	day := h.Created
+	if len(day) > 10 {
+		day = day[:10]
+	}
+	switch h.Provenance() {
+	case "rule":
+		return "owner rule"
+	case "owner":
+		return dated("you said", day, "")
+	case "statement":
+		return "you said once"
+	case "derived":
+		return "computed from git"
+	case "claim":
+		return dated("agent note", day, ClaimMark)
+	case "words":
+		return dated("agent note holding your words", day, "")
+	}
+	return dated("agent note", day, "")
+}
+
+// dated is label with the fact's day in parentheses, and extra after it.
+func dated(label, day, extra string) string {
+	var in []string
+	if day != "" {
+		in = append(in, day)
+	}
+	if extra != "" {
+		in = append(in, extra)
+	}
+	if len(in) == 0 {
+		return label
+	}
+	return label + " (" + strings.Join(in, "; ") + ")"
+}
+
 // Block renders hits as the compact context block a hook prints: one line
-// per fact, name and description only. Bodies are a tool call away. Owner
-// rulings (fact.IsRuling: their own words) are rendered as rules, not as quotes of what the owner
-// once said: a dated quote beside "the current request wins" weakens the
-// rule (eval/VALUE.md, D7). A ruling whose quote was an instruction inside its
-// task is a plain line (Rule). Known contradictions are marked.
+// per fact, name and description only. Bodies are a tool call away. Every
+// line says whose it is (Provenance): owner rules (fact.IsRuling: their own
+// words) are rendered as rules, not as quotes of what the owner once said: a
+// dated quote beside "the current request wins" weakens the rule
+// (eval/VALUE.md, D7). A ruling whose quote was an instruction inside its
+// task is "you said (<day>)" (Rule), a statement "you said once"; everything
+// else is an agent's note, "agent note (<day>)", and one that claims the
+// owner's authority without evidence says so (no hook delivers it). Known
+// contradictions are marked.
 func Block(hits []Hit, title string) string {
 	if len(hits) == 0 {
 		return ""
@@ -1151,18 +1252,33 @@ func Block(hits []Hit, title string) string {
 	for _, h := range hits {
 		desc := strings.Join(strings.Fields(h.Description), " ")
 		line := "- " + h.Name
+		day := h.Created
+		if len(day) > 10 {
+			day = day[:10]
+		}
 		if h.Rule() {
 			line = "- RULE " + h.Name
 			desc = asRule(desc)
-		} else if day, words, ok := statementOf(h); ok {
+		} else if h.Ruling {
+			desc = dated("you said", day, "") + ": " + desc
+		} else if said, words, ok := statementOf(h); ok {
 			// The owner's words said once: in their words, dated, with the
 			// context, never as a rule (SPEC.md, "Statements").
-			desc = "you said once (" + day + "): \"" + words + "\""
+			desc = "you said once (" + said + "): \"" + words + "\""
 			if c := strings.TrimRight(strings.Join(strings.Fields(h.Description), " "), "."); c != "" {
 				desc += "; context: " + c
 			}
 			if len(fact.CheckFlags(h.Body)) > 0 {
 				desc += " (a check disagrees, maybe misread)"
+			}
+		} else {
+			switch h.Provenance() {
+			case "claim":
+				desc = dated("agent note", day, ClaimMark) + ": " + desc
+			case "words":
+				desc = dated("agent note holding your words", day, "") + ": " + desc
+			case "agent", "statement":
+				desc = dated("agent note", day, "") + ": " + desc
 			}
 		}
 		if h.Inbox {

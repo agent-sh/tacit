@@ -198,6 +198,7 @@ func runHook(args []string) int {
 		if err != nil {
 			return 0
 		}
+		hits = withoutClaims(hits)
 		remember(in.SessionID, hits)
 		mcp := slices.Contains(args[1:], "--mcp")
 		fmt.Print(search.Block(hits, startTitle(sit, mcp)))
@@ -235,6 +236,7 @@ func runHook(args []string) int {
 		if err != nil {
 			return 0
 		}
+		strong = withoutClaims(strong)
 		remember(in.SessionID, strong)
 		fmt.Print(search.Block(strong, "# tacit: facts matching this request"))
 	default:
@@ -602,7 +604,7 @@ func runFact(args []string) int {
 	if err != nil {
 		return 2
 	}
-	os.Stdout.WriteString(out)
+	os.Stdout.WriteString(withProvenance(s, out))
 	return 0
 }
 
