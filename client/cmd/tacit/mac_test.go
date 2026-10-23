@@ -124,7 +124,7 @@ func TestMacReadOnlyCloneSendsNothing(t *testing.T) {
 	r.split(entry(note.Meta.Name, "gizmo-build-tracker", "The gizmo build reads tickets from the tracker", "design_decision", "projects/gizmo"))
 	r.judge()
 	fa := &fakeAssessor{first: map[string]assess.Decision{
-		"projects/gizmo":  aDecision("projects/gizmo", "repo", "active", "edited in session:m1"),
+		"projects/gizmo": aDecision("projects/gizmo", "repo", "active", "edited in session:m1"),
 		// This machine's sessions edited it today: active here, code's status
 		// from those dates (the model is not asked).
 		"projects/numbat": aDecision("projects/numbat", "repo", "dormant", "only looked at in session:m2, no work"),
