@@ -640,6 +640,11 @@ func Same(a, b *record.Record) bool {
 	return string(ea) == string(eb)
 }
 
+// isGroupHead reports the folder a group is named for.
+func isGroupHead(c Candidate) bool {
+	return c.Group != "" && c.Folder[strings.LastIndex(c.Folder, "/")+1:] == c.Group
+}
+
 // SortCandidates puts a name that exists before one that exists nowhere
 // (the folders others may be suppressed into first; a group as one), then
 // the names of one repository or the folders of one ancestor together (Group) and the folders of one name pattern together,
@@ -685,6 +690,12 @@ func SortCandidates(cands []Candidate, aliasOf func(folder string) string) {
 		ki, kj := key(cands[i]), key(cands[j])
 		if ki != kj {
 			return ki < kj
+		}
+		// The group's own folder (the ancestor, the repository the names are
+		// of) first: the others fold into it, so it is decided in the first
+		// batch of the group.
+		if gi, gj := isGroupHead(cands[i]), isGroupHead(cands[j]); gi != gj {
+			return gi
 		}
 		ai, aj := aliasOf(cands[i].Folder) != "", aliasOf(cands[j].Folder) != ""
 		if ai != aj {
