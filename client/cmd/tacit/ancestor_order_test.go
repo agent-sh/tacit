@@ -24,8 +24,10 @@ var (
 )
 
 // orderModel answers from the folder's block alone, the same block the same
-// answer: a folder with ancestor candidates folds into the first; a name
-// that exists nowhere is left for review; any other stands alone. Sent back, it folds where code says, or leaves the
+// answer: a folder with ancestor candidates folds into the first; one
+// marked with no evidence is answered active with nothing cited (code's
+// outcome must replace it); a name that exists nowhere is left for review;
+// any other stands alone. Sent back, it folds where code says, or leaves the
 // folder for review.
 func orderModel(_ context.Context, _, prompt string) (string, float64, error) {
 	blocks := map[string]string{}
@@ -49,6 +51,8 @@ func orderModel(_ context.Context, _, prompt string) (string, float64, error) {
 		switch {
 		case firstAncRx.MatchString(body):
 			d.SuppressedBy = firstAncRx.FindStringSubmatch(body)[1]
+		case strings.Contains(body, "evidence of what it is: none"):
+			d.Status, d.Why = "active", "worked on lately"
 		case strings.Contains(body, "as a repository: fails"):
 			d.Status = "needs-review"
 		}
@@ -77,8 +81,8 @@ func orderModel(_ context.Context, _, prompt string) (string, float64, error) {
 // whole graph finds: a chain (aaa-chain inside bbb-mid, bbb-mid inside
 // widget: aaa-chain is widget's), a folder the store talks about in another
 // folder with no record yet (alpha-note, written about in zeta-base, whose
-// name exists nowhere), and a cycle (cyc-one and cyc-two, each inside the
-// other).
+// name exists nowhere), a cycle (cyc-one and cyc-two, each inside the
+// other), and a folder nothing says anything of (lonely-x).
 func orderFixture(t *testing.T) *store.Store {
 	home, _, _ := checkedHome(t)
 	s := &store.Store{Dir: filepath.Join(home, "store")}
@@ -94,6 +98,7 @@ func orderFixture(t *testing.T) *store.Store {
 	}
 	add("projects/cyc-one", "cyc-one-data", "s-c1", "Its data sits under ~/projects/cyc-two/cyc-one/data")
 	add("projects/cyc-two", "cyc-two-data", "s-c2", "Its data sits under ~/projects/cyc-one/cyc-two/data")
+	add("projects/lonely-x", "lonely-colour", "", "The theme colour is teal")
 	facts, _, _ := fact.Walk(s.Dir)
 	writeIndexesForTest(t, s.Dir, facts)
 	gitIn(t, s.Dir, "add", "-A")
@@ -111,6 +116,9 @@ func outcome(t *testing.T, s *store.Store) map[string]string {
 	for f, r := range recs {
 		w, _, _ := record.Resolve(recs, f)
 		out[f] = r.Kind + " " + r.Status + " -> " + w
+		if strings.HasPrefix(r.Was[0].Why, "code: no ancestor candidate") {
+			out[f] += " (code: no evidence)"
+		}
 	}
 	return out
 }
@@ -128,7 +136,7 @@ func grouping(t *testing.T, s *store.Store) map[string]string {
 		if len(c.Ancestors) > 0 {
 			anc = c.Ancestors[0].Folder
 		}
-		out[c.Folder] = fmt.Sprintf("group=%s ancestor=%s depth=%d", c.Group, anc, c.Depth)
+		out[c.Folder] = fmt.Sprintf("group=%s ancestor=%s depth=%d none=%v", c.Group, anc, c.Depth, c.NoEvidence)
 	}
 	return out
 }
@@ -193,6 +201,7 @@ func TestAncestorGraphIsOrderIndependent(t *testing.T) {
 				"projects/alpha-note": "-> projects/zeta-base",
 				"projects/cyc-two":    "-> projects/cyc-one",
 				"projects/cyc-one":    "needs-review -> projects/cyc-one",
+				"projects/lonely-x":   "folder needs-review -> projects/lonely-x (code: no evidence)",
 			} {
 				if !strings.Contains(got[f], want) {
 					t.Errorf("%s: %q, want %q", f, got[f], want)
@@ -204,6 +213,7 @@ func TestAncestorGraphIsOrderIndependent(t *testing.T) {
 				"projects/alpha-note": "ancestor=projects/zeta-base depth=1",
 				"projects/cyc-two":    "ancestor=projects/cyc-one depth=1",
 				"projects/cyc-one":    "ancestor= depth=0",
+				"projects/lonely-x":   "none=true",
 			} {
 				if !strings.Contains(groups[f], want) {
 					t.Errorf("grouping %s: %q, want %q", f, groups[f], want)

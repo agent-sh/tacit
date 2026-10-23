@@ -334,6 +334,9 @@ func Fingerprint(c Candidate) string {
 	for _, in := range c.Independence {
 		b.WriteString("independence " + in.Key + "\n")
 	}
+	if c.NoEvidence {
+		b.WriteString("no evidence\n")
+	}
 	for _, l := range c.Context {
 		if !strings.HasPrefix(l, "owner's turn (") {
 			b.WriteString(l + "\n")
@@ -388,4 +391,40 @@ func SimilarLines(what string, recs []*record.Record) []string {
 		out = append(out, fmt.Sprintf("  - %d %s; e.g. %s", g.n, g.key, strings.Join(g.ex, " | ")))
 	}
 	return out
+}
+
+// NoEvidenceOutcome is code's outcome for a folder nothing says anything of
+// (Candidate.NoEvidence) when d is not a plain needs-review and rests on no
+// evidence code showed: the owner's words (owner_quote), or a note:<name>
+// the folder's rendered evidence (shown) lists, as [[name]] or note:name. ok is false when
+// d stands as it is.
+func NoEvidenceOutcome(c Candidate, d Decision, shown string) (Decision, bool) {
+	if !c.NoEvidence || c.Kind != "" || len(c.Proposed()) > 0 {
+		return d, false
+	}
+	if d.Status == record.StatusNeedsReview && strings.TrimSpace(d.SuppressedBy) == "" && d.Kind != KindNone {
+		return d, false
+	}
+	if strings.TrimSpace(d.OwnerQuote) != "" {
+		return d, false
+	}
+	for _, cite := range record.Cites(d.Why) {
+		if n, ok := strings.CutPrefix(cite, "note:"); ok && n != "" && (strings.Contains(shown, "[["+n+"]]") || record.WholeWord(shown, "note:"+n)) {
+			return d, false
+		}
+	}
+	kind := record.KindFolder
+	if c.GitRoot {
+		kind = record.KindRepo
+	}
+	was := d.Kind + " " + d.Status
+	if into := strings.TrimSpace(d.SuppressedBy); into != "" {
+		was += ", suppressed by " + into
+	}
+	desc := strings.TrimSpace(d.Description)
+	if desc == "" {
+		desc = "A folder whose evidence does not yet say what it is."
+	}
+	return Decision{Folder: c.Folder, Kind: kind, Status: record.StatusNeedsReview, Description: desc,
+		Why: "code: no ancestor candidate, no candidate real repository, no identity of its own (no own commits, no remote or forge repository of its own, no work in a folder of its name) and no session worked in it or filed its facts: the evidence does not say what it is or whether it is worked, so it waits for review and is asked again with wider evidence (the answer " + was + " cited no evidence code showed)"}, true
 }
