@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/assess"
@@ -179,4 +180,77 @@ func sortedKeysStr(m map[string]string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// prefetchWorkers is how many repositories the prefetch asks the forge
+// about at once: three calls each, about a second a call through gh, and
+// 111 repositories on the Mac's shadow store took 20 minutes one at a time.
+const prefetchWorkers = 8
+
+// prefetchActivity asks the forge, a few at a time, for the activity of the
+// repositories of every project folder this run may gather (the catalogs'
+// and the store's, and the records'), so gathering a folder reads the
+// cache. Each folder's name check comes first, one at a time (the checker
+// keeps them), as gathering reads it.
+func (a *assessor) prefetchActivity() {
+	if a.prefetched || a.checker == nil || a.checker.Forge == nil {
+		return
+	}
+	a.prefetched = true
+	set := map[string]bool{}
+	for _, f := range a.ancestorUniverse() {
+		set[f] = true
+	}
+	for f := range a.recs {
+		if strings.HasPrefix(f, "projects/") {
+			set[f] = true
+		}
+	}
+	want := map[string]bool{}
+	for _, f := range sortedKeysBool(set) {
+		name := strings.TrimPrefix(f, "projects/")
+		full := ""
+		if rc := a.checker.Repo(a.ctx, name); rc.Forge != "" {
+			full = rc.Forge
+		} else if r := a.recs[f]; r != nil && r.Forge != "" {
+			full = r.Forge[strings.Index(r.Forge, "/")+1:]
+		} else {
+			var urls []string
+			if r, ok := a.catalog.Repo(name); ok {
+				urls = append(urls, r.URLs...)
+			}
+			for _, h := range a.shared[name] {
+				urls = append(urls, h.URLs...)
+			}
+			for _, u := range urls {
+				if rest, ok := strings.CutPrefix(u, "github.com/"); ok && strings.Count(rest, "/") == 1 {
+					full = strings.TrimSuffix(rest, ".git")
+					break
+				}
+			}
+		}
+		if strings.Contains(full, "/") {
+			want[strings.ToLower(full)] = true
+		}
+	}
+	jobs := make(chan string)
+	var wg sync.WaitGroup
+	for i := 0; i < prefetchWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for full := range jobs {
+				owner, name, _ := strings.Cut(full, "/")
+				ctx, cancel := context.WithTimeout(a.ctx, time.Minute)
+				a.checker.Forge.Activity(ctx, owner, name, forgeActivityCommits)
+				cancel()
+			}
+		}()
+	}
+	for _, full := range sortedKeysBool(want) {
+		jobs <- full
+	}
+	close(jobs)
+	wg.Wait()
+	a.checker.Forge.Forge.User(a.ctx)
 }
