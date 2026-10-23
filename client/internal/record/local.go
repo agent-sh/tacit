@@ -21,19 +21,21 @@ func MergeLocal(store, local map[string]*Record) map[string]*Record {
 		switch {
 		case s == nil:
 			out[f] = l
-		case s.Kind == l.Kind && s.Name == l.Name && l.Status != "" && l.Status != s.Status:
+		case s.Kind == l.Kind && s.Name == l.Name && l.Status != "" && (l.Status != s.Status || l.Successor != s.Successor):
 			out[f] = Override(s, l)
 		}
 	}
 	return out
 }
 
-// Override is store's record with local's status and history: what this
+// Override is store's record with local's status, history and successor
+// (the status's): what this
 // machine reads of the folder. LocalStatus marks it.
 func Override(store, local *Record) *Record {
 	m := store.Clone()
 	m.Status = local.Status
 	m.Was = append([]Entry(nil), local.Was...)
+	m.Successor = local.Successor
 	m.LocalStatus = true
 	return m
 }
@@ -45,6 +47,7 @@ func AsOverride(store, decided *Record) *Record {
 	m := store.Clone()
 	m.Status = decided.Status
 	m.Was = append([]Entry(nil), decided.Was...)
+	m.Successor = decided.Successor
 	m.Evidence = append([]Evidence(nil), decided.Evidence...)
 	m.LocalStatus = false
 	return m

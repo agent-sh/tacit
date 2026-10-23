@@ -20,6 +20,9 @@
 //	              the forge says that owner is an organization), by code
 //	forge         a project's current forge name (normalized URL,
 //	              github.com/<owner>/<name>), by code from the forge
+//	successor     a dead project's successor: the live project folder the
+//	              owner's words say replaces it (projects/<name>); its
+//	              facts stay as history (not a suppression)
 //
 // A folder orgs/<name> has a record of kind org: an organization on the
 // forge (GitHub: an account of type Organization) whose facts hold across
@@ -87,6 +90,20 @@ type Entry struct {
 	// (by owner, written by the curator): the quote ledger must back them.
 	Quote     string `yaml:"quote,omitempty"`
 	QuoteFrom string `yaml:"quote_from,omitempty"`
+	// Words, WordsFrom and WordsOn: the owner's words about the folder's
+	// status that an agent's entry rests on (a note or statement of theirs
+	// code showed and checked, verbatim), where they are and the day they
+	// were said: the status stands against the dates until the owner's real
+	// work on the folder after that day (store format 3).
+	Words     string `yaml:"words,omitempty"`
+	WordsFrom string `yaml:"words_from,omitempty"`
+	WordsOn   string `yaml:"words_on,omitempty"`
+}
+
+// RestsOnWords reports an entry whose status rests on the owner's words
+// (Words), with the day they were said.
+func (e Entry) RestsOnWords() (string, bool) {
+	return e.WordsOn, e.Words != "" && e.WordsOn != ""
 }
 
 // Evidence is what code gathered for a decision, from one machine (git,
@@ -152,6 +169,12 @@ type Record struct {
 	// answers (store format 2), never by a model.
 	Org   string `yaml:"org,omitempty"`
 	Forge string `yaml:"forge,omitempty"`
+	// Successor is the live project folder that replaces a dead project
+	// (projects/<name>), from the owner's words, checked by code: the
+	// project and its facts stay, as history (store format 3). Unlike
+	// suppressed_by (the same thing under another name, its facts moved),
+	// a successor is another project.
+	Successor string `yaml:"successor,omitempty"`
 
 	// Folder is the store-relative folder the record is in (its scope);
 	// Body the free text after the frontmatter. Neither is frontmatter.

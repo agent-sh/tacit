@@ -366,6 +366,19 @@ func records(root string, facts []*fact.Fact) []Finding {
 			}
 		}
 	}
+	if haveFormat && !format.Successors() {
+		// Format 3's successor and owner words: an older binary's strict
+		// decoder refuses them.
+		for f, r := range recs {
+			words := false
+			for _, e := range r.Was {
+				words = words || e.Words != "" || e.WordsFrom != "" || e.WordsOn != ""
+			}
+			if r.Successor != "" || words {
+				add(record.Rel(f), fmt.Sprintf("a record's successor, or an entry's owner words, in a store whose format marker is not %d or newer", ledger.SuccessorsFormat))
+			}
+		}
+	}
 	ql, _ := os.ReadFile(filepath.Join(root, filepath.FromSlash(ledger.QuotesPath)))
 	env := record.Env{Static: true, Records: recs, QuoteBacked: ledger.Backing(ql)}
 	folders := make([]string, 0, len(recs))
