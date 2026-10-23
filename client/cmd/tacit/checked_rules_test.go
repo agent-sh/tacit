@@ -224,7 +224,7 @@ func TestAssessDecidesOneRepositorysNamesTogether(t *testing.T) {
 	w := a.candidate("projects/widget", "", nil)
 	var lines []byte
 	pending := map[string]*record.Record{}
-	acc, refused := a.check([]assess.Candidate{w, old}, []assess.Decision{aDecision("projects/widget", "repo", "active", "no citation"), aDecision("projects/widget-old", "repo", "active", "session:s-one")}, pending, &lines)
+	acc, refused := a.check([]assess.Candidate{w, old}, []assess.Decision{elsewhere(aDecision("projects/widget", "repo", "active", "no citation")), aDecision("projects/widget-old", "repo", "active", "session:s-one")}, pending, &lines)
 	if len(acc) != 0 || len(refused) != 2 || pending["projects/widget-old"] != nil {
 		t.Fatalf("accepted %d, refused %+v", len(acc), refused)
 	}

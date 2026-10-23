@@ -160,6 +160,7 @@ type assessor struct {
 	pathCache              *repoid.Cache               // repoCache
 	scopeFacts             map[string]int              // project folder -> its live facts (mentionedIn)
 	ancMemo                map[string]string           // ancestorFolder's answers over the graph's view
+	codeStatus             map[string]string           // folder -> code's status from its dates (assess_activity.go)
 }
 
 func newAssessor(ctx context.Context, s *store.Store, local bool) (*assessor, error) {
@@ -260,6 +261,7 @@ func (a *assessor) recordEnv(pending map[string]*record.Record, pendingLedger []
 		ToolUsed:    a.tools.Used,
 		KnownRepo:   a.env.KnownRepo,
 		HoldsFacts:  a.holdsFacts,
+		CodeStatus:  func(f string) string { return a.codeStatus[f] },
 	}
 }
 
@@ -350,6 +352,15 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 			out = append(out, c)
 			continue
 		}
+		// Active or dormant is code's from the folder's dates: when the dates
+		// move it across its window, code writes the new status itself.
+		if cs := c.CodeStatus(); statusDrift(r, cs) {
+			seen[f] = true
+			c.Reason = fmt.Sprintf("code's status from its dates is %s now (the record says %s)", cs, r.Status)
+			a.applyGraph(&c)
+			out = append(out, c)
+			continue
+		}
 		// A folder left for review is worked on, not parked: each run it is
 		// asked again with more evidence than it had (assess_deep.go), and it
 		// waits only when that wider search found nothing new, until the
@@ -397,6 +408,7 @@ func (a *assessor) candidate(folder, reason string, old *record.Record) assess.C
 			c.Real, c.ProposedKey = a.realRepos(folder, name, rc)
 			c.Context = append(c.Context, a.namedElsewhere(folder, name, 3)...)
 		}
+		a.activity(&c)
 	}
 	return c
 }
@@ -685,6 +697,14 @@ func groupSame(cands []assess.Candidate) {
 		}
 		cands[i].Depth = d
 	}
+}
+
+// statusDrift reports a live record of the model's (not the owner's)
+// whose active or dormant status code's status cs from the folder's dates
+// no longer agrees with.
+func statusDrift(r *record.Record, cs string) bool {
+	return cs != "" && r.Live() && r.SuppressedBy == "" && (r.Status == record.StatusActive || r.Status == record.StatusDormant) &&
+		cs != r.Status && len(r.Was) > 0 && r.Was[0].By == record.ByOpus
 }
 
 // hostWorked reports evidence that host has the folder as a checkout or
@@ -1223,6 +1243,14 @@ func (a *assessor) check(cands []assess.Candidate, ds []assess.Decision, pending
 		// rests on evidence code showed.
 		if nd, ok := assess.NoEvidenceOutcome(c, d, assess.Render([]assess.Candidate{c})); ok {
 			fmt.Fprintf(os.Stderr, "assess: %s: no evidence of what it is; code's outcome needs-review (the answer was %s %s, citing nothing shown)\n", c.Folder, d.Kind, d.Status)
+			d = nd
+		}
+		// Active or dormant is code's from the dates it checked; dead and
+		// shipped stand only on the explicit evidence they cite.
+		if nd, ok := assess.ApplyStatus(c, d, assess.Render([]assess.Candidate{c})); ok {
+			if nd.Status != d.Status {
+				fmt.Fprintf(os.Stderr, "assess: %s: code's status %s from its dates (the answer was %s)\n", c.Folder, nd.Status, d.Status)
+			}
 			d = nd
 		}
 		owner, line, op := a.verifyOwner(c.Folder, d)

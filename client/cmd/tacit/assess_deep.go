@@ -6,13 +6,13 @@ package main
 // for review, or refused on the same evidence, comes back to the model with
 // more evidence than it had, gathered by code and wider on each attempt:
 // facts in other folders that name it, the sessions behind them, the
-// forge's record of the repository, the decisions on folders alike and the
-// owner's turns that name it. A folder waits only when that wider search
+// decisions on folders alike and the owner's turns that name it (the
+// forge's record, a dry fact every run reads alike, is gathered before the
+// first ask: assess_activity.go). A folder waits only when that wider search
 // found nothing new (its items are in the fingerprint), and even then it is
 // asked again on the weekly retry. Every attempt is logged.
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -103,7 +103,6 @@ func (a *assessor) deepen(c *assess.Candidate, attempt int, seen []string, lastA
 	hits := a.factsNaming(c.Folder, names, name)
 	c.Extra = append(c.Extra, a.extraFacts(hits, names, per)...)
 	c.Extra = append(c.Extra, a.extraSessions(c.Folder, hits, per)...)
-	c.Extra = append(c.Extra, a.extraForge(c, per)...)
 	c.Extra = append(c.Extra, a.extraAlike(c, name, per)...)
 	c.Extra = append(c.Extra, a.extraTurns(names, 3*depth)...)
 }
@@ -335,55 +334,6 @@ func forgeFull(c *assess.Candidate) string {
 		return f[strings.Index(f, "/")+1:]
 	}
 	return ""
-}
-
-// extraForge is the forge's record of the folder's repository: last push,
-// archived, latest release and newest commits, the owner's account's
-// listed as the folder's own (citable, knownCommit).
-func (a *assessor) extraForge(c *assess.Candidate, per int) []assess.Extra {
-	full := forgeFull(c)
-	owner, name, ok := strings.Cut(full, "/")
-	if !ok || a.checker == nil || a.checker.Forge == nil {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(a.ctx, time.Minute)
-	defer cancel()
-	act, err := a.checker.Forge.Activity(ctx, owner, name, min(per, 20))
-	if err != nil {
-		return nil
-	}
-	user := strings.ToLower(a.checker.Forge.Forge.User(ctx))
-	head := fmt.Sprintf("forge: github.com/%s: last push %s", act.FullName, orDefaultStr(act.PushedAt, "unknown"))
-	out := []assess.Extra{}
-	keys := []string{"forge:pushed:" + act.PushedAt}
-	if act.Archived {
-		head += ", archived"
-		keys = append(keys, "forge:archived")
-	}
-	if act.Release != "" {
-		head += fmt.Sprintf(", latest release %s (%s)", act.Release, act.ReleasedAt)
-		keys = append(keys, "forge:release:"+act.Release)
-	}
-	if user != "" {
-		head += "; the owner's forge account is " + user
-	}
-	out = append(out, assess.Extra{Key: strings.Join(keys, " "), Line: head})
-	for i, cm := range act.Commits {
-		if i == per {
-			break
-		}
-		sha := cm.SHA
-		if len(sha) > 12 {
-			sha = sha[:12]
-		}
-		who := orDefaultStr(cm.Login, "no forge account")
-		if user != "" && strings.EqualFold(cm.Login, user) {
-			who += " (the owner's: an own commit, cite as commit:" + sha + ")"
-			a.commitsShown[c.Folder] = append(a.commitsShown[c.Folder], strings.ToLower(cm.SHA))
-		}
-		out = append(out, assess.Extra{Key: "forge:commit:" + cm.SHA, Line: fmt.Sprintf("  - commit:%s %s by %s", sha, cm.Day, who)})
-	}
-	return out
 }
 
 // extraAlike are the decisions on folders alike: near names, and the other

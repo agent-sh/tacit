@@ -133,6 +133,13 @@ func aDecision(folder, kind, status, why string) assess.Decision {
 	return assess.Decision{Folder: folder, Kind: kind, Status: status, Why: why, Description: "what " + folder + " is"}
 }
 
+// elsewhere is d with a root on another machine, which code refuses
+// whatever the status (code sets a dated folder's status itself).
+func elsewhere(d assess.Decision) assess.Decision {
+	d.Roots = []record.Root{{Host: "elsewhere", Path: "/srv/x"}}
+	return d
+}
+
 // independent is d citing independence evidence (keys code may list).
 func independent(d assess.Decision, keys ...string) assess.Decision {
 	d.Independent = keys
@@ -148,7 +155,7 @@ func TestAssessDecidesFoldersOnCodesEvidence(t *testing.T) {
 		first: map[string]assess.Decision{
 			"projects/widget":   aDecision("projects/widget", "repo", "active", "worked in session:s-one and session:s-two"),
 			"projects/upstream": aDecision("projects/upstream", "none", "dead", "an upstream clone: no own commits, no work"),
-			"projects/notes":    aDecision("projects/notes", "folder", "active", "the launch drafts, last 2026-10-11"),
+			"projects/notes":    elsewhere(aDecision("projects/notes", "folder", "active", "the launch drafts, last 2026-10-11")),
 		},
 		fixed: map[string]assess.Decision{
 			"projects/notes": aDecision("projects/notes", "folder", "active", "the launch drafts, session:s-three"),
@@ -176,7 +183,7 @@ func TestAssessDecidesFoldersOnCodesEvidence(t *testing.T) {
 	if i, j := strings.Index(p, "folder=projects/widget\n"), strings.Index(p, "folder=projects/widget-old"); i < 0 || j < i {
 		t.Error("the alias is asked before its repository")
 	}
-	if len(fa.prompts) != 2 || !strings.Contains(fa.prompts[1], "projects/notes: was[0].why: cites no session") {
+	if len(fa.prompts) != 2 || !strings.Contains(fa.prompts[1], "projects/notes: roots: elsewhere is another machine's") {
 		t.Fatalf("retry: %d prompts\n%s", len(fa.prompts), fa.prompts[len(fa.prompts)-1])
 	}
 	recs, errs := record.Walk(s.Dir)
@@ -219,7 +226,7 @@ func TestAssessDecidesFoldersOnCodesEvidence(t *testing.T) {
 // only flagged by the model; and nothing is written without the marker.
 func TestAssessRefusesTwiceAndKeepsTheOwnersStatus(t *testing.T) {
 	_, s := assessHome(t)
-	bad := aDecision("projects/widget", "repo", "active", "the last commit was yesterday")
+	bad := elsewhere(aDecision("projects/widget", "repo", "active", "the last commit was yesterday"))
 	fa := &fakeAssessor{first: map[string]assess.Decision{"projects/widget": bad}}
 	fa.install(t)
 	rep := &curate.Report{}

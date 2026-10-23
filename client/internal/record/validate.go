@@ -61,6 +61,11 @@ type Env struct {
 	// HoldsFacts reports a folder of the store that holds facts. Nil: not
 	// checked (lint).
 	HoldsFacts func(folder string) bool
+	// CodeStatus is the status code sets for a folder from its dates (the
+	// owner's activity days against its rhythm), "" for none. An entry whose
+	// why is code's ("code: ...") and whose status is code's rests on those
+	// dates: it needs no citation. Nil: none.
+	CodeStatus func(folder string) string
 	// Static is lint's check: the record as it stands, without the writer
 	// (no history entry is new, no day is today's).
 	Static bool
@@ -287,7 +292,10 @@ func Validate(old, rec *Record, by string, env Env) []Problem {
 			if t := env.Records[rec.SuppressedBy]; rec.SuppressedBy != "" && OrgFolds(rec, t) && OrgChecked(t) {
 				orgOK = true // the folder named for an org, folded into it by code
 			}
-			if known == 0 && !quietOK && !orgOK {
+			// Active or dormant from the dates code checked (assess.Activity):
+			// the dates are the evidence, written in the why by code.
+			codeOK := env.CodeStatus != nil && strings.HasPrefix(fresh.Why, "code: ") && rec.Status != "" && env.CodeStatus(folder) == rec.Status
+			if known == 0 && !quietOK && !orgOK && !codeOK {
 				add("was[0].why", "cites no session, note or commit code can find", "cite the session ids (claude:<id>, codex:<id>), note:<name> or the folder's own commits (commit:<sha>, as the evidence lists them) the decision rests on; a git date alone is no reason; a folder whose evidence shows no session at all may only be dead, dormant or needs-review")
 			}
 		}
