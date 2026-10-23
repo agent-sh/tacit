@@ -341,3 +341,49 @@ func TestValidateAliasOfAFolderWithFacts(t *testing.T) {
 	r.Aliases = []string{"widget-svc"}
 	expect(t, Validate(nil, r, ByOpus, e), "")
 }
+
+// A dead project's successor is another live project with a record; the
+// owner's words an entry rests on go together, dated no later than it.
+func TestValidateSuccessorAndWords(t *testing.T) {
+	succ := repoRec("crane")
+	gone := repoRec("gishra")
+	gone.SuppressedBy = "projects/crane"
+	dead := func(s string) *Record {
+		r := repoRec("oldtool")
+		r.Status, r.Was[0].Status, r.Successor = StatusDead, StatusDead, s
+		r.Was[0].Why = "code: dead on the owner's words of 2026-10-06, note:n1"
+		r.Was[0].Words, r.Was[0].WordsFrom, r.Was[0].WordsOn = "to delete the plugins oldtool", "note:n1", "2026-10-06"
+		return r
+	}
+	expect(t, Validate(nil, dead("projects/crane"), ByOpus, env(succ, gone)), "")
+	expect(t, Validate(nil, dead("projects/gishra"), ByOpus, env(succ, gone)), "successor: names a folder that is suppressed")
+	expect(t, Validate(nil, dead("projects/nothing"), ByOpus, env(succ, gone)), "successor: names a folder with no record")
+	expect(t, Validate(nil, dead("projects/oldtool"), ByOpus, env(succ)), "successor: points at the folder itself")
+	expect(t, Validate(nil, dead("areas/ops"), ByOpus, env(succ)), "successor: is no project folder")
+	active := dead("projects/crane")
+	active.Status, active.Was[0].Status = StatusActive, StatusActive
+	expect(t, Validate(nil, active, ByOpus, env(succ)), "successor: only a dead project has a successor")
+	w := dead("")
+	w.Was[0].WordsOn = "2099-01-01"
+	expect(t, Validate(nil, w, ByOpus, env(succ)), "words_on: not a day on or before the entry's")
+	w = dead("")
+	w.Was[0].WordsFrom = ""
+	expect(t, Validate(nil, w, ByOpus, env(succ)), "words, words_from and words_on go together")
+	w = dead("")
+	w.Was[0].WordsFrom = "note:unknown"
+	expect(t, Validate(nil, w, ByOpus, env(succ)), "words_from: names no note or quote code can find")
+	if day, ok := dead("").Was[0].RestsOnWords(); !ok || day != "2026-10-06" {
+		t.Fatalf("rests on words: %v %s", ok, day)
+	}
+	// The local layer's status takes its successor with it.
+	l := dead("projects/crane")
+	m := MergeLocal(map[string]*Record{"projects/oldtool": repoRec("oldtool")}, map[string]*Record{"projects/oldtool": l})
+	if m["projects/oldtool"].Successor != "projects/crane" || !m["projects/oldtool"].LocalStatus {
+		t.Fatalf("merge %+v", m["projects/oldtool"])
+	}
+	b, _ := dead("projects/crane").Encode()
+	r, err := Parse("projects/oldtool", b)
+	if err != nil || r.Successor != "projects/crane" || r.Was[0].WordsOn != "2026-10-06" {
+		t.Fatalf("round trip %v %+v", err, r)
+	}
+}

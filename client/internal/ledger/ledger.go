@@ -260,12 +260,18 @@ func (m Marker) Encode() []byte {
 // the format. Version 2 adds statements (SPEC.md, "Statements": facts of
 // type statement) and orgs (SPEC.md, "Orgs": orgs/<name> folders with
 // records of kind org, and a project record's org and forge fields), which
-// an older binary's strict decoders and its lint do not know.
-const FormatVersion = 2
+// an older binary's strict decoders and its lint do not know. Version 3
+// adds a project record's successor and a status entry's owner words
+// (SPEC.md, "Folder records": Owner words beat dates, Successors).
+const FormatVersion = 3
 
 // StatementsFormat is the first format whose stores hold statements and
 // orgs.
 const StatementsFormat = 2
+
+// SuccessorsFormat is the first format whose records may hold a successor
+// and a status entry's owner words (words, words_from, words_on).
+const SuccessorsFormat = 3
 
 // Format is review/format.json, the store's format marker: the format
 // version every machine that writes the store can read, set by the owner's
@@ -321,6 +327,10 @@ func (f Format) Statements() bool { return f.Writes() && f.Version >= Statements
 // Orgs reports a store whose writers may write org folders and a project
 // record's org and forge fields: every machine reads format 2.
 func (f Format) Orgs() bool { return f.Statements() }
+
+// Successors reports a store whose writers may write a record's successor
+// and an entry's owner words: every machine reads format 3.
+func (f Format) Successors() bool { return f.Writes() && f.Version >= SuccessorsFormat }
 
 // Encode renders the marker.
 func (f Format) Encode() []byte {

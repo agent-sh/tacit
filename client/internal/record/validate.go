@@ -219,6 +219,11 @@ func Validate(old, rec *Record, by string, env Env) []Problem {
 		if e.Quote != "" && e.QuoteFrom != "" && env.QuoteBacked != nil && !env.QuoteBacked(e.Quote, e.QuoteFrom) {
 			add(f+".quote", "the quote ledger does not record these words of the owner's", "")
 		}
+		if (e.Words == "") != (e.WordsFrom == "") || (e.Words == "") != (e.WordsOn == "") {
+			add(f+".words", "words, words_from and words_on go together", "")
+		} else if e.WordsOn != "" && (!fact.IsDate(e.WordsOn) || e.WordsOn > e.Date) {
+			add(f+".words_on", "not a day on or before the entry's", fmt.Sprintf("got %q, the entry is of %s", e.WordsOn, e.Date))
+		}
 		if i > 0 && e.Date > rec.Was[i-1].Date {
 			add(f+".date", "is later than the entry above it (newest first)", "")
 		}
@@ -298,6 +303,9 @@ func Validate(old, rec *Record, by string, env Env) []Problem {
 			if known == 0 && !quietOK && !orgOK && !codeOK {
 				add("was[0].why", "cites no session, note or commit code can find", "cite the session ids (claude:<id>, codex:<id>), note:<name> or the folder's own commits (commit:<sha>, as the evidence lists them) the decision rests on; a git date alone is no reason; a folder whose evidence shows no session at all may only be dead, dormant or needs-review")
 			}
+		}
+		if fresh.WordsFrom != "" && env.KnownSession != nil && !env.KnownSession(fresh.WordsFrom) {
+			add("was[0].words_from", "names no note or quote code can find", fmt.Sprintf("got %q", fresh.WordsFrom))
 		}
 		if fresh.Quote != "" && !ownerQuote(fresh) && fresh.By == ByOwner && by == ByOpus {
 			add("was[0].quote", "is not a quote of the owner's that the ledger backs and that names the folder", "")
@@ -381,6 +389,29 @@ func Validate(old, rec *Record, by string, env Env) []Problem {
 		}
 	}
 
+	// Successor: another live project replaces a dead one (its facts stay).
+	if s := rec.Successor; s != "" {
+		target := env.Records[s]
+		switch {
+		case Broad(rec.Kind) != "project" || !strings.HasPrefix(folder, "projects/"):
+			add("successor", "only a project has a successor", fmt.Sprintf("got %q on a %s", s, rec.Kind))
+		case rec.Status != StatusDead:
+			add("successor", "only a dead project has a successor", fmt.Sprintf("the status is %s", rec.Status))
+		case rec.SuppressedBy != "":
+			add("successor", "a suppressed folder has no successor: suppressed_by already names where it went", "")
+		case s == folder:
+			add("successor", "points at the folder itself", "")
+		case !strings.HasPrefix(s, "projects/") || !IsFolder(s):
+			add("successor", "is no project folder", fmt.Sprintf("got %q; projects/<name>", s))
+		case target == nil:
+			add("successor", "names a folder with no record", fmt.Sprintf("%s; it needs a record first", s))
+		case !target.Live():
+			add("successor", "names a folder that is suppressed", fmt.Sprintf("%s is suppressed by %s; name that", s, target.SuppressedBy))
+		case Broad(target.Kind) != "project" || notProjectRecord(target):
+			add("successor", "names no live project", fmt.Sprintf("%s is a %s, %s", s, target.Kind, target.Status))
+		}
+	}
+
 	// What each kind may hold.
 	if rec.Kind != KindArea && (len(rec.Tools) > 0 || len(rec.Commands) > 0) {
 		add("tools", "only an area has tools and commands", "")
@@ -450,6 +481,16 @@ func Validate(old, rec *Record, by string, env Env) []Problem {
 	}
 	return out
 }
+
+// notProjectRecord reports a record the assessment made of a folder that is
+// no project (kind none: dead, its why saying so).
+func notProjectRecord(r *Record) bool {
+	return r.Status == StatusDead && len(r.Was) > 0 && strings.HasPrefix(r.Was[0].Why, NotProjectWhy)
+}
+
+// NotProjectWhy starts the why of a record of a folder that is no project
+// (the assessment's kind none).
+const NotProjectWhy = "not a project: "
 
 // noSessions reports a record whose evidence (code's) shows no session at
 // all: none worked there, none filed a note there, none proposed it.
