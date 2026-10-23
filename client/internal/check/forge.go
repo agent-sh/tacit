@@ -151,6 +151,8 @@ type cacheEntry struct {
 	At       string `json:"at"`
 	// Activity is a repository's Activity (Cache.Activity's entries).
 	Activity *Activity `json:"activity,omitempty"`
+	// Commit is one commit's CommitDetail (Cache.Commit's entries).
+	Commit *CommitDetail `json:"commit,omitempty"`
 }
 
 // Default times to live of the forge's answers.
