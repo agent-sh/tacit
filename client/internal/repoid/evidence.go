@@ -191,3 +191,47 @@ func RecentOwnCommits(ctx context.Context, root string, n int) []OwnCommit {
 	}
 	return cs
 }
+
+// ChangedCommit is one commit with the files its diff changes (a merge's
+// against its first parent).
+type ChangedCommit struct {
+	Hash  string // full
+	Day   string // committer date, YYYY-MM-DD
+	Merge bool
+	Files []string
+}
+
+// OwnCommitsAfter are the commits of the checkout at root under this
+// machine's git identity whose committer day is after the day after
+// (YYYY-MM-DD), newest first, at most n, each with the files it changes;
+// nil when git cannot say or there are none.
+func OwnCommitsAfter(ctx context.Context, root, after string, n int) []ChangedCommit {
+	id := identity(ctx, root)
+	if id == "" || n <= 0 || !dayRx.MatchString(after) {
+		return nil
+	}
+	out, err := gitOut(ctx, root, "log", "--all", "--fixed-strings", "--author="+id, "--since="+after+"T23:59:59", "-n", strconv.Itoa(n),
+		"--diff-merges=first-parent", "--name-only", "--format=%x1e%H%x09%cs%x09%P")
+	if err != nil {
+		return nil
+	}
+	var cs []ChangedCommit
+	for _, rec := range strings.Split(out, "\x1e") {
+		lines := strings.Split(strings.TrimSpace(rec), "\n")
+		if len(lines) == 0 {
+			continue
+		}
+		parts := strings.SplitN(lines[0], "\t", 3)
+		if len(parts) < 2 || !dayRx.MatchString(parts[1]) || parts[1] <= after {
+			continue
+		}
+		c := ChangedCommit{Hash: parts[0], Day: parts[1], Merge: len(parts) == 3 && len(strings.Fields(parts[2])) > 1}
+		for _, f := range lines[1:] {
+			if f = strings.TrimSpace(f); f != "" {
+				c.Files = append(c.Files, f)
+			}
+		}
+		cs = append(cs, c)
+	}
+	return cs
+}

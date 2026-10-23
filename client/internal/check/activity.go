@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -163,4 +164,73 @@ func (c *Cache) Activity(ctx context.Context, owner, name string, n int) (Activi
 		c.changed = true
 	}
 	return cut(a), err
+}
+
+// CommitDetail is what a forge says of one commit: its author (the forge
+// account and the commit's own name and email), how many parents it has,
+// and the files its diff changes (a merge's against its first parent).
+type CommitDetail struct {
+	SHA     string   `json:"sha"`
+	Login   string   `json:"login,omitempty"`
+	Name    string   `json:"name,omitempty"`
+	Email   string   `json:"email,omitempty"`
+	Parents int      `json:"parents"`
+	Files   []string `json:"files,omitempty"`
+}
+
+// CommitForge is a forge that can say a commit's CommitDetail.
+type CommitForge interface {
+	Commit(ctx context.Context, owner, name, sha string) (CommitDetail, error)
+}
+
+var shaRx = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+
+// Commit asks gh for one commit's author, parents and files.
+func (g *GitHub) Commit(ctx context.Context, owner, name, sha string) (CommitDetail, error) {
+	sha = strings.ToLower(sha)
+	if !ValidRepo(owner, name) || !shaRx.MatchString(sha) {
+		return CommitDetail{}, ErrNotFound
+	}
+	out, errb, err := g.run(ctx, g.Bin, "api", "repos/"+owner+"/"+name+"/commits/"+sha, "--jq",
+		`{sha: .sha, login: (.author.login // ""), name: .commit.author.name, email: .commit.author.email, parents: (.parents | length), files: [.files[]?.filename]}`)
+	if err != nil {
+		if e := string(out) + string(errb); strings.Contains(e, "HTTP 404") || strings.Contains(e, "HTTP 422") {
+			return CommitDetail{}, ErrNotFound
+		}
+		return CommitDetail{}, ErrUnavailable
+	}
+	var d CommitDetail
+	if json.Unmarshal(out, &d) != nil || d.SHA == "" {
+		return CommitDetail{}, ErrUnavailable
+	}
+	return d, nil
+}
+
+// Commit is the forge's CommitDetail of owner/name's commit sha, kept for
+// good once fetched (a commit never changes).
+func (c *Cache) Commit(ctx context.Context, owner, name, sha string) (CommitDetail, error) {
+	if c == nil {
+		return CommitDetail{}, ErrUnavailable
+	}
+	cf, ok := c.Forge.(CommitForge)
+	if !ok {
+		return CommitDetail{}, ErrUnavailable
+	}
+	key := c.Forge.Name() + "-commit:" + strings.ToLower(owner+"/"+name+"@"+sha)
+	c.mu.Lock()
+	c.load()
+	if e, ok := c.entries[key]; ok && e.Commit != nil {
+		c.mu.Unlock()
+		return *e.Commit, nil
+	}
+	c.mu.Unlock()
+	d, err := cf.Commit(ctx, owner, name, sha)
+	if err != nil {
+		return CommitDetail{}, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries[key] = cacheEntry{Found: true, Commit: &d, At: stamp(c.Now())}
+	c.changed = true
+	return d, nil
 }
