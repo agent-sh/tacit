@@ -96,6 +96,19 @@ func TestApplyStatus(t *testing.T) {
 		{"dead, archived", func() Candidate {
 			c := dated()
 			c.Activity.Forge = &check.Activity{Archived: true}
+			c.Activity.Measure("2026-10-23")
+			return c
+		}, Decision{Kind: "repo", Status: "dead", Why: "gone"}, record.StatusDead, false},
+		{"dead, archived with a live successor", func() Candidate {
+			c := dated()
+			c.Activity.Forge = &check.Activity{Archived: true}
+			c.Activity.Measure("2026-10-23")
+			c.Ancestors = []Ancestor{{Name: "y", Folder: "projects/y"}}
+			return c
+		}, Decision{Kind: "repo", Status: "dead", Why: "gone"}, record.StatusDormant, true},
+		{"dead, deleted", func() Candidate {
+			c := dated()
+			c.Activity.Deleted = true
 			return c
 		}, Decision{Kind: "repo", Status: "dead", Why: "gone"}, record.StatusDead, false},
 		{"shipped on a release alone", func() Candidate {

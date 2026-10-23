@@ -324,7 +324,8 @@ func (c Candidate) CodeStatus() string {
 // has (the owner's rule: active vs dormant is set by code from dates; dead
 // and shipped are never set from dates): an answer of active or dormant takes
 // code's; dead stands only on explicit evidence (the forge has it archived or
-// deleted, or the why cites a note shown for this folder), shipped only on a
+// deleted with no live successor, or the why cites a note shown for this
+// folder), shipped only on a
 // release the forge lists or a note shown, together with the owner's words
 // shown for it and cited; anything else takes code's status, saying why.
 // needs-review stands only for a folder dated by sessions alone (what it is
@@ -361,7 +362,7 @@ func ApplyStatus(c Candidate, d Decision, shown string) (Decision, bool) {
 		if c.deadEvidence(why, shown) {
 			return d, false
 		}
-		refused = "dead, which code does not take without explicit evidence (the forge has it archived or deleted, a note shown for it cited, the owner's words)"
+		refused = "dead, which code does not take without explicit evidence (the forge has it archived or deleted and no successor is in sight, a note shown for it cited, the owner's words)"
 	case record.StatusShipped:
 		if c.shippedEvidence(why, shown) {
 			return d, false
@@ -382,10 +383,12 @@ func ApplyStatus(c Candidate, d Decision, shown string) (Decision, bool) {
 }
 
 // deadEvidence reports explicit evidence a dead answer cites or code holds:
-// the forge has the repository archived or deleted, or why cites a note
-// shown for this folder.
+// the forge has the repository archived or deleted and code found no live
+// successor for it (no ancestor candidate, no candidate real repository:
+// one with a successor folds into it), or why cites a note shown for this
+// folder.
 func (c Candidate) deadEvidence(why, shown string) bool {
-	if a := c.Activity; a != nil && (a.Deleted || a.Forge != nil && a.Forge.Archived) {
+	if a := c.Activity; a != nil && (a.Deleted || a.Forge != nil && a.Forge.Archived) && len(c.Ancestors) == 0 && len(c.Proposed()) == 0 {
 		return true
 	}
 	return citesShownNote(why, shown)
