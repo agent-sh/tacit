@@ -322,3 +322,38 @@ func TestEnforceKeepsARepositoryOfItsOwn(t *testing.T) {
 		t.Fatalf("commits only: %v", ps)
 	}
 }
+
+// A folder nothing says anything of gets code's needs-review for any other
+// answer, unless the answer cites a note its evidence shows or the owner's
+// words; a plain needs-review stands.
+func TestNoEvidenceOutcome(t *testing.T) {
+	c := Candidate{Folder: "projects/lonely", Name: repoCheck("lonely", check.Fails, ""), NoEvidence: true}
+	shown := Render([]Candidate{c}) + "  - [[lonely-elsewhere]] (projects/other, 2026-10-01): lonely is the theme\n"
+	for _, d := range []Decision{
+		{Kind: "folder", Status: "active", Why: "worked on lately"},
+		{Kind: "none", Status: "dead", Why: "a scratch folder"},
+		{Kind: "folder", Status: "dormant", SuppressedBy: "projects/other", Why: "part of other, note:made-up"},
+	} {
+		got, ok := NoEvidenceOutcome(c, d, shown)
+		if !ok || got.Status != "needs-review" || got.SuppressedBy != "" || got.Kind != "folder" || !strings.HasPrefix(got.Why, "code: no ancestor candidate") || !strings.Contains(got.Why, "the answer "+d.Kind+" "+d.Status) {
+			t.Errorf("%+v: %+v %v", d, got, ok)
+		}
+	}
+	for _, d := range []Decision{
+		{Kind: "folder", Status: "needs-review", Why: "nothing says"},
+		{Kind: "folder", Status: "dormant", SuppressedBy: "projects/other", Why: "part of other (note:lonely-elsewhere)"},
+		{Kind: "folder", Status: "active", OwnerQuote: "lonely is live", Why: "the owner says so"},
+	} {
+		if _, ok := NoEvidenceOutcome(c, d, shown); ok {
+			t.Errorf("%+v replaced", d)
+		}
+	}
+	// Code's candidate repository is evidence: the rule is not for it.
+	c.Real = []RealRepo{{Name: "lonelier"}}
+	if _, ok := NoEvidenceOutcome(c, Decision{Kind: "folder", Status: "dormant", SuppressedBy: "projects/lonelier"}, shown); ok {
+		t.Error("replaced with a candidate repository")
+	}
+	if !strings.Contains(Render([]Candidate{{Folder: "projects/x", NoEvidence: true}}), "evidence of what it is: none") {
+		t.Error("not rendered")
+	}
+}

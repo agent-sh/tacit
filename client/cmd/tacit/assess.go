@@ -1219,6 +1219,12 @@ func (a *assessor) check(cands []assess.Candidate, ds []assess.Decision, pending
 			acc = append(acc, decided{c: c, rec: rec, old: target, moves: proposalMoves(c, into), closes: closeProposals(c, "folded into "+into, a.today)})
 			continue
 		}
+		// Nothing says what it is: code's needs-review, unless the decision
+		// rests on evidence code showed.
+		if nd, ok := assess.NoEvidenceOutcome(c, d, assess.Render([]assess.Candidate{c})); ok {
+			fmt.Fprintf(os.Stderr, "assess: %s: no evidence of what it is; code's outcome needs-review (the answer was %s %s, citing nothing shown)\n", c.Folder, d.Kind, d.Status)
+			d = nd
+		}
 		owner, line, op := a.verifyOwner(c.Folder, d)
 		if op != "" {
 			ps = append(ps, op)

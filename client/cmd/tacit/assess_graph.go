@@ -217,9 +217,9 @@ func (g *ancestorGraph) final(x string) (string, []string) {
 }
 
 // applyGraph fills c's ancestors from the graph (each resolved to its final
-// ancestor) and its independence evidence against them.
+// ancestor), its independence evidence, and whether nothing says what it is.
 func (a *assessor) applyGraph(c *assess.Candidate) {
-	c.Ancestors, c.Independence = nil, nil
+	c.Ancestors, c.Independence, c.NoEvidence = nil, nil, false
 	name, ok := strings.CutPrefix(c.Folder, "projects/")
 	if !ok || c.Kind != "" {
 		return
@@ -274,9 +274,27 @@ func (a *assessor) applyGraph(c *assess.Candidate) {
 		}
 		c.Ancestors = append(c.Ancestors, *by[f])
 	}
+	ix := a.ancestorIx()
+	live := a.liveOf(c.Folder)
+	ind := a.independence(c, name, ix, live)
 	if len(c.Ancestors) > 0 {
-		c.Independence = a.independence(c, name, a.ancestorIx(), a.liveOf(c.Folder))
+		c.Independence = ind
+		return
 	}
+	// A checkout is evidence: git says whether it is real work and whose.
+	// So is a repository code proposes from its evidence.
+	c.NoEvidence = len(ind) == 0 && !c.GitRoot && !sessionEvidence(*c) && len(c.Real) == 0
+}
+
+// sessionEvidence reports evidence of a session: one that worked in its
+// checkout or folder, or filed its notes or facts.
+func sessionEvidence(c assess.Candidate) bool {
+	for _, e := range c.Evidence {
+		if e.WorkSessions > 0 || e.FactSessions > 0 || len(e.Sessions) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // sortedUnion is a ∪ b, sorted.
