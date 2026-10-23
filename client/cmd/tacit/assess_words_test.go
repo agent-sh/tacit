@@ -220,3 +220,35 @@ func TestSuccessorLinkedLater(t *testing.T) {
 		t.Fatalf("lint %v %v", fs, err)
 	}
 }
+
+// A name code proves is the repository's (another name of its checkout: a
+// symlink) becomes an alias by code, not by the model; a name that is a
+// folder holding facts (widget-old) gets its own record instead.
+func TestProvenNamesBecomeAliases(t *testing.T) {
+	home, s := assessHome(t)
+	if err := os.Symlink("widget", filepath.Join(home, "projects", "gizmo")); err != nil {
+		t.Fatal(err)
+	}
+	fa := &fakeAssessor{first: map[string]assess.Decision{"projects/widget": aDecision("projects/widget", "repo", "active", "worked in session:s-one")}}
+	fa.install(t)
+	if errs := assessStep(context.Background(), s, assessOpts{model: "opus", only: map[string]bool{"projects/widget": true}}, &curate.Report{}); errs != 0 {
+		t.Fatalf("errs %d", errs)
+	}
+	recs, _ := record.Walk(s.Dir)
+	w := recs["projects/widget"]
+	if w == nil || !slicesContains(w.Aliases, "gizmo") || slicesContains(w.Aliases, "widget-old") {
+		t.Fatalf("widget %+v", w)
+	}
+	found := false
+	for _, e := range w.Evidence {
+		for _, c := range e.Checks {
+			found = found || c.Value == "gizmo" && c.Verdict == "holds"
+		}
+	}
+	if !found {
+		t.Fatalf("the proof is not in the evidence: %+v", w.Evidence)
+	}
+	if fs, err := lint.Run(s.Dir); err != nil || len(fs) != 0 {
+		t.Fatalf("lint %v %v", fs, err)
+	}
+}

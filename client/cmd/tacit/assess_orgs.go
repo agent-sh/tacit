@@ -210,11 +210,12 @@ func (a *assessor) forgeFacts(name string) (forge, org string, checks []check.Re
 
 // forgeNames are the records whose current forge name or organization the
 // forge's answer changed (a rename updates the name; the folder, the
-// intended name, stays), and the org folders that two or more live projects
-// now belong to. With the local layer only the layer's own folders: a store
+// intended name, stays) or that go by names code proves and they do not list
+// (provenNames), and the org folders that two or more live projects now
+// belong to. With the local layer only the layer's own folders: a store
 // record's fields are the store's.
 func (a *assessor) forgeNames(only map[string]bool) []decided {
-	if !a.format2() || a.checker.Forge == nil {
+	if !a.format2() {
 		return nil
 	}
 	pending := map[string]*record.Record{}
@@ -237,8 +238,15 @@ func (a *assessor) forgeNames(only map[string]bool) []decided {
 			}
 			continue
 		}
-		forge, org, checks, ok := a.forgeFacts(r.Name)
-		if !ok || (forge == r.Forge && org == r.Org) {
+		forge, org, checks, ok := "", "", []check.Result(nil), false
+		if a.checker.Forge != nil {
+			forge, org, checks, ok = a.forgeFacts(r.Name)
+		}
+		if !ok {
+			forge, org, checks = r.Forge, r.Org, nil
+		}
+		names, nameChecks := a.provenNames(r, forge, pending)
+		if forge == r.Forge && org == r.Org && len(names) == 0 {
 			if r.Org != "" {
 				members[r.Org]++
 			}
@@ -246,7 +254,10 @@ func (a *assessor) forgeNames(only map[string]bool) []decided {
 		}
 		rec := r.Clone()
 		rec.Forge, rec.Org = forge, org
-		rec.Evidence = append(append([]record.Evidence(nil), rec.Evidence...), record.Evidence{Gathered: a.today, Checks: checks})
+		rec.Aliases = append(rec.Aliases, names...)
+		if checks = append(checks, nameChecks...); len(checks) > 0 {
+			rec.Evidence = append(append([]record.Evidence(nil), rec.Evidence...), record.Evidence{Gathered: a.today, Checks: checks})
+		}
 		if ps := record.Validate(r, rec, record.ByOpus, a.recordEnv(pending, nil)); len(ps) > 0 {
 			fmt.Fprintf(os.Stderr, "assess: %s: forge name not written: %s\n", f, strings.Join(messages(ps), "; "))
 			continue
@@ -259,7 +270,7 @@ func (a *assessor) forgeNames(only map[string]bool) []decided {
 	}
 	for _, org := range sortedKeysInt(members) {
 		orgF := "orgs/" + org
-		if members[org] < 2 || a.recs[orgF] != nil || pending[orgF] != nil || (only != nil && !only[orgF]) {
+		if members[org] < 2 || a.recs[orgF] != nil || pending[orgF] != nil || (only != nil && !only[orgF]) || a.checker.Forge == nil {
 			continue
 		}
 		isOrg, res := a.checker.IsOrg(a.ctx, org)
@@ -274,6 +285,48 @@ func (a *assessor) forgeNames(only map[string]bool) []decided {
 		out = append(out, decided{c: assess.Candidate{Folder: orgF, Reason: "a forge organization of two or more projects"}, rec: rec})
 	}
 	return out
+}
+
+// provenNames are the other names code proves r's repository goes by that
+// r does not list yet (the owner's rule: dry claims are checked; a name a
+// check proves is code's to add, not the model's): the catalogs' other
+// names of its checkout and clones of its origin (check.Checker.Same), and
+// the forge's current name of it (forge, host/owner/name) when that differs
+// from the folder's. A name another folder has (its folder, or its name or
+// alias) or that holds facts is left out: that folder has or gets its own
+// record, suppressed into r's. The checks are returned for the evidence.
+func (a *assessor) provenNames(r *record.Record, forge string, pending map[string]*record.Record) ([]string, []check.Result) {
+	taken := func(n string) bool {
+		if n == r.Name || slices.Contains(r.Aliases, n) || !fact.IsSlug(n) || a.holdsFacts("projects/"+n) {
+			return true
+		}
+		for f, o := range a.recs {
+			if p := pending[f]; p != nil {
+				o = p
+			}
+			if f != r.Folder && (f == "projects/"+n || slices.Contains(o.Names(), n)) {
+				return true
+			}
+		}
+		for f, o := range pending {
+			if f != r.Folder && (f == "projects/"+n || slices.Contains(o.Names(), n)) {
+				return true
+			}
+		}
+		return false
+	}
+	var out []string
+	var checks []check.Result
+	for _, res := range a.checker.Same(r.Name) {
+		if n := strings.ToLower(res.Value); !taken(n) && !slices.Contains(out, n) {
+			out = append(out, n)
+			checks = append(checks, res)
+		}
+	}
+	if fn := strings.ToLower(path.Base(forge)); forge != "" && !taken(fn) && !slices.Contains(out, fn) {
+		out = append(out, fn)
+	}
+	return out, checks
 }
 
 // codeSteps writes decisions code makes without the model (org folders, the
