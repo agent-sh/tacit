@@ -24,7 +24,7 @@ import (
 const KindNone = "none"
 
 // NotProject starts the why of a "none" decision's entry, written by code.
-const NotProject = "not a project: "
+const NotProject = record.NotProjectWhy
 
 // Candidate is one folder to decide.
 type Candidate struct {
@@ -114,6 +114,22 @@ type Candidate struct {
 	// before its first ask (activity.go): the owner's activity days, the
 	// forge's record, and code's status from them. nil: none gathered.
 	Activity *Activity
+	// Notes are the live facts in other folders that name it, the owner's
+	// rulings, statements and decisions first (words.go), at most NotesShown
+	// of NotesTotal, gathered before its first ask.
+	Notes      []Note
+	NotesTotal int
+	// RealWork is the owner's activity on it after a day, classified as
+	// work or maintenance by code (maintenance.go); nil: none known.
+	RealWork func(after string) Changes `json:"-"`
+}
+
+// Changes is c's RealWork after day (none when it has no way to say).
+func (c Candidate) Changes(after string) Changes {
+	if c.RealWork == nil {
+		return Changes{}
+	}
+	return c.RealWork(after)
 }
 
 // Ancestor is a folder code proposes a candidate is part of, with why.
@@ -315,6 +331,13 @@ type Decision struct {
 	// Independent: for a folder with ancestors that stands alone (no
 	// suppressed_by), the keys of the independence evidence it rests on.
 	Independent Keys `json:"independent,omitempty"`
+	// OwnerStatus: the owner's word on this folder's status in notes code
+	// showed (words.go), each cited verbatim.
+	OwnerStatus OwnerWordsList `json:"owner_status,omitempty"`
+	// Words and Successor are code's (WordsOutcome), never the model's: the
+	// owner's words the status rests on, and the live project replacing it.
+	Words     *record.Entry `json:"-"`
+	Successor string        `json:"-"`
 }
 
 // Prompt is the assessment prompt; %s is the candidates (Render).
@@ -322,7 +345,7 @@ const Prompt = `You are the curator of tacit, a fact store shared by coding agen
 
 For each folder decide:
 - kind: "repo" (a git repository that is the owner's project), "folder" (a project folder of the owner's that is no git repository), or "none" (not a project of the owner's: an upstream or tool clone nobody works in, a folder that only holds other checkouts, the home directory, a scratch or task directory). For a proposed area or topic: "area" or "topic", or set reject or fold_into.
-- status: "active" (being worked), "dormant" (real work, nobody on it lately), "shipped" (done and delivered), "dead" (abandoned or gone), or "needs-review" (the evidence does not settle what the folder is). Active or dormant is a question of dates, and code answers it: a folder with a line "status (code's): ..." has the status code set from the owner's activity days (its own commits here and on the forge, other machines' catalogs, the sessions that worked in it or filed its notes), measured against the folder's own rhythm; answer that status, which code writes in any case. Dates never make a folder dead or shipped: answer "dead" only on explicit evidence your why cites (the forge has it archived or deleted, a note shown for this folder that says it was removed or abandoned, as note:<name>, or the owner's words in owner_quote), and "shipped" only on a release, package or deploy shown for it together with the owner's statement or decision shown for it, cited by its ref; without that evidence code keeps its own status. Answer needs-review for such a folder only when what it is is not settled; for one with the owner's own commits git settles that (real work, theirs), so code keeps its status there too. A folder with no "status (code's)" line has no activity day code could find: its status comes from the owner's words and the notes; git says whether a folder is real work and whose, never whether it is shipped, dormant or dead.
+- status: "active" (being worked), "dormant" (real work, nobody on it lately), "shipped" (done and delivered), "dead" (abandoned or gone), or "needs-review" (the evidence does not settle what the folder is). Active or dormant is a question of dates, and code answers it: a folder with a line "status (code's): ..." has the status code set from the owner's activity days (its own commits here and on the forge, other machines' catalogs, the sessions that worked in it or filed its notes), measured against the folder's own rhythm; answer that status, which code writes in any case. Dates never make a folder dead or shipped: answer "dead" only on explicit evidence your why cites (the forge has it archived or deleted, a note shown for this folder that says it was removed or abandoned, as note:<name>, the owner's word on its status in owner_status, or the owner's words in owner_quote), and "shipped" only on a release, package or deploy shown for it together with the owner's statement or decision shown for it, cited by its ref; without that evidence code keeps its own status. Answer needs-review for such a folder only when what it is is not settled; for one with the owner's own commits git settles that (real work, theirs), so code keeps its status there too. A folder with no "status (code's)" line has no activity day code could find: its status comes from the owner's words and the notes; git says whether a folder is real work and whose, never whether it is shipped, dormant or dead.
 - why: one or two sentences. For a folder with code's status, say what the folder is (its kind, its ancestor or its own identity, and for dead or shipped the evidence): code writes the reason of its status itself. Otherwise it MUST cite the sessions, notes or commits the decision rests on, as code shows them for THIS folder (session:<id>, claude:<id>, codex:<id>, note:<name>, or commit:<sha> for the folder's own commits under the owner's git identity or by the owner's forge account, which code lists); never cite a session that is not about this folder just to have a citation. Code refuses a why that cites none it can find; a git date alone is no reason. A folder whose evidence shows no session at all (no work sessions, no fact sessions) needs no citation, and its status can then only be dead, dormant or needs-review: say that no session touched it.
 - description: one line (at most 200 characters) saying what the folder is.
 - body: optional, a few sentences: why the folder exists and what belongs in it.
@@ -334,6 +357,7 @@ For each folder decide:
 - repos: a topic only, optional: repositories it is tied to.
 - owner_quote, owner_quote_from: only when the owner's own words shown below state the decision for THIS folder (its name or alias in them): copy their words exactly and the ref they came from. Words that only mention the folder are evidence for your why, not a quote here.
 - reject (true) or fold_into ("<existing folder>"): a proposed area or topic only, when it should not be made, with why.
+- owner_status: optional, [{"says": ..., "words": ..., "from": "note:<name>", "successor": ...}], one item for each note code lists for THIS folder ("notes in other folders that name it") that is the owner's ruling, statement, words or decision and states THIS folder's status: says "dead" (obsolete, abandoned, removed, to be deleted, replaced by another), "shipped" (done and delivered) or "dormant" (paused); words copied exactly from that note (the part that says it); successor, for dead only, the project the words say replaces this one (its folder name), when they name one. A note that lists several folders states the status of each it names that way. Words that only mention the folder, or say something else of it, are no item. The owner's word beats dates: code takes the newest item's status (and successor) over its dates unless the owner really worked on it after the day of the words (sessions that worked in it, commits changing more than dependency, CI or version files), which code checks; answer status as the newest item says. A successor is another project that took this one's place: this folder stays, dead, its facts kept as its history, and the record links to the successor; it is not suppressed_by, which is for the same project under another name or a part of one (its facts move there).
 
 Find the ancestor. A folder that is clearly related to another is part of it: worktrees, clones, scratch folders, task folders and subfolders almost always belong to a project. Code lists such a folder's "ancestor candidates", best first, with the evidence (git metadata of a worktree or clone, paths that put the folder inside the ancestor's tree, a name that contains the ancestor's, sessions that worked in both with facts that point at it). Such a folder is presumed part of one of them: set suppressed_by to the one its evidence supports. It stands alone (any decision without suppressed_by: a status of its own, needs-review or kind none) only on evidence of an identity of its own, which code lists as "independence" items (its own commits, a remote or forge repository of its own that no ancestor has, work done in a folder of its own name across sessions): cite their keys in independent. Code refuses a folder with ancestor candidates that stands alone without such a citation, and when code lists no independence item it must take one of the candidates. One whose independence shows its own commits and a remote or forge repository of its own is another repository than its ancestors: it stands alone, and code refuses folding it into one of them. Code resolves chains (a part of b, b part of c: c is the ancestor, shown "by way of b"), and the evidence includes where the store talks about the folder: most of the facts of other project folders that name it are the ancestor's. Folders that share an ancestor come in one batch, the ancestor first: decide them together and alike.
 
@@ -349,7 +373,7 @@ A folder left for review comes back on later runs with "extra evidence" code gat
 Folders whose names follow one pattern (kv-013-g1, kv-140-g2) come together, with the decisions already made on folders like them: decide alike folders alike, and when one differs say in why what in its evidence differs.
 
 Output ONLY a JSON array, one object per folder, no prose, no code fence:
-  {"folder": "...", "kind": "...", "status": "...", "why": "...", "description": "...", "body": "...", "aliases": [], "suppressed_by": "", "roots": [], "tools": [], "commands": [], "repos": [], "owner_quote": "", "owner_quote_from": "", "reject": false, "fold_into": "", "independent": []}
+  {"folder": "...", "kind": "...", "status": "...", "why": "...", "description": "...", "body": "...", "aliases": [], "suppressed_by": "", "roots": [], "tools": [], "commands": [], "repos": [], "owner_quote": "", "owner_quote_from": "", "reject": false, "fold_into": "", "independent": [], "owner_status": []}
 
 FOLDERS:
 %s
@@ -425,6 +449,9 @@ func Render(cands []Candidate) string {
 		}
 		if c.NoEvidence {
 			b.WriteString("evidence of what it is: none (no ancestor candidate, no candidate real repository, no identity of its own: no own commits, no remote or forge repository of its own, no work in a folder of its name; no session worked in it or filed its facts): code's outcome is needs-review, asked again with wider evidence; another decision only when its why cites a note:<name> shown here, or the owner's words, that settles it\n")
+		}
+		for _, l := range c.noteLines() {
+			b.WriteString(l + "\n")
 		}
 		for _, l := range c.Context {
 			b.WriteString(l + "\n")
@@ -575,6 +602,9 @@ func Build(c Candidate, d Decision, today string, owner *Owner) *record.Record {
 		}
 	}
 	entry := record.Entry{Status: status, Date: today, By: record.ByOpus, Why: why}
+	if w := d.Words; w != nil && kind != record.KindArea && kind != record.KindTopic {
+		entry.Words, entry.WordsFrom, entry.WordsOn = w.Words, w.WordsFrom, w.WordsOn
+	}
 	if owner != nil {
 		entry.By, entry.Quote, entry.QuoteFrom = record.ByOwner, owner.Quote, owner.From
 	}
@@ -595,6 +625,16 @@ func Build(c Candidate, d Decision, today string, owner *Owner) *record.Record {
 	}
 	r.Folder = c.Folder
 	r.Name = c.Folder[strings.LastIndex(c.Folder, "/")+1:]
+	// The successor goes with the status that names it: a dead project's,
+	// set by code from the owner's words, gone with any other status.
+	switch {
+	case status != record.StatusDead || r.SuppressedBy != "":
+		r.Successor = ""
+	case d.Successor != "":
+		r.Successor = d.Successor
+	case d.Words != nil || d.Kind == KindNone:
+		r.Successor = ""
+	}
 	if desc := strings.TrimSpace(d.Description); desc != "" {
 		r.Description = desc
 	}

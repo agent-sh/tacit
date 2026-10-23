@@ -162,6 +162,18 @@ type assessor struct {
 	ancMemo                map[string]string           // ancestorFolder's answers over the graph's view
 	codeStatus             map[string]string           // folder -> code's status from its dates (assess_activity.go)
 	prefetched             bool                        // prefetchActivity ran
+	workMemo               map[string]assess.Changes   // realWork's answers, folder@day
+	runFolders             map[string]bool             // this run's candidates (a successor among them waits for its record)
+	waiting                []waitingDecision           // decisions waiting for their successor's record
+	finalPass              bool                        // the run's end: a successor with no record no longer waits
+	wantSuccessor          map[string]string           // folder -> the successor its words name, linked once it has a record
+}
+
+// waitingDecision is a decision whose successor gets its record later in
+// the run: checked again at the run's end.
+type waitingDecision struct {
+	c assess.Candidate
+	d assess.Decision
 }
 
 func newAssessor(ctx context.Context, s *store.Store, local bool) (*assessor, error) {
@@ -355,6 +367,28 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 			out = append(out, c)
 			continue
 		}
+		// A status that rests on the owner's words moves only on the owner's
+		// real work after the day of the words (assess_words.go).
+		if len(r.Was) > 0 && r.Live() {
+			if day, ok := restsOnWords(r.Was[0]); ok {
+				if ch := c.Changes(day); ch.Changed() {
+					seen[f] = true
+					c.Reason = fmt.Sprintf("the owner worked on it after the %s words its %s status rests on (%s)", day, r.Status, ch.Summary(3))
+					a.applyGraph(&c)
+					out = append(out, c)
+				}
+				continue
+			}
+		}
+		// The owner's word on a folder may come after its decision: a note of
+		// theirs naming it that no decision of it saw is asked about.
+		if k := a.unseenOwnerNotes(c); k > 0 && r.Live() && r.Status != record.StatusNeedsReview && len(r.Was) > 0 && r.Was[0].By == record.ByOpus && !notProject(r) {
+			seen[f] = true
+			c.Reason = fmt.Sprintf("%d note(s) of the owner's that name it came after its last decision", k)
+			a.applyGraph(&c)
+			out = append(out, c)
+			continue
+		}
 		// Active or dormant is code's from the folder's dates: when the dates
 		// move it across its window, code writes the new status itself.
 		if cs := c.CodeStatus(); statusDrift(r, cs) {
@@ -409,9 +443,9 @@ func (a *assessor) candidate(folder, reason string, old *record.Record) assess.C
 		c.Canonical, c.CanonicalWhy = a.canonicalName(c)
 		if rc.Verdict != check.Holds || rc.Renamed != "" {
 			c.Real, c.ProposedKey = a.realRepos(folder, name, rc)
-			c.Context = append(c.Context, a.namedElsewhere(folder, name, 3)...)
 		}
 		a.activity(&c)
+		a.notes(&c)
 	}
 	return c
 }
@@ -423,34 +457,6 @@ func (a *assessor) projectFolders() map[string]bool {
 		if !f.InInbox() && !overlay.IsInbox(f.Path) && strings.HasPrefix(f.Meta.Scope, "projects/") {
 			out[f.Meta.Scope] = true
 		}
-	}
-	return out
-}
-
-// namedElsewhere are up to n live facts outside folder whose words name the
-// folder's name as a whole word, newest first: evidence of what it is that
-// sits in other folders (the owner's rule: run searches, the evidence may be
-// elsewhere).
-func (a *assessor) namedElsewhere(folder, name string, n int) []string {
-	var hits []*fact.Fact
-	for _, f := range a.facts {
-		if f.Meta.Scope == folder || f.InInbox() || overlay.IsInbox(f.Path) || f.Meta.SupersededBy != "" || f.Meta.Retired != "" {
-			continue
-		}
-		if record.WholeWord(strings.ToLower(f.Meta.Description+"\n"+f.Body), name) {
-			hits = append(hits, f)
-		}
-	}
-	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Meta.Created > hits[j].Meta.Created })
-	var out []string
-	for i, f := range hits {
-		if i == n {
-			break
-		}
-		out = append(out, fmt.Sprintf("  - [[%s]] (%s, %s): %s", f.Meta.Name, f.Meta.Scope, f.Meta.Created, fact.ClipDescription(f.Meta.Description, 200)))
-	}
-	if len(out) > 0 {
-		out = append([]string{fmt.Sprintf("facts in other folders that name %s (%d, newest first):", name, len(hits))}, out...)
 	}
 	return out
 }
@@ -1165,6 +1171,9 @@ type decided struct {
 	// log's close lines.
 	moves  []moveItem
 	closes []folderEntry
+	// review: optional review lines (the owner's words their later work
+	// overrode), for review/<date>-assess.md.
+	review []string
 }
 
 // check judges an answer's decisions in candidate order, accepting each
@@ -1242,19 +1251,39 @@ func (a *assessor) check(cands []assess.Candidate, ds []assess.Decision, pending
 			acc = append(acc, decided{c: c, rec: rec, old: target, moves: proposalMoves(c, into), closes: closeProposals(c, "folded into "+into, a.today)})
 			continue
 		}
-		// Nothing says what it is: code's needs-review, unless the decision
-		// rests on evidence code showed.
-		if nd, ok := assess.NoEvidenceOutcome(c, d, assess.Render([]assess.Candidate{c})); ok {
-			fmt.Fprintf(os.Stderr, "assess: %s: no evidence of what it is; code's outcome needs-review (the answer was %s %s, citing nothing shown)\n", c.Folder, d.Kind, d.Status)
-			d = nd
+		// The owner's word on its status, checked, beats its dates unless the
+		// owner worked on it after the day of the words.
+		words, wait, wps, review := a.ownerWordsOutcome(c, d, pending)
+		if wait {
+			a.waiting = append(a.waiting, waitingDecision{c: c, d: d})
+			continue
 		}
-		// Active or dormant is code's from the dates it checked; dead and
-		// shipped stand only on the explicit evidence they cite.
-		if nd, ok := assess.ApplyStatus(c, d, assess.Render([]assess.Candidate{c})); ok {
-			if nd.Status != d.Status {
-				fmt.Fprintf(os.Stderr, "assess: %s: code's status %s from its dates (the answer was %s)\n", c.Folder, nd.Status, d.Status)
+		ps = append(ps, wps...)
+		if words != nil {
+			d = *words
+		} else {
+			// Nothing says what it is: code's needs-review, unless the decision
+			// rests on evidence code showed.
+			if nd, ok := assess.NoEvidenceOutcome(c, d, assess.Render([]assess.Candidate{c})); ok {
+				fmt.Fprintf(os.Stderr, "assess: %s: no evidence of what it is; code's outcome needs-review (the answer was %s %s, citing nothing shown)\n", c.Folder, d.Kind, d.Status)
+				d = nd
 			}
-			d = nd
+			// Active or dormant is code's from the dates it checked; dead and
+			// shipped stand only on the explicit evidence they cite.
+			if nd, ok := assess.ApplyStatus(c, d, assess.Render([]assess.Candidate{c})); ok {
+				if nd.Status != d.Status {
+					fmt.Fprintf(os.Stderr, "assess: %s: code's status %s from its dates (the answer was %s)\n", c.Folder, nd.Status, d.Status)
+				}
+				d = nd
+			}
+			// A dead or shipped status that rests on a note shown for it is that
+			// note's word against the dates: it moves on the owner's real work
+			// after the note's day, as the owner's words do.
+			if (d.Status == record.StatusDead || d.Status == record.StatusShipped) && d.Kind != assess.KindNone && strings.TrimSpace(d.SuppressedBy) == "" && a.format3() {
+				if n, day, ok := assess.NoteDay(c, d.Why); ok && day != "" && strings.TrimSpace(n.Description) != "" {
+					d.Words = &record.Entry{Words: clipOne(n.Description, 500), WordsFrom: "note:" + n.Name, WordsOn: day}
+				}
+			}
 		}
 		owner, line, op := a.verifyOwner(c.Folder, d)
 		if op != "" {
@@ -1287,7 +1316,7 @@ func (a *assessor) check(cands []assess.Candidate, ds []assess.Decision, pending
 		}
 		pending[c.Folder] = rec
 		*pendingLedger = append(*pendingLedger, line...)
-		dd := decided{c: c, rec: rec, old: c.Old, line: line}
+		dd := decided{c: c, rec: rec, old: c.Old, line: line, review: review}
 		if c.Kind != "" {
 			dd.moves, dd.closes = proposalMoves(c, c.Folder), closeProposals(c, "made "+c.Folder, a.today)
 		}
@@ -1579,6 +1608,7 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 	// Code's own decisions first: the folders named for forge organizations
 	// become their orgs' folders.
 	errs0 := a.codeSteps(ctx, s, "a forge organization's folder", a.orgFolders(o.only), o.dry, rep)
+	errs0 += a.codeSteps(ctx, s, "the successor the owner's words name", a.linkSuccessors(held), o.dry, rep)
 	all := a.candidates(max+len(held.Folders), o.only)
 	rep.ReviewWaiting += a.reviewWaiting
 	// A folder refused in assessHoldRuns runs on the same evidence waits
@@ -1609,6 +1639,10 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 	}
 	cands = append(cands, a.proposalCandidates(max-len(cands), o.only)...)
 	rep.AssessCandidates += len(cands)
+	a.runFolders = map[string]bool{}
+	for _, c := range cands {
+		a.runFolders[c.Folder] = true
+	}
 	errs := errs0
 	pending := map[string]*record.Record{}
 	var pendingLedger []byte
@@ -1717,6 +1751,35 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 		}
 		finish(acc)
 	}
+	// Decisions that waited for their successor's record, checked again now
+	// that the run's other decisions are written.
+	if len(a.waiting) > 0 && ctx.Err() == nil {
+		a.finalPass = true
+		var wc []assess.Candidate
+		var wd []assess.Decision
+		seenW := map[string]bool{}
+		for _, w := range a.waiting {
+			if seenW[w.c.Folder] {
+				continue
+			}
+			seenW[w.c.Folder] = true
+			c := w.c
+			a.applyGraph(&c)
+			a.refresh(&c, decidedRun)
+			wc, wd = append(wc, c), append(wd, w.d)
+		}
+		a.waiting = nil
+		acc, refused := a.check(wc, wd, pending, &pendingLedger)
+		for _, r := range refused {
+			for _, c := range wc {
+				if c.Folder == r.Folder {
+					refusedRun = append(refusedRun, refusedItem{c: c, problems: strings.Join(r.Problems, "; ")})
+				}
+			}
+		}
+		rep.AssessRefused += len(refused)
+		finish(acc)
+	}
 	// The refused folders' fingerprints are taken as the next run will see
 	// them (the records as this run left them), so a folder whose evidence
 	// does not change waits.
@@ -1724,6 +1787,14 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 	// asked again when that changes.
 	for _, d := range acceptedRun {
 		f := d.c.Folder
+		if keys := ownerNoteKeys(d.c); len(keys) > 0 {
+			held.Notes[f] = keys
+		} else {
+			delete(held.Notes, f)
+		}
+		if want := a.wantSuccessor[f]; want != "" && d.rec.Status == record.StatusDead && d.rec.Successor == "" {
+			held.Successors[f] = want
+		}
 		_, had := held.Review[f]
 		if d.c.Attempt > 0 || had {
 			rep.ReviewRetried++
@@ -1763,6 +1834,10 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 			next = fmt.Sprintf("refused in %d runs: asked again when a wider search finds something new, and on %s in any case", h.Runs, nextRetry(h.At))
 		}
 		fmt.Fprintf(os.Stderr, "assess: %s refused twice, %s: %s\n", c.Folder, next, r.problems)
+	}
+	// Successors named by this run's decisions that got their records since.
+	if ctx.Err() == nil {
+		errs += a.codeSteps(ctx, s, "the successor the owner's words name", a.linkSuccessors(held), o.dry, rep)
 	}
 	// The forge's current names and orgs of the live projects, by code.
 	if ctx.Err() == nil {
@@ -1890,6 +1965,12 @@ type heldState struct {
 	// Review: the folders left for review, with what they were last decided
 	// on (assess_deep.go).
 	Review map[string]reviewState `json:"review,omitempty"`
+	// Notes: the owner's notes (assess.Note.OwnerTier) that name a folder,
+	// by key (noteKey), that its last decision saw.
+	Notes map[string][]string `json:"notes,omitempty"`
+	// Successors: dead folders whose owner's words name a successor that had
+	// no record when they were decided, folder -> its folder (linkSuccessors).
+	Successors map[string]string `json:"successors,omitempty"`
 }
 
 type heldFolder struct {
@@ -1916,6 +1997,12 @@ func loadHeld(path string) *heldState {
 	}
 	if h.Review == nil {
 		h.Review = map[string]reviewState{}
+	}
+	if h.Notes == nil {
+		h.Notes = map[string][]string{}
+	}
+	if h.Successors == nil {
+		h.Successors = map[string]string{}
 	}
 	h.path = path
 	return h
@@ -2121,8 +2208,17 @@ func (a *assessor) write(ctx context.Context, s *store.Store, ds []decided) (int
 			moves = append(moves, d.moves...)
 			closes = append(closes, d.closes...)
 		}
-		if len(files) == 0 && len(closes) == 0 {
+		var review []string
+		for _, d := range ds {
+			review = append(review, d.review...)
+		}
+		if len(files) == 0 && len(closes) == 0 && len(review) == 0 {
 			return nil, "", nil
+		}
+		if len(review) > 0 {
+			rel := "review/" + a.today + "-assess.md"
+			cur, _ := os.ReadFile(filepath.Join(s.Dir, filepath.FromSlash(rel)))
+			files[rel] = append(append([]byte(nil), cur...), []byte(strings.Join(review, "\n")+"\n")...)
 		}
 		var log []byte
 		if len(moves) > 0 {
@@ -2171,6 +2267,11 @@ func (a *assessor) writeLocal(s *store.Store, ds []decided) (int, error) {
 	var moves []moveItem
 	var log []byte
 	for _, d := range ds {
+		if len(d.review) > 0 {
+			if err := overlay.Append(dir, s.Dir, overlay.ReviewDir+"/"+a.today+"-assess.md", []byte(strings.Join(d.review, "\n")+"\n")); err != nil {
+				return n, err
+			}
+		}
 		moves = append(moves, d.moves...)
 		for _, c := range d.closes {
 			log = append(log, c.line()...)

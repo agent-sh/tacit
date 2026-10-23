@@ -340,6 +340,9 @@ func Fingerprint(c Candidate) string {
 	if c.Activity != nil {
 		b.WriteString("activity " + c.Activity.Key() + "\n")
 	}
+	for _, n := range c.Notes {
+		fmt.Fprintf(&b, "note %s %d %s\n", n.Name, n.Tier, n.Created)
+	}
 	for _, l := range c.Context {
 		if !strings.HasPrefix(l, "owner's turn (") {
 			b.WriteString(l + "\n")

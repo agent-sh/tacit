@@ -192,6 +192,8 @@ func repoStartHits(ctx context.Context, ix *search.Index, sit search.Situation) 
 	}
 	// The repository's org: its rules and standards, lightly.
 	keep = append(keep, orgStartHits(ctx, ix, sit, keep)...)
+	// A dead repository's successor: its rules and standards, lightly.
+	keep = append(keep, successorStartHits(ctx, ix, sit, keep)...)
 	return keep, true, nil
 }
 

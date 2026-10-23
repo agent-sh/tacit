@@ -359,12 +359,23 @@ func ApplyStatus(c Candidate, d Decision, shown string) (Decision, bool) {
 		refused = "needs-review, but its own commits say what it is and its dates whether it is worked"
 	case record.StatusActive, record.StatusDormant:
 	case record.StatusDead:
-		if c.deadEvidence(why, shown) {
+		if c.forgeDead() {
+			return d, false
+		}
+		if citesShownNote(why, shown) {
+			if ch, day, ok := c.changedAfterNote(why); ok {
+				refused = fmt.Sprintf("dead on a note of %s, but the owner worked on it after that day (%s)", day, ch.Summary(3))
+				break
+			}
 			return d, false
 		}
 		refused = "dead, which code does not take without explicit evidence (the forge has it archived or deleted and no successor is in sight, a note shown for it cited, the owner's words)"
 	case record.StatusShipped:
 		if c.shippedEvidence(why, shown) {
+			if ch, day, ok := c.changedAfterNote(why); ok {
+				refused = fmt.Sprintf("shipped on a note of %s, but the owner worked on it after that day (%s)", day, ch.Summary(3))
+				break
+			}
 			return d, false
 		}
 		refused = "shipped, which code takes only on a release, package or deploy shown for it together with the owner's statement or decision, cited"
@@ -382,16 +393,26 @@ func ApplyStatus(c Candidate, d Decision, shown string) (Decision, bool) {
 	return d, true
 }
 
-// deadEvidence reports explicit evidence a dead answer cites or code holds:
-// the forge has the repository archived or deleted and code found no live
-// successor for it (no ancestor candidate, no candidate real repository:
-// one with a successor folds into it), or why cites a note shown for this
-// folder.
-func (c Candidate) deadEvidence(why, shown string) bool {
-	if a := c.Activity; a != nil && (a.Deleted || a.Forge != nil && a.Forge.Archived) && len(c.Ancestors) == 0 && len(c.Proposed()) == 0 {
-		return true
+// forgeDead reports the forge's explicit evidence of a dead repository: it
+// has it archived or deleted and code found no live successor for it (no
+// ancestor candidate, no candidate real repository: one with a successor
+// folds into it).
+func (c Candidate) forgeDead() bool {
+	a := c.Activity
+	return a != nil && (a.Deleted || a.Forge != nil && a.Forge.Archived) && len(c.Ancestors) == 0 && len(c.Proposed()) == 0
+}
+
+// changedAfterNote reports the owner's real work on the folder after the day
+// of the first of its notes why cites (words.go): a dead or shipped answer
+// resting on a note is the note's word against the dates, which stands only
+// while the owner has not worked on it since.
+func (c Candidate) changedAfterNote(why string) (Changes, string, bool) {
+	_, day, ok := NoteDay(c, why)
+	if !ok || day == "" {
+		return Changes{}, "", false
 	}
-	return citesShownNote(why, shown)
+	ch := c.Changes(day)
+	return ch, day, ch.Changed()
 }
 
 // shippedEvidence reports a release (the forge's) or a cited note shown,

@@ -289,10 +289,31 @@ func treeSearch(ctx context.Context, ix *search.Index, a browseArgs) (string, er
 		}
 	}
 	out := page(keep, max(0, a.Offset), limit)
+	out += replacedLines(keep, max(0, a.Offset), limit, a.Records)
 	if footer != "" && len(keep) > 0 {
 		out += footer
 	}
 	return out, nil
+}
+
+// replacedLines say, for each folder of the page's facts whose record has a
+// successor, that another project replaced it: its facts are its history.
+func replacedLines(hits []search.Hit, offset, limit int, recs map[string]*record.Record) string {
+	if offset >= len(hits) || len(recs) == 0 {
+		return ""
+	}
+	end := min(len(hits), offset+limit)
+	var b strings.Builder
+	seen := map[string]bool{}
+	for _, h := range hits[offset:end] {
+		r := recs[h.Scope]
+		if seen[h.Scope] || r == nil || r.Successor == "" {
+			continue
+		}
+		seen[h.Scope] = true
+		fmt.Fprintf(&b, "# %s is %s, replaced by %s: its facts are its history\n", h.Scope, r.Status, r.Successor)
+	}
+	return b.String()
 }
 
 // sessionRepoBoost is how much more a fact of the session's repository
