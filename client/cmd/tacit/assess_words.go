@@ -74,12 +74,20 @@ func (a *assessor) notes(c *assess.Candidate) {
 				n.Said = day
 			}
 		}
+		n.Projects = append([]string(nil), f.Meta.AppliesTo.Repos...) // resolved below, for the notes shown
 		ns = append(ns, n)
 	}
 	assess.SortNotes(ns)
 	c.NotesTotal = len(ns)
 	if len(ns) > assess.NotesShown {
 		ns = ns[:assess.NotesShown]
+	}
+	self := map[string]bool{}
+	for _, x := range a.namesOf(*c, name) {
+		self[x] = true
+	}
+	for i := range ns {
+		ns[i].Projects = a.noteProjects(ns[i], self)
 	}
 	c.Notes = ns
 	folder, act := c.Folder, c.Activity
@@ -238,6 +246,12 @@ func (a *assessor) successorFolder(self, name string, pending map[string]*record
 	if recs[f] == nil {
 		if o := record.RepoOwner(recs, n); o != "" {
 			f = o
+		}
+	}
+	// An old name the forge renamed leads to the current one.
+	if recs[f] == nil && a.checker != nil {
+		if rc := a.checker.Repo(a.ctx, n); rc.Renamed != "" && rc.Renamed != n {
+			f, n = "projects/"+rc.Renamed, rc.Renamed
 		}
 	}
 	if recs[f] == nil {
@@ -410,4 +424,65 @@ func (a *assessor) linkSuccessors(held *heldState) []decided {
 		out = append(out, decided{c: assess.Candidate{Folder: f, Reason: "its successor has a record now"}, rec: rec, old: r})
 	}
 	return out
+}
+
+// maxNoteProjects bounds the project folders listed for one note.
+const maxNoteProjects = 6
+
+// noteProjects are the project folders other than the candidate (self: its
+// names) that a note's text names (a name with a dash or of 8 letters or
+// more as words, dashes read as spaces; a plain short word only when the
+// note lists it in applies_to.repos, held in n.Projects on the way in),
+// each shown with where it leads: its live folder through suppression, or
+// the forge's current name of a renamed one.
+func (a *assessor) noteProjects(n assess.Note, self map[string]bool) []string {
+	repos := map[string]bool{}
+	for _, r := range n.Projects {
+		repos[strings.ToLower(r)] = true
+	}
+	pool := map[string]bool{}
+	for _, f := range a.ancestorUniverse() {
+		pool[strings.TrimPrefix(f, "projects/")] = true
+	}
+	for _, x := range a.ancestorNamePool() {
+		pool[x] = true
+	}
+	text := n.Description + "\n" + n.Body
+	var out []string
+	seen := map[string]bool{}
+	for _, x := range sortedKeysBool(pool) {
+		if self[x] || seen[x] || len(out) == maxNoteProjects {
+			continue
+		}
+		if wordish(x) && !repos[x] || !assess.NameIn(text, x) {
+			continue
+		}
+		seen[x] = true
+		out = append(out, a.projectLead(x))
+	}
+	return out
+}
+
+// projectLead is a project name with where it leads now: "x" for a live
+// folder of its own, "x (suppressed into projects/y)", "x (renamed: y)" by
+// the forge, "x (another name of y)" by a record's alias.
+func (a *assessor) projectLead(x string) string {
+	f := "projects/" + x
+	if a.recs[f] == nil {
+		if o := record.RepoOwner(a.recs, x); o != "" && o != f {
+			if w, _, err := record.Resolve(a.recs, o); err == nil {
+				return x + " (another name of " + strings.TrimPrefix(w, "projects/") + ")"
+			}
+		}
+		if a.checker != nil {
+			if rc := a.checker.Repo(a.ctx, x); rc.Renamed != "" {
+				return x + " (renamed: " + rc.Renamed + ")"
+			}
+		}
+		return x
+	}
+	if w, _, err := record.Resolve(a.recs, f); err == nil && w != f {
+		return x + " (suppressed into " + w + ")"
+	}
+	return x
 }
