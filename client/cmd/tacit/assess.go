@@ -42,6 +42,10 @@ import (
 // assessRun is the model call of the assessment; tests substitute it.
 var assessRun curate.Runner = curate.RunCLI
 
+// assessFactOrder, when set, reorders the facts a run reads (tests: the
+// outcome must not depend on it).
+var assessFactOrder func([]*fact.Fact)
+
 // Bounds of one run: candidates per model call, and in all.
 const (
 	assessBatch = 10
@@ -142,12 +146,20 @@ type assessor struct {
 	held                   *heldState          // refused and review-waiting folders' fingerprints
 	refiler                *refiler            // where facts' own evidence points (codeDecision)
 	decisions              map[string]ownerDecision
-	lowText                map[*fact.Fact]string // facts' lowered text, for the re-attempts' store search
-	retry                  bool                  // assessOpts.retry
-	attempts               []reviewAttempt       // this run's re-attempts, for the log
-	reviewWaiting          int                   // folders left for review that wait this run
-	ancIx                  *ancestorIndex        // where facts put folders (assess_ancestor.go)
-	families               map[string]bool       // names a family of repositories holds (familyName)
+	lowText                map[*fact.Fact]string       // facts' lowered text, for the re-attempts' store search
+	retry                  bool                        // assessOpts.retry
+	attempts               []reviewAttempt             // this run's re-attempts, for the log
+	reviewWaiting          int                         // folders left for review that wait this run
+	ancIx                  *ancestorIndex              // where facts put folders (assess_ancestor.go)
+	families               map[string]bool             // names a family of repositories holds (familyName)
+	namePool               []string                    // ancestorNamePool, for the graph's view
+	ancView                map[string]*record.Record   // the records, and a stand-in for each folder with none (assess_graph.go)
+	graph                  *ancestorGraph              // every folder's ancestors, to a fixpoint (assess_graph.go)
+	nodeBase               map[string]assess.Candidate // a folder with no record, as first gathered this run
+	mentions               map[string]map[string]int   // word -> project folder -> its live facts that name it
+	pathCache              *repoid.Cache               // repoCache
+	scopeFacts             map[string]int              // project folder -> its live facts (mentionedIn)
+	ancMemo                map[string]string           // ancestorFolder's answers over the graph's view
 }
 
 func newAssessor(ctx context.Context, s *store.Store, local bool) (*assessor, error) {
@@ -161,6 +173,9 @@ func newAssessor(ctx context.Context, s *store.Store, local bool) (*assessor, er
 	if local {
 		lf, _ := overlay.Load(overlay.Dir())
 		a.facts = append(a.facts, lf...)
+	}
+	if assessFactOrder != nil {
+		assessFactOrder(a.facts)
 	}
 	a.catalog = knownCatalog(home, s.Dir, local)
 	a.checker = newChecker(ctx, home, s.Dir, a.catalog)
@@ -270,6 +285,8 @@ func (a *assessor) holdsFacts(folder string) bool {
 func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate {
 	seen := map[string]bool{}
 	var out []assess.Candidate
+	// The ancestor graph over every folder, before any decision.
+	a.buildGraph()
 	consider := func(folder, reason string) {
 		if seen[folder] || !record.IsFolder(folder) || (only != nil && !only[folder]) {
 			return
@@ -279,8 +296,9 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 			return // a folder with a record: the records' turn below
 		}
 		seen[folder] = true
-		c := a.candidate(folder, reason, nil)
-		a.findAncestors(&c)
+		c := a.nodeCandidate(folder)
+		c.Reason = reason
+		a.applyGraph(&c)
 		out = append(out, c)
 	}
 	for _, n := range a.catalog.Names() {
@@ -316,7 +334,7 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 			if why != "" {
 				seen[f] = true
 				c.Reason = why
-				a.findAncestors(&c)
+				a.applyGraph(&c)
 				out = append(out, c)
 			}
 			continue
@@ -324,7 +342,7 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 		if why := materialChange(r, ev, a.host); why != "" {
 			seen[f] = true
 			c.Reason = why
-			a.findAncestors(&c)
+			a.applyGraph(&c)
 			if a.held != nil && r.Live() && r.Status == record.StatusNeedsReview {
 				st := a.held.Review[f]
 				a.deepen(&c, st.Attempts+1, st.Keys, st.At)
@@ -337,7 +355,7 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 		// waits only when that wider search found nothing new, until the
 		// weekly retry.
 		if a.held != nil && r.Live() && r.Status == record.StatusNeedsReview {
-			a.findAncestors(&c)
+			a.applyGraph(&c)
 			if why, ok := a.reviewDue(&c); ok {
 				seen[f] = true
 				c.Reason = why
@@ -349,10 +367,17 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 	assess.SortCandidates(out, func(folder string) string {
 		return a.catalog.AliasOf(strings.TrimPrefix(folder, "projects/"))
 	})
-	if len(out) > max {
-		out = out[:max]
+	return out[:wholeGroups(out, max)]
+}
+
+// wholeGroups is where to cut cands at max candidates without cutting a
+// group apart: a group is decided in one run, its ancestor first.
+func wholeGroups(cands []assess.Candidate, max int) int {
+	j := min(max, len(cands))
+	for j > 0 && j < len(cands) && cands[j].Group != "" && cands[j].Group == cands[j-1].Group {
+		j++
 	}
-	return out
+	return j
 }
 
 // candidate is folder as the model is asked about it: code's evidence, the
@@ -460,8 +485,7 @@ func (a *assessor) realRepos(folder, name string, rc check.RepoCheck) ([]assess.
 		noteStable(n, fmt.Sprintf("%d of %d session(s) that filed its notes worked in its checkout", k, len(sessions)), 100*k)
 	}
 	paths, remotes, applies := map[string]int{}, map[string]int{}, map[string]int{}
-	cache := repoid.NewCache(a.home)
-	cache.Mains = a.catalog.Mains()
+	cache := a.repoCache()
 	for _, f := range live {
 		text := f.Meta.Description + "\n" + f.Body + "\n" + strings.Join(f.Meta.AppliesTo.Paths, "\n") + "\n" + strings.Join(f.Meta.AppliesTo.Commands, "\n")
 		inPaths, inRemotes := map[string]bool{}, map[string]bool{}
@@ -641,6 +665,25 @@ func groupSame(cands []assess.Candidate) {
 		if n, ok := strings.CutPrefix(cands[i].Folder, "projects/"); ok && size[find(n)] > 1 {
 			cands[i].Group = strings.TrimPrefix(find(n), "\x00")
 		}
+	}
+	// Ancestor first: how many candidates stand between each and the end of
+	// its chain of best ancestors among them.
+	best := map[string]string{}
+	isCand := map[string]bool{}
+	for _, c := range cands {
+		isCand[c.Folder] = true
+		if len(c.Ancestors) > 0 {
+			best[c.Folder] = c.Ancestors[0].Folder
+		}
+	}
+	for i := range cands {
+		d, x, seen := 0, cands[i].Folder, map[string]bool{}
+		for !seen[x] && isCand[best[x]] {
+			seen[x] = true
+			x = best[x]
+			d++
+		}
+		cands[i].Depth = d
 	}
 }
 
@@ -1523,8 +1566,8 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 				continue
 			}
 		}
-		if len(cands) < max {
-			cands = append(cands, c)
+		if len(cands) < max || len(cands) > 0 && c.Group != "" && c.Group == cands[len(cands)-1].Group {
+			cands = append(cands, c) // a group whole
 		}
 	}
 	cands = append(cands, a.proposalCandidates(max-len(cands), o.only)...)
@@ -1582,6 +1625,8 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 				a.recs[d.rec.Folder] = d.rec
 			}
 		}
+		// The ancestor graph again, over the records written.
+		a.buildGraph()
 		a.ledgerBytes = append(a.ledgerBytes, pendingLedger...)
 		pendingLedger = nil
 		pending = map[string]*record.Record{}
@@ -1596,8 +1641,8 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 		i += len(batch) // before any candidate waits to the end of the run
 		n++
 		for j := range batch {
-			// The records this run wrote may change where its ancestors live.
-			a.findAncestors(&batch[j])
+			// The graph as this run's records left it.
+			a.applyGraph(&batch[j])
 			a.refresh(&batch[j], decidedRun)
 		}
 		// The candidates the checks settle are decided by code; the rest go to
@@ -1609,7 +1654,7 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 			// the rest of the batch with them among the decisions on folders alike.
 			finish(codeAcc)
 			for j := range batch {
-				a.findAncestors(&batch[j])
+				a.applyGraph(&batch[j])
 				a.refresh(&batch[j], decidedRun)
 			}
 		}

@@ -38,7 +38,6 @@ import (
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/overlay"
 	"github.com/agent-sh/tacit/client/internal/record"
-	"github.com/agent-sh/tacit/client/internal/repoid"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
@@ -428,8 +427,7 @@ func (a *assessor) factsPoint(c assess.Candidate) (map[string]bool, int, int, st
 		a.refiler = newRefiler(a.home, a.catalog, a.recs)
 	}
 	a.refiler.recs = a.recs
-	cache := repoid.NewCache(a.home)
-	cache.Mains = a.catalog.Mains()
+	cache := a.repoCache()
 	// The proposed repositories, for the relative paths: each one's checkout
 	// here, else its forge repository (read at its default branch).
 	roots := map[string]pathSource{}
