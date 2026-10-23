@@ -59,8 +59,14 @@ func (g *GitHub) Activity(ctx context.Context, owner, name string, n int) (Activ
 	}
 	a := Activity{FullName: r.FullName, PushedAt: day(r.PushedAt), Archived: r.Archived}
 	if n > 0 {
-		out, _, err := g.run(ctx, g.Bin, "api", "repos/"+r.FullName+"/commits?per_page="+strconv.Itoa(n))
+		out, errb, err := g.run(ctx, g.Bin, "api", "repos/"+r.FullName+"/commits?per_page="+strconv.Itoa(n))
 		if err != nil {
+			// An empty repository has no commits to list (409), and one the
+			// commits of which the forge does not show (404) none either; any
+			// other failure is no answer.
+			if e := string(out) + string(errb); strings.Contains(e, "HTTP 409") || strings.Contains(e, "HTTP 404") {
+				return a, nil
+			}
 			return Activity{}, ErrUnavailable
 		}
 		var cs []struct {
@@ -109,8 +115,8 @@ func day(ts string) string {
 const ActivityTTL = 24 * time.Hour
 
 // activityCommits is how many commits the cache asks for, whatever a caller
-// wants: one answer serves every depth of a re-attempt.
-const activityCommits = 20
+// wants: one answer serves every caller (the forge pages at 100, one call).
+const activityCommits = 100
 
 // Activity is the forge's Activity for owner/name with its n newest commits
 // (at most activityCommits), from the cache while it is fresh (ActivityTTL).

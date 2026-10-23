@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -494,17 +495,17 @@ func TestCommitEvidenceAndSharedFields(t *testing.T) {
 	}
 	ctx := context.Background()
 	c, ok := CommitEvidence(ctx, repo)
-	if !ok || c.Own != 2 || c.First != "2026-10-01" || c.Last != "2026-10-03" {
+	if !ok || c.Own != 2 || c.First != "2026-10-01" || c.Last != "2026-10-03" || !reflect.DeepEqual(c.Days, []string{"2026-10-03", "2026-10-01"}) {
 		t.Fatalf("evidence %+v %v", c, ok)
 	}
 	cache := LoadCommitCache(filepath.Join(home, "state", CommitCacheFile))
-	if c2, ok := cache.Get(ctx, repo); !ok || c2 != c {
+	if c2, ok := cache.Get(ctx, repo); !ok || !reflect.DeepEqual(c2, c) {
 		t.Fatalf("cache %+v", c2)
 	}
 	if err := cache.Save(); err != nil {
 		t.Fatal(err)
 	}
-	if c3, _ := LoadCommitCache(filepath.Join(home, "state", CommitCacheFile)).Get(ctx, repo); c3 != c {
+	if c3, _ := LoadCommitCache(filepath.Join(home, "state", CommitCacheFile)).Get(ctx, repo); !reflect.DeepEqual(c3, c) {
 		t.Fatalf("cache reread %+v", c3)
 	}
 	empty := filepath.Join(home, "projects", "fresh")

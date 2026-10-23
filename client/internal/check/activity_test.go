@@ -67,10 +67,12 @@ func TestCacheActivity(t *testing.T) {
 }
 
 // GitHub's Activity reads the repository, its commits and its latest
-// release from gh; no release is no error.
+// release from gh; no release is no error, and an empty repository (no
+// commits to list) is a repository with none.
 func TestGitHubActivity(t *testing.T) {
 	answers := map[string]string{
 		"api repos/o/x":                    `{"full_name":"o/x","pushed_at":"2026-10-20T10:00:00Z","archived":true}`,
+		"api repos/o/empty":                `{"full_name":"o/empty","pushed_at":"2026-10-20T10:00:00Z"}`,
 		"api repos/o/x/commits?per_page=2": `[{"sha":"ABC","commit":{"author":{"date":"2026-10-19T09:00:00Z"}},"author":{"login":"o"}},{"sha":"def","commit":{"author":{"date":"2026-10-02T09:00:00Z"}},"author":null}]`,
 	}
 	g := &GitHub{Bin: "gh", run: func(_ context.Context, _ string, args ...string) ([]byte, []byte, error) {
@@ -86,5 +88,8 @@ func TestGitHubActivity(t *testing.T) {
 	}
 	if _, err := g.Activity(context.Background(), "o", "missing", 2); !errors.Is(err, ErrNotFound) {
 		t.Fatal(err)
+	}
+	if e, err := g.Activity(context.Background(), "o", "empty", 2); err != nil || e.FullName != "o/empty" || len(e.Commits) != 0 {
+		t.Fatalf("empty: %+v %v", e, err)
 	}
 }
