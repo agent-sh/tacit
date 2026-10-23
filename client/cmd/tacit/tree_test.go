@@ -65,7 +65,7 @@ func treeRig(t *testing.T) {
 func TestTacitSearchFiltersTheTree(t *testing.T) {
 	treeRig(t)
 	got := callTool(t, "tacit_search", map[string]any{"scope": "projects/widget", "path": "src/scheduler/pool.go"})
-	if !strings.Contains(got, "- widget-pool-decision: The pool owns worker state") || !strings.Contains(got, "widget-old-layout") || strings.Contains(got, "widget-signoff") {
+	if !strings.Contains(got, "- widget-pool-decision: agent note (2026-10-08): The pool owns worker state") || !strings.Contains(got, "widget-old-layout") || strings.Contains(got, "widget-signoff") {
 		t.Fatalf("path filter:\n%s", got)
 	}
 	if strings.Index(got, "widget-pool-decision") > strings.Index(got, "widget-old-layout") {

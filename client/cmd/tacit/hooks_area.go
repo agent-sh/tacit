@@ -55,7 +55,7 @@ func matchedAreas(recs map[string]*record.Record, toolName, command string) []st
 func areaHits(facts []search.Hit, command string, seen map[string]bool, limit int) []search.Hit {
 	var keep []search.Hit
 	for _, h := range facts {
-		if tier(h) <= 1 && !seen[h.Name] {
+		if tier(h) <= 1 && !h.Claim && !seen[h.Name] {
 			keep = append(keep, h)
 		}
 	}
@@ -194,7 +194,7 @@ func orgStartHits(ctx context.Context, ix *search.Index, sit search.Situation, h
 	}
 	var keep []search.Hit
 	for _, h := range hs {
-		if tier(h) == 0 && !h.Quiet && !seen[h.Name] {
+		if tier(h) == 0 && !h.Quiet && !h.Claim && !seen[h.Name] {
 			keep = append(keep, h)
 		}
 	}

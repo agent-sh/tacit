@@ -166,8 +166,8 @@ func repoStartHits(ctx context.Context, ix *search.Index, sit search.Situation) 
 	var keep []search.Hit
 	local := 0
 	for _, h := range tied {
-		if tier(h) > 1 || h.Quiet {
-			continue // a dead or shipped folder's facts are quiet in hooks
+		if tier(h) > 1 || h.Quiet || h.Claim {
+			continue // a dead or shipped folder's facts are quiet in hooks; a claim of the owner's authority without their words is held back
 		}
 		if h.Local && !overlay.IsCurated(h.Path) {
 			if local >= startLocalLimit {
@@ -376,7 +376,7 @@ type metaMatch struct {
 func metaSelect(all []search.Hit, names []string, paths []string, command, prompt string, seen map[string]bool, limit int) []search.Hit {
 	var ms []metaMatch
 	for _, h := range all {
-		if tier(h) > 1 || !repoTied(h, names) {
+		if tier(h) > 1 || h.Claim || !repoTied(h, names) {
 			continue
 		}
 		spec := 0
@@ -413,6 +413,21 @@ func metaSelect(all []search.Hit, names []string, paths []string, command, promp
 		}
 		if !seen[m.hit.Name] {
 			out = append(out, m.hit)
+		}
+	}
+	return out
+}
+
+// withoutClaims is hits less the facts that claim the owner's authority
+// without their verified words (search.Hit.Claim): no hook pushes one until
+// it is fixed (reworded as an agent's note, or its quote found); search and
+// the tree still show it, marked (SPEC.md, Provenance). Every hook's block
+// passes through it, whatever chose its lines.
+func withoutClaims(hits []search.Hit) []search.Hit {
+	out := hits[:0:0]
+	for _, h := range hits {
+		if !h.Claim {
+			out = append(out, h)
 		}
 	}
 	return out

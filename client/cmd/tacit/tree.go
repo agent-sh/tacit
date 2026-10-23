@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/agent-sh/tacit/client/internal/overlay"
+	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
 	"github.com/agent-sh/tacit/client/internal/tree"
 )
@@ -58,7 +60,8 @@ func runTree(args []string) int {
 // directory (readSession: its repository under every name delivery knows
 // it by, unless repo names one, and host): first how many facts of each
 // type the answer's scopes hold (scopeCounts, from the search index; left
-// out when the index cannot be opened), then the folder indexes.
+// out when the index cannot be opened), then the folder indexes, each fact
+// line saying whose it is (treeWhose).
 func treeView(s *store.Store, p string, depth int, repo, host string) (string, error) {
 	cwd, _ := os.Getwd()
 	ro := tree.ReadOptions{Store: s.Dir, Session: readSession(storeRecords(s.Dir), cwd, repo, host)}
@@ -69,13 +72,20 @@ func treeView(s *store.Store, p string, depth int, repo, host string) (string, e
 	if err != nil {
 		return "", err
 	}
-	return treeCounts(s, ro.Session, p) + out, nil
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	ix, err := openHookIndex(ctx, s)
+	if err != nil {
+		return out, nil
+	}
+	defer ix.Close()
+	return treeCounts(ctx, ix, ro.Session, p) + treeWhose(ctx, ix, out), nil
 }
 
 // treeCounts is scopeCounts for the scopes of a tree answer from folder p:
 // the session's scopes from the root, those under a scope root, or the one
 // scope p is in. Best effort: "" when the index cannot be read in time.
-func treeCounts(s *store.Store, sess tree.Session, p string) string {
+func treeCounts(ctx context.Context, ix *search.Index, sess tree.Session, p string) string {
 	p, _ = tree.Clean(p)
 	var scopes []string
 	if named := tree.Named(p); named != "" {
@@ -87,18 +97,51 @@ func treeCounts(s *store.Store, sess tree.Session, p string) string {
 			}
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	ix, err := openHookIndex(ctx, s)
-	if err != nil {
-		return ""
-	}
-	defer ix.Close()
 	out, err := scopeCounts(ctx, ix, scopes)
 	if err != nil || out == "" {
 		return ""
 	}
 	return out + "\n"
+}
+
+// treeLineRx is a fact line of a folder index: "- `name` (type...):".
+var treeLineRx = regexp.MustCompile("(?m)^- `([a-z0-9][a-z0-9-]*)` \\(([^)\n]*)\\):")
+
+// treeWhose marks each fact line of a tree answer that is not the owner's
+// with whose it is, from the index's code-checked fields (search.Hit's
+// Provenance): "agent note", "agent note holding your words", or "agent
+// note, claims owner authority without evidence". The folder index files
+// stay as they are (they already mark the owner's rulings); a line the
+// index does not know is left alone.
+func treeWhose(ctx context.Context, ix *search.Index, out string) string {
+	var names []string
+	for _, m := range treeLineRx.FindAllStringSubmatch(out, -1) {
+		names = append(names, m[1])
+	}
+	hs, err := ix.Named(ctx, names)
+	if err != nil || len(hs) == 0 {
+		return out
+	}
+	return treeLineRx.ReplaceAllStringFunc(out, func(l string) string {
+		m := treeLineRx.FindStringSubmatch(l)
+		h, ok := hs[m[1]]
+		if !ok {
+			return l
+		}
+		label := ""
+		switch h.Provenance() {
+		case "claim":
+			label = "agent note, " + search.ClaimMark
+		case "words":
+			label = "agent note holding your words"
+		case "agent":
+			label = "agent note"
+		}
+		if label == "" || strings.Contains(m[2], label) {
+			return l
+		}
+		return "- `" + m[1] + "` (" + m[2] + ", " + label + "):"
+	})
 }
 
 var errTreeArgs = errors.New("depth must be between 0 and 8")

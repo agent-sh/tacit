@@ -1,16 +1,20 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/overlay"
 	"github.com/agent-sh/tacit/client/internal/record"
 	"github.com/agent-sh/tacit/client/internal/repoid"
 	"github.com/agent-sh/tacit/client/internal/search"
+	"github.com/agent-sh/tacit/client/internal/store"
 )
 
 // storeRecords are the folder records of the store at dir and, with the
@@ -117,6 +121,47 @@ func factText(storeDir, name string) (string, bool, error) {
 		return string(b), true, nil
 	}
 	return fmt.Sprintf("%s was superseded by %s; the newer fact first, then the old one.\n\n%s\n--- the old fact, %s ---\n%s", name, cur.Meta.Name, curBytes, name, b), true, nil
+}
+
+// nameLineRx finds the name line of each fact a factText answer holds.
+var nameLineRx = regexp.MustCompile(`(?m)^name: *"?([a-z0-9][a-z0-9-]*)"?\s*$`)
+
+// withProvenance is what tacit_fact and `tacit fact` print: first, for each
+// fact text shows, whose it is (search.Hit.ProvenanceLabel, read from the
+// index's code-checked fields: an owner rule, their words, or an agent's
+// note, marked when it claims their authority without evidence), then the
+// text. The text alone when the index cannot say in time.
+func withProvenance(s *store.Store, text string) string {
+	var names []string
+	for _, m := range nameLineRx.FindAllStringSubmatch(text, -1) {
+		names = append(names, m[1])
+	}
+	if len(names) == 0 {
+		return text
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ix, err := openHookIndex(ctx, s)
+	if err != nil {
+		return text
+	}
+	defer ix.Close()
+	hs, err := ix.Named(ctx, names)
+	if err != nil {
+		return text
+	}
+	var b strings.Builder
+	seen := map[string]bool{}
+	for _, n := range names {
+		if h, ok := hs[n]; ok && !seen[n] {
+			seen[n] = true
+			fmt.Fprintf(&b, "# whose: %s is %s\n", n, h.ProvenanceLabel())
+		}
+	}
+	if b.Len() == 0 {
+		return text
+	}
+	return b.String() + text
 }
 
 // rootFolder is the project folder of kind folder (no git repository) whose
