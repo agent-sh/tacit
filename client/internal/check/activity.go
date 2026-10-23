@@ -130,7 +130,6 @@ func (c *Cache) Activity(ctx context.Context, owner, name string, n int) (Activi
 		return Activity{}, ErrUnavailable
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.load()
 	key := c.Forge.Name() + "-activity:" + strings.ToLower(owner+"/"+name)
 	now := c.Now()
@@ -142,13 +141,19 @@ func (c *Cache) Activity(ctx context.Context, owner, name string, n int) (Activi
 	}
 	if e, ok := c.entries[key]; ok {
 		if at, err := time.Parse(time.RFC3339, e.At); err == nil && now.Sub(at) < ActivityTTL {
+			c.mu.Unlock()
 			if !e.Found || e.Activity == nil {
 				return Activity{}, ErrNotFound
 			}
 			return cut(*e.Activity), nil
 		}
 	}
+	c.mu.Unlock()
+	// The forge is asked without the lock: callers may ask for several
+	// repositories at once (the assessment's prefetch).
 	a, err := af.Activity(ctx, owner, name, activityCommits)
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	switch {
 	case err == nil:
 		c.entries[key] = cacheEntry{Found: true, FullName: a.FullName, Activity: &a, At: stamp(now)}

@@ -161,6 +161,7 @@ type assessor struct {
 	scopeFacts             map[string]int              // project folder -> its live facts (mentionedIn)
 	ancMemo                map[string]string           // ancestorFolder's answers over the graph's view
 	codeStatus             map[string]string           // folder -> code's status from its dates (assess_activity.go)
+	prefetched             bool                        // prefetchActivity ran
 }
 
 func newAssessor(ctx context.Context, s *store.Store, local bool) (*assessor, error) {
@@ -287,7 +288,9 @@ func (a *assessor) holdsFacts(folder string) bool {
 func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate {
 	seen := map[string]bool{}
 	var out []assess.Candidate
-	// The ancestor graph over every folder, before any decision.
+	// The forge's record of every folder's repository, a few at a time, then
+	// the ancestor graph over every folder, before any decision.
+	a.prefetchActivity()
 	a.buildGraph()
 	consider := func(folder, reason string) {
 		if seen[folder] || !record.IsFolder(folder) || (only != nil && !only[folder]) {
