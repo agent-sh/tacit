@@ -18,6 +18,8 @@ import (
 	"github.com/agent-sh/tacit/client/internal/check"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
+	"github.com/agent-sh/tacit/client/internal/ownerwords"
+	"github.com/agent-sh/tacit/client/internal/validate"
 )
 
 // Outcomes of a verdict.
@@ -28,13 +30,18 @@ const (
 	Fix        = "fix"        // it holds but a detail changed: an in-place note
 	Compress   = "compress"   // it and others say one thing: one new fact cites them all
 	Unknown    = "unknown"    // the proof does not settle it: no change
+	// Reword: a fact that claims the owner's authority without their words
+	// (Item.ClaimsOwner) says the same as an agent's note: one new fact in
+	// agent attribution replaces it (superseded_by), never with words of
+	// the owner's it does not already quote.
+	Reword = "reword"
 )
 
 // Proof is one item code gathered for a fact. A verdict that changes the
 // fact cites the items it rests on by ID.
 type Proof struct {
 	ID   string `json:"id"`
-	Kind string `json:"kind"` // git | path | newer | mention | folder | finding | check
+	Kind string `json:"kind"` // git | path | newer | mention | folder | finding | check | attribution
 	Text string `json:"text"`
 	// Fact is the fact a newer or mention item names: a superseded_by or a
 	// compress may name only a fact code put in front of the model.
@@ -47,17 +54,22 @@ type Proof struct {
 
 // Item is one fact as the model reads it, with its proof.
 type Item struct {
-	Name        string  `json:"name"`
-	Scope       string  `json:"scope"`
-	Type        string  `json:"type"`
-	Description string  `json:"description"`
-	Body        string  `json:"body"`
-	Created     string  `json:"created"`
-	Updated     string  `json:"updated,omitempty"`
-	LastChecked string  `json:"last_checked,omitempty"`
-	Host        string  `json:"host,omitempty"`
-	Ruling      bool    `json:"owner_rule,omitempty"`
-	OwnerWords  string  `json:"owner_words,omitempty"`
+	Name        string `json:"name"`
+	Scope       string `json:"scope"`
+	Type        string `json:"type"`
+	Description string `json:"description"`
+	Body        string `json:"body"`
+	Created     string `json:"created"`
+	Updated     string `json:"updated,omitempty"`
+	LastChecked string `json:"last_checked,omitempty"`
+	Host        string `json:"host,omitempty"`
+	Ruling      bool   `json:"owner_rule,omitempty"`
+	OwnerWords  string `json:"owner_words,omitempty"`
+	// ClaimsOwner: its text says the owner ruled, said, decided or wants
+	// something, but it is not their verified words (the write-time
+	// attribution check fails on it, so no hook delivers it). The rotation
+	// takes these first.
+	ClaimsOwner bool    `json:"claims_owner,omitempty"`
 	Proof       []Proof `json:"proof"`
 }
 
@@ -92,6 +104,7 @@ For each fact give one outcome:
 - "fix": it holds but one detail changed (a version, a path, a name, a number); put the detail as the fact writes it, copied word for word, in "was" and the detail as it is now in "now". The fact keeps its words and gets one line "> superseded <date>: <was> -> <now>".
 - "compress": it and one or more facts of its own folder in the proof say one thing; list those facts in "compress" and write the one fact that replaces them all in "new" (name: lower case with hyphens and unused; description at most 200 characters; type: one of the fact types; body: what they say together, citing each fact it replaces, this one too, as [[name]]).
 - "unknown": the proof does not settle it either way. Not having proof is unknown, not stale.
+- "reword": only for a fact marked claims_owner (its text says the owner ruled, said, decided or wants something, and code found no words of theirs behind it, so no hook delivers it): when it still holds, write in "new" the one fact that says the same as an agent's observation (name: lower case with hyphens and unused; description at most 200 characters; body: the same content, citing [[<this fact>]]), with no "owner ruling", "owner rule", "the owner said", "decided" or "wants": say what is so, or that an agent noted it. Never put words in the owner's mouth: quote only words the fact already quotes. It replaces this fact. When the proof shows it no longer holds, give the outcome that does instead (stale, superseded).
 Every outcome but still and unknown cites the proof items it rests on by id in "cites", and says why in "evidence", one or two sentences. A fact of the owner's (owner_rule, or owner_words) is never retired, replaced or compressed by you: when the proof goes against it, give the outcome you see and code asks the owner. A fact is never stale only because it is old.
 
 Never quote a token, key or password. No em dashes. Output ONLY a JSON array with one object per fact: {"name", "outcome", "cites", "evidence", "superseded_by", "was", "now", "compress", "new"}.
@@ -159,9 +172,9 @@ func Check(v Verdict, it Item, env Env) []string {
 	switch v.Outcome {
 	case Still, Unknown:
 		return nil
-	case Stale, Superseded, Fix, Compress:
+	case Stale, Superseded, Fix, Compress, Reword:
 	default:
-		return []string{fmt.Sprintf("outcome %q is not one of still, stale, superseded, fix, compress, unknown", v.Outcome)}
+		return []string{fmt.Sprintf("outcome %q is not one of still, stale, superseded, fix, compress, reword, unknown", v.Outcome)}
 	}
 	ids := map[string]Proof{}
 	for _, p := range it.Proof {
@@ -259,6 +272,38 @@ func Check(v Verdict, it Item, env Env) []string {
 			if !cited[n] {
 				add("new.body must cite [[%s]], a fact it replaces", n)
 			}
+		}
+	case Reword:
+		if !it.ClaimsOwner {
+			add("reword is only for a fact marked claims_owner")
+			break
+		}
+		nf := v.New
+		if nf == nil {
+			add("reword writes the fact that replaces it in new")
+			break
+		}
+		if !fact.IsSlug(nf.Name) || env.Taken(nf.Name) {
+			add("new.name %q is not an unused slug", nf.Name)
+		}
+		if d := strings.TrimSpace(nf.Description); d == "" || len([]rune(d)) > 200 {
+			add("new.description must be one line of 1 to 200 characters")
+		}
+		if p := validate.Attribution(nf.Description, nf.Body, false); p != nil {
+			add("new still claims the owner's authority (%s): state it as an agent's observation", p.Rule)
+		}
+		old := it.Description + "\n" + it.Body
+		for _, q := range ownerwords.Quotes(nf.Description + "\n" + nf.Body) {
+			if !ownerwords.In(old, q) {
+				add("new quotes %q, which the fact does not: never put words in the owner's mouth", q)
+			}
+		}
+		cited := false
+		for _, m := range linkRx.FindAllStringSubmatch(nf.Body, -1) {
+			cited = cited || m[1] == it.Name
+		}
+		if !cited {
+			add("new.body must cite [[%s]], the fact it replaces", it.Name)
 		}
 	}
 	return ps

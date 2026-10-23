@@ -66,6 +66,10 @@ type rotationOpts struct {
 
 type rotationStats struct {
 	Due, Checked, Still, Stale, Superseded, Fixed, Compressed, Unknown, Asked, Refused, Unanswered, Batches int
+	// Claims: the due facts that claim the owner's authority without their
+	// words (taken first); Reworded: of those, replaced by a fact in an
+	// agent's words.
+	Claims, Reworded int
 	// Folders: the folders left for review the rotation found due (asked
 	// again with extra evidence), Settled: of those, decided otherwise.
 	Folders, Settled int
@@ -77,8 +81,8 @@ func (st rotationStats) String() string {
 	if st.Checked > 0 {
 		per = st.Cost / float64(st.Checked)
 	}
-	return fmt.Sprintf("%d due, %d checked (%d still, %d stale, %d superseded, %d fixed, %d compressed, %d unknown, %d asked the owner, %d refused), %d unanswered, %d folder(s) left for review asked again (%d settled), $%.3f ($%.4f a fact)",
-		st.Due, st.Checked, st.Still, st.Stale, st.Superseded, st.Fixed, st.Compressed, st.Unknown, st.Asked, st.Refused, st.Unanswered, st.Folders, st.Settled, st.Cost, per)
+	return fmt.Sprintf("%d due (%d claiming the owner's authority without their words, first), %d checked (%d still, %d stale, %d superseded, %d fixed, %d compressed, %d reworded as an agent's note, %d unknown, %d asked the owner, %d refused), %d unanswered, %d folder(s) left for review asked again (%d settled), $%.3f ($%.4f a fact)",
+		st.Due, st.Claims, st.Checked, st.Still, st.Stale, st.Superseded, st.Fixed, st.Compressed, st.Reworded, st.Unknown, st.Asked, st.Refused, st.Unanswered, st.Folders, st.Settled, st.Cost, per)
 }
 
 func envInt(key string, def int) int {
@@ -321,6 +325,8 @@ func (st *rotationStats) add(b rotationStats) {
 	st.Superseded += b.Superseded
 	st.Fixed += b.Fixed
 	st.Compressed += b.Compressed
+	st.Reworded += b.Reworded
+	st.Claims += b.Claims
 	st.Unknown += b.Unknown
 	st.Asked += b.Asked
 	st.Refused += b.Refused
@@ -411,9 +417,20 @@ func (r *rotator) rotatable(f *fact.Fact) bool {
 	return true
 }
 
-// due are the facts this run checks: never checked first, then the oldest
-// check, then the oldest created, then by name; a checked fact is due again
-// after o.age days; at most o.max when it is set.
+// claimsOwner reports a fact whose text claims the owner's authority
+// without their verified words: the write-time attribution check fails on
+// it (search.ClaimsWithoutEvidence), and no hook delivers it.
+func claimsOwner(f *fact.Fact) bool {
+	ruling, words := owners(f)
+	return search.ClaimsWithoutEvidence(f.Meta.Description, f.Body, ruling, words != "" || f.Meta.Type == fact.StatementType)
+}
+
+// due are the facts this run checks: the facts that claim the owner's
+// authority without their words first (claimsOwner: no hook delivers them
+// until they are reworded as an agent's note or their quote is found), then
+// never checked, then the oldest check, then the oldest created, then by
+// name; a checked fact is due again after o.age days; at most o.max when it
+// is set.
 func (r *rotator) due(o rotationOpts) []*fact.Fact {
 	cut := time.Now().AddDate(0, 0, -o.age).Format("2006-01-02")
 	var out []*fact.Fact
@@ -431,8 +448,15 @@ func (r *rotator) due(o rotationOpts) []*fact.Fact {
 			out = append(out, f)
 		}
 	}
+	claims := map[*fact.Fact]bool{}
+	for _, f := range out {
+		claims[f] = claimsOwner(f)
+	}
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i].Meta, out[j].Meta
+		if ci, cj := claims[out[i]], claims[out[j]]; ci != cj {
+			return ci
+		}
 		if a.LastChecked != b.LastChecked {
 			return a.LastChecked < b.LastChecked // "" (never) first
 		}
@@ -472,12 +496,16 @@ func owners(f *fact.Fact) (ruling bool, words string) {
 func (r *rotator) item(ctx context.Context, f *fact.Fact) (rotation.Item, error) {
 	ruling, words := owners(f)
 	it := rotation.Item{Name: f.Meta.Name, Scope: f.Meta.Scope, Type: f.Meta.Type, Description: f.Meta.Description, Body: clip(f.Body, 2400),
-		Created: f.Meta.Created, Updated: f.Meta.Updated, LastChecked: f.Meta.LastChecked, Host: f.Meta.Source.Host, Ruling: ruling, OwnerWords: words}
+		Created: f.Meta.Created, Updated: f.Meta.Updated, LastChecked: f.Meta.LastChecked, Host: f.Meta.Source.Host, Ruling: ruling, OwnerWords: words,
+		ClaimsOwner: claimsOwner(f)}
 	var ps []rotation.Proof
 	add := func(p rotation.Proof) {
 		p.ID = fmt.Sprintf("p%d", len(ps)+1)
 		p.Text = clip(p.Text, 400)
 		ps = append(ps, p)
+	}
+	if it.ClaimsOwner {
+		add(rotation.Proof{Kind: "attribution", Text: "code: its text says the owner ruled, said, decided or wants it, and it holds no verified words of theirs (no quote the ledger backs; the rulings audit looks for one in the owner's history), so no hook delivers it: reword it as an agent's note, never with words of theirs it does not quote"})
 	}
 	// Git: what each repository holds now of the paths and names it cites.
 	gctx, cancel := context.WithTimeout(ctx, 45*time.Second)
@@ -771,6 +799,13 @@ func (r *rotator) outcomes(items []rotation.Item, vs map[string]rotation.Verdict
 			b.Fixed++
 		case rotation.Compress:
 			b.Compressed++
+		case rotation.Reword:
+			b.Reworded++
+		}
+	}
+	for _, it := range items {
+		if it.ClaimsOwner {
+			b.Claims++
 		}
 	}
 	return b
@@ -882,6 +917,22 @@ func (r *rotator) plan(dir, prefix string, batch []*fact.Fact, items []rotation.
 				return nil, nil, nil, nil, err
 			}
 			body = append(body, fmt.Sprintf("%s: fixed, %s", f.Meta.Name, strings.TrimPrefix(line, fact.NotePrefix)))
+		case v.Outcome == rotation.Reword:
+			// One fact in an agent's words replaces the claim: the same
+			// folder, type and applies_to, superseding it (never deleted).
+			nf := v.New
+			newF := &fact.Fact{Path: prefix + f.Meta.Scope + "/" + nf.Name + ".md", Meta: fact.Meta{Name: nf.Name, Description: clip(nf.Description, 200), Type: f.Meta.Type, Scope: f.Meta.Scope,
+				AppliesTo: f.Meta.AppliesTo, Source: fact.Source{Harness: "curator", Host: r.host, Kind: "observed"}, Created: r.today}, Body: strings.TrimSpace(nf.Body) + "\n"}
+			nb, err := newF.Encode()
+			if err != nil {
+				continue
+			}
+			files[strings.TrimPrefix(newF.Path, prefix)] = nb
+			if err := patch(f, func(m *fact.Meta) { m.SupersededBy, m.Updated = nf.Name, r.today }); err != nil {
+				return nil, nil, nil, nil, err
+			}
+			r.taken[nf.Name] = true
+			body = append(body, fmt.Sprintf("%s: reworded as an agent's note, %s", f.Meta.Name, nf.Name))
 		case v.Outcome == rotation.Compress:
 			nf := v.New
 			members := []*fact.Fact{f}
@@ -970,6 +1021,8 @@ func outcomeWords(v rotation.Verdict) string {
 		return fmt.Sprintf("true, with one detail changed (%q is now %q)", v.Was, v.Now)
 	case rotation.Compress:
 		return "one of several facts that say one thing"
+	case rotation.Reword:
+		return "an agent's note that claims your authority"
 	}
 	return v.Outcome
 }
@@ -996,7 +1049,7 @@ func (r *rotator) write(ctx context.Context, batch []*fact.Fact, items []rotatio
 			}
 			files[rel] = append(cur, []byte(strings.Join(asks, "\n")+"\n")...)
 		}
-		msg := fmt.Sprintf("%s %d checked (%d still, %d stale, %d superseded, %d fixed, %d compressed, %d unknown, %d asked)", gitev.RotationPrefix, b.Checked, b.Still, b.Stale, b.Superseded, b.Fixed, b.Compressed, b.Unknown, b.Asked)
+		msg := fmt.Sprintf("%s %d checked (%d still, %d stale, %d superseded, %d fixed, %d compressed, %d reworded, %d unknown, %d asked)", gitev.RotationPrefix, b.Checked, b.Still, b.Stale, b.Superseded, b.Fixed, b.Compressed, b.Reworded, b.Unknown, b.Asked)
 		if len(body) > 0 {
 			msg += "\n\n" + strings.Join(body, "\n")
 		}
@@ -1053,6 +1106,6 @@ func (r *rotator) logBatch(n int, b rotationStats, cost float64, model string) {
 		per = cost / float64(n)
 	}
 	line, _ := json.Marshal(map[string]any{"at": time.Now().Format(time.RFC3339), "model": model, "facts": n, "cost_usd": cost, "cost_per_fact": per, "local": r.local,
-		"still": b.Still, "stale": b.Stale, "superseded": b.Superseded, "fixed": b.Fixed, "compressed": b.Compressed, "unknown": b.Unknown, "asked": b.Asked, "refused": b.Refused, "unanswered": b.Unanswered})
+		"still": b.Still, "stale": b.Stale, "superseded": b.Superseded, "fixed": b.Fixed, "compressed": b.Compressed, "reworded": b.Reworded, "claims": b.Claims, "unknown": b.Unknown, "asked": b.Asked, "refused": b.Refused, "unanswered": b.Unanswered})
 	fh.Write(append(line, '\n'))
 }

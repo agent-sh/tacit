@@ -37,6 +37,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
+	"github.com/agent-sh/tacit/client/internal/validate"
 )
 
 // Audit outcomes.
@@ -271,14 +272,16 @@ func auditorFor(ctx context.Context, dir string, corpus *ownerwords.Corpus) ([]*
 
 // candidate reports a fact the audit decides on: a curated fact the old
 // definition treated as a ruling, one that is kind user or carries owner
-// evidence (their words included) now, or one an older audit put to them (it
-// took the fact off kind user, whatever its type).
+// evidence (their words included) now, one whose text claims the owner's
+// authority (validate.ClaimsOwner: delivery holds it back until its quote is
+// found, which promotes it, or it is reworded), or one an older audit put to
+// them (it took the fact off kind user, whatever its type).
 func (a *rulingAuditor) candidate(f *fact.Fact) bool {
 	if f.InInbox() || strings.HasPrefix(f.Meta.Scope, "derived/") {
 		return false
 	}
 	_, legacy := a.legacy[f.Meta.Name]
-	return f.Meta.Source.Kind == "user" || f.Meta.Type == "user_standard" || fact.ClaimsEvidence(f) || legacy
+	return f.Meta.Source.Kind == "user" || f.Meta.Type == "user_standard" || fact.ClaimsEvidence(f) || legacy || validate.ClaimsOwner(f.Meta.Description, f.Body)
 }
 
 // found is where a phrase of theirs was found.
