@@ -35,6 +35,7 @@ func TestMacReadOnlyCloneSendsNothing(t *testing.T) {
 	os.WriteFile(filepath.Join(seed, filepath.FromSlash(ledger.FormatPath)), ledger.Format{Version: ledger.FormatVersion, At: "x"}.Encode(), 0o644)
 	other := testRec(record.KindRepo, "projects/numbat")
 	other.CreatedBy, other.Was[0].By = record.ByOpus, record.ByOpus // another machine's curator decided it
+	other.Status, other.Was[0].Status = record.StatusDormant, record.StatusDormant
 	putRecordFile(t, seed, other)
 	gitIn(t, seed, "add", "-A")
 	gitIn(t, seed, "commit", "-q", "-m", "format and a record")
@@ -124,6 +125,8 @@ func TestMacReadOnlyCloneSendsNothing(t *testing.T) {
 	r.judge()
 	fa := &fakeAssessor{first: map[string]assess.Decision{
 		"projects/gizmo":  aDecision("projects/gizmo", "repo", "active", "edited in session:m1"),
+		// This machine's sessions edited it today: active here, code's status
+		// from those dates (the model is not asked).
 		"projects/numbat": aDecision("projects/numbat", "repo", "dormant", "only looked at in session:m2, no work"),
 	}}
 	fa.install(t)
@@ -147,8 +150,10 @@ func TestMacReadOnlyCloneSendsNothing(t *testing.T) {
 	if strings.Join(rotated, ",") != "gizmo-build-tracker" {
 		t.Fatalf("the local curate's rotation judged %v", rotated)
 	}
-	if len(fa.prompts) == 0 || !strings.Contains(fa.prompts[0], "folder=projects/numbat") {
-		t.Fatalf("the local assessment: %d prompt(s); the store's record was not checked against this machine's work", len(fa.prompts))
+	// The store's record says dormant; this machine's work dates say active:
+	// code decides that on its own (no model call), into the overlay.
+	if len(fa.prompts) == 0 || strings.Contains(strings.Join(fa.prompts, "\n"), "folder=projects/numbat") {
+		t.Fatalf("the local assessment: %d prompt(s); numbat's status is code's from this machine's dates", len(fa.prompts))
 	}
 	// The store's record, consolidated with this machine's view: its status
 	// here is the overlay's, everything else the store's; the store's file
@@ -157,10 +162,10 @@ func TestMacReadOnlyCloneSendsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("no local view of the store's record: %v", err)
 	}
-	if lr, err := record.Parse("projects/numbat", ov); err != nil || lr.Status != record.StatusDormant || lr.Description != other.Description || lr.CreatedBy != record.ByOpus || len(lr.Was) != 2 {
+	if lr, err := record.Parse("projects/numbat", ov); err != nil || lr.Status != record.StatusActive || !strings.HasPrefix(lr.Was[0].Why, "code: active from its dates") || lr.Description != other.Description || lr.CreatedBy != record.ByOpus || len(lr.Was) != 2 {
 		t.Fatalf("the local view: %+v %v", lr, err)
 	}
-	if m := storeRecords(r.s.Dir)["projects/numbat"]; m == nil || m.Status != record.StatusDormant || !m.LocalStatus {
+	if m := storeRecords(r.s.Dir)["projects/numbat"]; m == nil || m.Status != record.StatusActive || !m.LocalStatus {
 		t.Fatalf("this machine reads %+v", m)
 	}
 	if ix, err := openIndex(ctx, r.s); err != nil {
@@ -168,7 +173,7 @@ func TestMacReadOnlyCloneSendsNothing(t *testing.T) {
 	} else {
 		recs, _ := ix.Records(ctx)
 		ix.Close()
-		if recs["projects/numbat"] == nil || recs["projects/numbat"].Status != record.StatusDormant {
+		if recs["projects/numbat"] == nil || recs["projects/numbat"].Status != record.StatusActive {
 			t.Fatalf("the index reads %+v", recs["projects/numbat"])
 		}
 	}
