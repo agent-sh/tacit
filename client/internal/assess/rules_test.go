@@ -297,3 +297,28 @@ func TestSortPutsTheAncestorFirstInItsGroup(t *testing.T) {
 		t.Fatalf("order %v", got)
 	}
 }
+
+// A related folder that is a repository of its own does not fold into an
+// ancestor: its own commits and remote are a checked fact.
+func TestEnforceKeepsARepositoryOfItsOwn(t *testing.T) {
+	env := Checked{Repo: func(n string) check.RepoCheck { return *repoCheck(n, check.Holds, "") }}
+	c := Candidate{Folder: "projects/zed-tool-upstream", Name: repoCheck("zed-tool-upstream", check.Holds, ""),
+		Ancestors:    []Ancestor{{Name: "tool", Folder: "projects/tool", Sources: []string{SourceName}}},
+		Independence: []Independence{{Key: "commits"}, {Key: "remote:github.com/o/extensions"}}}
+	if ps := Enforce(c, Decision{Kind: "repo", Status: "needs-review", SuppressedBy: "projects/tool"}, env); len(ps) != 1 || !strings.Contains(ps[0], "a repository of its own (commits, remote:github.com/o/extensions), not part of projects/tool") {
+		t.Fatalf("fold into an ancestor: %v", ps)
+	}
+	if ps := Enforce(c, Decision{Kind: "repo", Status: "dormant", Independent: Keys{"commits"}}, env); len(ps) != 0 {
+		t.Fatalf("standing alone: %v", ps)
+	}
+	// Into the same repository (code's check) it may fold.
+	c.Same = []check.Result{{Value: "extensions"}}
+	if ps := Enforce(c, Decision{Kind: "repo", Status: "dormant", SuppressedBy: "projects/extensions"}, env); len(ps) != 0 {
+		t.Fatalf("fold into the same repository: %v", ps)
+	}
+	// Own commits alone (no remote of its own) leave the fold open.
+	c.Independence = []Independence{{Key: "commits"}}
+	if ps := Enforce(c, Decision{Kind: "repo", Status: "dormant", SuppressedBy: "projects/tool"}, env); len(ps) != 0 {
+		t.Fatalf("commits only: %v", ps)
+	}
+}
