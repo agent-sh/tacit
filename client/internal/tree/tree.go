@@ -52,6 +52,10 @@ var rootOrder = map[string]int{"system": 1, "user": 2, "projects": 3, "orgs": 4,
 // names the folder replacing it; Read follows it.
 const SuppressedLine = "Suppressed by: "
 
+// ReplacedLine starts a record's successor line: another project replaced
+// this one (Record.Successor).
+const ReplacedLine = "Replaced by: "
+
 // Excluded are the top-level folders that hold no index.
 var Excluded = map[string]bool{"inbox": true, "review": true, "keys": true}
 
@@ -370,6 +374,9 @@ func render(fo *folder, folders map[string]*folder, total func(string) stats) st
 		if r.SuppressedBy != "" {
 			fmt.Fprintf(&b, "%s%s\n", SuppressedLine, r.SuppressedBy)
 		}
+		if r.Successor != "" {
+			fmt.Fprintf(&b, "%s%s (its facts here are its history)\n", ReplacedLine, r.Successor)
+		}
 	}
 	all := total(fo.dir)
 	fmt.Fprintf(&b, "\n%s.\n", all.summary(path.Base(fo.dir)))
@@ -408,6 +415,9 @@ func render(fo *folder, folders map[string]*folder, total func(string) stats) st
 			kind := ""
 			if r := sub.rec; r != nil {
 				kind = r.Kind + ", " + r.Status + "; "
+				if r.Successor != "" {
+					kind = r.Kind + ", " + r.Status + ", replaced by " + r.Successor + "; "
+				}
 				if d := r.Display(); d != r.Name {
 					kind = strings.TrimPrefix(d, r.Name+" ") + " " + kind
 				}

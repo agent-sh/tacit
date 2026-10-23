@@ -153,6 +153,12 @@ func withOrgs(sit search.Situation, recs map[string]*record.Record) search.Situa
 	if f := record.RepoOwner(recs, sit.Repo); f != "" {
 		if w, _, err := record.Resolve(recs, f); err == nil && recs[w] != nil {
 			sit.RepoDisplay = recs[w].Display()
+			// A dead repository another project replaced: that project's rules
+			// come lightly with its own (successorStartHits).
+			if sc := recs[w].Successor; sc != "" && recs[sc] != nil && recs[sc].Live() && !recs[sc].Quiet() {
+				sit.Successors = []string{sc}
+				sit.RepoDisplay += " (dead, replaced by " + recs[sc].Display() + ")"
+			}
 		}
 	}
 	sit.Orgs = tree.Session{Repos: repoNames(sit), Records: recs}.Orgs()
@@ -205,6 +211,19 @@ func orgStartHits(ctx context.Context, ix *search.Index, sit search.Situation, h
 		keep = keep[:n]
 	}
 	return keep
+}
+
+// successorStartHits are the rulings and standards (tier 0) of the project
+// that replaced the session's dead repository (Situation.Successors), for
+// the SessionStart block: lightly, as an org's (at most orgStartLimit),
+// newest first, none the session has.
+func successorStartHits(ctx context.Context, ix *search.Index, sit search.Situation, have []search.Hit) []search.Hit {
+	if len(sit.Successors) == 0 {
+		return nil
+	}
+	s := sit
+	s.Orgs = sit.Successors
+	return orgStartHits(ctx, ix, s, have)
 }
 
 // withRecordAliases is the situation with the names the records give its

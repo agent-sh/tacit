@@ -28,7 +28,9 @@ const kindCheck = "check"
 var reCheckLine = regexp.MustCompile(`^- check\? \[\[([^\]]+)\]\] \(([^)]*)\) outcome=([a-z]+) on=(\d{4}-\d{2}-\d{2})`)
 
 // optionalOutcome reports the statements step's items: shown, never owed.
-func optionalOutcome(o string) bool { return o == "misread" || o == "differs" }
+// The assessment's item for a folder whose owner's words their later work
+// overrode (outcome=activity) is one too.
+func optionalOutcome(o string) bool { return o == "misread" || o == "differs" || o == "activity" }
 
 // checkLine is a question's first line.
 func checkLine(name, scope, outcome, on string) string {

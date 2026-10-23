@@ -67,7 +67,7 @@ func (m *reviewModel) run(_ context.Context, _, prompt string) (string, float64,
 }
 
 // A folder left for review is asked again with more evidence, and settles
-// on it: a fact elsewhere that names it reaches the model on the second run.
+// on it: a fact filed elsewhere since that names it reaches the second run.
 // The forge's record is no re-attempt's: the first ask already shows it,
 // with code's status from the dates (the owner's forge commit 3 days ago:
 // active, whatever the model answers between active and dormant). A folder
@@ -103,11 +103,13 @@ func TestNeedsReviewIsWorkedNotParked(t *testing.T) {
 	}
 	add("projects/beacon", "beacon-note", "s-b1", "The beacon service batches pings every ten seconds")
 	add("projects/lonely", "lonely-note", "s-l1", "The lonely tool writes its log next to the binary")
-	add("projects/widget", "widget-uses-beacon", "s-w9", "Widget reports its health to beacon over HTTP")
-	facts, _, _ := fact.Walk(s.Dir)
-	writeIndexesForTest(t, s.Dir, facts)
-	gitIn(t, s.Dir, "add", "-A")
-	gitIn(t, s.Dir, "commit", "-q", "-m", "facts")
+	commitFacts := func() {
+		facts, _, _ := fact.Walk(s.Dir)
+		writeIndexesForTest(t, s.Dir, facts)
+		gitIn(t, s.Dir, "add", "-A")
+		gitIn(t, s.Dir, "commit", "-q", "-m", "facts")
+	}
+	commitFacts()
 	m := &reviewModel{}
 	prev := assessRun
 	assessRun = m.run
@@ -133,8 +135,12 @@ func TestNeedsReviewIsWorkedNotParked(t *testing.T) {
 			t.Errorf("run 1's prompt lacks %q:\n%s", want, p1)
 		}
 	}
-	// Run 2: beacon comes back with the extra evidence and settles; lonely's
-	// wider search finds nothing, so it waits.
+	// A fact filed since in another folder names beacon. Run 2: beacon comes
+	// back with the extra evidence and settles (the note is also among the
+	// notes every ask shows up front); lonely's wider search finds nothing,
+	// so it waits.
+	add("projects/widget", "widget-uses-beacon", "s-w9", "Widget reports its health to beacon over HTTP")
+	commitFacts()
 	n := len(m.prompts)
 	rep2 := &curate.Report{}
 	if errs := assessStep(ctx, s, assessOpts{model: "opus", only: only}, rep2); errs != 0 {
