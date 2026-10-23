@@ -919,3 +919,37 @@ func TestPageSaysYourRuleOnlyForHisRulings(t *testing.T) {
 		t.Fatalf("questions: %v", got)
 	}
 }
+
+// A fact whose text claims the owner's authority is the audit's too: its
+// quote found in their turns promotes it to their ruling (delivery shows it
+// as theirs again); with no words of theirs it stays an agent's note,
+// unchanged, and delivery keeps holding it back.
+func TestRulingsAuditFindsTheQuoteOfAClaim(t *testing.T) {
+	r, _ := rulingsRig(t)
+	w := func(name, desc, body string) {
+		writeFact(t, r.clone, fact.Meta{Name: name, Description: desc, Type: "design_decision", Scope: "projects/x"}, body)
+	}
+	w("claim-quoted", "The owner decided the nightly evals use the slow lane", "Owner 2026-10-01: \"the nightly evals always go through the slow lane\".")
+	w("claim-unbacked", "The owner said jobs go through one queue", "Jobs go through one queue.")
+	r.commitIndex(r.clone, "claims")
+	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
+	b := ownerwords.NewBuilder()
+	b.Add("transcript", "claude:evals", "ok so the nightly evals always go through the slow lane, keep it that way")
+	rep, err := rulingsApply(ctxMinute(t), r.s, b.Build(), false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, v := range rep.Verdicts {
+		got[v.Name] = v.Outcome
+	}
+	if got["claim-quoted"] != ruledQuote || got["claim-unbacked"] != ruledAgent {
+		t.Fatalf("outcomes %v", got)
+	}
+	if s := serverSource(t, r, "projects/x/claim-quoted.md"); s.Kind != "user" || s.OwnerQuoteFrom != "claude:evals" {
+		t.Errorf("the claim with their quote is not promoted: %+v", s)
+	}
+	if s := serverSource(t, r, "projects/x/claim-unbacked.md"); s.Kind != "observed" || fact.ClaimsEvidence(&fact.Fact{Meta: fact.Meta{Source: s}}) {
+		t.Errorf("an unbacked claim changed: %+v", s)
+	}
+}

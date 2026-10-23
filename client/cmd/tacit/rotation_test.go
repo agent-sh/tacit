@@ -272,3 +272,67 @@ func TestRotationWaitsForTheFormatMarker(t *testing.T) {
 		t.Fatalf("ran without the marker: %+v", st)
 	}
 }
+
+// A fact that claims the owner's authority without their words is checked
+// first, whatever its age, and the rotation may reword it as an agent's
+// note: one new fact in the same folder supersedes it. A reword that still
+// claims their authority, or quotes words of theirs the fact does not, is
+// refused; so is a reword of a fact that claims nothing.
+func TestRotationRewordsClaimsOfTheOwnersAuthorityFirst(t *testing.T) {
+	stubScrump(t)
+	r := rotationRig(t)
+	os.WriteFile(filepath.Join(r.clone, "system", "claim-tabs.md"), []byte(rotFile("claim-tabs", "system", "user_standard", "Owner ruling: build logs use tabs", "The owner said build logs use tabs.", "2026-10-20", "")), 0o644)
+	r.commitIndex(r.clone, "claim")
+	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
+	tries := 0
+	var fr *fakeRotator
+	fr = &fakeRotator{answer: func(it rotation.Item) (rotation.Verdict, bool) {
+		switch it.Name {
+		case "claim-tabs":
+			if !it.ClaimsOwner || len(it.Proof) == 0 || it.Proof[0].Kind != "attribution" {
+				t.Errorf("the claim is not marked: %+v", it)
+			}
+			tries++
+			return rotation.Verdict{Outcome: rotation.Reword, Cites: []string{it.Proof[0].ID}, Evidence: "no words of theirs",
+				New: &rotation.NewFact{Name: "build-logs-tabs", Description: "The owner said: \"build logs always use tabs and never spaces\"", Body: "Build logs use tabs ([[claim-tabs]])."}}, true
+		}
+		return rotation.Verdict{Outcome: rotation.Still}, true
+	}, retry: func(it rotation.Item) (rotation.Verdict, bool) {
+		if it.Name == "claim-tabs" {
+			if p := fr.prompts[len(fr.prompts)-1]; !strings.Contains(p, "still claims the owner's authority") || !strings.Contains(p, "never put words in the owner's mouth") {
+				t.Errorf("refusals: %s", p)
+			}
+			return rotation.Verdict{Outcome: rotation.Reword, Cites: []string{it.Proof[0].ID}, Evidence: "no words of theirs",
+				New: &rotation.NewFact{Name: "build-logs-tabs", Description: "Build logs use tabs (an agent noted it)", Body: "Build logs use tabs ([[claim-tabs]])."}}, true
+		}
+		return rotation.Verdict{Outcome: rotation.Still}, true
+	}}
+	prev := rotationRun
+	rotationRun = fr.run
+	t.Cleanup(func() { rotationRun = prev })
+	st := runRotationStep(t, r, rotationOpts{model: "m", age: 30, batch: 50, max: 1})
+	if st.Claims != 1 || !strings.Contains(fr.prompts[0], `"name":"claim-tabs"`) {
+		t.Fatalf("the claim is not first: %+v\n%s", st, fr.prompts[0])
+	}
+	if st.Reworded != 1 || tries != 1 {
+		t.Fatalf("stats %+v", st)
+	}
+	b, _ := os.ReadFile(filepath.Join(r.clone, "system", "claim-tabs.md"))
+	old, _ := fact.Parse("system/claim-tabs.md", b)
+	nb, err := os.ReadFile(filepath.Join(r.clone, "system", "build-logs-tabs.md"))
+	if err != nil || old.Meta.SupersededBy != "build-logs-tabs" {
+		t.Fatalf("not reworded: %v %+v", err, old.Meta)
+	}
+	nf, _ := fact.Parse("system/build-logs-tabs.md", nb)
+	if nf.Meta.Type != "user_standard" || nf.Meta.Source.Kind != "observed" || claimsOwner(nf) {
+		t.Fatalf("the new fact: %+v", nf.Meta)
+	}
+	// A reword of a fact that claims nothing is refused.
+	it := rotation.Item{Name: "fine", Proof: []rotation.Proof{{ID: "p1", Kind: "git"}}}
+	if ps := rotation.Check(rotation.Verdict{Outcome: rotation.Reword, Cites: []string{"p1"}, Evidence: "x", New: &rotation.NewFact{Name: "fine-2", Description: "x", Body: "[[fine]]"}}, it, rotation.Env{Taken: func(string) bool { return false }}); len(ps) == 0 {
+		t.Fatal("a reword of a plain fact passed")
+	}
+	if fs, _ := lint.Run(r.clone); len(fs) > 0 {
+		t.Fatalf("lint: %v", fs)
+	}
+}
