@@ -132,6 +132,19 @@ func Enforce(c Candidate, d Decision, env Checked) []string {
 			ps = append(ps, fmt.Sprintf("%s is related to %s (code's ancestor candidates: %s): it stands alone only on evidence of its own identity: cite the independence item(s) it rests on in independent (code's keys: %s), or set suppressed_by to %s, or to another of them the evidence supports", name, anc[0], strings.Join(anc, ", "), strings.Join(ks, ", "), anc[0]))
 		}
 	}
+	// The other way: a related folder that is a repository of its own (its
+	// own commits, and a remote or forge repository of its own that no
+	// ancestor has) is another repository than its ancestors, a checked
+	// fact: it does not fold into one of them (only into a folder code proved
+	// is the same repository).
+	if len(c.Ancestors) > 0 && into != "" && !sameGroup(c, into) && ownRepository(c) {
+		for _, an := range c.Ancestors {
+			if an.Folder == into {
+				ps = append(ps, fmt.Sprintf("%s is a repository of its own (%s), not part of %s: it stands alone (cite those keys in independent), or folds only into a folder code proved is the same repository", name, strings.Join(independenceKeys(c), ", "), into))
+				break
+			}
+		}
+	}
 	if strings.HasPrefix(into, "projects/") && env.Repo != nil {
 		t := strings.TrimPrefix(into, "projects/")
 		tc := env.Repo(t)
@@ -149,6 +162,29 @@ func Enforce(c Candidate, d Decision, env Checked) []string {
 		}
 	}
 	return ps
+}
+
+// ownRepository reports independence evidence of a repository of its own:
+// own commits, and a remote or forge repository of its own.
+func ownRepository(c Candidate) bool {
+	commits, remote := false, false
+	for _, in := range c.Independence {
+		switch {
+		case in.Key == "commits":
+			commits = true
+		case strings.HasPrefix(in.Key, "remote:"), strings.HasPrefix(in.Key, "forge:"):
+			remote = true
+		}
+	}
+	return commits && remote
+}
+
+func independenceKeys(c Candidate) []string {
+	var out []string
+	for _, in := range c.Independence {
+		out = append(out, in.Key)
+	}
+	return out
 }
 
 // liveWinner is the live folder that holds folder's content (folder itself,
