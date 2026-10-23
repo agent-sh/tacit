@@ -42,6 +42,9 @@ type Note struct {
 	// Said is a statement's day (when the owner said it); Description and
 	// Body are the fact's text, which an owner_status item's words must be in.
 	Said, Description, Body string
+	// Projects are the other project folders code finds its text names, each
+	// with where its name leads now ("gishra (renamed: tower-crane)").
+	Projects []string
 }
 
 // OwnerTier reports a note whose words may be the owner's word on a
@@ -89,9 +92,17 @@ func (c Candidate) noteLines() []string {
 		if i == NotesShown {
 			break
 		}
-		text := oneLine(n.Description, 220)
-		if b := oneLine(n.Body, 320); b != "" {
-			text += " | " + b
+		// The owner's notes with their text (their words are quoted from it);
+		// the others, evidence only, by their description.
+		text := oneLine(n.Description, 120)
+		if n.OwnerTier() {
+			text = oneLine(n.Description, 220)
+			if b := oneLine(n.Body, 220); b != "" {
+				text += " | " + b
+			}
+		}
+		if len(n.Projects) > 0 {
+			text += " [names projects: " + strings.Join(n.Projects, ", ") + "]"
 		}
 		out = append(out, fmt.Sprintf("  - [[%s]] (%s, %s, %s; %s): %s", n.Name, n.Scope, n.Type, n.Created, n.tierLabel(), text))
 	}
@@ -166,6 +177,10 @@ func noteDay(n Note, words string) string {
 	}
 	return n.Created
 }
+
+// NameIn reports a project name in text as words, its dashes as dashes or
+// spaces.
+func NameIn(text, name string) bool { return nameIn(text, name) }
 
 // nameIn reports a project name in text as words, its dashes as dashes or
 // spaces ("tower-crane" in "Tower Crane replaces them").

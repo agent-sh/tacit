@@ -71,7 +71,7 @@ func wordsHome(t *testing.T) (string, *store.Store) {
 	home, s := assessHome(t)
 	datedRepo(t, home, "oldtool", [2]string{daysAgo(9), "main.go"}, [2]string{daysAgo(6), "main.go"}, [2]string{daysAgo(3), "cmd/run.go"})
 	datedRepo(t, home, "tower", [2]string{daysAgo(0), "main.go"})
-	writeFactFile(t, s.Dir, &fact.Fact{Path: "user/oldtool-obsolete.md", Meta: fact.Meta{Name: "oldtool-obsolete", Type: "design_decision", Scope: "user",
+	writeFactFile(t, s.Dir, &fact.Fact{Path: "user/oldtool-obsolete.md", Meta: fact.Meta{Name: "oldtool-obsolete", Type: "design_decision", Scope: "user", AppliesTo: fact.AppliesTo{Repos: []string{"oldtool", "tower"}},
 		Description: "Owner decided on " + daysAgo(1) + " that oldtool is obsolete: tower replaces it.",
 		Source:      fact.Source{Harness: "curator", Host: "box", Session: "s-one", Kind: "observed"}, Created: daysAgo(0)}, Body: "Stop polishing oldtool.\n"})
 	for _, f := range []*fact.Fact{
@@ -106,7 +106,7 @@ func TestOwnerWordsBeatDates(t *testing.T) {
 		t.Fatalf("errs %d report %+v", errs, rep)
 	}
 	p := m.prompts[0]
-	if !strings.Contains(p, "notes in other folders that name it") || !strings.Contains(p, "[[oldtool-obsolete]] (user, design_decision, "+daysAgo(0)+"; a decision): Owner decided on") {
+	if !strings.Contains(p, "notes in other folders that name it") || !strings.Contains(p, "[[oldtool-obsolete]] (user, design_decision, "+daysAgo(0)+"; a decision): Owner decided on") || !strings.Contains(p, "[names projects: tower]") {
 		t.Fatalf("the note is not shown up front:\n%s", p)
 	}
 	recs, _ := record.Walk(s.Dir)
