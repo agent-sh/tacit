@@ -101,6 +101,10 @@ type Candidate struct {
 	// code found of an identity of its own, which its decision cites.
 	Ancestors    []Ancestor
 	Independence []Independence
+	// Depth is how many of this run's candidates stand between the folder
+	// and its group's final ancestor (0: the ancestor itself, or no ancestor
+	// among them): a group is decided ancestor first.
+	Depth int
 }
 
 // Ancestor is a folder code proposes a candidate is part of, with why.
@@ -148,6 +152,9 @@ const (
 	// it (Real), and one its facts name as a word.
 	SourceProposed = "proposed"
 	SourceNamed    = "named"
+	// SourceMentions: the facts of other project folders that name the
+	// folder are mostly the ancestor's, more than the folder holds itself.
+	SourceMentions = "mentions"
 )
 
 // Independence is one item of evidence that a folder has an identity of its
@@ -319,7 +326,7 @@ For each folder decide:
 - owner_quote, owner_quote_from: only when the owner's own words shown below state the decision for THIS folder (its name or alias in them): copy their words exactly and the ref they came from. Words that only mention the folder are evidence for your why, not a quote here.
 - reject (true) or fold_into ("<existing folder>"): a proposed area or topic only, when it should not be made, with why.
 
-Find the ancestor. A folder that is clearly related to another is part of it: worktrees, clones, scratch folders, task folders and subfolders almost always belong to a project. Code lists such a folder's "ancestor candidates", best first, with the evidence (git metadata of a worktree or clone, paths that put the folder inside the ancestor's tree, a name that contains the ancestor's, sessions that worked in both with facts that point at it). Such a folder is presumed part of one of them: set suppressed_by to the one its evidence supports. It stands alone (any decision without suppressed_by: a status of its own, needs-review or kind none) only on evidence of an identity of its own, which code lists as "independence" items (its own commits, a remote or forge repository of its own that no ancestor has, work done in a folder of its own name across sessions): cite their keys in independent. Code refuses a folder with ancestor candidates that stands alone without such a citation, and when code lists no independence item it must take one of the candidates. One whose independence shows its own commits and a remote or forge repository of its own is another repository than its ancestors: it stands alone, and code refuses folding it into one of them. Folders that share an ancestor come in one batch: decide them together and alike.
+Find the ancestor. A folder that is clearly related to another is part of it: worktrees, clones, scratch folders, task folders and subfolders almost always belong to a project. Code lists such a folder's "ancestor candidates", best first, with the evidence (git metadata of a worktree or clone, paths that put the folder inside the ancestor's tree, a name that contains the ancestor's, sessions that worked in both with facts that point at it). Such a folder is presumed part of one of them: set suppressed_by to the one its evidence supports. It stands alone (any decision without suppressed_by: a status of its own, needs-review or kind none) only on evidence of an identity of its own, which code lists as "independence" items (its own commits, a remote or forge repository of its own that no ancestor has, work done in a folder of its own name across sessions): cite their keys in independent. Code refuses a folder with ancestor candidates that stands alone without such a citation, and when code lists no independence item it must take one of the candidates. One whose independence shows its own commits and a remote or forge repository of its own is another repository than its ancestors: it stands alone, and code refuses folding it into one of them. Code resolves chains (a part of b, b part of c: c is the ancestor, shown "by way of b"), and the evidence includes where the store talks about the folder: most of the facts of other project folders that name it are the ancestor's. Folders that share an ancestor come in one batch, the ancestor first: decide them together and alike.
 
 Dry claims are checked by code, not judged. Whether a repository of a name exists and what it is called now has one source of truth: code checked each folder's name against every machine's checkouts, the checkouts' remotes and the forge (lines "check: ..."), and code refuses a decision a check refutes, showing the check:
 - A project folder whose name exists nowhere (no checkout or other name of one, no remote, the forge has no such repository) is no repository under that name: it cannot be active, dormant, shipped or dead as it is. Set suppressed_by to the real repository its facts belong to (code lists candidates with their evidence: the checkouts its sessions worked in, repositories whose paths or remotes its facts name, near names; pick the one the evidence supports), or answer needs-review when the evidence picks none. Only when code lists no candidate may it be kind none.
@@ -691,9 +698,12 @@ func SortCandidates(cands []Candidate, aliasOf func(folder string) string) {
 		if ki != kj {
 			return ki < kj
 		}
-		// The group's own folder (the ancestor, the repository the names are
-		// of) first: the others fold into it, so it is decided in the first
-		// batch of the group.
+		// The ancestor first, then the folders nearest it: the others fold
+		// into it, so it is decided in the first batch of the group.
+		if di, dj := cands[i].Depth, cands[j].Depth; di != dj {
+			return di < dj
+		}
+		// The group's own folder (the repository the names are of) first.
 		if gi, gj := isGroupHead(cands[i]), isGroupHead(cands[j]); gi != gj {
 			return gi
 		}

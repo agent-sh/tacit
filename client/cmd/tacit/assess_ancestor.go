@@ -103,8 +103,21 @@ func (a *assessor) knownRepoName(n string) string {
 	if a.catalog.Has(n) {
 		return n
 	}
-	if o := record.RepoOwner(a.recs, n); o != "" && strings.HasPrefix(o, "projects/") {
+	if o := record.RepoOwner(a.arecs(), n); o != "" && strings.HasPrefix(o, "projects/") {
 		return path.Base(o)
+	}
+	return ""
+}
+
+// checkoutName is the repository a name is a checkout's directory of in
+// some machine's catalog (its name or another name of it); "" for none.
+func (a *assessor) checkoutName(n string) string {
+	n = strings.ToLower(n)
+	if own := a.catalog.AliasOf(n); own != "" {
+		return own
+	}
+	if a.catalog.Has(n) {
+		return n
 	}
 	return ""
 }
@@ -117,7 +130,10 @@ func (a *assessor) ancestorIx() *ancestorIndex {
 	a.ancIx = ix
 	for _, f := range a.facts {
 		if (f.InInbox() || overlay.IsInbox(f.Path)) && f.Meta.Source.Session != "" {
-			ix.noteSess[f.Meta.Name] = f.Meta.Source.Session
+			// One answer whatever the order the facts were read in.
+			if s, ok := ix.noteSess[f.Meta.Name]; !ok || f.Meta.Source.Session < s {
+				ix.noteSess[f.Meta.Name] = f.Meta.Source.Session
+			}
 		}
 	}
 	for _, f := range a.facts {
@@ -161,18 +177,32 @@ func (a *assessor) indexPath(ix *ancestorIndex, f *fact.Fact, p string) {
 		}
 		start = 1
 	}
-	last := ""
+	last, hidden := "", false
 	for _, comp := range comps[start:] {
 		lc := strings.ToLower(comp)
-		if lc == "" || strings.HasPrefix(lc, ".") {
+		if strings.HasPrefix(lc, ".") {
+			hidden = true // a tool's tree (~/.claude/projects/...)
 			continue
 		}
-		if r := a.knownRepoName(lc); r != "" {
+		if lc == "" {
+			continue
+		}
+		// A checkout's directory starts its own tree (one checked out inside
+		// another's folder); any other known name starts the outermost one,
+		// outside a tool's hidden tree: a directory inside a tree is inside it
+		// whether or not a folder of its name has a record yet.
+		if r := a.checkoutName(lc); r != "" {
 			last = r
 			continue
 		}
 		if b, ok := worktreesDir(lc); ok {
 			if r := a.knownRepoName(b); r != "" {
+				last = r
+				continue
+			}
+		}
+		if last == "" && !hidden {
+			if r := a.knownRepoName(lc); r != "" {
 				last = r
 				continue
 			}
@@ -188,8 +218,9 @@ func (a *assessor) indexPath(ix *ancestorIndex, f *fact.Fact, p string) {
 			h = &pathHits{facts: map[string]pathFact{}}
 			ix.inside[lc][last] = h
 		}
-		if _, ok := h.facts[f.Meta.Name]; !ok {
-			h.facts[f.Meta.Name] = pathFact{scope: f.Meta.Scope, session: ix.session(f), path: homeTilde(p)}
+		pf := pathFact{scope: f.Meta.Scope, session: ix.session(f), path: homeTilde(p)}
+		if old, ok := h.facts[f.Meta.Name]; !ok || pathFactLess(pf, old) {
+			h.facts[f.Meta.Name] = pf
 		}
 	}
 }
@@ -202,9 +233,21 @@ func (a *assessor) noteOwn(ix *ancestorIndex, n string, f *fact.Fact, p string) 
 	if ix.own[n] == nil {
 		ix.own[n] = map[string]string{}
 	}
-	if _, ok := ix.own[n][s]; !ok {
+	if old, ok := ix.own[n][s]; !ok || homeTilde(p) < old {
 		ix.own[n][s] = homeTilde(p)
 	}
+}
+
+// pathFactLess orders the readings of one fact's paths, so the index is the
+// same whatever the order the facts were read in.
+func pathFactLess(x, y pathFact) bool {
+	if x.scope != y.scope {
+		return x.scope < y.scope
+	}
+	if x.session != y.session {
+		return x.session < y.session
+	}
+	return x.path < y.path
 }
 
 // homeTilde writes a path's home part as ~.
@@ -217,22 +260,40 @@ func homeTilde(p string) string {
 
 // ancestorFolder is the live project folder that holds the repository or
 // project n now (n itself, or the end of its suppression), when it exists
-// (a live record, else a name code's check finds) and is no folder that is
-// not a project, nor self; "" otherwise.
+// (a live record, a folder of the store or the catalogs with no record yet,
+// which the graph stands in for, else a name code's check finds) and is no
+// folder that is not a project, nor self; "" otherwise.
 func (a *assessor) ancestorFolder(n, self string) string {
 	n = strings.ToLower(n)
+	if a.ancMemo == nil {
+		a.ancMemo = map[string]string{}
+	}
+	w, ok := a.ancMemo[n]
+	if !ok {
+		w = a.ancestorFolderOf(n)
+		a.ancMemo[n] = w
+	}
+	if w == self {
+		return ""
+	}
+	return w
+}
+
+// ancestorFolderOf is ancestorFolder before the self check.
+func (a *assessor) ancestorFolderOf(n string) string {
 	if own := a.catalog.AliasOf(n); own != "" {
 		n = own
 	}
 	folder := "projects/" + n
-	if o := record.RepoOwner(a.recs, n); o != "" {
+	recs := a.arecs()
+	if o := record.RepoOwner(recs, n); o != "" {
 		folder = o
 	}
-	w, _, err := record.Resolve(a.recs, folder)
-	if err != nil || !strings.HasPrefix(w, "projects/") || w == self {
+	w, _, err := record.Resolve(recs, folder)
+	if err != nil || !strings.HasPrefix(w, "projects/") {
 		return ""
 	}
-	if r := a.recs[w]; r != nil {
+	if r := recs[w]; r != nil {
 		if notProject(r) || record.Broad(r.Kind) != "project" {
 			return ""
 		}
@@ -274,8 +335,11 @@ type ancestorAcc struct {
 	score int
 }
 
-// findAncestors fills c's ancestor candidates and independence evidence.
-func (a *assessor) findAncestors(c *assess.Candidate) {
+// directAncestors fills c's own ancestor candidates (the folders its own
+// evidence relates it to, each the live folder or the folder with no record
+// yet that holds the repository now) and the independence evidence against
+// them. The graph (assess_graph.go) resolves them to their final ancestors.
+func (a *assessor) directAncestors(c *assess.Candidate) {
 	name, ok := strings.CutPrefix(c.Folder, "projects/")
 	if !ok || c.Kind != "" {
 		return
@@ -390,6 +454,12 @@ func (a *assessor) findAncestors(c *assess.Candidate) {
 			add(repo, assess.SourceFacts, fmt.Sprintf("%d of %d live fact(s) read point at %s by their own paths, forge URLs or repository-relative paths", m, sample, repo), 20*min(m, 10))
 		}
 	}
+	// Where the store talks about it: the project folder that holds most of
+	// the facts of other project folders that name it, more than it holds
+	// itself (negeig's work is written down in darklanes).
+	if w, n, total := a.mentionedIn(c.Folder, name); w != "" && n > len(live) {
+		add(path.Base(w), assess.SourceMentions, fmt.Sprintf("%d of the %d fact(s) in other project folders that name %s are %s's, more than its own %d live fact(s) and far more than its share of the store's facts", n, total, name, path.Base(w), len(live)), 5*min(n, 10))
+	}
 	if len(by) > 0 {
 		// Related: the other repositories its evidence names join the ranking
 		// (they do not make a folder related on their own).
@@ -431,6 +501,17 @@ func (a *assessor) finishAncestors(c *assess.Candidate, name string, ix *ancesto
 	if len(c.Ancestors) > 0 {
 		c.Independence = a.independence(c, name, ix, live)
 	}
+}
+
+// liveOf are the live facts filed in folder.
+func (a *assessor) liveOf(folder string) []*fact.Fact {
+	var out []*fact.Fact
+	for _, f := range a.facts {
+		if f.Meta.Scope == folder && liveFact(f) {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 func sortedPathRepos(m map[string]*pathHits) []string {
@@ -491,6 +572,9 @@ func (a *assessor) familyName(p string) bool {
 // repositories and their other names, and the project records' names and
 // aliases (live or folded: a folded one resolves to its winner).
 func (a *assessor) ancestorNamePool() []string {
+	if a.namePool != nil {
+		return a.namePool
+	}
 	set := map[string]bool{}
 	for _, n := range a.catalog.Names() {
 		set[n] = true
@@ -498,14 +582,15 @@ func (a *assessor) ancestorNamePool() []string {
 	for _, n := range a.catalog.AliasNames() {
 		set[n] = true
 	}
-	for f, r := range a.recs {
+	for f, r := range a.arecs() {
 		if strings.HasPrefix(f, "projects/") && record.Broad(r.Kind) == "project" {
 			for _, n := range r.Names() {
 				set[strings.ToLower(n)] = true
 			}
 		}
 	}
-	return sortedKeysBool(set)
+	a.namePool = sortedKeysBool(set)
+	return a.namePool
 }
 
 // maxProbe bounds the repositories a folder's relative paths are checked
@@ -553,8 +638,7 @@ func (a *assessor) factsPointAt(self string, live []*fact.Fact, probe map[string
 			roots[b] = pathSource{forge: full}
 		}
 	}
-	cache := repoid.NewCache(a.home)
-	cache.Mains = a.catalog.Mains()
+	cache := a.repoCache()
 	// The newest facts first, at most maxPointFacts: what a folder is shows
 	// in a sample; a folder of hundreds of facts costs no more.
 	live = append([]*fact.Fact(nil), live...)
@@ -569,7 +653,7 @@ func (a *assessor) factsPointAt(self string, live []*fact.Fact, probe map[string
 	}
 	for _, f := range live {
 		set := map[string]bool{}
-		for n := range pointedRepos(cache, a.catalog, a.recs, f) {
+		for n := range pointedRepos(cache, a.catalog, a.arecs(), f) {
 			if w := a.ancestorFolder(n, self); w != "" {
 				set[path.Base(w)] = true
 			}
