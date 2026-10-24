@@ -121,16 +121,10 @@ func TestPiWindowsAndASourceAddedLater(t *testing.T) {
 	for _, w := range ws {
 		got[w.Session] = strings.Join(w.Lines, "\n")
 	}
-	// A program's prompt is no owner line: with nothing else to extract, the
-	// headless session gives no window and its cursor moves to its end.
-	if len(ws) != 1 || !strings.HasPrefix(got["02bb"], "U: keep the cache warm before a release") {
-		t.Fatalf("pi windows: %d", len(ws))
-	}
-	if fi, _ := os.Stat(headless); state.Offsets[headless] != fi.Size() {
-		t.Fatalf("headless cursor %d", state.Offsets[headless])
-	}
-	if lines := digest.PiLines(strings.NewReader(piSession("03cc", "2026-10-02T10:00:00.000Z", "2026-10-02T10:00:00.040Z")), digest.PiHeadless([]byte(piSession("03cc", "2026-10-02T10:00:00.000Z", "2026-10-02T10:00:00.040Z")))); !strings.HasPrefix(lines[0], "H: keep the cache warm") {
-		t.Fatalf("headless prompt: %q", lines[0])
+	// A program's prompt is no owner line: the headless session is read as
+	// an agent's, its prompt another agent's (P:).
+	if len(ws) != 2 || !strings.HasPrefix(got["02bb"], "U: keep the cache warm before a release") || !strings.HasPrefix(got["03cc"], "P: keep the cache warm before a release") {
+		t.Fatalf("pi windows: %d %q", len(ws), got)
 	}
 }
 

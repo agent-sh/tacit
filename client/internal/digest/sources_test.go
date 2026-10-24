@@ -27,7 +27,8 @@ func piSession(first string) string {
 }
 
 func TestPiLines(t *testing.T) {
-	got := PiLines(strings.NewReader(piSession("2026-10-01T10:00:05.000Z")), false)
+	typed := piSession("2026-10-01T10:00:05.000Z")
+	got := Lines(strings.NewReader(typed), Pi, SessionWho("s.jsonl", []byte(typed), Pi).Owner())
 	want := []string{
 		"U: never deploy the shop on a friday",
 		"A: Checking the deploy script.",
@@ -41,15 +42,15 @@ func TestPiLines(t *testing.T) {
 		"H: Earlier: deploy checks.",
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("PiLines:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+		t.Fatalf("Lines(Pi):\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	// A session a program started: its prompts are an agent's.
-	agent := PiLines(strings.NewReader(piSession("2026-10-01T10:00:00.250Z")), true)
-	if agent[0] != "H: never deploy the shop on a friday" {
-		t.Fatalf("headless prompt digested as %q", agent[0])
-	}
-	if !reflect.DeepEqual(Lines(strings.NewReader(piSession("2026-10-01T10:00:05.000Z")), Pi), want) {
-		t.Fatal("Lines(Pi) differs from PiLines")
+	// A session a program started: its prompts are another agent's (P:);
+	// harness text stays H:.
+	headless := piSession("2026-10-01T10:00:00.250Z")
+	v := SessionWho("s.jsonl", []byte(headless), Pi)
+	agent := Lines(strings.NewReader(headless), Pi, v.Owner())
+	if v.Who != Agent || agent[0] != "P: never deploy the shop on a friday" || agent[7] != `H: <file name="a.txt">pasted</file>` {
+		t.Fatalf("headless session %+v digested as %q", v, agent)
 	}
 }
 

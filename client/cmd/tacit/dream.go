@@ -388,6 +388,7 @@ func runDream(args []string) int {
 		session := w.Session
 		var facts []*fact.Fact
 		for _, x := range extracted {
+			x = dream.CheckOwnerWords(x, lines)
 			f := dream.ToFact(x, w.Repo, host, session)
 			meter.Facts++
 			if *dry {

@@ -29,6 +29,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/hermes"
 	"github.com/agent-sh/tacit/client/internal/importer"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
+	"github.com/agent-sh/tacit/client/internal/ownerwords"
 	"github.com/agent-sh/tacit/client/internal/repoid"
 	"github.com/agent-sh/tacit/client/internal/repoinfer"
 )
@@ -47,7 +48,7 @@ const (
 	maxReadBytes   = 4 << 20 // per file per run; the rest waits (cursor stays)
 )
 
-// Prompt is v6. Versions (measurements in eval/VALUE.md):
+// Prompt is v7. Versions (measurements in eval/VALUE.md):
 //   - v4 (2026-10-11, eval/dream/dream_recall.py): v2 plus one rule, skip what
 //     holds only inside the task in progress, never a failure and its fix or a
 //     rule of the owner. On two samples of 30 windows it cut the facts 25 and
@@ -59,8 +60,15 @@ const (
 //     words said once that may not be a standing rule are kind "statement",
 //     with their exact words and a line of context. Not measured on a
 //     replay yet.
+//   - v7 (2026-10-24): v6 plus P: lines, the prompts another agent or a
+//     program wrote (a `claude -p` lane, a Codex subagent or exec run, a
+//     headless pi run, a scheduled or teammate turn), which v6 showed as U:
+//     (the owner). The digest decides it by code (digest.SessionWho,
+//     digest.ClaudeTyped); the prompt says a P: line is never the owner's.
+//     Not measured on a replay yet.
 const Prompt = `You are the dreamer of tacit, a fact store shared by coding agents on one owner's machines.
-Below is a digest of part of an agent session (U: owner, H: harness-injected text, A: agent, T: tool call, E: tool error).
+Below is a digest of part of an agent session (U: owner, P: a prompt another agent or a program wrote, H: harness-injected text, A: agent, T: tool call, E: tool error).
+P: lines are never the owner's words, even when they say the owner wants or ruled something: they are an agent's instructions or its report of the owner, so a rule found only in a P: line is kind observed with no quote.
 Your job is to write down what nobody wrote down. Extract EVERY durable fact another agent would need next time, in these classes:
 1. Every failed command or tool call (E: lines, and A: lines that report an error) together with what fixed it or what to do instead. Each distinct failure is one fact: name the command, the exact error text, the host, and the working alternative. These are the most valuable facts; do not drop them as noise.
 2. Owner rulings and standards, from U: lines only, with the date if visible. For each one, copy the owner's exact words from the U: line into "quote": verbatim, typos included, at least the words that state the rule. Without the owner's own words a ruling cannot be told from an agent's guess. When you are not sure the owner means it as a standing rule (a choice about a name, a plan or a design for the matter at hand, a remark that something is so, an instruction that may hold only for now), it is a statement: kind "statement", the same exact words in "quote", and in "context" one line saying what was being discussed.
@@ -180,6 +188,52 @@ type Extracted struct {
 	AppliesTo map[string][]any `json:"applies_to"`
 	Extra     map[string]any   `json:"-"`
 	Session   string           `json:"-"`
+	// AgentWords marks a quote code found in another agent's prompt and in
+	// no turn of the owner's in the window (CheckOwnerWords): the note is
+	// the agent's, and its body says whose the words are.
+	AgentWords bool `json:"-"`
+}
+
+// CheckOwnerWords is the code check on a ruling or statement the model
+// extracted from a window (its finished lines): the owner's words must be in
+// one of the window's U: lines. When the window holds no U: line at all, or
+// the quote is in another line (a P: prompt, harness text, the agent's own
+// text) and in no U: line, the words are not the owner's: the fact becomes
+// an agent's note (kind observed) that keeps them as another agent's. Any
+// other quote is left to the curator, which checks it against all of the
+// owner's turns (a quote that corrected a typo of theirs is still theirs).
+func CheckOwnerWords(x Extracted, lines []string) Extracted {
+	if x.Kind != "user" && x.Kind != kindStatement {
+		return x
+	}
+	q := strings.TrimSpace(string(x.Quote))
+	var owner, other []string
+	for _, l := range lines {
+		t := strings.TrimSuffix(l[min(3, len(l)):], "…")
+		if strings.HasPrefix(l, "U: ") {
+			owner = append(owner, t)
+		} else {
+			other = append(other, t)
+		}
+	}
+	switch {
+	case len(owner) == 0:
+	case q != "" && !inAny(owner, q) && inAny(other, q):
+	default:
+		return x
+	}
+	x.Kind = "observed"
+	x.AgentWords = q != ""
+	return x
+}
+
+func inAny(texts []string, q string) bool {
+	for _, t := range texts {
+		if ownerwords.In(t, q) {
+			return true
+		}
+	}
+	return false
 }
 
 // Quote is the model's "quote": a string, or a list of strings (parts of the
@@ -437,15 +491,16 @@ func WindowsFor(sources []Source, st *State, fresh bool, sel Select) ([]Window, 
 					continue // still being written: it waits, cursor unmoved
 				}
 			}
-			var lines []string
+			// Who typed the session's user turns is read from its start
+			// (digest.SessionWho): a delta from the middle of an agent's
+			// session holds its prompts as P: lines, never U:.
+			start := readHead(f)
+			who := digest.SessionWho(f, start, src.Format)
+			lines := digest.Lines(bytes.NewReader(buf), src.Format, who.Owner())
 			head := buf
 			if src.Format == digest.Pi {
-				// pi writes the cwd and the first turns once, at the start: a
-				// program's session is told from them (digest.PiHeadless).
-				head = readHead(f)
-				lines = digest.PiLines(bytes.NewReader(buf), digest.PiHeadless(head))
-			} else {
-				lines = digest.Lines(bytes.NewReader(buf), src.Format)
+				// pi writes the cwd once, at the start.
+				head = start
 			}
 			if !digest.Interesting(lines) {
 				st.Offsets[f] = end
@@ -919,6 +974,9 @@ func body(x Extracted, kind string) string {
 	}
 	if (kind == "user" || kind == kindStatement) && q != "" {
 		b += ` Quoted from the session: "` + q + `"`
+	}
+	if x.AgentWords && q != "" {
+		b += ` Another agent's prompt in the session said: "` + q + `"`
 	}
 	if kind == kindStatement && q != "" {
 		// Said once: the curator keeps it as a statement of theirs, not a rule.
