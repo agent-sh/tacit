@@ -216,10 +216,41 @@ func coListed(words, folder, succ string) bool {
 			if len(strings.Fields(it)) > 4 {
 				continue
 			}
-			self = self || nameIn(it, folder)
-			other = other || nameIn(it, succ)
+			s, o := nameIn(it, folder), nameIn(it, succ)
+			if s && o {
+				continue // one item naming both ("tower replaces oldtool") is no list of them
+			}
+			self = self || s
+			other = other || o
 		}
 		if self && other {
+			return true
+		}
+	}
+	return false
+}
+
+// names are the folder's names a cited sentence may name it by: its folder
+// name and the other names code found for it (Candidate.Names).
+func (c Candidate) names() []string {
+	out := []string{strings.ToLower(strings.TrimPrefix(c.Folder, "projects/"))}
+	for _, n := range c.Names {
+		n = strings.ToLower(strings.TrimSpace(n))
+		if n != "" && n != out[0] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// namedIn reports words that name the folder by one of its names (a forge
+// name owner/name by its last part too).
+func (c Candidate) namedIn(words string) bool {
+	for _, n := range c.names() {
+		if nameIn(words, n) {
+			return true
+		}
+		if i := strings.LastIndex(n, "/"); i >= 0 && nameIn(words, n[i+1:]) {
 			return true
 		}
 	}
@@ -229,11 +260,13 @@ func coListed(words, folder, succ string) bool {
 // CheckOwnerWords checks d's owner_status items against the notes code
 // showed for c: each from a note of the owner's tiers among them, its words
 // verbatim in that note, says dead, shipped or dormant, a successor (dead
-// only) named in the cited words themselves (not elsewhere in the note, and
-// not listed with this folder as one more thing the words retire: then it is
-// no successor, and dead with no successor is what they say). It returns the
-// verified items, newest first (the newest supersedes the older), and the
-// problems of the others.
+// only) named in the cited words themselves together with this folder (its
+// name or another name of it: the same words name both, whichever sentence
+// of the note is cited; not elsewhere in the note, and not listed with this
+// folder as one more thing the words retire: then it is no successor, and
+// dead with no successor is what they say). It returns the verified items,
+// newest first (the newest supersedes the older), and the problems of the
+// others.
 func CheckOwnerWords(c Candidate, d Decision) ([]Said, []string) {
 	var ok []Said
 	var ps []string
@@ -276,6 +309,10 @@ func CheckOwnerWords(c Candidate, d Decision) ([]Said, []string) {
 		}
 		if succ != "" && !nameIn(it.Words, succ) {
 			ps = append(ps, fmt.Sprintf("%s.successor: the words you cite do not name %s; a successor is accepted only where the cited words name it as this folder's replacement (not the rest of the note, not a related plan): cite the words that do, or give no successor (dead with no successor)", label, succ))
+			continue
+		}
+		if succ != "" && !c.namedIn(it.Words) {
+			ps = append(ps, fmt.Sprintf("%s.successor: the words you cite do not name this folder (%s); a successor is accepted only where the cited words name both this folder (or another name of it) and the successor: cite the words that say %s replaces it, or give no successor (dead with no successor)", label, strings.Join(c.names(), ", "), succ))
 			continue
 		}
 		if folder := strings.TrimPrefix(c.Folder, "projects/"); succ != "" && coListed(it.Words, folder, succ) {

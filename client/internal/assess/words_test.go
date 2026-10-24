@@ -39,7 +39,7 @@ func TestMaintenancePaths(t *testing.T) {
 func wordsCand(cs string) Candidate {
 	c := Candidate{Folder: "projects/oldtool", Notes: []Note{
 		{Name: "plugins-to-delete", Scope: "user", Type: "design_decision", Created: "2026-10-08", Tier: TierDecision,
-			Description: "Owner decided on 2026-10-06 to delete the plugins oldtool and gadget.", Body: "Tower Crane replaces them. As of 2026-10-08 both still exist."},
+			Description: "Owner decided on 2026-10-06 to delete the plugins oldtool and gadget.", Body: "Tower Crane replaces oldtool and gadget. As of 2026-10-08 both still exist."},
 		{Name: "removed-plugins", Scope: "user", Type: "design_decision", Created: "2026-10-08", Tier: TierDecision,
 			Description: "Removed for good (2026-09-23): oldtool, gadget.", Body: "They were unused."},
 		{Name: "oldtool-howto", Scope: "projects/other", Type: "history", Created: "2026-10-01", Tier: TierOther,
@@ -56,7 +56,7 @@ func TestOwnerWordsChecked(t *testing.T) {
 	var d Decision
 	if err := json.Unmarshal([]byte(`{"folder":"projects/oldtool","kind":"repo","status":"dead","why":"a plugin repository","owner_status":[
 		{"says":"dead","words":"Removed for good (2026-09-23): oldtool","from":"note:removed-plugins"},
-		{"says":"dead","words":"Tower Crane replaces them","from":"note:plugins-to-delete","successor":"tower-crane"}]}`), &d); err != nil {
+		{"says":"dead","words":"Tower Crane replaces oldtool","from":"note:plugins-to-delete","successor":"tower-crane"}]}`), &d); err != nil {
 		t.Fatal(err)
 	}
 	said, ps := CheckOwnerWords(c, d)
@@ -82,6 +82,9 @@ func TestOwnerWordsChecked(t *testing.T) {
 		{Says: "dead", Words: "to delete the plugins", From: "note:plugins-to-delete", Successor: "pikadon"},
 		// The note names tower-crane, but not in the words cited.
 		{Says: "dead", Words: "decided on 2026-10-06 to delete the plugins oldtool", From: "note:plugins-to-delete", Successor: "tower-crane"},
+		// The words name tower-crane but not this folder: whichever sentence
+		// is cited, the successor needs words that name both.
+		{Says: "dead", Words: "Tower Crane replaces", From: "note:plugins-to-delete", Successor: "tower-crane"},
 		{Says: "dormant", Words: "to delete the plugins", From: "note:plugins-to-delete", Successor: "tower-crane"},
 		{Says: "active", Words: "to delete the plugins", From: "note:plugins-to-delete"},
 	} {
@@ -94,7 +97,7 @@ func TestOwnerWordsChecked(t *testing.T) {
 func TestWordsOutcome(t *testing.T) {
 	c := wordsCand(record.StatusActive)
 	d := Decision{Folder: c.Folder, Kind: "repo", Status: "active", Why: "the owner's plugin repository",
-		OwnerStatus: OwnerWordsList{{Says: "dead", Words: "Tower Crane replaces them", From: "note:plugins-to-delete", Successor: "tower-crane"}}}
+		OwnerStatus: OwnerWordsList{{Says: "dead", Words: "Tower Crane replaces oldtool", From: "note:plugins-to-delete", Successor: "tower-crane"}}}
 	said, _ := CheckOwnerWords(c, d)
 	// No real work after the words: dead, replaced by the successor, the words kept.
 	maint := Changes{Maintenance: []Work{{Day: "2026-10-09", Kind: "commit", Cite: "commit:abc1234", Why: "a bot's commit (dependabot[bot])"}}}
@@ -195,3 +198,31 @@ func TestSuccessorOnlyFromTheCitedWords(t *testing.T) {
 		t.Error("coListed")
 	}
 }
+
+// A successor is accepted only where the cited words name both the folder
+// (its name or another name of it) and the successor: the same answer
+// whichever sentence of the note the model cites.
+func TestSuccessorNeedsWordsNamingTheFolder(t *testing.T) {
+	c := Candidate{Folder: "projects/audit-project", Names: []string{"auditor"}, Notes: []Note{
+		{Name: "pipeline-obsolete", Scope: "user", Type: "design_decision", Created: "2026-10-08", Tier: TierDecision,
+			Description: "audit-project and the per-ticket pipeline are obsolete (owner 2026-10-06).", Body: "These were part of the obsolete next-task pipeline that Tower Crane replaces. The auditor goes too; Tower Crane replaces the auditor."},
+	}, NotesTotal: 1}
+	check := func(words string) ([]Said, []string) {
+		return CheckOwnerWords(c, Decision{OwnerStatus: OwnerWordsList{{Says: "dead", Words: words, From: "note:pipeline-obsolete", Successor: "tower-crane"}}})
+	}
+	if said, ps := check("These were part of the obsolete next-task pipeline that Tower Crane replaces."); len(said) != 0 || len(ps) != 1 || !strings.Contains(ps[0], "do not name this folder") {
+		t.Fatalf("words naming only the successor: said %+v problems %v", said, ps)
+	}
+	if said, ps := check("Tower Crane replaces the auditor"); len(ps) != 0 || len(said) != 1 || said[0].Successor != "tower-crane" {
+		t.Fatalf("an alias and the successor: said %+v problems %v", said, ps)
+	}
+	if said, ps := check("audit-project and the per-ticket pipeline are obsolete (owner 2026-10-06). These were part of the obsolete next-task pipeline that Tower Crane replaces."); len(ps) != 0 || len(said) != 1 {
+		t.Fatalf("the folder and the successor: said %+v problems %v", said, ps)
+	}
+	// With no successor the description's words alone say dead, none.
+	said, ps := CheckOwnerWords(c, Decision{OwnerStatus: OwnerWordsList{{Says: "dead", Words: "audit-project and the per-ticket pipeline are obsolete", From: "note:pipeline-obsolete"}}})
+	if len(ps) != 0 || len(said) != 1 || said[0].Successor != "" {
+		t.Fatalf("no successor: said %+v problems %v", said, ps)
+	}
+}
+

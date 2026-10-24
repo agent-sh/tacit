@@ -90,6 +90,7 @@ func (a *assessor) notes(c *assess.Candidate) {
 		ns[i].Projects = a.noteProjects(ns[i], self)
 	}
 	c.Notes = ns
+	c.Names = a.namesOf(*c, name)[1:]
 	folder, act := c.Folder, c.Activity
 	c.RealWork = func(after string) assess.Changes { return a.realWork(folder, act, after) }
 }
