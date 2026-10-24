@@ -51,15 +51,22 @@ var pasted = regexp.MustCompile(`\[Pasted text #\d+[^\]]*\]|\[Image #\d+[^\]]*\]
 // AddClaudeHistory adds the prompts the owner typed into Claude Code
 // (~/.claude/history.jsonl: one line per prompt, `display` and `sessionId`).
 // Only interactive sessions write it, and it outlives the transcripts, which
-// Claude Code deletes after a few weeks. Pastes are left out.
+// Claude Code deletes after a few weeks. Pastes are left out, and so is a
+// prompt of a session its transcript shows is an agent's (AddTranscripts runs
+// first) or whose project is a directory only agents use.
 func (b *Builder) AddClaudeHistory(path string) error {
 	return b.jsonLines(path, func(line []byte) {
 		var h struct {
 			Display   string `json:"display"`
 			SessionID string `json:"sessionId"`
+			Project   string `json:"project"`
 		}
 		if json.Unmarshal(line, &h) != nil || h.Display == "" {
 			return
+		}
+		if AgentCwd(h.Project) || (h.SessionID != "" && b.agentRefs["claude:"+h.SessionID]) {
+			b.c.Stats.AgentTurns++
+			return // typed into an agent's session (a lane a program drives through a terminal)
 		}
 		if strings.HasPrefix(strings.TrimSpace(h.Display), "!") {
 			return // a shell command the owner ran, not words to an agent
@@ -73,7 +80,8 @@ func (b *Builder) AddClaudeHistory(path string) error {
 }
 
 // AddCodexHistory adds the prompts the owner typed into Codex
-// (~/.codex/history.jsonl: `session_id`, `text`).
+// (~/.codex/history.jsonl: `session_id`, `text`), less those of a session its
+// transcript shows is an agent's (a subagent, an exec run).
 func (b *Builder) AddCodexHistory(path string) error {
 	return b.jsonLines(path, func(line []byte) {
 		var h struct {
@@ -81,6 +89,10 @@ func (b *Builder) AddCodexHistory(path string) error {
 			Text      string `json:"text"`
 		}
 		if json.Unmarshal(line, &h) != nil || h.Text == "" {
+			return
+		}
+		if h.SessionID != "" && b.agentRefs["codex:"+h.SessionID] {
+			b.c.Stats.AgentTurns++
 			return
 		}
 		ref := "codex:history"
