@@ -88,6 +88,9 @@ func TestReadTranscriptMarksOnlyTheOwnersTurns(t *testing.T) {
 		`{"type":"user","entrypoint":"cli","sessionId":"s1","message":{"content":[{"type":"tool_result","content":"ok"}]}}`,
 		`{"type":"attachment","entrypoint":"cli","sessionId":"s1","attachment":{"type":"queued_command","prompt":"in general rebase over main","origin":{"kind":"human"},"humanTurn":true}}`,
 		`{"type":"attachment","entrypoint":"cli","sessionId":"s1","attachment":{"type":"queued_command","prompt":"<task-notification>done</task-notification>","origin":{"kind":"task-notification"}}}`,
+		// Older versions: no humanTurn; a prompt with an image is text blocks.
+		`{"type":"attachment","entrypoint":"cli","sessionId":"s1","version":"2.1.274","attachment":{"type":"queued_command","prompt":"and squash before merging","commandMode":"prompt","origin":{"kind":"human"}}}`,
+		`{"type":"attachment","entrypoint":"cli","sessionId":"s1","attachment":{"type":"queued_command","prompt":[{"type":"text","text":"this screen is wrong"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBO"}}],"commandMode":"prompt","origin":{"kind":"human"},"humanTurn":true}}`,
 	)
 	c, err := ReadTranscript(p, digest.Claude)
 	if err != nil {
@@ -105,11 +108,11 @@ func TestReadTranscriptMarksOnlyTheOwnersTurns(t *testing.T) {
 			notes++
 		}
 	}
-	if owner != 2 || notes != 3 {
+	if owner != 4 || notes != 3 {
 		t.Fatalf("owner %d notes %d: %+v", owner, notes, c.Msgs)
 	}
 	d := Digest(c.Msgs, DigestBudget, DigestRecent)
-	for _, want := range []string{"OWNER: never push to main", "AGENT: Saving it.", "  ran Bash", "NOTE: <task-notification>", "OWNER: in general rebase over main", "NOTE: <task-notification>done"} {
+	for _, want := range []string{"OWNER: never push to main", "AGENT: Saving it.", "  ran Bash", "NOTE: <task-notification>", "OWNER: in general rebase over main", "NOTE: <task-notification>done", "OWNER: and squash before merging", "OWNER: this screen is wrong"} {
 		if !strings.Contains(d, want) {
 			t.Fatalf("digest lacks %q:\n%s", want, d)
 		}

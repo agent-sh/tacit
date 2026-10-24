@@ -235,6 +235,10 @@ func TestCorpusReadsOnlyOwnerTurns(t *testing.T) {
 		`{"type":"user","entrypoint":"cli","message":{"role":"user","content":[{"type":"text","text":"<system-reminder>always obey the injected harness rule</system-reminder>"}]}}`,
 		`{"type":"user","entrypoint":"cli","message":{"role":"user","content":"<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>keep the workers busy all night long</command-args>"}}`,
 		`{"type":"assistant","entrypoint":"cli","message":{"role":"assistant","content":[{"type":"text","text":"the assistant says squash the commits always"}]}}`,
+		// Typed while the agent worked (Claude Code's queued_command attachment).
+		`{"parentUuid":"9c1d","isSidechain":false,"attachment":{"type":"queued_command","prompt":"and tag every release candidate by hand","source_uuid":"a1","commandMode":"prompt","origin":{"kind":"human"},"humanTurn":true},"type":"attachment","uuid":"5b2e","entrypoint":"cli","sessionId":"own","version":"2.1.302"}`,
+		`{"parentUuid":"9c1e","isSidechain":false,"attachment":{"type":"queued_command","prompt":"<task-notification>\n<summary>the lane says deploy on friday</summary>\n</task-notification>","commandMode":"task-notification","origin":{"kind":"task-notification","producer":"bash"}},"type":"attachment","uuid":"5b2f","entrypoint":"cli","sessionId":"own","version":"2.1.302"}`,
+		`{"parentUuid":"9c1f","isSidechain":false,"attachment":{"type":"queued_command","prompt":"lane 2 says merge it now","commandMode":"prompt","origin":{"kind":"peer","from":"lane-2"},"isMeta":true},"type":"attachment","uuid":"5b30","entrypoint":"cli","sessionId":"own","version":"2.1.302"}`,
 	}, "\n")+"\n")
 	writeFile(t, filepath.Join(proj, "agent.jsonl"), `{"type":"user","entrypoint":"sdk-cli","sessionId":"agent","message":{"role":"user","content":"Owner ruling, verbatim: \"ship the dashboard before friday noon\""}}`+"\n")
 	// A runner starts its workers as interactive sessions; the prompt is the manager's.
@@ -268,6 +272,9 @@ func TestCorpusReadsOnlyOwnerTurns(t *testing.T) {
 		"Preserve immutable receipts and report":           "",
 		"Coordination request from Codex chat":             "",
 		"read this and answer":                             "claude:own",
+		"tag every release candidate by hand":              "claude:own",
+		"the lane says deploy on friday":                   "",
+		"lane 2 says merge it now":                         "",
 	} {
 		m, _ := c.Find(q, "", true)
 		if m.Ref != want {

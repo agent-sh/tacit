@@ -382,3 +382,80 @@ func ClaudeTyped(m ClaudeMarks) (bool, string) {
 	}
 	return false, "entrypoint " + m.Entrypoint
 }
+
+// ClaudeQueued reads a Claude Code line that delivers a message queued while
+// the agent was working: Claude Code records what the owner types mid-turn
+// not as a user line but as an attachment of type queued_command, delivered
+// after the tool result it waited for, in order with the rest of the turn.
+// ok is false for any other line. texts are the message's text (its prompt,
+// a string or text blocks), and typed reports a message a person typed, and
+// why not when it is not:
+//   - a sidechain's (a subagent's) and a meta attachment are no one's typing;
+//   - a command mode other than "prompt" (a task notification) is the
+//     harness's;
+//   - origin.kind, when it has one, decides: "human" is a person ("peer",
+//     "coordinator", "task-notification" are agents' or the harness's);
+//   - else (versions before origin was recorded) a line of a person's
+//     entrypoint, as ClaudeTyped falls back to it.
+//
+// Versions from 2.1.296 also mark a person's queued message humanTurn; it
+// adds nothing origin.kind does not say. Harness text inside the message is
+// the caller's to drop (HarnessText), as for a user line.
+func ClaudeQueued(o map[string]any) (texts []string, typed bool, why string, ok bool) {
+	if t, _ := o["type"].(string); t != "attachment" {
+		return nil, false, "", false
+	}
+	a, _ := o["attachment"].(map[string]any)
+	if at, _ := a["type"].(string); at != "queued_command" {
+		return nil, false, "", false
+	}
+	switch p := a["prompt"].(type) {
+	case string:
+		texts = []string{p}
+	case []any:
+		for _, b := range p {
+			bm, _ := b.(map[string]any)
+			if bt, _ := bm["type"].(string); bt == "text" {
+				s, _ := bm["text"].(string)
+				texts = append(texts, s)
+			}
+		}
+	}
+	side, _ := o["isSidechain"].(bool)
+	meta, _ := a["isMeta"].(bool)
+	mode, _ := a["commandMode"].(string)
+	kind := ""
+	if org, isMap := a["origin"].(map[string]any); isMap {
+		kind, _ = org["kind"].(string)
+	}
+	entry, _ := o["entrypoint"].(string)
+	switch {
+	case side:
+		return texts, false, "sidechain", true
+	case meta:
+		return texts, false, "harness line", true
+	case mode != "" && mode != "prompt":
+		return texts, false, "commandMode " + mode, true
+	case kind == "human":
+		return texts, true, "", true
+	case kind != "":
+		return texts, false, "origin " + kind, true
+	case ClaudeOwnerEntrypoints[entry]:
+		return texts, true, "", true
+	case entry == "":
+		return texts, false, "no entrypoint", true
+	}
+	return texts, false, "entrypoint " + entry, true
+}
+
+// ClaudeQueuedLine is ClaudeQueued on a raw transcript line.
+func ClaudeQueuedLine(line []byte) (texts []string, typed bool, why string, ok bool) {
+	if !bytes.Contains(line, []byte(`"queued_command"`)) {
+		return nil, false, "", false
+	}
+	var o map[string]any
+	if json.Unmarshal(line, &o) != nil {
+		return nil, false, "", false
+	}
+	return ClaudeQueued(o)
+}
