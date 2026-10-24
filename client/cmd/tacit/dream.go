@@ -64,6 +64,7 @@ func runDream(args []string) int {
 	envFile := fs.String("env-file", "", "KEY=VALUE lines (the variables claude -p needs, for example the Bedrock ones) set before `claude -p` runs; for launchd, which has no EnvironmentFile")
 	idle := fs.Duration("idle", 0, "only transcripts with no write for this long (--idle alone: 20m), or whose new content holds a compaction")
 	session := fs.String("session", "", "only this transcript (its path; a Hermes session id)")
+	agentWindows := fs.String("agent-windows", "", "windows with no turn of the owner's: all (default), recent:<days> or none; $TACIT_DREAM_AGENT_WINDOWS, dream_agent_windows in the settings")
 	fs.Parse(idleDefault(args))
 	if *maxCalls < 0 {
 		fmt.Fprintln(os.Stderr, "dream: --max-calls must be nonnegative")
@@ -134,6 +135,15 @@ func runDream(args []string) int {
 	limit, err := time.ParseDuration(*maxRuntime)
 	if err != nil || limit < 0 {
 		fmt.Fprintln(os.Stderr, "dream: --max-runtime must be a nonnegative duration")
+		return 2
+	}
+	// The flag wins over the environment (the settings set it).
+	if *agentWindows == "" {
+		*agentWindows = os.Getenv("TACIT_DREAM_AGENT_WINDOWS")
+	}
+	agentPolicy, err := dream.ParseAgentWindows(*agentWindows)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "dream:", err)
 		return 2
 	}
 
@@ -215,18 +225,19 @@ func runDream(args []string) int {
 		fmt.Fprintln(os.Stderr, "dream: redaction needs scrump with the text profile:", err)
 		return 2
 	}
-	sel := dream.Select{Idle: *idle, Now: time.Now()}
+	sel := dream.Select{Idle: *idle, Now: time.Now(), Agent: agentPolicy}
 	if *session != "" {
 		sel.Only = *session
 		if abs, err := filepath.Abs(*session); err == nil && strings.ContainsRune(*session, filepath.Separator) {
 			sel.Only = abs
 		}
 	}
-	windows, err := dream.WindowsFor(dream.DefaultSources(home), st, fresh, sel)
+	scan, err := dream.ScanWindows(dream.DefaultSources(home), st, fresh, sel)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "dream:", err)
 		return 2
 	}
+	windows := scan.Windows
 	// A cwd checkout outside home or in a temp directory names its windows'
 	// repository once sessions worked there; the registry keeps the
 	// evidence (a dry run reads it and records nothing).
@@ -266,6 +277,15 @@ func runDream(args []string) int {
 		remaining = append(remaining, w)
 	}
 	windows = remaining
+	if *dry {
+		// What a run would send, before any cap: a dry run with --max-calls 0
+		// counts a backlog at no cost.
+		chars := 0
+		for _, w := range windows {
+			chars += w.SentChars()
+		}
+		fmt.Printf("dream: dry run: %d window(s) to dream, %d characters to send\n", len(windows), chars)
+	}
 	if *dry && sel.Idle > 0 {
 		// What the idle run took and why, before any cap.
 		why := map[string]string{}
@@ -322,6 +342,11 @@ func runDream(args []string) int {
 	}
 
 	meter := dream.Meter{At: time.Now().Format(time.RFC3339), Windows: len(windows), Local: local}
+	if !agentPolicy.All() {
+		meter.AgentWindows = agentPolicy.String()
+		meter.AgentPassed, meter.AgentPassedChars = scan.Passed.Windows, scan.Passed.Chars
+		meter.OwnerCut, meter.OwnerCutChars = scan.Passed.Cut, scan.Passed.CutChars
+	}
 	switch {
 	case *session != "":
 		meter.Mode = "session"
@@ -351,7 +376,7 @@ func runDream(args []string) int {
 		}
 		// Redact here, one scrump call per window that is actually sent, and
 		// never move the cursor past a window whose redaction failed.
-		lines, err := digest.Finish(w.Lines)
+		lines, err := digest.Finish(w.Sent())
 		if err != nil {
 			meter.Errors++
 			failed[w.File] = true
@@ -466,11 +491,20 @@ func runDream(args []string) int {
 	if local && !*dry {
 		fmt.Println("dream: local layer: notes go to this machine's overlay, " + filepath.Join(overlay.Dir(), overlay.InboxDir, "dreamer@"+host) + "; nothing is pushed")
 	}
-	fmt.Printf("dream: %d window(s), %d call(s), %d fact(s), %d written, %d in-tokens, %s, %d error(s)\n", meter.Windows, meter.Calls, meter.Facts, len(written), meter.InTokens, meter.ModelCalls.CostSummary(meter.CostUSD), meter.Errors)
+	fmt.Printf("dream: %d window(s), %d call(s), %d fact(s), %d written, %d in-tokens, %s, %d error(s)%s\n", meter.Windows, meter.Calls, meter.Facts, len(written), meter.InTokens, meter.ModelCalls.CostSummary(meter.CostUSD), meter.Errors, agentSummary(meter))
 	if meter.Errors > 0 {
 		return 1
 	}
 	return 0
+}
+
+// agentSummary is the dream summary's account of the agent-window policy
+// (dream.AgentWindows): empty for the default, which dreams every window.
+func agentSummary(m dream.Meter) string {
+	if m.AgentWindows == "" {
+		return ""
+	}
+	return fmt.Sprintf("; agent windows %s: %d passed over (%d characters), %d owner window(s) cut to the owner's turns (%d characters left out)", m.AgentWindows, m.AgentPassed, m.AgentPassedChars, m.OwnerCut, m.OwnerCutChars)
 }
 
 // idleDefault lets --idle stand alone: with no duration after it, it is

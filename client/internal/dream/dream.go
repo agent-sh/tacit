@@ -275,8 +275,12 @@ type Select struct {
 	// other transcript waits with its cursor unmoved: the session is still
 	// being written, and its turns are still in the agent's context.
 	Idle time.Duration
-	// Now is the time idleness is measured against.
+	// Now is the time idleness, and the age of a window for Agent, are
+	// measured against.
 	Now time.Time
+	// Agent is what the run does with a window that holds no turn of the
+	// owner's (agentwindows.go); the zero value dreams every window.
+	Agent AgentWindows
 }
 
 // Window is one digest ready for the model. File is the transcript, or a
@@ -315,6 +319,23 @@ type Window struct {
 	// Why is the reason a selecting run took the transcript: "idle" or
 	// "compacted" (Select.Idle), empty otherwise.
 	Why string
+	// At is when the newest of the window's lines was written (zero when
+	// none records it).
+	At time.Time
+	// Send, when not nil, is what the model is sent in place of Lines: the
+	// owner's turns with their context (OwnerTurns), when Select.Agent does
+	// not take the window's agent content. Lines stays the whole window, so
+	// the window's identity (its completed key) does not depend on the
+	// policy.
+	Send []string
+}
+
+// Sent is what the model is sent for the window.
+func (w Window) Sent() []string {
+	if w.Send != nil {
+		return w.Send
+	}
+	return w.Lines
 }
 
 // Runner is the LLM call; tests substitute it.
@@ -393,8 +414,30 @@ func Windows(sources []Source, st *State, fresh bool) ([]Window, error) {
 // WindowsFor is Windows for the transcripts sel takes. A transcript it passes
 // over keeps its cursor, so a later run reads the same delta.
 func WindowsFor(sources []Source, st *State, fresh bool, sel Select) ([]Window, error) {
+	sc, err := ScanWindows(sources, st, fresh, sel)
+	return sc.Windows, err
+}
+
+// Scan is what ScanWindows found: the windows to dream, and what sel.Agent
+// passed over.
+type Scan struct {
+	Windows []Window
+	Passed  Passed
+}
+
+// ScanWindows is WindowsFor that also counts what sel.Agent passed over. A
+// delta whose every window the policy passes over moves its cursor to its
+// end, as a delta with nothing to extract does; the transcript's next bytes
+// wait for the next run, like any delta beyond maxReadBytes. So a run that
+// finds no window to dream may still leave bytes unread.
+func ScanWindows(sources []Source, st *State, fresh bool, sel Select) (Scan, error) {
 	home, _ := os.UserHomeDir()
 	var ws []Window
+	var passed Passed
+	now := sel.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
 	exclude := loadExclude()
 	// A separate clone of a checkout in the projects directory is that
 	// repository (repoid.Mains); scanned once per run.
@@ -408,7 +451,9 @@ func WindowsFor(sources []Source, st *State, fresh bool, sel Select) ([]Window, 
 			st.Sources = append(st.Sources, src.root())
 		}
 		if src.Format == digest.Hermes {
-			ws = append(ws, hermesWindows(src.DB, st, fresh, exclude, home, mains, sel)...)
+			hw, hp := hermesWindows(src.DB, st, fresh, exclude, home, mains, sel, now)
+			ws = append(ws, hw...)
+			passed.add(hp)
 			continue
 		}
 		files, _ := filepath.Glob(src.Glob)
@@ -439,84 +484,98 @@ func WindowsFor(sources []Source, st *State, fresh bool, sel Select) ([]Window, 
 			if seen && info.Size() <= off+minNewBytes {
 				continue
 			}
-			fh, err := os.Open(f)
-			if err != nil {
-				continue
-			}
-			if _, err := fh.Seek(off, 0); err != nil {
-				fh.Close()
-				continue
-			}
-			want := info.Size() - off
-			if want > maxReadBytes {
-				want = maxReadBytes
-			}
-			buf := make([]byte, want)
-			n, _ := io.ReadFull(fh, buf)
-			fh.Close()
-			buf = buf[:n]
-			// Only complete lines: cut at the last newline.
-			last := strings.LastIndexByte(string(buf), '\n')
-			if last < 0 {
-				// A full read with no newline is one line longer than
-				// maxReadBytes (a pasted blob or a huge tool result). Waiting
-				// would wait forever: every run would read the same bytes.
-				// Skip past that line once it is complete; a line still being
-				// written keeps the cursor.
-				if int64(n) == maxReadBytes {
-					if next, ok := nextLineStart(f, off+int64(n)); ok {
-						// Not when the file was replaced or cut meanwhile: the
-						// offset would land inside other content.
-						if fi, err := os.Stat(f); err == nil && fi.Size() >= next {
-							fmt.Fprintf(os.Stderr, "dream: %s: a line of %d bytes at %d is longer than the read cap; passed over\n", f, next-off, off)
-							st.Offsets[f] = next
-							st.Skipped++
-						}
-					}
-				}
-				// The rest of the file waits for the next run, like any delta
-				// beyond maxReadBytes.
-				continue
-			}
-			buf = buf[:last+1]
-			end := off + int64(len(buf))
-			why := ""
-			if sel.Idle > 0 {
-				switch {
-				case sel.Now.Sub(info.ModTime()) >= sel.Idle:
-					why = "idle"
-				case digest.Compacted(buf, src.Format):
-					why = "compacted"
-				default:
-					continue // still being written: it waits, cursor unmoved
-				}
-			}
-			// Who typed the session's user turns is read from its start
-			// (digest.SessionWho): a delta from the middle of an agent's
-			// session holds its prompts as P: lines, never U:.
-			start := readHead(f)
-			who := digest.SessionWho(f, start, src.Format)
-			lines := digest.Lines(bytes.NewReader(buf), src.Format, who.Owner())
-			head := buf
-			if src.Format == digest.Pi {
-				// pi writes the cwd once, at the start.
-				head = start
-			}
-			if !digest.Interesting(lines) {
-				st.Offsets[f] = end
-				continue
-			}
-			// The cwd's repo, else the repo the window's own paths are in. Per
-			// window, not per delta: a long session moves between repos, and
-			// measured per delta, 10 of 40 inferred repos were wrong.
-			cwdRepo, cwd := repoOf(head, home, mains)
-			resolver := repoinfer.NewResolver(home).WithMains(mains)
-			ws = append(ws, windowsOf(lines, cwdRepo, cwd, home, mains, resolver, func(part int, c []string) Window {
-				return Window{File: f, Session: session, Lines: c, Start: off, End: end, Part: part, Why: why}
-			})...)
+			fw, fp := fileWindows(f, src.Format, session, off, info, st, home, mains, sel, now)
+			ws = append(ws, fw...)
+			passed.add(fp)
 		}
 	}
-	return ws, nil
+	return Scan{Windows: ws, Passed: passed}, nil
+}
+
+// fileWindows digests a transcript's delta from off (at most maxReadBytes)
+// and names its windows; the ones sel.Agent passes over are counted, not
+// returned.
+func fileWindows(f string, format digest.Format, session string, off int64, info os.FileInfo, st *State, home string, mains *repoid.Mains, sel Select, now time.Time) ([]Window, Passed) {
+	fh, err := os.Open(f)
+	if err != nil {
+		return nil, Passed{}
+	}
+	if _, err := fh.Seek(off, 0); err != nil {
+		fh.Close()
+		return nil, Passed{}
+	}
+	want := info.Size() - off
+	if want > maxReadBytes {
+		want = maxReadBytes
+	}
+	buf := make([]byte, want)
+	n, _ := io.ReadFull(fh, buf)
+	fh.Close()
+	buf = buf[:n]
+	// Only complete lines: cut at the last newline.
+	last := strings.LastIndexByte(string(buf), '\n')
+	if last < 0 {
+		// A full read with no newline is one line longer than
+		// maxReadBytes (a pasted blob or a huge tool result). Waiting
+		// would wait forever: every run would read the same bytes.
+		// Skip past that line once it is complete; a line still being
+		// written keeps the cursor.
+		if int64(n) == maxReadBytes {
+			if next, ok := nextLineStart(f, off+int64(n)); ok {
+				// Not when the file was replaced or cut meanwhile: the
+				// offset would land inside other content.
+				if fi, err := os.Stat(f); err == nil && fi.Size() >= next {
+					fmt.Fprintf(os.Stderr, "dream: %s: a line of %d bytes at %d is longer than the read cap; passed over\n", f, next-off, off)
+					st.Offsets[f] = next
+					st.Skipped++
+				}
+			}
+		}
+		// The rest of the file waits for the next run, like any delta
+		// beyond maxReadBytes.
+		return nil, Passed{}
+	}
+	buf = buf[:last+1]
+	end := off + int64(len(buf))
+	why := ""
+	if sel.Idle > 0 {
+		switch {
+		case sel.Now.Sub(info.ModTime()) >= sel.Idle:
+			why = "idle"
+		case digest.Compacted(buf, format):
+			why = "compacted"
+		default:
+			return nil, Passed{} // still being written: it waits, cursor unmoved
+		}
+	}
+	// Who typed the session's user turns is read from its start
+	// (digest.SessionWho): a delta from the middle of an agent's session
+	// holds its prompts as P: lines, never U:.
+	start := readHead(f)
+	who := digest.SessionWho(f, start, format)
+	lines, at := digest.LinesAt(bytes.NewReader(buf), format, who.Owner())
+	head := buf
+	if format == digest.Pi {
+		// pi writes the cwd once, at the start.
+		head = start
+	}
+	if !digest.Interesting(lines) {
+		st.Offsets[f] = end
+		return nil, Passed{}
+	}
+	// The cwd's repo, else the repo the window's own paths are in. Per
+	// window, not per delta: a long session moves between repos, and
+	// measured per delta, 10 of 40 inferred repos were wrong.
+	cwdRepo, cwd := repoOf(head, home, mains)
+	resolver := repoinfer.NewResolver(home).WithMains(mains)
+	all := windowsOf(lines, at, cwdRepo, cwd, home, mains, resolver, func(part int, c []string) Window {
+		return Window{File: f, Session: session, Lines: c, Start: off, End: end, Part: part, Why: why}
+	})
+	kept, passed := sel.Agent.apply(all, now)
+	if len(kept) == 0 {
+		st.Offsets[f] = end // every window passed over: the delta is done
+	}
+	return kept, passed
 }
 
 // sameFile reports whether two paths name one transcript.
@@ -570,30 +629,34 @@ const hermesTimeout = 2 * time.Minute
 // the session's git root or cwd when it records one, else the window's paths.
 // A store that cannot be read is reported and left for the next run, its
 // cursors unmoved.
-func hermesWindows(path string, st *State, fresh bool, exclude map[string]bool, home string, mains *repoid.Mains, sel Select) []Window {
+//
+// The windows sel.Agent passes over are counted, not returned; when it passes
+// over all of them the cursor moves past what was read.
+func hermesWindows(path string, st *State, fresh bool, exclude map[string]bool, home string, mains *repoid.Mains, sel Select, now time.Time) ([]Window, Passed) {
 	ctx, cancel := context.WithTimeout(context.Background(), hermesTimeout)
 	defer cancel()
+	var passed Passed
 	db, err := hermes.Open(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dream: hermes %s: %v\n", path, err)
-		return nil
+		return nil, passed
 	}
 	defer db.Close()
 	sessions, err := db.Sessions(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dream: hermes %s: %v\n", path, err)
-		return nil
+		return nil, passed
 	}
 	last, err := db.LastIDs(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dream: hermes %s: %v\n", path, err)
-		return nil
+		return nil, passed
 	}
 	var lastAt map[string]float64
 	if sel.Idle > 0 {
 		if lastAt, err = db.LastTimes(ctx); err != nil {
 			fmt.Fprintf(os.Stderr, "dream: hermes %s: %v\n", path, err)
-			return nil
+			return nil, passed
 		}
 	}
 	resolver := repoinfer.NewResolver(home).WithMains(mains)
@@ -646,13 +709,19 @@ func hermesWindows(path string, st *State, fresh bool, exclude map[string]bool, 
 			continue
 		}
 		end := ms[len(ms)-1].ID
-		rows := make([]digest.HermesMessage, 0, len(ms))
+		var lines []string
+		var at []time.Time
 		for _, m := range ms {
-			if !m.Copy {
-				rows = append(rows, m.HermesMessage)
+			if m.Copy {
+				continue
 			}
+			ls := digest.HermesLines([]digest.HermesMessage{m.HermesMessage})
+			t := hermesTime(m.Timestamp)
+			for range ls {
+				at = append(at, t)
+			}
+			lines = append(lines, ls...)
 		}
-		lines := digest.HermesLines(rows)
 		if !digest.Interesting(lines) {
 			st.Offsets[key] = end
 			continue
@@ -670,11 +739,26 @@ func hermesWindows(path string, st *State, fresh bool, exclude map[string]bool, 
 		if s.Cwd != "" {
 			cwd = cwdPath(s.Cwd)
 		}
-		ws = append(ws, windowsOf(lines, cwdRepo, cwd, home, mains, resolver, func(part int, c []string) Window {
+		all := windowsOf(lines, at, cwdRepo, cwd, home, mains, resolver, func(part int, c []string) Window {
 			return Window{File: key, Session: s.ID, Lines: c, Start: after, End: end, Part: part, Why: why}
-		})...)
+		})
+		kept, p := sel.Agent.apply(all, now)
+		passed.add(p)
+		if len(kept) == 0 {
+			st.Offsets[key] = end // every window passed over
+		}
+		ws = append(ws, kept...)
 	}
-	return ws
+	return ws, passed
+}
+
+// hermesTime is a Hermes row's time (Unix seconds); zero when it has none.
+func hermesTime(ts float64) time.Time {
+	if ts <= 0 {
+		return time.Time{}
+	}
+	sec := int64(ts)
+	return time.Unix(sec, int64((ts-float64(sec))*1e9))
 }
 
 // nextLineStart is the offset just after the first newline at or after from,
@@ -777,7 +861,10 @@ func recordedRepo(ids *repoid.Cache, cwd, home string) repoid.Repo {
 // checkout, else what the window's paths say. A cwd checkout outside home or
 // in a temp directory is only Pending, with this window's evidence of work
 // in it, until the caller accepts it (AcceptPending).
-func windowsOf(lines []string, cwdRepo repoid.Repo, cwd, home string, mains *repoid.Mains, resolver *repoinfer.Resolver, mk func(part int, c []string) Window) []Window {
+//
+// at holds, per line, when it was written (digest.LinesAt; nil or a zero time
+// for none): each window's At is its newest line's.
+func windowsOf(lines []string, at []time.Time, cwdRepo repoid.Repo, cwd, home string, mains *repoid.Mains, resolver *repoinfer.Resolver, mk func(part int, c []string) Window) []Window {
 	var pending repoid.Repo
 	if cwdRepo.Root != "" && repoid.Elsewhere(cwdRepo.Root, home, mains) {
 		pending, cwdRepo = cwdRepo, repoid.Repo{}
@@ -787,8 +874,14 @@ func windowsOf(lines []string, cwdRepo repoid.Repo, cwd, home string, mains *rep
 		folder = ProjectFolder(cwdPath(cwd), home)
 	}
 	var out []Window
-	for part, c := range chunk(lines, maxWindowChars) {
+	for part, r := range chunkRanges(lines, maxWindowChars) {
+		c := lines[r[0]:r[1]:r[1]]
 		w := mk(part, c)
+		for i := r[0]; i < r[1] && i < len(at); i++ {
+			if at[i].After(w.At) {
+				w.At = at[i]
+			}
+		}
 		for _, r := range []repoid.Repo{cwdRepo, pending} {
 			if r.Root != "" && (r.Clone != "" || r.Worktree != r.Root || !mains.In(r.Root)) {
 				w.Checkout = r
@@ -880,23 +973,33 @@ func RepoOfCwd(cwd, home string) string { return repoid.Name(cwdPath(cwd), home)
 
 func chunk(lines []string, maxChars int) [][]string {
 	var out [][]string
-	var cur []string
-	size := 0
-	for _, l := range lines {
-		// Lines are uncut until Finish; size by what the model will see.
-		w := min(len(l), digest.Width(l))
-		if size+w+1 > maxChars && len(cur) > 0 {
-			out = append(out, cur)
-			cur, size = nil, 0
-		}
-		cur = append(cur, l)
-		size += w + 1
-	}
-	if len(cur) > 0 {
-		out = append(out, cur)
+	for _, r := range chunkRanges(lines, maxChars) {
+		out = append(out, lines[r[0]:r[1]])
 	}
 	return out
 }
+
+// chunkRanges is chunk as index ranges [start, end) of lines.
+func chunkRanges(lines []string, maxChars int) [][2]int {
+	var out [][2]int
+	start, size := 0, 0
+	for i, l := range lines {
+		w := windowWidth(l)
+		if size+w+1 > maxChars && i > start {
+			out = append(out, [2]int{start, i})
+			start, size = i, 0
+		}
+		size += w + 1
+	}
+	if start < len(lines) {
+		out = append(out, [2]int{start, len(lines)})
+	}
+	return out
+}
+
+// windowWidth is a line's size in a window: lines are uncut until Finish, so
+// it is sized by what the model will see.
+func windowWidth(l string) int { return min(len(l), digest.Width(l)) }
 
 var arrayRx = regexp.MustCompile(`(?s)\[.*\]`)
 
@@ -1068,4 +1171,13 @@ type Meter struct {
 	// Local is a run of the local layer: the notes went to this machine's
 	// overlay, not the store.
 	Local bool `json:"local,omitempty"`
+	// AgentWindows is the policy for windows with no turn of the owner's,
+	// when it is not the default (all); AgentPassed the windows it passed
+	// over and OwnerCut the owner's windows it cut to their turns, with the
+	// characters each left out.
+	AgentWindows     string `json:"agent_windows,omitempty"`
+	AgentPassed      int    `json:"agent_windows_passed,omitempty"`
+	AgentPassedChars int    `json:"agent_windows_passed_chars,omitempty"`
+	OwnerCut         int    `json:"owner_windows_cut,omitempty"`
+	OwnerCutChars    int    `json:"owner_windows_cut_chars,omitempty"`
 }

@@ -220,7 +220,16 @@ const (
 // again on its own line (ClaudeTyped). Only complete lines are consumed; the
 // caller tracks byte offsets (see Delta).
 func Lines(r io.Reader, f Format, owner bool) []string {
+	out, _ := LinesAt(r, f, owner)
+	return out
+}
+
+// LinesAt is Lines with, for each line, when the entry it came from was
+// written (its "timestamp", which Claude Code, Codex and pi record on every
+// entry); the zero time when the entry records none.
+func LinesAt(r io.Reader, f Format, owner bool) ([]string, []time.Time) {
 	var out []string
+	var at []time.Time
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1<<20), 64<<20)
 	for sc.Scan() {
@@ -228,16 +237,28 @@ func Lines(r io.Reader, f Format, owner bool) []string {
 		if json.Unmarshal(sc.Bytes(), &o) != nil {
 			continue
 		}
+		var ls []string
 		switch f {
 		case Claude:
-			out = append(out, claudeLine(o, owner)...)
+			ls = claudeLine(o, owner)
 		case Codex:
-			out = append(out, codexLine(o, owner)...)
+			ls = codexLine(o, owner)
 		case Pi:
-			out = append(out, piLine(o, owner)...)
+			ls = piLine(o, owner)
+		}
+		if len(ls) == 0 {
+			continue
+		}
+		var t time.Time
+		if s, ok := o["timestamp"].(string); ok {
+			t, _ = time.Parse(time.RFC3339Nano, s)
+		}
+		out = append(out, ls...)
+		for range ls {
+			at = append(at, t)
 		}
 	}
-	return out
+	return out, at
 }
 
 // capFor is the final width of a digest line by its prefix.
