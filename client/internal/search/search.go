@@ -489,14 +489,7 @@ func build(ctx context.Context, storeDir, localDir, path, base string) error {
 			ruling, words, inbox = overlay.IsRuling(f), false, overlay.IsInbox(f.Path)
 		}
 		intask := ruling && inTaskRuling(f)
-		// A statement is written by code only, from their verified words
-		// (a model's or an agent's type statement is refused): theirs.
-		// So is a fact code generates from git (derived/, results): no agent's.
-		gen := strings.HasPrefix(f.Meta.Scope, "derived/") || f.Meta.Source.Kind == "derived"
-		if d, ok := fact.TypeDocOf(f.Meta.Type); ok && d.Generated {
-			gen = true
-		}
-		claim := !gen && ClaimsWithoutEvidence(f.Meta.Description, f.Body, ruling, words || (f.Meta.Type == fact.StatementType && !inbox))
+		claim := FactClaims(f, isLocal)
 		if _, err := ins.ExecContext(ctx, f.Path, f.Meta.Name, f.Meta.Scope, f.Meta.Type, f.Meta.Description, strings.TrimSpace(f.Body), b2i(inbox), b2i(f.Meta.SupersededBy != "" || f.Meta.Retired != ""), string(applies), f.Meta.Source.Kind, strings.Join(f.Meta.ConflictsWith, ","), b2i(ruling), b2i(intask), b2i(words), b2i(isLocal), f.Meta.Created, b2i(quietScope(all, f.Meta.Scope)), b2i(claim)); err != nil {
 			return err
 		}
@@ -1159,6 +1152,28 @@ func dropConflictPartners(hits []Hit) []Hit {
 // every statement has). Hooks hold it back (Hit.Claim).
 func ClaimsWithoutEvidence(desc, body string, ruling, words bool) bool {
 	return validate.Attribution(desc, body, ruling || words) != nil
+}
+
+// FactClaims is delivery's owner-claim check on one fact, the index's claim
+// column (the assessment reads notes with it too): its text claims the
+// owner's authority (ClaimsWithoutEvidence) while it is not their ruling
+// and holds no words of theirs the store backs. A statement is written by
+// code only, from their verified words (a model's or an agent's type
+// statement is refused): theirs. So is a fact code generates from git
+// (derived/, results): no agent's. local is a fact of the local layer
+// (overlay.Prefix), a ruling only when the local quote ledger backs it.
+func FactClaims(f *fact.Fact, local bool) bool {
+	ruling, words, inbox := fact.IsRuling(f), fact.OwnerWordsOf(f) != "", f.InInbox()
+	if local {
+		ruling, words, inbox = overlay.IsRuling(f), false, overlay.IsInbox(f.Path)
+	}
+	if strings.HasPrefix(f.Meta.Scope, "derived/") || f.Meta.Source.Kind == "derived" {
+		return false
+	}
+	if d, ok := fact.TypeDocOf(f.Meta.Type); ok && d.Generated {
+		return false
+	}
+	return ClaimsWithoutEvidence(f.Meta.Description, f.Body, ruling, words || (f.Meta.Type == fact.StatementType && !inbox))
 }
 
 // ClaimMark is how search and the tree mark a held-back claim.

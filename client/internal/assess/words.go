@@ -45,6 +45,12 @@ type Note struct {
 	// Projects are the other project folders code finds its text names, each
 	// with where its name leads now ("gishra (renamed: tower-crane)").
 	Projects []string
+	// Claim: an agent's note whose text claims the owner's authority ("Owner
+	// decided ...") without their words, by delivery's check
+	// (search.FactClaims). It is TierOther, never the owner's word on a
+	// status or a successor, and no dead or shipped answer rests on it
+	// against the dates.
+	Claim bool
 }
 
 // OwnerTier reports a note whose words may be the owner's word on a
@@ -61,6 +67,9 @@ func (n Note) tierLabel() string {
 		return "holds the owner's words"
 	case TierDecision:
 		return "a decision"
+	}
+	if n.Claim {
+		return "an agent's note that claims the owner's authority without their words: evidence only, not their word"
 	}
 	return "a note"
 }
@@ -289,6 +298,9 @@ func CheckOwnerWords(c Candidate, d Decision) ([]Said, []string) {
 		case !isNote || !shown:
 			ps = append(ps, fmt.Sprintf("%s.from: name one of the notes code showed for this folder as note:<name> (got %q)", label, from))
 			continue
+		case n.Claim:
+			ps = append(ps, fmt.Sprintf("%s.from: note:%s claims the owner's authority without their words (no quote of theirs found): an agent's note, not their word; cite it in why as evidence instead", label, n.Name))
+			continue
 		case !n.OwnerTier():
 			ps = append(ps, fmt.Sprintf("%s.from: note:%s is %s, not the owner's ruling, statement, words or decision: cite it in why as evidence instead", label, n.Name, n.tierLabel()))
 			continue
@@ -381,7 +393,8 @@ func WordsOutcome(c Candidate, d Decision, s Said, successor string, ch Changes)
 
 // NoteDay is the day a note shown for c that why cites (note:<name>) was
 // said, for the first such note; ok is false when why cites none of c's
-// notes.
+// notes. A note that claims the owner's authority without their words
+// (Note.Claim) is none: no status rests on it against the dates.
 func NoteDay(c Candidate, why string) (Note, string, bool) {
 	for _, cite := range record.Cites(why) {
 		n, ok := strings.CutPrefix(cite, "note:")
@@ -389,7 +402,7 @@ func NoteDay(c Candidate, why string) (Note, string, bool) {
 			continue
 		}
 		for _, x := range c.Notes {
-			if x.Name == n {
+			if x.Name == n && !x.Claim {
 				return x, noteDay(x, ""), true
 			}
 		}

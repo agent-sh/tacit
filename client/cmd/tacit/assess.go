@@ -178,6 +178,29 @@ type waitingDecision struct {
 
 func newAssessor(ctx context.Context, s *store.Store, local bool) (*assessor, error) {
 	home, _ := os.UserHomeDir()
+	corpus, err := assessCorpus(home)
+	if err != nil {
+		return nil, err
+	}
+	return newAssessorWith(ctx, s, local, corpus)
+}
+
+// assessCorpus is the owner's history an assessment reads (nil when none of
+// their turns is on this machine).
+func assessCorpus(home string) (*ownerwords.Corpus, error) {
+	c, err := loadOwnerCorpus(home, ownerwords.DefaultDigests(home), false)
+	switch {
+	case err == nil:
+		return c, nil
+	case errors.Is(err, errNoOwnerWords):
+		return nil, nil
+	}
+	return nil, fmt.Errorf("owner history: %w", err)
+}
+
+// newAssessorWith is newAssessor on the owner's history already read.
+func newAssessorWith(ctx context.Context, s *store.Store, local bool, corpus *ownerwords.Corpus) (*assessor, error) {
+	home, _ := os.UserHomeDir()
 	a := &assessor{dir: s.Dir, home: home, host: store.ShortHost(), today: time.Now().Format("2006-01-02"), local: local, ctx: ctx, commitsShown: map[string][]string{}}
 	facts, _, err := fact.Walk(s.Dir)
 	if err != nil {
@@ -208,11 +231,7 @@ func newAssessor(ctx context.Context, s *store.Store, local bool) (*assessor, er
 		lq, _ := os.ReadFile(filepath.Join(overlay.Dir(), filepath.FromSlash(overlay.QuotesRel)))
 		a.ledgerBytes = append(append([]byte(nil), a.ledgerBytes...), lq...)
 	}
-	if c, err := loadOwnerCorpus(home, ownerwords.DefaultDigests(home), false); err == nil {
-		a.corpus = c
-	} else if !errors.Is(err, errNoOwnerWords) {
-		return nil, fmt.Errorf("owner history: %w", err)
-	}
+	a.corpus = corpus
 	a.env = curateEnv(s.Dir, local)
 	a.known = map[string]bool{}
 	for _, f := range a.facts {
@@ -1593,7 +1612,22 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 			return 1
 		}
 	}
-	a, err := newAssessor(ctx, s, local)
+	home, _ := os.UserHomeDir()
+	corpus, err := assessCorpus(home)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "assess:", err)
+		return 1
+	}
+	// The rulings audit's promotion first: a note that claims the owner's
+	// authority is their word only once its words are found to be theirs
+	// (assess_promote.go); the others are agents' notes to the assessment.
+	promoted, err := promoteClaims(ctx, s, corpus, local, o.dry)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "assess: rulings promotion:", err)
+		return 1
+	}
+	reportPromotions(promoted, o.dry)
+	a, err := newAssessorWith(ctx, s, local, corpus)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "assess:", err)
 		return 1
