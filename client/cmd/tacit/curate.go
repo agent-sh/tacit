@@ -43,6 +43,9 @@ type curatorState struct {
 	// catalog knows yet: note -> the date it was first held back
 	// (deferUnknownRepos).
 	DeferredRepo map[string]string `json:"deferred_repo,omitempty"`
+	// ReviewWait holds the agents' notes with no reviewer's verdict yet:
+	// note -> the date a run first held it back (gateReviewed).
+	ReviewWait map[string]string `json:"review_wait,omitempty"`
 }
 
 // maxRepoDefer is how long a note whose scope names a repository no catalog
@@ -262,6 +265,18 @@ func runCurate(args []string) int {
 			f.AppNote = strings.HasPrefix(c.subject, ownerCommit)
 		}
 	}
+	// The reviewer judges the agents' notes before they are curated (SPEC.md,
+	// "The reviewer"): a wrong one is not curated, and a curated fact carries
+	// the verdict on the note it was made from.
+	reviews, reviewStarted := curateReview(ctx, s, facts, *quick, *dry, time.Now().Add(*budget/3))
+	reviewState := fact.StoreState{Reviews: reviews}
+	for _, f := range facts {
+		reviewState.ApplyReview(f)
+	}
+	reviewsFM := false
+	if fm, ok, ferr := ledger.ReadFormat(s.Dir); ferr == nil && ok && fm.Writes() && fm.Version >= ledger.ReviewsFormat {
+		reviewsFM = true
+	}
 	curatedOrigins := map[string]bool{}
 	names := map[string]bool{}
 	for _, f := range facts {
@@ -329,7 +344,13 @@ func runCurate(args []string) int {
 	if deferredRepo > 0 {
 		fmt.Fprintf(os.Stderr, "curate: %d note(s) name a repository no catalog knows yet; each waits up to %d days for one (curator.json \"deferred_repo\")\n", deferredRepo, int(maxRepoDefer.Hours()/24))
 	}
-	if deferChanged && !*dry {
+	// An agent's note waits for the reviewer's verdict; a wrong one is not
+	// curated (its reason is in the ledger, the note stays in the inbox).
+	pending, reviewRefused, reviewWaiting, reviewChanged := gateReviewed(pending, reviews, reviewStarted, cst, time.Now())
+	if reviewWaiting > 0 {
+		fmt.Fprintf(os.Stderr, "curate: %d agent note(s) wait for the reviewer's verdict (up to %d days, curator.json \"review_wait\")\n", reviewWaiting, int(reviewWait.Hours()/24))
+	}
+	if (deferChanged || reviewChanged) && !*dry {
 		saveCuratorState(filepath.Join(stateDir, "curator.json"), cst)
 	}
 	// Notes that only restate a curated fact or an earlier note go before the
@@ -358,7 +379,7 @@ func runCurate(args []string) int {
 	// A fact of the split that only restates a curated fact (or one an earlier
 	// batch of this run wrote) is not written a second time (no model).
 	absorber := curate.NewAbsorber(curated)
-	rep := curate.Report{At: time.Now().Format(time.RFC3339), Notes: len(pending), Restated: len(restated), DeferredOwner: deferredOwner, DeferredRepo: deferredRepo, Quick: *quick}
+	rep := curate.Report{At: time.Now().Format(time.RFC3339), Notes: len(pending), Restated: len(restated), DeferredOwner: deferredOwner, DeferredRepo: deferredRepo, Quick: *quick, ReviewRefused: reviewRefused, NotesForReviewer: reviewWaiting}
 	rep.ModelCalls = &modelrun.Trace{}
 	ctx = modelrun.WithTrace(ctx, rep.ModelCalls)
 	batches := curate.Batches(pending)
@@ -528,6 +549,7 @@ func runCurate(args []string) int {
 				rep.Redirected++
 			}
 			env.RepoPaths(&f.Meta)
+			stampReview(f, reviews, reviewsFM)
 			// A ruling is the owner's own words: kind user stays only with their
 			// quote found in the note and in their turns or notes. A statement
 			// (their words said once) is kept verbatim on the same evidence.

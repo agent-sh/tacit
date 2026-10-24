@@ -13,7 +13,8 @@ Codex use, so every harness gets the same facts by the same rules:
   session in the background and returns at once, so what the compaction is
   about to drop from the context is in the inbox soon after.
 - on_memory_write: Hermes' own memory writes go to the tacit inbox as
-  hermes@<host> notes, through `tacit add` (which redacts with scrump), so the
+  hermes@<host> notes, through `tacit add` (which redacts with scrump, and
+  records the session for tacit's reviewer), so the
   curator sees them like any other harness's notes.
 
 It never touches MEMORY.md / USER.md; the built-in memory tool keeps working.
@@ -185,10 +186,16 @@ class TacitProvider(MemoryProvider):
         desc = " ".join(text.split())
         args = ["add", "--harness", "hermes", "--type", "user" if target == "user" else "unclassified",
                 "--scope", "user", "--kind", "observed", "--desc", desc, "--body", text, name]
+        # The session the write was made in, so tacit's reviewer reads the
+        # conversation the note came from.
+        env = dict(os.environ)
+        with self._lock:
+            if self._session_id:
+                env["TACIT_SESSION"] = "hermes:" + self._session_id
 
         def work() -> None:
             try:
-                out = subprocess.run(_command(args), capture_output=True, text=True, timeout=120, check=False)
+                out = subprocess.run(_command(args), capture_output=True, text=True, timeout=120, check=False, env=env)
                 if out.returncode != 0:
                     logger.warning("tacit add failed: %s", out.stderr.strip()[:300])
             except (OSError, subprocess.SubprocessError) as exc:

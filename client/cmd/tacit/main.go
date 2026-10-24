@@ -43,7 +43,7 @@ func usage() {
   tacit search [--repo R] [--limit N] [--inbox] [--json] [--scope S] [--type T] [--rulings] [--path P] [--command C] [--offset K] [query...]  with a filter and no query: those facts, 20 a page
   tacit fact <name>                print one fact
   tacit add --harness H --desc "..." [--type T] [--scope S] [--kind K] <name>
-  tacit hook session-start|prompt|pre-tool|pre-compact  Claude Code and Codex hooks (JSON on stdin, block on stdout; pre-tool answers PreToolUse as JSON; pre-compact starts a dream of the session and returns)
+  tacit hook session-start|prompt|pre-tool|pre-compact|questions  Claude Code and Codex hooks (JSON on stdin, block on stdout; pre-tool answers PreToolUse as JSON; pre-compact starts a dream of the session and returns; questions prints only the reviewer's question for the owner, for pi's extension)
   tacit mcp [--harness H]          MCP stdio server: tacit_tree, tacit_search, tacit_fact, tacit_add
   tacit install claude|codex|hermes|grok|pi|muse|agy|follow|dream|curate|app
   tacit install claude [--no-mcp]   hooks, and the tacit MCP server in Claude Code's user config (~/.claude.json); --no-mcp: hooks only
@@ -52,6 +52,8 @@ func usage() {
   tacit curate [--model M] [--dry-run] [--max-batches N] [--budget D] [--recheck-conflicts --since D] inbox notes -> curated one-fact entries, conflict check, index, push; then the derive step
   tacit curate --quick [--min-interval D] [--env-file F]   the last day's notes only, no derive, results, links or staleness step; nothing within D (30m) of the last quick run
   tacit assess [--model M] [--max N] [--dry-run]   folders with no record (repositories, project folders) and records whose evidence changed -> the curator's model decides kind and status, code checks, records written (a step of curate)
+  tacit reviewer [--dry-run] [--max N] [--backfill] [--note PATH]... [--json FILE] [--env-file F]   agents' notes (tacit add, tacit_add, Hermes memory writes, imported memories) -> the deciding model judges each against the session it came from: correct, uncertain (a question for the owner in their next relevant session) or wrong (not curated); a step of every curate, on by default (TACIT_REVIEWER=off turns it off)
+  tacit reviewer questions [--json]   the questions waiting for the owner
   tacit statements [--model M] [--dry-run]   the owner's statements (their words said once) -> the curator's model reads each new one once, code checks its dry claims and promotes: the same point in another session (decision; preference, then rule), or one statement a check agrees with (decision); a disagreeing check flags it (a step of curate, before assess)
   tacit folder create|status|alias|suppress|tools --folder F [--kind K] [--desc D] [--status S] [--why W] [--alias A] [--into F] [--tools a,b] [--commands c,d]   an agent's change to a folder record, as the curator (by opus; the owner's channel is tacit review)
   tacit migrate [--dry-run] [--max N] [--commits N]   the facts of suppressed folders -> copies in the folder that replaces each (or absorbed by a fact there), the old ones superseded; a ruling moves with its quote, held for the owner only with a reason (a step of curate; no model)
@@ -162,6 +164,8 @@ func main() {
 		os.Exit(runIndex(os.Args[2:]))
 	case "import":
 		os.Exit(runImport(os.Args[2:]))
+	case "reviewer":
+		os.Exit(runReviewer(os.Args[2:]))
 	case "keygen", "pubkey", "token", "credential":
 		os.Exit(runKey(os.Args[1], os.Args[2:]))
 	case "clone":

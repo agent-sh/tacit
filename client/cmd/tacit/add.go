@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agent-sh/tacit/client/internal/agentreview"
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/importer"
@@ -85,7 +86,7 @@ func addFact(ctx context.Context, s *store.Store, harness string, m fact.Meta, b
 	if l := strings.ToLower(m.Scope); l != m.Scope && fact.ValidScope(l) {
 		m.Scope = l
 	}
-	m.Source = fact.Source{Harness: harness, Host: host, Kind: firstNonEmpty(m.Source.Kind, "observed"), Session: m.Source.Session}
+	m.Source = fact.Source{Harness: harness, Host: host, Kind: firstNonEmpty(m.Source.Kind, "observed"), Session: firstNonEmpty(m.Source.Session, harnessSession(harness))}
 	env := addEnv(s)
 	if w, ok := env.Redirect(m.Scope); ok {
 		m.Scope = w // a suppressed folder's facts go to the folder that replaces it
@@ -134,6 +135,38 @@ func addFact(ctx context.Context, s *store.Store, harness string, m fact.Meta, b
 		return nil
 	})
 	return rel, err
+}
+
+// sessionEnv is where each harness tells a tool it runs which session it
+// runs in: Claude Code's Bash tool and MCP servers (CLAUDE_CODE_SESSION_ID),
+// Codex's (CODEX_THREAD_ID), pi's bash tool (PI_SESSION_ID). TACIT_SESSION,
+// set by an integration that knows its session (the Hermes provider), comes
+// first. The reviewer reads the conversation a note came from by it
+// (SPEC.md, "The reviewer").
+var sessionEnv = map[string][]string{
+	"claude": {"CLAUDE_CODE_SESSION_ID"},
+	"codex":  {"CODEX_THREAD_ID", "CODEX_SESSION_ID"},
+	"pi":     {"PI_SESSION_ID"},
+}
+
+// harnessSession is the session a note of harness is written in, from the
+// environment its harness gives it, or "" when it gives none (code supplies
+// it only where it reads it reliably). An id that could name a path is not
+// one.
+func harnessSession(harness string) string {
+	for _, k := range append([]string{"TACIT_SESSION"}, sessionEnv[harness]...) {
+		v := strings.TrimSpace(os.Getenv(k))
+		if p, id, ok := strings.Cut(v, ":"); ok && k == "TACIT_SESSION" {
+			if p != harness {
+				continue // another harness's session
+			}
+			v = id
+		}
+		if v != "" && agentreview.ValidSession(v) {
+			return v
+		}
+	}
+	return ""
 }
 
 // addEnv is what an agent's note is checked against: this machine's
