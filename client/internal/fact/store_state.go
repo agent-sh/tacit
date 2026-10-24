@@ -24,6 +24,8 @@ type StoreState struct {
 	quotes    map[string]ledger.Quote
 	endorsed  map[string]ledger.Endorsement
 	notMine   map[string]string
+	// Reviews is the reviewer's ledger (ledger.ReviewsPath).
+	Reviews *ledger.Reviews
 }
 
 // ErrMarker is a rulings audit marker that exists but cannot be read. The
@@ -54,6 +56,8 @@ func LoadState(root string) (StoreState, error) {
 	ql, _ := os.ReadFile(filepath.Join(root, filepath.FromSlash(ledger.QuotesPath)))
 	dl, _ := os.ReadFile(filepath.Join(root, filepath.FromSlash(ledger.DecisionsPath)))
 	st.quotes, st.endorsed, st.notMine = ledger.Quotes(ql), ledger.Endorsements(dl), ledger.NotMine(dl)
+	rl, _ := os.ReadFile(filepath.Join(root, filepath.FromSlash(ledger.ReviewsPath)))
+	st.Reviews = ledger.ParseReviews(rl)
 	return st, nil
 }
 
@@ -70,6 +74,25 @@ func (st StoreState) Apply(f *Fact) {
 	_, words := st.quotes[ledger.Quote{Name: f.Meta.Name, Quote: s.OwnerWords, From: s.OwnerWordsFrom, Words: true}.Key()]
 	f.WordsRecorded = words && s.OwnerWords != "" && s.OwnerWordsFrom != "" && !f.InInbox()
 	f.WordsBacked = f.WordsRecorded && !f.NotMine
+	st.ApplyReview(f)
+}
+
+// ApplyReview sets f.Review from the reviewer's ledger: the verdict on the
+// note at f's path, else, for a curated fact, on the note it was made from
+// (its origin). A verdict field in f's frontmatter is a claim and changes
+// nothing here.
+func (st StoreState) ApplyReview(f *Fact) {
+	f.Review, f.ReviewReason, f.ReviewDay = "", "", ""
+	r, ok := st.Reviews.ForNote(f.Path)
+	if !ok && !f.InInbox() && f.Meta.Origin != "" && f.Meta.Source.Harness == "curator" {
+		r, ok = st.Reviews.ForOrigin(f.Meta.Origin)
+	}
+	if ok {
+		f.Review, f.ReviewReason = r.Verdict, r.Reason
+		if len(r.At) >= 10 {
+			f.ReviewDay = r.At[:10]
+		}
+	}
 }
 
 // WithStore applies the state of the store at root to a fact read on its own

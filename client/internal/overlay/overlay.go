@@ -147,12 +147,17 @@ func Load(dir string) (facts []*fact.Fact, errs []error) {
 	sort.Slice(facts, func(i, j int) bool { return facts[i].Path < facts[j].Path })
 	var st *fact.StoreState
 	for _, f := range facts {
+		if st == nil {
+			s := curatedState(dir)
+			st = &s
+		}
 		if IsCurated(f.Path) {
-			if st == nil {
-				s := curatedState(dir)
-				st = &s
-			}
 			st.Apply(f)
+		} else if LayerOn() {
+			// An agent's note is never a ruling here; the reviewer's verdict
+			// on it is in the local layer's ledger (ReviewsRel), read only
+			// with the layer on, as the rest of the layer is.
+			st.ApplyReview(f)
 		}
 		f.Audited = true
 	}
@@ -195,8 +200,9 @@ func Stamp(dir string) string {
 			return nil
 		}
 		rel, _ := filepath.Rel(dir, p)
-		// The local quote ledger decides which local facts are rulings.
-		if !strings.HasSuffix(d.Name(), ".md") && filepath.ToSlash(rel) != QuotesRel {
+		// The local quote ledger decides which local facts are rulings, the
+		// reviewer's ledger how an agent's note is delivered.
+		if !strings.HasSuffix(d.Name(), ".md") && filepath.ToSlash(rel) != QuotesRel && filepath.ToSlash(rel) != ReviewsRel {
 			return nil
 		}
 		info, err := d.Info()

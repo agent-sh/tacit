@@ -669,7 +669,7 @@ func (s *Store) rejectFiles(ctx context.Context, rels []string, reason string) e
 // UnionFiles are the .gitattributes lines for files several machines append
 // to: the decision log, the review files, the quote ledger. Each line is
 // checked on its own, so a store that has the older lines gets the new one.
-var UnionFiles = []string{"review/decisions.jsonl merge=union", "review/*.md merge=union", "review/owner-quotes.jsonl merge=union"}
+var UnionFiles = []string{"review/decisions.jsonl merge=union", "review/*.md merge=union", "review/owner-quotes.jsonl merge=union", "review/agent-reviews.jsonl merge=union"}
 
 func (s *Store) ensureAttributes(ctx context.Context) {
 	p := filepath.Join(s.Dir, ".gitattributes")

@@ -412,3 +412,32 @@ func TestDeliverySettingsBecomeEnvironment(t *testing.T) {
 		}
 	}
 }
+
+// The reviewer's switch and its route: reviewer on or off, its runner,
+// model and effort like any deciding role; Opus by default.
+func TestReviewerSettings(t *testing.T) {
+	for _, key := range []string{"TACIT_SETTINGS", "TACIT_REVIEWER", "TACIT_RUNNER", "TACIT_REVIEW_RUNNER", "TACIT_REVIEW_MODEL", "TACIT_REVIEW_EFFORT"} {
+		clear(t, key)
+	}
+	if got := modelrun.Default("review"); got.Model != "opus" {
+		t.Fatalf("default %+v", got)
+	}
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "bad.yaml")
+	os.WriteFile(bad, []byte("reviewer: sometimes\n"), 0600)
+	if err := Load(bad, true); err == nil {
+		t.Fatal("reviewer: sometimes was taken")
+	}
+	good := filepath.Join(dir, "good.yaml")
+	os.WriteFile(good, []byte("reviewer: off\nrunners: {review: muse}\nmodels: {review: chosen}\nefforts: {review: high}\n"), 0600)
+	if err := Load(good, true); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("TACIT_REVIEWER") != "off" {
+		t.Fatal("reviewer: off not loaded")
+	}
+	route, err := modelrun.Resolve("review", modelrun.Model("review", "opus"))
+	if err != nil || route.Runner != "muse" || route.Model != "chosen" || route.Effort != "high" {
+		t.Fatalf("route %+v %v", route, err)
+	}
+}

@@ -421,4 +421,6 @@ type Report struct {
 	CheckRefused     int             `json:"check_refused,omitempty"`      // decisions a check refuted (sent back once with the check's output)
 	InvalidEntries   []string        `json:"invalid_entries,omitempty"`    // why split and rulings answers failed validation: "split: entry N: field: rule", never the entry's text
 	Retries          int             `json:"validation_retries,omitempty"` // answers refused by the checks and sent back to the model once (curate.SplitChecked)
+	ReviewRefused    int             `json:"review_refused,omitempty"`     // agents' notes the reviewer judged wrong (or the owner said no to): not curated
+	NotesForReviewer int             `json:"reviewer_waiting,omitempty"`   // agents' notes waiting for the reviewer's verdict
 }
