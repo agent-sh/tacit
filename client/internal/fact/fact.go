@@ -74,6 +74,13 @@ type Source struct {
 	// weighs, recorded in the quote ledger like a quote (ledger.Quote.Words).
 	OwnerWords     string `yaml:"owner_words,omitempty"`
 	OwnerWordsFrom string `yaml:"owner_words_from,omitempty"`
+	// Review and ReviewReason: the reviewer's verdict on the agent's note a
+	// curated fact was made from, and why (SPEC.md, "The reviewer"). Written
+	// by the curator in a store of format 4 (ledger.ReviewsFormat) only; a
+	// field is a claim, and counts only when the reviewer's ledger backs it
+	// (Fact.Review). Lint L21 checks the pair.
+	Review       string `yaml:"review,omitempty"`
+	ReviewReason string `yaml:"review_reason,omitempty"`
 }
 
 // OwnerWrote reports a fact the owner wrote themself in tacit app. A curated
@@ -180,6 +187,11 @@ type Fact struct {
 	// WordsRecorded: the ledger records its owner_words, whether or not a Not
 	// mine of theirs lifted them (the app still shows them).
 	QuoteBacked, EndorsedBacked, WordsBacked, WordsRecorded, NotMine bool
+	// Review is the reviewer's verdict that stands on this agent's note, or
+	// on the note a curated fact was made from (ledger.Reviews: ForNote,
+	// ForOrigin), set by StoreState.Apply; "" when none (not reviewed, or no
+	// agent's note). ReviewReason is why, ReviewDay its day.
+	Review, ReviewReason, ReviewDay string
 }
 
 // Split separates frontmatter from body. ok is false when the file has no

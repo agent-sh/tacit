@@ -25,6 +25,7 @@ type Models struct {
 	Dream    string `yaml:"dream"`
 	Verify   string `yaml:"verify"`
 	Fallback string `yaml:"verify_fallback"`
+	Review   string `yaml:"review"`
 }
 
 type Runners struct {
@@ -32,6 +33,7 @@ type Runners struct {
 	Curate string `yaml:"curate"`
 	Judge  string `yaml:"judge"`
 	Verify string `yaml:"verify"`
+	Review string `yaml:"review"`
 }
 
 type Utility struct {
@@ -85,6 +87,7 @@ type Config struct {
 	LocalLayer  string   `yaml:"local_layer"` // TACIT_LOCAL_LAYER, on or off (default): a read-only clone dreams and curates into its overlay
 	OwnerNames  []string `yaml:"owner_names"`
 	HermesDB    string   `yaml:"hermes_db"` // TACIT_HERMES_DB; "off" reads no Hermes store
+	Reviewer    string   `yaml:"reviewer"`  // TACIT_REVIEWER, on (default) or off: the reviewer judges agents' notes against their sessions (SPEC.md, "The reviewer")
 	MemoryMD    string   `yaml:"memory_md"` // TACIT_MEMORY_MD, on (default) or off: a bridge for older clients, to be dropped (index.On)
 	VerifyRoots []string `yaml:"verify_roots"`
 	Models      Models   `yaml:"models"`
@@ -170,6 +173,11 @@ func Load(path string, required bool) error {
 	default:
 		return fmt.Errorf("local_layer must be on or off")
 	}
+	switch strings.ToLower(c.Reviewer) {
+	case "", "on", "off":
+	default:
+		return fmt.Errorf("reviewer must be on or off")
+	}
 	switch strings.ToLower(c.MemoryMD) {
 	case "", "on", "off", "true", "false":
 	default:
@@ -190,7 +198,7 @@ func Load(path string, required bool) error {
 	if v := c.Delivery.PromptRelative; v != nil && (math.IsNaN(*v) || *v < 0 || *v > 1) {
 		return fmt.Errorf("delivery.prompt_relative must be in [0,1]")
 	}
-	values := map[string]string{"TACIT_LOCAL_LAYER": strings.ToLower(c.LocalLayer), "TACIT_MEMORY_MD": strings.ToLower(c.MemoryMD), "TACIT_STORE": resolve(c.Store), "TACIT_PROJECTS": resolve(c.Projects), "TACIT_INDEX": resolve(c.Index), "TACIT_CONFIG": resolve(c.Keys), "TACIT_LOCAL": resolve(c.Local), "TACIT_OWNER_NAMES": strings.Join(c.OwnerNames, ","), "TACIT_CURATE_MODEL": c.Models.Curate, "TACIT_JUDGE_MODEL": c.Models.Judge, "TACIT_DREAM_MODEL": c.Models.Dream, "TACIT_VERIFY_MODEL": c.Models.Verify, "TACIT_VERIFY_FALLBACK_MODEL": c.Models.Fallback}
+	values := map[string]string{"TACIT_LOCAL_LAYER": strings.ToLower(c.LocalLayer), "TACIT_MEMORY_MD": strings.ToLower(c.MemoryMD), "TACIT_STORE": resolve(c.Store), "TACIT_PROJECTS": resolve(c.Projects), "TACIT_INDEX": resolve(c.Index), "TACIT_CONFIG": resolve(c.Keys), "TACIT_LOCAL": resolve(c.Local), "TACIT_OWNER_NAMES": strings.Join(c.OwnerNames, ","), "TACIT_CURATE_MODEL": c.Models.Curate, "TACIT_JUDGE_MODEL": c.Models.Judge, "TACIT_DREAM_MODEL": c.Models.Dream, "TACIT_VERIFY_MODEL": c.Models.Verify, "TACIT_VERIFY_FALLBACK_MODEL": c.Models.Fallback, "TACIT_REVIEW_MODEL": c.Models.Review, "TACIT_REVIEWER": strings.ToLower(c.Reviewer)}
 	switch c.Utility.Provider {
 	case "", "jev":
 		if c.Utility.Model != "" || c.Utility.Endpoint != "" || c.Utility.Region != "" {
@@ -254,12 +262,12 @@ func Load(path string, required bool) error {
 	if c.StaleWorkers > 0 {
 		values["TACIT_STALE_WORKERS"] = strconv.Itoa(c.StaleWorkers)
 	}
-	for role, name := range map[string]string{"DREAM": c.Runners.Dream, "CURATE": c.Runners.Curate, "JUDGE": c.Runners.Judge, "VERIFY": c.Runners.Verify} {
+	for role, name := range map[string]string{"DREAM": c.Runners.Dream, "CURATE": c.Runners.Curate, "JUDGE": c.Runners.Judge, "VERIFY": c.Runners.Verify, "REVIEW": c.Runners.Review} {
 		values["TACIT_"+role+"_RUNNER"] = name
 	}
 
 	validRole := func(role string) bool {
-		return role == "dream" || role == "curate" || role == "judge" || role == "verify"
+		return role == "dream" || role == "curate" || role == "judge" || role == "verify" || role == "review"
 	}
 	for suffix, entries := range map[string]map[string]string{"EFFORT": c.Efforts, "PROFILE": c.Profiles, "TIMEOUT": c.Timeouts} {
 		for role, value := range entries {

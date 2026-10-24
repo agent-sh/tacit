@@ -8,7 +8,7 @@ import (
 )
 
 // liveColumns is the column list the scans below read, in Hit order.
-const liveColumns = `path, name, scope, type, description, body, inbox, kind, conflicts, ruling, intask, words, local, coalesce(applies, ''), coalesce(created, ''), coalesce(quiet, 0), coalesce(claim, 0)`
+const liveColumns = `path, name, scope, type, description, body, inbox, kind, conflicts, ruling, intask, words, local, coalesce(applies, ''), coalesce(created, ''), coalesce(quiet, 0), coalesce(claim, 0), coalesce(review, '')`
 
 // Tied returns every live curated fact tied to one of the repo names: its
 // scope is projects/<name> (and its applies_to.repos, when set, names one of
@@ -67,7 +67,7 @@ func (ix *Index) Named(ctx context.Context, names []string) (map[string]Hit, err
 // authority without their words (claim) are left out: hooks only.
 func (ix *Index) MetaFacts(ctx context.Context) ([]Hit, error) {
 	q := `SELECT ` + liveColumns + ` FROM facts f
-		WHERE f.superseded = 0 AND f.inbox = 0 AND f.type != 'result_ref' AND f.scope NOT LIKE 'derived/%' AND f.quiet = 0 AND f.claim = 0
+		WHERE f.superseded = 0 AND f.inbox = 0 AND f.type != 'result_ref' AND f.scope NOT LIKE 'derived/%' AND f.quiet = 0 AND f.claim = 0 AND ` + HeldClause + `
 		AND (coalesce(json_array_length(f.applies, '$.Paths'), 0) > 0 OR coalesce(json_array_length(f.applies, '$.Commands'), 0) > 0)
 		ORDER BY f.path`
 	return ix.scan(ctx, q, nil)
@@ -88,7 +88,7 @@ func (ix *Index) scan(ctx context.Context, q string, named map[string]any) ([]Hi
 		var h Hit
 		var inbox, ruling, intask, words, local, quiet, claim int
 		var conflicts, applies string
-		if err := rows.Scan(&h.Path, &h.Name, &h.Scope, &h.Type, &h.Description, &h.Body, &inbox, &h.Kind, &conflicts, &ruling, &intask, &words, &local, &applies, &h.Created, &quiet, &claim); err != nil {
+		if err := rows.Scan(&h.Path, &h.Name, &h.Scope, &h.Type, &h.Description, &h.Body, &inbox, &h.Kind, &conflicts, &ruling, &intask, &words, &local, &applies, &h.Created, &quiet, &claim, &h.Review); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(applies), &h.Applies)

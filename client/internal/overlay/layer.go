@@ -178,6 +178,10 @@ func curatedState(dir string) fact.StoreState {
 // QuotesRel is the local quote ledger's path in the overlay.
 var QuotesRel = CuratedDir + "/" + ledger.QuotesPath
 
+// ReviewsRel is the local reviewer's ledger in the overlay (SPEC.md, "The
+// reviewer"): its verdicts on this machine's agents' notes.
+var ReviewsRel = CuratedDir + "/" + ledger.ReviewsPath
+
 // Remove deletes the file at rel in the overlay (a stale generated folder
 // index), with the same path checks as Write. A file already gone is no
 // error.

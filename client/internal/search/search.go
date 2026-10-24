@@ -26,6 +26,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/overlay"
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
 	"github.com/agent-sh/tacit/client/internal/record"
@@ -49,7 +50,13 @@ type Hit struct {
 	// (validate.ClaimsOwner, the check new writes get) while it is not the
 	// owner's verified words (no ruling, statement or backed words). No hook
 	// delivers it; search and the tree show it marked (SPEC.md, Provenance).
-	Claim     bool `json:",omitempty"`
+	Claim bool `json:",omitempty"`
+	// Review is the reviewer's verdict that stands on an agent's note (or on
+	// the note a curated fact was made from): fact.Fact.Review, read from the
+	// reviewer's ledger. Hooks hold back a note judged wrong, rejected or
+	// corrected (Held), and rank a checked one over an unreviewed one and an
+	// unconfirmed one under it (ReviewWeight).
+	Review    string `json:",omitempty"`
 	Conflicts []string
 	// Local is a note in this machine's overlay (internal/overlay): written
 	// by a harness here on a read-only clone, never pushed, never reviewed.
@@ -104,8 +111,9 @@ const (
 // forge organization and its current forge name, store format 2). 13: the
 // records' successor (a dead project's replacement, store format 3). 14:
 // the claim column (Hit.Claim: a fact whose text claims the owner's authority
-// without their verified words, which hooks hold back).
-const schemaVersion = 14
+// without their verified words, which hooks hold back). 15: the review column
+// (Hit.Review: the reviewer's verdict on an agent's note).
+const schemaVersion = 15
 
 // Open returns the index for the store at head, building it when missing:
 // the exact index, for callers that must not read an older one (the
@@ -427,7 +435,7 @@ func build(ctx context.Context, storeDir, localDir, path, base string) error {
 		}
 	}
 	stmts := []string{
-		`CREATE TABLE facts(id INTEGER PRIMARY KEY, path TEXT, name TEXT, scope TEXT, type TEXT, description TEXT, body TEXT, inbox INT, superseded INT, applies TEXT, kind TEXT, conflicts TEXT, ruling INT, intask INT, words INT, local INT, created TEXT, quiet INT, claim INT)`,
+		`CREATE TABLE facts(id INTEGER PRIMARY KEY, path TEXT, name TEXT, scope TEXT, type TEXT, description TEXT, body TEXT, inbox INT, superseded INT, applies TEXT, kind TEXT, conflicts TEXT, ruling INT, intask INT, words INT, local INT, created TEXT, quiet INT, claim INT, review TEXT)`,
 		// The folder records (internal/record), so a reader needs no file
 		// beyond the index: kinds, statuses, suppression, an area's tools.
 		`CREATE TABLE records(folder TEXT PRIMARY KEY, kind TEXT, name TEXT, status TEXT, suppressed_by TEXT, aliases TEXT, tools TEXT, commands TEXT, repos TEXT, description TEXT, local INT, roots TEXT, org TEXT, forge TEXT, successor TEXT)`,
@@ -449,7 +457,7 @@ func build(ctx context.Context, storeDir, localDir, path, base string) error {
 	if err != nil {
 		return err
 	}
-	ins, err := tx.PrepareContext(ctx, `INSERT INTO facts(path, name, scope, type, description, body, inbox, superseded, applies, kind, conflicts, ruling, intask, words, local, created, quiet, claim) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+	ins, err := tx.PrepareContext(ctx, `INSERT INTO facts(path, name, scope, type, description, body, inbox, superseded, applies, kind, conflicts, ruling, intask, words, local, created, quiet, claim, review) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
@@ -490,7 +498,7 @@ func build(ctx context.Context, storeDir, localDir, path, base string) error {
 		}
 		intask := ruling && inTaskRuling(f)
 		claim := FactClaims(f, isLocal)
-		if _, err := ins.ExecContext(ctx, f.Path, f.Meta.Name, f.Meta.Scope, f.Meta.Type, f.Meta.Description, strings.TrimSpace(f.Body), b2i(inbox), b2i(f.Meta.SupersededBy != "" || f.Meta.Retired != ""), string(applies), f.Meta.Source.Kind, strings.Join(f.Meta.ConflictsWith, ","), b2i(ruling), b2i(intask), b2i(words), b2i(isLocal), f.Meta.Created, b2i(quietScope(all, f.Meta.Scope)), b2i(claim)); err != nil {
+		if _, err := ins.ExecContext(ctx, f.Path, f.Meta.Name, f.Meta.Scope, f.Meta.Type, f.Meta.Description, strings.TrimSpace(f.Body), b2i(inbox), b2i(f.Meta.SupersededBy != "" || f.Meta.Retired != ""), string(applies), f.Meta.Source.Kind, strings.Join(f.Meta.ConflictsWith, ","), b2i(ruling), b2i(intask), b2i(words), b2i(isLocal), f.Meta.Created, b2i(quietScope(all, f.Meta.Scope)), b2i(claim), f.Review); err != nil {
 			return err
 		}
 	}
@@ -948,8 +956,9 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 		inboxClause += " AND f.type != 'result_ref'"
 	}
 	if sit.RestrictRepos {
-		inboxClause += " AND f.quiet = 0" // hook delivery: nothing from a dead or shipped folder
-		inboxClause += " AND f.claim = 0" // nor a claim of the owner's authority without their words
+		inboxClause += " AND f.quiet = 0"   // hook delivery: nothing from a dead or shipped folder
+		inboxClause += " AND f.claim = 0"   // nor a claim of the owner's authority without their words
+		inboxClause += " AND " + HeldClause // nor an agent's note the reviewer or the owner turned down
 	}
 	if sit.Type != "" {
 		inboxClause += " AND f.type = :onlyType"
@@ -1049,7 +1058,7 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	if allowRelationRouting && sit.PromptRelevance && !sit.OnlyDerived {
 		scopeClause = "(" + scopeClause + " OR (f.scope LIKE 'projects/%' AND (" + route + ")))"
 	}
-	q := fmt.Sprintf(`SELECT f.path, f.name, f.scope, f.type, f.description, f.body, f.inbox, f.kind, f.conflicts, f.ruling, f.intask, f.words, f.local, coalesce(f.applies, ''), coalesce(f.created, ''), coalesce(f.claim, 0), -bm25(fts, 6.0, 6.0, 1.0) AS score %s
+	q := fmt.Sprintf(`SELECT f.path, f.name, f.scope, f.type, f.description, f.body, f.inbox, f.kind, f.conflicts, f.ruling, f.intask, f.words, f.local, coalesce(f.applies, ''), coalesce(f.created, ''), coalesce(f.claim, 0), coalesce(f.review, ''), -bm25(fts, 6.0, 6.0, 1.0) AS score %s
 		FROM fts JOIN facts f ON f.id = fts.rowid
 		WHERE fts MATCH :query AND f.superseded = 0 AND %s %s
 		ORDER BY score DESC LIMIT :candidateLimit`, selectCoverage, scopeClause, inboxClause)
@@ -1065,7 +1074,7 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 		var inbox, ruling, intask, words, local, claim int
 		var conflicts, applies string
 		matched := make([]int, len(coverage))
-		dest := []any{&h.Path, &h.Name, &h.Scope, &h.Type, &h.Description, &h.Body, &inbox, &h.Kind, &conflicts, &ruling, &intask, &words, &local, &applies, &h.Created, &claim, &h.Score}
+		dest := []any{&h.Path, &h.Name, &h.Scope, &h.Type, &h.Description, &h.Body, &inbox, &h.Kind, &conflicts, &ruling, &intask, &words, &local, &applies, &h.Created, &claim, &h.Review, &h.Score}
 		for i := range matched {
 			dest = append(dest, &matched[i])
 		}
@@ -1091,6 +1100,11 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 		if strings.HasPrefix(h.Scope, "projects/") || strings.HasPrefix(h.Scope, "machines/") {
 			h.Score *= 1.1
 		}
+		// An agent's note the reviewer checked against its session outranks
+		// an unreviewed one, the one the owner confirmed more; an unconfirmed
+		// one (uncertain, or no session to check) ranks under it. An
+		// unreviewed fact keeps its score.
+		h.Score *= ReviewWeight(h.Review)
 		hits = append(hits, h)
 	}
 	if err := rows.Err(); err != nil {
@@ -1179,6 +1193,49 @@ func FactClaims(f *fact.Fact, local bool) bool {
 // ClaimMark is how search and the tree mark a held-back claim.
 const ClaimMark = "claims owner authority without evidence"
 
+// HeldClause is the SQL condition the hooks' queries add: no agent's note
+// the reviewer judged wrong, the owner said no to, or the owner corrected.
+const HeldClause = "coalesce(f.review, '') NOT IN ('wrong', 'rejected', 'corrected')"
+
+// Held reports an agent's note no hook delivers: the reviewer judged it
+// wrong, or the owner said no to it or corrected it (SPEC.md, "The
+// reviewer"). Search and the tree still find it, marked.
+func (h Hit) Held() bool {
+	switch h.Review {
+	case ledger.VerdictWrong, ledger.VerdictRejected, ledger.VerdictCorrected:
+		return true
+	}
+	return false
+}
+
+// HeldBack reports a fact no hook pushes: a claim of the owner's authority
+// without their words (Claim), or an agent's note turned down (Held).
+func (h Hit) HeldBack() bool { return h.Claim || h.Held() }
+
+// Review weights (SPEC.md, "The reviewer"): an agent's note checked against
+// its session weighs more than an unreviewed one, one the owner confirmed
+// more still (below the owner's rules, which have their own slot and rank
+// first); one the reviewer was unsure of, or could not check, less.
+const (
+	weightConfirmed = 1.4
+	weightCorrect   = 1.25
+	weightUnsure    = 0.7
+)
+
+// ReviewWeight is the factor a verdict puts on a fact's score; 1 for a fact
+// with none.
+func ReviewWeight(review string) float64 {
+	switch review {
+	case ledger.VerdictConfirmed:
+		return weightConfirmed
+	case ledger.VerdictCorrect:
+		return weightCorrect
+	case ledger.VerdictUncertain, ledger.VerdictNoSource:
+		return weightUnsure
+	}
+	return 1
+}
+
 // Provenance is who a delivered line is from, read from code-checked fields
 // only (SPEC.md, Provenance): "rule" (an owner rule, a RULE line),
 // "statement" (their words said once), "owner" (another verified ruling of
@@ -1199,10 +1256,31 @@ func (h Hit) Provenance() string {
 		return "derived"
 	case h.Claim:
 		return "claim"
+	case h.Review == ledger.VerdictConfirmed:
+		return "confirmed"
 	case h.Words:
 		return "words"
 	}
 	return "agent"
+}
+
+// reviewMark is how a line marks the reviewer's verdict on an agent's note.
+func reviewMark(review string) string {
+	switch review {
+	case ledger.VerdictCorrect:
+		return "checked against its session"
+	case ledger.VerdictUncertain:
+		return "unconfirmed"
+	case ledger.VerdictNoSource:
+		return "unchecked: no session"
+	case ledger.VerdictWrong:
+		return "the reviewer found it wrong"
+	case ledger.VerdictRejected:
+		return "you said no to it"
+	case ledger.VerdictCorrected:
+		return "you corrected it"
+	}
+	return ""
 }
 
 // ProvenanceLabel is Provenance in the words a reader sees: "owner rule",
@@ -1226,10 +1304,12 @@ func (h Hit) ProvenanceLabel() string {
 		return "computed from git"
 	case "claim":
 		return dated("agent note", day, ClaimMark)
+	case "confirmed":
+		return dated("you confirmed", day, "")
 	case "words":
-		return dated("agent note holding your words", day, "")
+		return dated("agent note holding your words", day, reviewMark(h.Review))
 	}
-	return dated("agent note", day, "")
+	return dated("agent note", day, reviewMark(h.Review))
 }
 
 // dated is label with the fact's day in parentheses, and extra after it.
@@ -1290,10 +1370,12 @@ func Block(hits []Hit, title string) string {
 			switch h.Provenance() {
 			case "claim":
 				desc = dated("agent note", day, ClaimMark) + ": " + desc
+			case "confirmed":
+				desc = dated("you confirmed", day, "") + ": " + desc
 			case "words":
-				desc = dated("agent note holding your words", day, "") + ": " + desc
+				desc = dated("agent note holding your words", day, reviewMark(h.Review)) + ": " + desc
 			case "agent", "statement":
-				desc = dated("agent note", day, "") + ": " + desc
+				desc = dated("agent note", day, reviewMark(h.Review)) + ": " + desc
 			}
 		}
 		if h.Inbox {

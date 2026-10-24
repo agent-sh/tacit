@@ -2,6 +2,7 @@
 package lint
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -48,7 +49,9 @@ func Run(root string) ([]Finding, error) {
 		out = append(out, check(f, names)...)
 		out = append(out, ownerEvidence(f, ev)...)
 		out = append(out, statementRules(f, format)...)
+		out = append(out, reviewRules(f, format)...)
 	}
+	out = append(out, reviewLedger(root)...)
 	out = append(out, records(root, facts)...)
 	out = append(out, overviews(root, names)...)
 	// L10: committed index must equal the generated one.
@@ -448,5 +451,67 @@ func overviews(root string, names map[string]bool) []Finding {
 		}
 		return nil
 	})
+	return out
+}
+
+// reviewRules is L21 (SPEC.md, "The reviewer"): the reviewer's verdict in a
+// fact's frontmatter (source.review, review_reason) is the curator's, on a
+// curated fact made from an agent's note (origin), in a store of format 4;
+// it is a verdict a curated fact may carry, with its reason; and the
+// reviewer's ledger holds that verdict on the note.
+func reviewRules(f *fact.Fact, format ledger.Format) []Finding {
+	s := f.Meta.Source
+	if s.Review == "" && s.ReviewReason == "" {
+		return nil
+	}
+	var out []Finding
+	add := func(msg string) { out = append(out, Finding{"L21", f.Path, msg}) }
+	if f.InInbox() || strings.HasPrefix(f.Path, "local/") {
+		add("source.review is written by the curator on a curated fact, never on a note")
+		return out
+	}
+	if format.Version < ledger.ReviewsFormat {
+		add(fmt.Sprintf("source.review in a store whose format marker is not %d or newer (%s): an older binary does not read it", ledger.ReviewsFormat, ledger.FormatPath))
+	}
+	switch s.Review {
+	case ledger.VerdictCorrect, ledger.VerdictUncertain, ledger.VerdictNoSource, ledger.VerdictConfirmed:
+	default:
+		add(fmt.Sprintf("source.review %q is no verdict a curated fact carries (correct, uncertain, nosource, confirmed)", s.Review))
+	}
+	if s.Review == "" || strings.TrimSpace(s.ReviewReason) == "" {
+		add("source.review and source.review_reason go together")
+	}
+	if f.Meta.Origin == "" {
+		add("source.review on a fact with no origin: the verdict is on the note a fact was made from")
+	} else if f.Review != s.Review && !(ledger.OwnerVerdict(f.Review) && s.Review != ledger.VerdictConfirmed) {
+		// The owner's answer (yes, no, a correction) may stand over the
+		// review the fact was stamped with; any other difference is a
+		// verdict the ledger does not hold.
+		add(fmt.Sprintf("source.review %q is not the verdict the reviewer's ledger (%s) holds on its note %s (%q)", s.Review, ledger.ReviewsPath, f.Meta.Origin, f.Review))
+	}
+	return out
+}
+
+// reviewLedger is L21 on the ledger itself: every line parses and is a
+// verdict code writes (ledger.ValidReview), or the start line.
+func reviewLedger(root string) []Finding {
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(ledger.ReviewsPath)))
+	if err != nil {
+		return nil
+	}
+	var out []Finding
+	for i, l := range strings.Split(string(b), "\n") {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		var x ledger.Review
+		if json.Unmarshal([]byte(l), &x) != nil {
+			out = append(out, Finding{"L21", ledger.ReviewsPath, fmt.Sprintf("line %d does not parse", i+1)})
+			continue
+		}
+		if x.Started == "" && !ledger.ValidReview(x) {
+			out = append(out, Finding{"L21", ledger.ReviewsPath, fmt.Sprintf("line %d is no verdict the reviewer writes (note, name, verdict, by, at; an owner's verdict by the owner, with where)", i+1)})
+		}
+	}
 	return out
 }

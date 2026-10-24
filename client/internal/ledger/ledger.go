@@ -262,8 +262,10 @@ func (m Marker) Encode() []byte {
 // records of kind org, and a project record's org and forge fields), which
 // an older binary's strict decoders and its lint do not know. Version 3
 // adds a project record's successor and a status entry's owner words
-// (SPEC.md, "Folder records": Owner words beat dates, Successors).
-const FormatVersion = 3
+// (SPEC.md, "Folder records": Owner words beat dates, Successors). Version 4
+// adds the reviewer's verdict on a curated fact (source.review and
+// review_reason, SPEC.md "The reviewer"; ReviewsFormat).
+const FormatVersion = 4
 
 // StatementsFormat is the first format whose stores hold statements and
 // orgs.
