@@ -441,3 +441,29 @@ func TestReviewerSettings(t *testing.T) {
 		t.Fatalf("route %+v %v", route, err)
 	}
 }
+
+func TestDreamAgentWindowsSetting(t *testing.T) {
+	clear(t, "TACIT_DREAM_AGENT_WINDOWS")
+	file := filepath.Join(t.TempDir(), "config.yaml")
+	for in, want := range map[string]string{"none": "none", "Recent:30": "recent:30", "all": "all"} {
+		os.Unsetenv("TACIT_DREAM_AGENT_WINDOWS")
+		os.WriteFile(file, []byte("dream_agent_windows: "+in+"\n"), 0600)
+		if err := Load(file, true); err != nil {
+			t.Fatal(in, err)
+		}
+		if got := os.Getenv("TACIT_DREAM_AGENT_WINDOWS"); got != want {
+			t.Fatalf("%s: %q", in, got)
+		}
+	}
+	for _, bad := range []string{"some", "recent:0", "recent:3651", "recent", "recent:30d"} {
+		os.WriteFile(file, []byte("dream_agent_windows: "+bad+"\n"), 0600)
+		if err := Load(file, true); err == nil {
+			t.Fatal("accepted", bad)
+		}
+	}
+	os.WriteFile(file, []byte("dream_agent_windows: none\n"), 0600)
+	t.Setenv("TACIT_DREAM_AGENT_WINDOWS", "recent:7")
+	if err := Load(file, true); err != nil || os.Getenv("TACIT_DREAM_AGENT_WINDOWS") != "recent:7" {
+		t.Fatal("the setting replaced the environment's value")
+	}
+}

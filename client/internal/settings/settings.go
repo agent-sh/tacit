@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -67,6 +68,10 @@ type Config struct {
 	Utility         Utility  `yaml:"utility"`
 	Delivery        Delivery `yaml:"delivery"`
 	DreamMaxRuntime string   `yaml:"dream_max_runtime"`
+	// DreamAgentWindows is what the dreamer does with a window that holds no
+	// turn of the owner's (TACIT_DREAM_AGENT_WINDOWS): all (the default),
+	// recent:<days> or none.
+	DreamAgentWindows string `yaml:"dream_agent_windows"`
 	// StaleWorkers is how many facts the curator's stale step checks at once
 	// (git commands in parallel); 0 is the default, 4.
 	StaleWorkers int                        `yaml:"stale_workers"`
@@ -92,6 +97,10 @@ type Config struct {
 	VerifyRoots []string `yaml:"verify_roots"`
 	Models      Models   `yaml:"models"`
 }
+
+// agentWindowsRx is the form of dream_agent_windows; dream.ParseAgentWindows
+// checks the bound on the days.
+var agentWindowsRx = regexp.MustCompile(`^(?:all|none|recent:([1-9][0-9]{0,3}))$`)
 
 func Path() string {
 	if p := os.Getenv("TACIT_SETTINGS"); p != "" {
@@ -166,6 +175,17 @@ func Load(path string, required bool) error {
 	if c.DreamMaxRuntime != "" {
 		if limit, err := time.ParseDuration(c.DreamMaxRuntime); err != nil || limit < 0 {
 			return fmt.Errorf("dream_max_runtime must be a nonnegative duration")
+		}
+	}
+	if v := strings.ToLower(strings.TrimSpace(c.DreamAgentWindows)); v != "" {
+		m := agentWindowsRx.FindStringSubmatch(v)
+		ok := m != nil
+		if ok && m[1] != "" {
+			days, _ := strconv.Atoi(m[1])
+			ok = days <= 3650
+		}
+		if !ok {
+			return fmt.Errorf("dream_agent_windows must be all, none or recent:<days> (1 to 3650)")
 		}
 	}
 	switch strings.ToLower(c.LocalLayer) {
@@ -259,6 +279,7 @@ func Load(path string, required bool) error {
 	}
 	values["TACIT_RUNNER"] = c.Runner
 	values["TACIT_DREAM_MAX_RUNTIME"] = c.DreamMaxRuntime
+	values["TACIT_DREAM_AGENT_WINDOWS"] = strings.ToLower(strings.TrimSpace(c.DreamAgentWindows))
 	if c.StaleWorkers > 0 {
 		values["TACIT_STALE_WORKERS"] = strconv.Itoa(c.StaleWorkers)
 	}

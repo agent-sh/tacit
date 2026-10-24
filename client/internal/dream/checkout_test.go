@@ -41,7 +41,7 @@ func TestWorktreeCwdKeepsItsRepository(t *testing.T) {
 	if r.Name != "widget" || r.Worktree != wt {
 		t.Fatalf("worktree cwd: %+v", r)
 	}
-	ws := windowsOf([]string{"user: fix it"}, r, cwd, home, mains, nil, func(part int, c []string) Window { return Window{Session: "s1"} })
+	ws := windowsOf([]string{"user: fix it"}, nil, r, cwd, home, mains, nil, func(part int, c []string) Window { return Window{Session: "s1"} })
 	if len(ws) != 1 || ws[0].Checkout.Worktree != wt || ws[0].Repo != "widget" {
 		t.Fatalf("window: %+v", ws)
 	}
