@@ -170,6 +170,10 @@ func runHook(args []string) int {
 	}
 
 	switch args[0] {
+	case "questions":
+		// The reviewer's question alone, for a harness whose facts come from
+		// tacit's MCP server (pi's extension, internal/../pi/tacit.ts).
+		fmt.Print(questionBlock(ctx, in, sit, strings.TrimSpace(in.Prompt)))
 	case "session-start":
 		// Only a real start: resume, clear and compact re-fire this hook and
 		// the facts are already in the transcript (after a compaction, in the
@@ -208,6 +212,12 @@ func runHook(args []string) int {
 		// reached a full window starts its dream (windowDream).
 		windowDream(s, in)
 		p := strings.TrimSpace(in.Prompt)
+		// The reviewer's question for the owner, when one waits that belongs
+		// in this session (hooks_questions.go): after the facts, whatever
+		// the prompt. With none waiting it prints nothing.
+		if qb := questionBlock(ctx, in, sit, p); qb != "" {
+			defer fmt.Print(qb)
+		}
 		if !promptWorthy(p) {
 			return 0
 		}

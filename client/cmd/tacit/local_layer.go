@@ -191,6 +191,9 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 	if len(lerrs) > 0 {
 		fmt.Fprintf(os.Stderr, "curate: %d local file(s) in %s did not parse and are skipped\n", len(lerrs), dir)
 	}
+	// The reviewer judges this machine's agents' notes (SPEC.md, "The
+	// reviewer"), into the overlay's ledger: nothing leaves the machine.
+	localReview(ctx, s, dir, local, o.quick, o.dry, time.Now().Add(o.budget/3))
 	names := map[string]bool{}
 	var known []*fact.Fact // what a new fact is checked against: the store's curated facts and the overlay's
 	for _, f := range shared {

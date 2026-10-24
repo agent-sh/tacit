@@ -196,7 +196,17 @@ func runInstall(args []string) int {
 
 	case "grok":
 		fmt.Printf("Add to ~/.grok/config.toml:\n[mcp_servers.tacit]\ncommand = %q\nargs = %s\nenabled = true\n", exe, mcpArguments("grok"))
-	case "pi", "mcp":
+	case "pi":
+		// The reviewer's questions reach a pi session through an extension
+		// (pi has no hook config); the facts through the MCP server.
+		p, err := installPi(piAgentDir(home), exe)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "install:", err)
+			return 1
+		}
+		fmt.Println("wrote", p, "(the reviewer's questions for the owner in pi sessions; pi loads it at its next start)")
+		fmt.Printf("Add this MCP server to %s:\n  command: %q\n  args: %s\n", target, exe, mcpArguments(target))
+	case "mcp":
 		fmt.Printf("Add this MCP server to %s:\n  command: %q\n  args: %s\n", target, exe, mcpArguments(target))
 	default:
 		usage()
@@ -560,6 +570,37 @@ func installHooksWith(path, exe, goos string, startArgs []string) error {
 
 //go:embed hermes/__init__.py hermes/plugin.yaml
 var hermesPlugin embed.FS
+
+//go:embed pi/tacit.ts
+var piExtension []byte
+
+// piAgentDir is pi's agent directory: $PI_CODING_AGENT_DIR, else ~/.pi/agent.
+func piAgentDir(home string) string {
+	if d := os.Getenv("PI_CODING_AGENT_DIR"); d != "" {
+		if strings.HasPrefix(d, "~/") {
+			return filepath.Join(home, d[2:])
+		}
+		return d
+	}
+	return filepath.Join(home, ".pi", "agent")
+}
+
+// installPi writes tacit's pi extension (pi/tacit.ts) into the agent
+// directory's extensions/, the binary path baked in, and returns its path.
+func installPi(agentDir, exe string) (string, error) {
+	dir := filepath.Join(agentDir, "extensions")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	lit, _ := json.Marshal(exe) // a JSON string is a valid TypeScript literal
+	text := strings.ReplaceAll(string(piExtension), "@TACIT_BIN@", string(lit))
+	p := filepath.Join(dir, "tacit.ts")
+	tmp := p + ".tmp"
+	if err := os.WriteFile(tmp, []byte(text), 0o644); err != nil {
+		return "", err
+	}
+	return p, os.Rename(tmp, p)
+}
 
 // installHermes writes the provider plugin with the binary path baked in, so
 // the gateway's PATH does not matter.
