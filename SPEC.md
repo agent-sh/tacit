@@ -554,12 +554,13 @@ Every commit subject starts `owner: ` (`owner: edit <name> (<fields>)`, `owner: 
 
 ## Models
 
-The client calls models through the configured runner: Claude, Codex, Hermes, Grok, pi, Muse or agy. `runner` selects the default CLI and `runners` overrides each role. Generic defaults use Claude aliases (`opus` for dreaming, curation and verification, `haiku` for judging; the measurements behind the dreamer and curator choice are in eval/VALUE.md). Operator-specific model versions, effort, profiles and cross-runner fallbacks are loaded from private configuration. Explicit runner selections can use the CLI model default. See [runner configuration and boundaries](docs/portable.md#model-runners). Each step has an environment override, which a job takes from its env file (`EnvironmentFile`, `--env-file`):
+The client calls models through the configured runner: Claude, Codex, Hermes, Grok, pi, Muse or agy. `runner` selects the default CLI and `runners` overrides each role. Generic defaults use the Claude alias `opus` for every deciding call: dreaming, curation, judging and verification (the owner, 2026-10-24: "but we said opus"; the measurements behind the dreamer and curator choice are in eval/VALUE.md). The verifier alone falls back to `sonnet` when Opus has no capacity for a batch. Operator-specific model versions, effort, profiles and cross-runner fallbacks are loaded from private configuration. Explicit runner selections can use the CLI model default. See [runner configuration and boundaries](docs/portable.md#model-runners). Each step has an environment override, which a job takes from its env file (`EnvironmentFile`, `--env-file`):
 
 | Step | Default | Override |
 |---|---|---|
-| curator split and rulings pass (`tacit curate`) | Claude `opus` | `TACIT_CURATE_MODEL` |
-| curator contradiction judge | Claude `haiku` | `TACIT_JUDGE_MODEL` |
+| curator split (`tacit curate`) | Claude `opus` | `TACIT_CURATE_MODEL` |
+| curator contradiction judge and rulings pass | Claude `opus` | `TACIT_JUDGE_MODEL` |
+| assessment, rotation, statements step and folder overviews (the curate route) | Claude `opus` | `TACIT_CURATE_MODEL` |
 | dreamer (`tacit dream`) | Claude `opus` | `TACIT_DREAM_MODEL` |
 | verifier (`tacit verify`) | Claude `opus` | `TACIT_VERIFY_MODEL` |
 | verifier fallback | Claude `sonnet` | `TACIT_VERIFY_FALLBACK` |

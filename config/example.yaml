@@ -31,7 +31,7 @@ runner: claude
 runners: {}
 models:
   curate: opus
-  judge: haiku
+  judge: opus
   dream: opus
   verify: opus
   # verify_fallback: sonnet # Legacy same-runner option; prefer fallbacks below.

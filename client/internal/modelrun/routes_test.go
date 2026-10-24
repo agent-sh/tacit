@@ -14,7 +14,7 @@ func TestGenericRouteDefaults(t *testing.T) {
 		"curate": {Runner: "claude", Model: "opus"},
 		"verify": {Runner: "claude", Model: "opus"},
 		"dream":  {Runner: "claude", Model: "opus"},
-		"judge":  {Runner: "claude", Model: "haiku"},
+		"judge":  {Runner: "claude", Model: "opus"},
 	} {
 		t.Setenv(roleEnv(role, "RUNNER"), "")
 		t.Setenv(roleEnv(role, "MODEL"), "")

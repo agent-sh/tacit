@@ -235,7 +235,7 @@ func TestUserConfigLinkLoadsPrivateSettingsFromAnyDirectory(t *testing.T) {
 	if err := Load(Path(), false); err != nil {
 		t.Fatal(err)
 	}
-	route, err := modelrun.Resolve("judge", modelrun.Model("judge", "haiku"))
+	route, err := modelrun.Resolve("judge", modelrun.Model("judge", "opus"))
 	if err != nil || route.Runner != "muse" || route.Model != "chosen-model" || route.Effort != "high" {
 		t.Fatal("private route not loaded", err)
 	}

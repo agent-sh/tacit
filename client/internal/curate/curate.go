@@ -26,12 +26,14 @@ import (
 
 // The split model and conflict judge use independently configured routes.
 // The split defaults to opus: it curated better than Sonnet, mostly by not
-// dropping facts (eval/VALUE.md, "Dreamer and curator models").
+// dropping facts (eval/VALUE.md, "Dreamer and curator models"). The judge
+// (and the rulings recovery pass on its route) defaults to opus too: every
+// deciding call runs on Opus (the owner, 2026-10-24: "but we said opus").
 // Operator configuration selects model versions, effort and provider profiles.
 // Model overrides accept the selected CLI's IDs; --model on curate wins.
 var (
 	DefaultModel = modelrun.Model("curate", "opus")
-	JudgeModel   = modelrun.Model("judge", "haiku")
+	JudgeModel   = modelrun.Model("judge", "opus")
 )
 
 const batchChars = 45_000
