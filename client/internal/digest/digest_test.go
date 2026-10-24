@@ -10,7 +10,7 @@ import (
 func TestClaudeLines(t *testing.T) {
 	requireScrump(t)
 	in := strings.Join([]string{
-		`{"type":"user","message":{"content":"please fix the build"}}`,
+		`{"type":"user","entrypoint":"cli","message":{"content":"please fix the build"}}`,
 		`{"type":"user","message":{"content":"<task-notification>done</task-notification>"}}`,
 		`{"type":"user","isMeta":true,"message":{"content":"injected"}}`,
 		`{"type":"assistant","message":{"content":[{"type":"text","text":"Running tests."},{"type":"tool_use","name":"Bash","input":{"command":"pkill -f job"}}]}}`,
@@ -18,7 +18,7 @@ func TestClaudeLines(t *testing.T) {
 		`{"type":"attachment"}`,
 		`not json`,
 	}, "\n")
-	got, err := Finish(Lines(strings.NewReader(in), Claude))
+	got, err := Finish(Lines(strings.NewReader(in), Claude, true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestCodexLines(t *testing.T) {
 		`{"type":"response_item","payload":{"type":"function_call_output","output":"all good"}}`,
 		`{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done."}]}}`,
 	}, "\n")
-	got := Lines(strings.NewReader(in), Codex)
+	got := Lines(strings.NewReader(in), Codex, true)
 	want := []string{
 		"H: >>> RETAINED USER INSTRUCTIONS x",
 		"U: deploy it",

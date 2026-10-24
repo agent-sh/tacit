@@ -1,6 +1,8 @@
 // Package digest compacts Claude Code, Codex and pi transcript JSONL, and
-// Hermes session rows, into the line form the dreamer reads: U: owner text,
-// H: harness-injected text, A: assistant text, T: tool call, E: tool error.
+// Hermes session rows, into the line form the dreamer reads: U: what the
+// owner typed, P: a prompt another agent or a program wrote (who.go decides
+// which), H: harness-injected text, A: assistant text, T: tool call, E: tool
+// error.
 // Raw tool output is dropped and secrets are redacted. The Claude and Codex
 // readers are the Go port of eval/mine/digest.py, which the truth set was
 // mined with, so the dreamer sees what was measured.
@@ -204,17 +206,20 @@ type Format int
 const (
 	Claude Format = iota
 	Codex
-	// Pi is pi's session JSONL (see pi.go). Lines reads every user turn as
-	// the owner's; PiLines takes whether a program started the session.
+	// Pi is pi's session JSONL (see pi.go).
 	Pi
 	// Hermes is Hermes's session store, a SQLite database, not JSONL: its rows
 	// are digested by HermesLines, and Lines reads nothing in this format.
 	Hermes
 )
 
-// Lines digests JSONL from r in the given format. Only complete lines are
-// consumed; the caller tracks byte offsets (see Delta).
-func Lines(r io.Reader, f Format) []string {
+// Lines digests JSONL from r in the given format. owner is the session's
+// verdict (SessionWho(...).Owner()): in a session that is not the owner's,
+// every user turn that is not harness text is another agent's prompt (P:),
+// never the owner's (U:). In a Claude Code owner session each turn is decided
+// again on its own line (ClaudeTyped). Only complete lines are consumed; the
+// caller tracks byte offsets (see Delta).
+func Lines(r io.Reader, f Format, owner bool) []string {
 	var out []string
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1<<20), 64<<20)
@@ -225,11 +230,11 @@ func Lines(r io.Reader, f Format) []string {
 		}
 		switch f {
 		case Claude:
-			out = append(out, claudeLine(o)...)
+			out = append(out, claudeLine(o, owner)...)
 		case Codex:
-			out = append(out, codexLine(o)...)
+			out = append(out, codexLine(o, owner)...)
 		case Pi:
-			out = append(out, piLine(o, false)...)
+			out = append(out, piLine(o, owner)...)
 		}
 	}
 	return out
@@ -238,7 +243,7 @@ func Lines(r io.Reader, f Format) []string {
 // capFor is the final width of a digest line by its prefix.
 func capFor(line string) int {
 	switch {
-	case strings.HasPrefix(line, "U: "):
+	case strings.HasPrefix(line, "U: "), strings.HasPrefix(line, "P: "):
 		return uMax
 	case strings.HasPrefix(line, "A: "):
 		return aMax
@@ -310,7 +315,7 @@ func HarnessText(f Format, txt string) bool {
 	return codexHarness.MatchString(txt)
 }
 
-func claudeLine(o map[string]any) []string {
+func claudeLine(o map[string]any, owner bool) []string {
 	t, _ := o["type"].(string)
 	if t != "user" && t != "assistant" {
 		return nil
@@ -322,15 +327,20 @@ func claudeLine(o map[string]any) []string {
 	// harness's text, not the owner's words.
 	summary, _ := o["isCompactSummary"].(bool)
 	meta = meta || summary
+	typed := false
+	if t == "user" && owner {
+		typed, _ = ClaudeTyped(ClaudeMarksOf(o))
+	}
 	var out []string
 	userText := func(txt string) {
-		if strings.TrimSpace(txt) == "" {
-			return
-		}
-		if meta || claudeHarness.MatchString(txt) {
+		switch {
+		case strings.TrimSpace(txt) == "":
+		case meta || claudeHarness.MatchString(txt):
 			out = append(out, "H: "+clip(txt, hMax))
-		} else {
+		case typed:
 			out = append(out, "U: "+clip(txt, uMax))
+		default:
+			out = append(out, "P: "+clip(txt, uMax))
 		}
 	}
 	switch c := content.(type) {
@@ -364,7 +374,7 @@ func claudeLine(o map[string]any) []string {
 	return out
 }
 
-func codexLine(o map[string]any) []string {
+func codexLine(o map[string]any, owner bool) []string {
 	if o["type"] != "response_item" {
 		return nil
 	}
@@ -383,10 +393,13 @@ func codexLine(o map[string]any) []string {
 			}
 			switch role {
 			case "user":
-				if codexHarness.MatchString(txt) {
+				switch {
+				case codexHarness.MatchString(txt):
 					out = append(out, "H: "+clip(txt, hMax))
-				} else {
+				case owner:
 					out = append(out, "U: "+clip(txt, uMax))
+				default:
+					out = append(out, "P: "+clip(txt, uMax))
 				}
 			case "assistant":
 				if !strings.HasPrefix(txt, "[Recorded tool history]") {
@@ -458,12 +471,14 @@ func blocksText(c any) string {
 }
 
 // Interesting reports whether a digest has enough substance for the dreamer:
-// at least one owner line or tool error, and assistant text.
+// at least one owner line, agent prompt or tool error, and assistant text.
+// An agent's session is read like the owner's: what its agent found out is
+// agents' notes all the same.
 func Interesting(lines []string) bool {
 	var u, e, a int
 	for _, l := range lines {
 		switch {
-		case strings.HasPrefix(l, "U: "):
+		case strings.HasPrefix(l, "U: "), strings.HasPrefix(l, "P: "):
 			u++
 		case strings.HasPrefix(l, "E: "):
 			e++

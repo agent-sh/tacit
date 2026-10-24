@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -48,7 +47,7 @@ func PiSessionGlob(home string) string {
 // branches. "custom_message" entries are text an extension put into the
 // context. Subagents write their sessions one level down, with the parent in
 // the header (<session>/tasks/<time>_<id>.jsonl, "parentSession"): the glob
-// does not reach them, and that is all that keeps them out.
+// does not reach them, and SessionWho takes either mark for an agent's.
 var piHarness = regexp.MustCompile(`^\s*<[A-Za-z][\w:-]*[\s>/]`) // an attached file (<file name=...>), a skill or template expansion
 
 // PiHeadlessGap is how soon after pi set a session up its first user turn
@@ -100,10 +99,12 @@ func PiHeadless(head []byte) bool {
 	return false
 }
 
-// PiHeader is the first line of a pi session: its id and where it started.
+// PiHeader is the first line of a pi session: its id, where it started and,
+// for a subagent's session, the session that spawned it.
 type PiHeader struct {
-	ID  string `json:"id"`
-	Cwd string `json:"cwd"`
+	ID            string `json:"id"`
+	Cwd           string `json:"cwd"`
+	ParentSession string `json:"parentSession"`
 }
 
 // ReadPiHeader parses the header line at the start of head; ok is false when
@@ -123,23 +124,8 @@ func ReadPiHeader(head []byte) (PiHeader, bool) {
 	return h.PiHeader, true
 }
 
-// PiLines digests pi JSONL from r. agent says a program started the session
-// (PiHeadless): its user turns are an agent's prompts, H: lines, not U:.
-func PiLines(r io.Reader, agent bool) []string {
-	var out []string
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 1<<20), 64<<20)
-	for sc.Scan() {
-		var o map[string]any
-		if json.Unmarshal(sc.Bytes(), &o) != nil {
-			continue
-		}
-		out = append(out, piLine(o, agent)...)
-	}
-	return out
-}
-
-func piLine(o map[string]any, agent bool) []string {
+// piLine digests one pi entry; owner is the session's verdict (piWho).
+func piLine(o map[string]any, owner bool) []string {
 	switch o["type"] {
 	case "custom_message":
 		if txt := blocksText(o["content"]); strings.TrimSpace(txt) != "" {
@@ -159,10 +145,13 @@ func piLine(o map[string]any, agent bool) []string {
 		if strings.TrimSpace(txt) == "" {
 			break
 		}
-		if agent || piHarness.MatchString(txt) {
+		switch {
+		case piHarness.MatchString(txt):
 			out = append(out, "H: "+clip(txt, hMax))
-		} else {
+		case owner:
 			out = append(out, "U: "+clip(txt, uMax))
+		default:
+			out = append(out, "P: "+clip(txt, uMax))
 		}
 	case "assistant":
 		cs, _ := m["content"].([]any)

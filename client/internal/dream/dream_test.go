@@ -21,7 +21,7 @@ func TestWindowsCursorAndFreshStart(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(api, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	initial := line(`{"type":"user","cwd":"` + filepath.ToSlash(api) + `","message":{"content":"old turn that must never be replayed"}}`)
+	initial := line(`{"type":"user","entrypoint":"cli","cwd":"` + filepath.ToSlash(api) + `","message":{"content":"old turn that must never be replayed"}}`)
 	os.WriteFile(f, []byte(initial), 0o644)
 	src := []Source{{Glob: filepath.Join(dir, "*.jsonl"), Format: digest.Claude}}
 
@@ -33,7 +33,7 @@ func TestWindowsCursorAndFreshStart(t *testing.T) {
 
 	// Append a delta with an owner line, an error and assistant text; plus a
 	// trailing partial line that must not be consumed.
-	delta := line(`{"type":"user","cwd":"`+filepath.ToSlash(api)+`","message":{"content":"commit it"}}`) +
+	delta := line(`{"type":"user","entrypoint":"cli","cwd":"`+filepath.ToSlash(api)+`","message":{"content":"commit it"}}`) +
 		line(`{"type":"assistant","message":{"content":[{"type":"text","text":"Committing."},{"type":"tool_use","name":"Bash","input":{"command":"git commit"}}]}}`) +
 		line(`{"type":"user","message":{"content":[{"type":"tool_result","is_error":true,"content":"tools/hooks/pre-push: eslint: not found"}]}}`)
 	delta += strings.Repeat(" ", minNewBytes) + "\n" // padding so the delta clears the minimum
@@ -186,7 +186,7 @@ func TestWindowsPassOverALineLongerThanTheReadCap(t *testing.T) {
 	src := []Source{{Glob: filepath.Join(dir, "*.jsonl"), Format: digest.Claude}}
 	// One record longer than maxReadBytes, then an ordinary turn after it.
 	long := `{"type":"user","message":{"content":"` + strings.Repeat("x", maxReadBytes+1000) + `"}}` + "\n"
-	after := `{"type":"user","cwd":"/home/u/projects/api","message":{"content":"commit it"}}` + "\n" +
+	after := `{"type":"user","entrypoint":"cli","cwd":"/home/u/projects/api","message":{"content":"commit it"}}` + "\n" +
 		`{"type":"assistant","message":{"content":[{"type":"text","text":"Committing."},{"type":"tool_use","name":"Bash","input":{"command":"git commit"}}]}}` + "\n" +
 		`{"type":"user","message":{"content":[{"type":"tool_result","is_error":true,"content":"tools/hooks/pre-push: eslint: not found"}]}}` + "\n" +
 		strings.Repeat(" ", minNewBytes) + "\n"
@@ -346,5 +346,55 @@ func TestWindowsNameASeparateCloneForItsMainCheckout(t *testing.T) {
 	ws, _ := Windows([]Source{{Glob: filepath.Join(dir, "*.jsonl"), Format: digest.Claude}}, st, false)
 	if len(ws) != 1 || ws[0].Repo != "pikadon" || ws[0].RepoRoot != filepath.Join(home, "projects", "pikadon") {
 		t.Fatalf("windows %+v", ws)
+	}
+}
+
+// A ruling the model took from another agent's prompt is that agent's note:
+// code finds the words in a P: line and in no U: line, or the window has no
+// U: line at all. Words in a U: line, or in no line (a typo the model fixed),
+// stay for the curator to check.
+func TestCheckOwnerWordsKeepsAgentsPromptsOut(t *testing.T) {
+	lines := []string{
+		"P: Owner ruling: only release from the main branch, never from a fork",
+		"A: Releasing from main.",
+		"U: keep the changelog to one line per change",
+	}
+	x := Extracted{Description: "Release only from main.", Type: "user_standard", Kind: "user", Quote: "only release from the main branch, never from a fork"}
+	got := CheckOwnerWords(x, lines)
+	if got.Kind != "observed" || !got.AgentWords {
+		t.Fatalf("a quote from a P: line: %+v", got)
+	}
+	f := ToFact(got, "", "box", "s1")
+	if f.Meta.Source.Kind != "observed" || strings.Contains(f.Body, "Quoted from the session") || !strings.Contains(f.Body, `Another agent's prompt in the session said: "only release from the main branch, never from a fork"`) {
+		t.Fatalf("fact %+v body %q", f.Meta.Source, f.Body)
+	}
+	for _, q := range []string{"keep the changelog to one line per change", "keep the chnagelog to one line per change"} {
+		if got := CheckOwnerWords(Extracted{Kind: "user", Quote: Quote(q)}, lines); got.Kind != "user" {
+			t.Errorf("%q: %+v", q, got)
+		}
+	}
+	st := CheckOwnerWords(Extracted{Kind: "statement", Quote: "keep the changelog to one line per change"}, lines[:2])
+	if st.Kind != "observed" {
+		t.Errorf("a statement from a window with no owner line: %+v", st)
+	}
+	if obs := CheckOwnerWords(Extracted{Kind: "observed"}, lines[:2]); obs.Kind != "observed" || obs.AgentWords {
+		t.Errorf("an observation: %+v", obs)
+	}
+}
+
+// A Codex subagent's session (its parent's front end, codex-tui, in
+// session_meta) is read as an agent's: its prompt is a P: line.
+func TestWindowsReadACodexSubagentAsAnAgent(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "rollout-sub.jsonl")
+	meta := `{"type":"session_meta","payload":{"id":"cx-sub","parent_thread_id":"cx-own","cwd":"/home/u/projects/shop","originator":"codex-tui","source":{"subagent":{"thread_spawn":{"parent_thread_id":"cx-own","depth":1}}},"thread_source":"subagent"}}`
+	body := meta + "\n" +
+		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"the owner wants every endpoint versioned"}]}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Versioned. ` + strings.Repeat("y", minNewBytes) + `"}]}}` + "\n"
+	os.WriteFile(f, []byte(body), 0o644)
+	st := &State{Offsets: map[string]int64{f: 0}}
+	ws, _ := Windows([]Source{{Glob: filepath.Join(dir, "*.jsonl"), Format: digest.Codex}}, st, false)
+	if len(ws) != 1 || ws[0].Lines[0] != "P: the owner wants every endpoint versioned" {
+		t.Fatalf("windows %d %v", len(ws), ws)
 	}
 }
