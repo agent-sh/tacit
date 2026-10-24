@@ -172,7 +172,7 @@ func runHook(args []string) int {
 	switch args[0] {
 	case "questions":
 		// The reviewer's question alone, for a harness whose facts come from
-		// tacit's MCP server (pi's extension, internal/../pi/tacit.ts).
+		// tacit's MCP server (pi's extension, cmd/tacit/pi/tacit.ts).
 		fmt.Print(questionBlock(ctx, in, sit, strings.TrimSpace(in.Prompt)))
 	case "session-start":
 		// Only a real start: resume, clear and compact re-fire this hook and
