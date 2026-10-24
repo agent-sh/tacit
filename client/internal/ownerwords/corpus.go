@@ -17,28 +17,12 @@ import (
 	"github.com/agent-sh/tacit/client/internal/ledger"
 )
 
-// Owner sessions and turns. Claude Code records on every line how the session
-// was started (`entrypoint`): "cli" and "claude-desktop" are a person at a
-// terminal or in the desktop app; "sdk-cli" is `claude -p` (the curator, the
-// dreamer, worker lanes) and "sdk-ts" an Agent SDK lane, whose user turns are
-// prompts an agent wrote. Current versions also mark each user turn with
-// `origin.kind`: "human" is typed by a person; "task-notification", "peer"
-// and the rest are agents' text. Codex records the `originator` of a session.
+// Owner sessions and turns are decided in one place, digest.SessionWho and
+// digest.ClaudeTyped (digest/who.go); the dreamer reads the same verdicts.
+// The names below are kept for callers of this package.
 var (
-	ClaudeOwnerEntrypoints = map[string]bool{"cli": true, "claude-desktop": true}
-	// CodexOwnerOriginators are the Codex front ends a person types into;
-	// anything else (codex_exec, an SDK or app-server client) is not them.
-	CodexOwnerOriginators = map[string]bool{"Codex Desktop": true, "codex-tui": true, "codex_cli_rs": true, "codex_vscode": true}
-	// AgentCwds are where only agents start sessions: a runner's worker
-	// checkouts, scratch and temporary directories, Claude Code's background
-	// jobs, probe and e2e drivers.
-	AgentCwds = []string{"/.local/runners/", "/.claude/jobs/", "/.cache/", "/scratchpad", "/e2e/"}
-	// AgentCwdPrefixes are directory prefixes no session of theirs starts in:
-	// the temporary directories of Linux and of macOS, where /tmp is
-	// /private/tmp and $TMPDIR is under /var/folders.
-	AgentCwdPrefixes = []string{"/tmp/", "/var/tmp/", "/private/tmp/", "/private/var/tmp/", "/var/folders/", "/private/var/folders/"}
-	// AgentCwdExact are directories only agents start sessions in, as such.
-	AgentCwdExact = map[string]bool{"/tmp": true, "/var/tmp": true, "/private/tmp": true, "/private/var/tmp": true}
+	ClaudeOwnerEntrypoints = digest.ClaudeOwnerEntrypoints
+	CodexOwnerOriginators  = digest.CodexOwnerOriginators
 )
 
 // Source is a transcript glob in one dialect.
@@ -93,6 +77,9 @@ type Builder struct {
 	c     *Corpus
 	buf   bytes.Buffer
 	known map[string]bool
+	// agentRefs are the sessions whose transcripts are an agent's: a prompt
+	// history line of one of them (a lane a program typed into) is not theirs.
+	agentRefs map[string]bool
 	// pastes are texts the owner pasted into a prompt (the prompt history keeps
 	// them apart); a transcript inlines them into their turn, and a paste is
 	// often an agent's output the owner passed along.
@@ -101,7 +88,7 @@ type Builder struct {
 
 // NewBuilder starts an empty corpus.
 func NewBuilder() *Builder {
-	return &Builder{c: &Corpus{turns: map[string][]int{}, Stats: Stats{Turns: map[string]int{}}}, known: map[string]bool{}}
+	return &Builder{c: &Corpus{turns: map[string][]int{}, Stats: Stats{Turns: map[string]int{}}}, known: map[string]bool{}, agentRefs: map[string]bool{}}
 }
 
 // Has reports whether a session is already in the corpus.
@@ -455,68 +442,18 @@ func (c *Corpus) Sessions() int { return len(c.turns) }
 // --- transcripts ---
 
 var (
-	entryRx      = regexp.MustCompile(`"entrypoint":"([^"]*)"`)
-	cwdRx        = regexp.MustCompile(`"cwd":"([^"]*)"`)
-	originatorRx = regexp.MustCompile(`"originator":"([^"]*)"`)
-	sessionIDRx  = regexp.MustCompile(`"id":"([^"]*)"`)
+	sessionIDRx = regexp.MustCompile(`"id":"([^"]*)"`)
 )
 
-// AgentCwd reports a working directory only agents start sessions in.
-func AgentCwd(cwd string) bool {
-	if AgentCwdExact[strings.TrimRight(cwd, "/")] {
-		return true
-	}
-	for _, p := range AgentCwdPrefixes {
-		if strings.HasPrefix(cwd, p) {
-			return true
-		}
-	}
-	for _, part := range AgentCwds {
-		if strings.Contains(cwd, part) {
-			return true
-		}
-	}
-	return false
-}
+// AgentCwd reports a working directory only agents start sessions in
+// (digest.AgentCwd).
+func AgentCwd(cwd string) bool { return digest.AgentCwd(cwd) }
 
-// Who says whether a transcript can hold owner turns, from its first bytes:
-// "owner", "agent" or "unknown". For Claude Code each turn is decided again
-// on its own line (claudeUserTurns); this only rules sessions out. pi records
-// no mode: a session whose first turn came right after pi set it up is a
-// program's (digest.PiHeadless).
-func Who(head []byte, f digest.Format) string {
-	if m := cwdRx.FindSubmatch(head); m != nil && AgentCwd(string(m[1])) {
-		return "agent"
-	}
-	if f == digest.Pi {
-		if _, ok := digest.ReadPiHeader(head); !ok {
-			return "unknown"
-		}
-		if digest.PiHeadless(head) {
-			return "agent"
-		}
-		return "owner"
-	}
-	if f == digest.Claude {
-		ms := entryRx.FindAllSubmatch(head, -1)
-		if ms == nil {
-			return "unknown"
-		}
-		for _, m := range ms {
-			if ClaudeOwnerEntrypoints[string(m[1])] {
-				return "owner"
-			}
-		}
-		return "agent"
-	}
-	m := originatorRx.FindSubmatch(head)
-	if m == nil {
-		return "unknown"
-	}
-	if CodexOwnerOriginators[string(m[1])] {
-		return "owner"
-	}
-	return "agent"
+// Who says whether a transcript can hold owner turns, from its path and first
+// bytes: "owner", "agent" or "unknown" (digest.SessionWho). For Claude Code
+// each turn is decided again on its own line (claudeUserTurns).
+func Who(path string, head []byte, f digest.Format) string {
+	return string(digest.SessionWho(path, head, f).Who)
 }
 
 const headBytes = 256 << 10
@@ -546,9 +483,11 @@ func (b *Builder) AddTranscripts(sources []Source) error {
 			if fi, err := os.Lstat(f); err != nil || !fi.Mode().IsRegular() {
 				continue
 			}
-			switch Who(readHead(f), src.Format) {
+			head := readHead(f)
+			switch Who(f, head, src.Format) {
 			case "agent":
 				b.c.Stats.AgentSessions++
+				b.agentRefs[sessionRef(f, head, src.Format)] = true
 				continue
 			case "unknown":
 				b.c.Stats.UnknownSessions++
@@ -560,6 +499,25 @@ func (b *Builder) AddTranscripts(sources []Source) error {
 		}
 	}
 	return nil
+}
+
+// sessionRef is the corpus ref of a transcript's session, as addTranscript
+// names it.
+func sessionRef(path string, head []byte, f digest.Format) string {
+	name := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	switch f {
+	case digest.Pi:
+		if h, ok := digest.ReadPiHeader(head); ok && h.ID != "" {
+			return "pi:" + h.ID
+		}
+		return "pi:" + name
+	case digest.Codex:
+		if m, ok := digest.ReadCodexMeta(head); ok && m.ID != "" {
+			return "codex:" + m.ID
+		}
+		return "codex:" + name
+	}
+	return "claude:" + name
 }
 
 func (b *Builder) addTranscript(path string, f digest.Format) error {
@@ -621,36 +579,27 @@ func (b *Builder) addTranscript(path string, f digest.Format) error {
 }
 
 // claudeUserTurns is what the owner typed on one transcript line: a user turn
-// marked origin.kind "human", or, from a version that did not mark turns, one
-// with no origin kind on a line whose own entrypoint is a person's. Harness
-// text, compaction summaries, pasted blocks and agents' turns are not theirs; a
-// slash command's arguments are. skipped counts the turns left out as an
-// agent's.
+// a person typed (digest.ClaudeTyped: origin.kind "human", else turnOrigin or
+// promptSource, else, from a version that marked none, a person's
+// entrypoint). Harness text, compaction summaries, pasted blocks, sidechains,
+// scheduled prompts and agents' turns are not theirs; a slash command's
+// arguments are. skipped counts the turns left out as an agent's (a tool
+// result is no turn).
 func claudeUserTurns(line []byte) (out []string, skipped int) {
 	var o struct {
-		Type          string          `json:"type"`
-		Entrypoint    string          `json:"entrypoint"`
-		IsMeta        bool            `json:"isMeta"`
-		IsCompact     bool            `json:"isCompactSummary"`
-		TranscriptOff bool            `json:"isVisibleInTranscriptOnly"`
-		Sidechain     bool            `json:"isSidechain"`
-		Origin        json.RawMessage `json:"origin"`
-		Message       struct {
+		digest.ClaudeMarks
+		Message struct {
 			Content json.RawMessage `json:"content"`
 		} `json:"message"`
 	}
-	if json.Unmarshal(line, &o) != nil || o.Type != "user" || o.IsMeta || o.IsCompact || o.TranscriptOff || o.Sidechain {
+	if json.Unmarshal(line, &o) != nil || o.Type != "user" || o.IsMeta || o.IsCompact || o.TranscriptOnly {
 		return nil, 0
 	}
-	var origin struct {
-		Kind string `json:"kind"`
-	}
-	_ = json.Unmarshal(o.Origin, &origin) // a repo origin ({"host": ...}) has no kind
-	switch {
-	case origin.Kind == "human":
-	case origin.Kind == "" && ClaudeOwnerEntrypoints[o.Entrypoint]:
-	default:
-		return nil, 1
+	if typed, _ := digest.ClaudeTyped(o.ClaudeMarks); !typed {
+		if hasText(o.Message.Content) {
+			return nil, 1
+		}
+		return nil, 0
 	}
 	var texts []string
 	var s string
@@ -687,6 +636,26 @@ func claudeUserTurns(line []byte) (out []string, skipped int) {
 		out = append(out, t)
 	}
 	return out, skipped
+}
+
+// hasText reports a user line's content that holds text (a string, or a text
+// block): a turn someone wrote, not only tool results.
+func hasText(content json.RawMessage) bool {
+	var s string
+	if json.Unmarshal(content, &s) == nil {
+		return strings.TrimSpace(s) != ""
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	_ = json.Unmarshal(content, &blocks)
+	for _, bl := range blocks {
+		if bl.Type == "text" && strings.TrimSpace(bl.Text) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 var (
@@ -792,10 +761,10 @@ func harnessFrame(t string) bool {
 
 // AddDigests adds the owner turns (U: lines) of the session digests under dir
 // (eval/mine/digest.py: claude/<project>/<session>.md, codex/<session>.md)
-// for sessions the corpus does not hold yet. A digest says who started the
-// session in its `entry` header field; an older digest without it is decided
-// from its transcript (`src`) when that still exists, and skipped when it
-// does not. Digest lines are clipped (700 characters) and redacted, so a
+// for sessions the corpus does not hold yet. Who started the session is
+// decided from its transcript (`src`) when that still exists, else from the
+// digest's `entry` header field (digestWho); a session neither decides is
+// skipped. Digest lines are clipped (700 characters) and redacted, so a
 // transcript is the better source whenever it exists.
 func (b *Builder) AddDigests(dir string) error {
 	var files []string
@@ -834,18 +803,9 @@ func (b *Builder) AddDigests(dir string) error {
 		if b.known[ref] {
 			continue
 		}
-		who := "unknown"
-		switch {
-		case AgentCwd(h.Cwd):
+		who := digestWho(h, format)
+		if b.agentRefs[ref] {
 			who = "agent"
-		case h.Entry != "" && format == digest.Claude:
-			who = map[bool]string{true: "owner", false: "agent"}[ClaudeOwnerEntrypoints[h.Entry]]
-		case h.Entry != "":
-			who = map[bool]string{true: "owner", false: "agent"}[CodexOwnerOriginators[h.Entry]]
-		case h.Src != "":
-			if head := readHead(h.Src); len(head) > 0 {
-				who = Who(head, format)
-			}
 		}
 		switch who {
 		case "agent":
@@ -865,6 +825,31 @@ func (b *Builder) AddDigests(dir string) error {
 		}
 	}
 	return nil
+}
+
+// digestWho decides a digest's session: from its transcript when that still
+// exists (digest.SessionWho), else from the digest's `entry` field. Without the
+// transcript, a Codex session that names a person's front end is unknown: a
+// Codex subagent names its parent's front end too, and only the transcript's
+// session_meta tells it apart.
+func digestWho(h DigestHeader, format digest.Format) string {
+	if AgentCwd(h.Cwd) {
+		return "agent"
+	}
+	if h.Src != "" {
+		if head := readHead(h.Src); len(head) > 0 {
+			return Who(h.Src, head, format)
+		}
+	}
+	switch {
+	case h.Entry == "":
+		return "unknown"
+	case format == digest.Claude && ClaudeOwnerEntrypoints[h.Entry]:
+		return "owner"
+	case format == digest.Codex && CodexOwnerOriginators[h.Entry]:
+		return "unknown"
+	}
+	return "agent"
 }
 
 // DigestHeader is the first two lines of a digest:

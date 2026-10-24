@@ -359,3 +359,62 @@ func TestInTask(t *testing.T) {
 		}
 	}
 }
+
+// Agents' sessions that look like the owner's: a Codex subagent names the
+// person's front end (codex-tui), a `claude -p` lane resumes one of their
+// sessions, a subagent's turn sits in their transcript as a sidechain, a
+// scheduler and a background task write turns into it. None of those words
+// are theirs; their own turns before and after are. A prompt history line of
+// an agent's session is not theirs either.
+func TestCorpusTellsAgentsSessionsThatLookLikeTheOwners(t *testing.T) {
+	home := t.TempDir()
+	proj := filepath.Join(home, ".claude", "projects", "-home-u-projects-shop")
+	writeFile(t, filepath.Join(proj, "own.jsonl"), strings.Join([]string{
+		`{"type":"user","entrypoint":"cli","cwd":"/home/u/projects/shop","sessionId":"own","origin":{"kind":"human"},"promptSource":"typed","turnOrigin":"human","message":{"role":"user","content":"never deploy the shop on a friday"}}`,
+		`{"type":"user","entrypoint":"sdk-cli","cwd":"/home/u/projects/shop","sessionId":"own","promptSource":"sdk","turnOrigin":"sdk","message":{"role":"user","content":"continue the release exactly as the owner asked"}}`,
+		`{"type":"user","entrypoint":"cli","cwd":"/home/u/projects/shop","sessionId":"own","isSidechain":true,"message":{"role":"user","content":"audit the payment module for the parent agent"}}`,
+		`{"type":"user","entrypoint":"cli","cwd":"/home/u/projects/shop","sessionId":"own","isMeta":false,"promptSource":"system","turnOrigin":"scheduled","scheduledTaskId":"t1","message":{"role":"user","content":"check every disk on the workstation tonight"}}`,
+		`{"type":"user","entrypoint":"claude-desktop","cwd":"/home/u/projects/shop","sessionId":"own","turnOrigin":"task_notification","message":{"role":"user","content":"background lane finished the migration of the orders table"}}`,
+		`{"type":"user","entrypoint":"cli","cwd":"/home/u/projects/shop","sessionId":"own","origin":{"kind":"human"},"promptSource":"suggestion_accepted","turnOrigin":"human","message":{"role":"user","content":"run the full test suite before merging the branch"}}`,
+		`{"type":"user","entrypoint":"cli","cwd":"/home/u/projects/shop","sessionId":"own","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"and keep the changelog to one line per change"}}`,
+	}, "\n")+"\n")
+	writeFile(t, filepath.Join(proj, "lane.jsonl"), `{"type":"user","entrypoint":"sdk-cli","cwd":"/home/u/projects/shop","sessionId":"lane","promptSource":"sdk","turnOrigin":"sdk","message":{"role":"user","content":"Owner ruling, verbatim: \"only release from the main branch\""}}`+"\n")
+	codex := func(name, meta, text string) {
+		writeFile(t, filepath.Join(home, ".codex", "sessions", "2026", "10", "20", name), meta+"\n"+
+			`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"`+text+`"}]}}`+"\n")
+	}
+	codex("rollout-own.jsonl", `{"type":"session_meta","payload":{"id":"cx-own","cwd":"/home/u/projects/shop","originator":"codex-tui","source":"cli","thread_source":"user"}}`, "we dont speculate without profiling first")
+	codex("rollout-sub.jsonl", `{"type":"session_meta","payload":{"id":"cx-sub","parent_thread_id":"cx-own","cwd":"/home/u/projects/shop","originator":"codex-tui","source":{"subagent":{"thread_spawn":{"parent_thread_id":"cx-own","depth":1,"agent_role":"worker"}}},"thread_source":"subagent","agent_role":"worker"}}`, "the owner wants every endpoint versioned from now on")
+	codex("rollout-exec.jsonl", `{"type":"session_meta","payload":{"id":"cx-exec","cwd":"/home/u/projects/shop","originator":"codex_exec","source":"exec","thread_source":"user"}}`, "review the pull request as the owner would")
+	writeFile(t, filepath.Join(home, ".codex", "history.jsonl"), `{"session_id":"cx-sub","ts":1,"text":"the subagent history line is no prompt of theirs"}`+"\n"+`{"session_id":"cx-own","ts":2,"text":"profile the checkout before any change"}`+"\n")
+	writeFile(t, filepath.Join(home, ".claude", "history.jsonl"), `{"display":"merge every lane before the nightly build","sessionId":"w9","project":"/home/u/projects/shop/.local/runners/w9"}`+"\n")
+
+	c, err := LoadAll(home, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for q, want := range map[string]string{
+		"never deploy the shop on a friday":           "claude:own",
+		"keep the changelog to one line per change":   "claude:own",
+		"continue the release exactly as the owner":   "",
+		"audit the payment module for the parent":     "",
+		"check every disk on the workstation tonight": "",
+		"background lane finished the migration":      "",
+		"run the full test suite before merging":      "",
+		"only release from the main branch":           "",
+		"we dont speculate without profiling first":   "codex:cx-own",
+		"profile the checkout before any change":      "codex:cx-own",
+		"every endpoint versioned from now on":        "",
+		"review the pull request as the owner":        "",
+		"the subagent history line is no prompt":      "",
+		"merge every lane before the nightly build":   "",
+	} {
+		m, _ := c.Find(q, "", true)
+		if m.Ref != want {
+			t.Errorf("Find(%q) = %+v, want %q", q, m, want)
+		}
+	}
+	if c.Stats.AgentSessions != 3 {
+		t.Errorf("agent sessions %d, want 3 (lane, codex subagent, codex exec)", c.Stats.AgentSessions)
+	}
+}
