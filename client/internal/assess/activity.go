@@ -362,7 +362,7 @@ func ApplyStatus(c Candidate, d Decision, shown string) (Decision, bool) {
 		if c.forgeDead() {
 			return d, false
 		}
-		if citesShownNote(why, shown) {
+		if c.citesShownNote(why, shown) {
 			if ch, day, ok := c.changedAfterNote(why); ok {
 				refused = fmt.Sprintf("dead on a note of %s, but the owner worked on it after that day (%s)", day, ch.Summary(3))
 				break
@@ -418,7 +418,7 @@ func (c Candidate) changedAfterNote(why string) (Changes, string, bool) {
 // shippedEvidence reports a release (the forge's) or a cited note shown,
 // together with the owner's words shown for the folder and cited by ref.
 func (c Candidate) shippedEvidence(why, shown string) bool {
-	release := citesShownNote(why, shown) || c.Activity != nil && c.Activity.Forge != nil && c.Activity.Forge.Release != ""
+	release := c.citesShownNote(why, shown) || c.Activity != nil && c.Activity.Forge != nil && c.Activity.Forge.Release != ""
 	if !release {
 		return false
 	}
@@ -436,10 +436,18 @@ func (c Candidate) shippedEvidence(why, shown string) bool {
 }
 
 // citesShownNote reports a note:<name> in why that the folder's rendered
-// evidence lists (as [[name]] or note:name).
-func citesShownNote(why, shown string) bool {
+// evidence lists (as [[name]] or note:name), other than a note that claims
+// the owner's authority without their words (Note.Claim): an agent's note
+// like any other as evidence, but no status rests on it against the dates.
+func (c Candidate) citesShownNote(why, shown string) bool {
+	claims := map[string]bool{}
+	for _, n := range c.Notes {
+		if n.Claim {
+			claims[n.Name] = true
+		}
+	}
 	for _, cite := range record.Cites(why) {
-		if n, ok := strings.CutPrefix(cite, "note:"); ok && n != "" && (strings.Contains(shown, "[["+n+"]]") || record.WholeWord(shown, "note:"+n)) {
+		if n, ok := strings.CutPrefix(cite, "note:"); ok && n != "" && !claims[n] && (strings.Contains(shown, "[["+n+"]]") || record.WholeWord(shown, "note:"+n)) {
 			return true
 		}
 	}

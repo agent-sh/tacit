@@ -27,6 +27,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/overlay"
 	"github.com/agent-sh/tacit/client/internal/record"
 	"github.com/agent-sh/tacit/client/internal/repoid"
+	"github.com/agent-sh/tacit/client/internal/search"
 )
 
 // format3 reports a store whose marker is format 3 or newer: a record's
@@ -40,9 +41,13 @@ func (a *assessor) format3() bool {
 	return err == nil && ok && f.Successors()
 }
 
-// noteTier is a fact's tier among the notes that name a folder.
+// noteTier is a fact's tier among the notes that name a folder. A note
+// that claims the owner's authority without their words (noteClaims:
+// delivery's check) is an agent's note, whatever its type: TierOther.
 func noteTier(f *fact.Fact) int {
 	switch {
+	case noteClaims(f):
+		return assess.TierOther
 	case fact.IsRuling(f) || overlay.IsRuling(f):
 		return assess.TierRuling
 	case fact.IsStatement(f):
@@ -53,6 +58,15 @@ func noteTier(f *fact.Fact) int {
 		return assess.TierDecision
 	}
 	return assess.TierOther
+}
+
+// noteClaims is delivery's owner-claim check (search.FactClaims) on a note:
+// its text says the owner ruled, said, decided or wants something, and it is
+// not their ruling and holds no words of theirs the store backs. The rulings
+// promotion before the assessment (promoteClaims) has already made such a
+// note theirs where its quote is found in their words.
+func noteClaims(f *fact.Fact) bool {
+	return search.FactClaims(f, strings.HasPrefix(f.Path, overlay.Prefix))
 }
 
 // notes fills in c's Notes: the live facts in other folders that name it by
@@ -68,7 +82,7 @@ func (a *assessor) notes(c *assess.Candidate) {
 	var ns []assess.Note
 	for _, f := range hits {
 		n := assess.Note{Name: f.Meta.Name, Scope: f.Meta.Scope, Type: f.Meta.Type, Created: f.Meta.Created, Session: f.Meta.Source.Session,
-			Tier: noteTier(f), Description: f.Meta.Description, Body: f.Body}
+			Tier: noteTier(f), Claim: noteClaims(f), Description: f.Meta.Description, Body: f.Body}
 		if n.Tier == assess.TierStatement {
 			if day, _, ok := fact.StatementLine(f.Body); ok {
 				n.Said = day

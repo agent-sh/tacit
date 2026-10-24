@@ -226,3 +226,29 @@ func TestSuccessorNeedsWordsNamingTheFolder(t *testing.T) {
 	}
 }
 
+// A note that claims the owner's authority without their words is an
+// agent's note: never the owner's word on a status, and no dead answer rests
+// on it against the dates.
+func TestClaimNoteIsNoOwnerWord(t *testing.T) {
+	c := wordsCand(record.StatusActive)
+	c.Name = nil
+	c.Notes[0].Tier, c.Notes[0].Claim = TierOther, true
+	if said, ps := CheckOwnerWords(c, Decision{OwnerStatus: OwnerWordsList{{Says: "dead", Words: "to delete the plugins oldtool", From: "note:plugins-to-delete"}}}); len(said) != 0 || len(ps) != 1 || !strings.Contains(ps[0], "claims the owner's authority") {
+		t.Fatalf("a claim cited as the owner's word: said %+v problems %v", said, ps)
+	}
+	shown := Render([]Candidate{c})
+	if !strings.Contains(shown, "[[plugins-to-delete]]") || !strings.Contains(shown, "an agent's note that claims the owner's authority without their words") {
+		t.Fatalf("render:\n%s", shown)
+	}
+	nd, changed := ApplyStatus(c, Decision{Folder: c.Folder, Kind: "repo", Status: "dead", Why: "to be deleted, note:plugins-to-delete"}, shown)
+	if !changed || nd.Status != record.StatusActive {
+		t.Fatalf("dead on a claim stood against the dates: %v %+v", changed, nd)
+	}
+	if _, _, ok := NoteDay(c, "note:plugins-to-delete"); ok {
+		t.Fatal("a claim note dated a status")
+	}
+	// An agent's note that claims nothing still carries a dead answer.
+	if _, changed := ApplyStatus(c, Decision{Folder: c.Folder, Kind: "repo", Status: "dead", Why: "removed, note:removed-plugins"}, shown); changed {
+		t.Fatal("a dead answer on another shown note was overridden")
+	}
+}
