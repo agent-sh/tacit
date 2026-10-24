@@ -142,11 +142,13 @@ func (src Sources) Load(ctx context.Context, harness, id string) (Conversation, 
 }
 
 // OwnerTurn is the one place the reviewer decides what in a transcript line
-// the owner typed themself: the session must be one a person types into
-// (ownerwords.Who on its first bytes), and the line's user turn theirs by
-// the corpus's rules (ownerwords.TurnTexts). An agent's prompt in a
-// headless session, a subagent's brief, a task notification or an agent
-// relaying "the owner says yes" is never their turn.
+// the owner typed themself, by the decision the dreamer and the owner corpus
+// make (digest/who.go): the session must be one a person types into
+// (digest.SessionWho on its path and first bytes, ownerSession), and the
+// line's turn theirs (digest.ClaudeTyped, digest.ClaudeQueued for a message
+// typed mid-turn), read as the corpus reads it (ownerwords.TurnTexts). An
+// agent's prompt in a headless session, a subagent's brief, a task
+// notification or an agent relaying "the owner says yes" is never their turn.
 func OwnerTurn(f digest.Format, ownerSession bool, line []byte) []string {
 	if !ownerSession {
 		return nil
@@ -247,18 +249,14 @@ func claudeMsgs(owner bool, line []byte) []Msg {
 		Message struct {
 			Content json.RawMessage `json:"content"`
 		} `json:"message"`
-		Attachment struct {
-			Type   string `json:"type"`
-			Prompt string `json:"prompt"`
-		} `json:"attachment"`
+	}
+	if texts, _, _, ok := digest.ClaudeQueuedLine(line); ok {
+		// A message delivered while the agent worked: the owner's when they
+		// typed it, else a note (a task notification).
+		return userMsg(digest.Claude, owner, line, texts)
 	}
 	if json.Unmarshal(line, &o) != nil {
 		return nil
-	}
-	if o.Type == "attachment" && o.Attachment.Type == "queued_command" {
-		// A message delivered while the agent worked: the owner's when they
-		// typed it, else a note (a task notification).
-		return userMsg(digest.Claude, owner, line, []string{o.Attachment.Prompt})
 	}
 	if o.Type != "user" && o.Type != "assistant" {
 		return nil

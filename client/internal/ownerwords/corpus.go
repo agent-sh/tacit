@@ -550,7 +550,7 @@ func (b *Builder) addTranscript(path string, f digest.Format) error {
 			continue
 		}
 		if f == digest.Claude {
-			if !bytes.Contains(line, []byte(`"type":"user"`)) {
+			if !bytes.Contains(line, []byte(`"type":"user"`)) && !bytes.Contains(line, []byte(`"queued_command"`)) {
 				continue
 			}
 			turns, skipped := claudeUserTurns(line)
@@ -581,11 +581,23 @@ func (b *Builder) addTranscript(path string, f digest.Format) error {
 // claudeUserTurns is what the owner typed on one transcript line: a user turn
 // a person typed (digest.ClaudeTyped: origin.kind "human", else turnOrigin or
 // promptSource, else, from a version that marked none, a person's
-// entrypoint). Harness text, compaction summaries, pasted blocks, sidechains,
-// scheduled prompts and agents' turns are not theirs; a slash command's
-// arguments are. skipped counts the turns left out as an agent's (a tool
-// result is no turn).
+// entrypoint), or a message they typed while the agent worked, which Claude
+// Code records as a queued_command attachment (digest.ClaudeQueued). Harness
+// text, compaction summaries, pasted blocks, sidechains, scheduled prompts
+// and agents' turns are not theirs; a slash command's arguments are. skipped
+// counts the turns left out as an agent's (a tool result is no turn).
 func claudeUserTurns(line []byte) (out []string, skipped int) {
+	if texts, typed, _, ok := digest.ClaudeQueuedLine(line); ok {
+		if !typed {
+			for _, t := range texts {
+				if strings.TrimSpace(t) != "" {
+					return nil, 1
+				}
+			}
+			return nil, 0
+		}
+		return typedTexts(texts)
+	}
 	var o struct {
 		digest.ClaudeMarks
 		Message struct {
@@ -618,6 +630,12 @@ func claudeUserTurns(line []byte) (out []string, skipped int) {
 			}
 		}
 	}
+	return typedTexts(texts)
+}
+
+// typedTexts is the owner's words in the texts of a turn a person typed:
+// pasted blocks and harness text left out, a slash command's arguments kept.
+func typedTexts(texts []string) (out []string, skipped int) {
 	for _, t := range texts {
 		t = pastedBlock.ReplaceAllString(t, " ")
 		if strings.TrimSpace(t) == "" {

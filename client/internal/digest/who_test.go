@@ -151,3 +151,69 @@ func TestLinesLabelAgentsPrompts(t *testing.T) {
 		t.Error("an agent's session with a prompt and an answer is still read")
 	}
 }
+
+// Real-shaped queued_command attachments: the fields Claude Code writes on
+// the line and in the attachment, by version (2.1.30x: humanTurn and
+// source_uuid; 2.1.19x-2.1.27x: origin with no humanTurn; 2.1.17x: no
+// origin), values synthetic.
+func queuedLine(version, att string, sidechain bool) string {
+	side := "false"
+	if sidechain {
+		side = "true"
+	}
+	return `{"parentUuid":"9c1d","isSidechain":` + side + `,"attachment":` + att + `,"type":"attachment","uuid":"5b2e","timestamp":"2026-10-22T09:14:03.120Z","userType":"external","entrypoint":"cli","cwd":"/home/u/projects/shop","sessionId":"s1","version":"` + version + `","gitBranch":"main","slug":"brisk-otter","renderedRole":"system"}`
+}
+
+func TestClaudeQueued(t *testing.T) {
+	for _, c := range []struct {
+		name, line string
+		texts      []string
+		typed      bool
+	}{
+		{"typed mid-turn", queuedLine("2.1.302", `{"type":"queued_command","prompt":"and rebase over main first","source_uuid":"a1","delivery_id":"d1","commandMode":"prompt","origin":{"kind":"human"},"humanTurn":true,"timestamp":"2026-10-22T09:13:58.004Z"}`, false), []string{"and rebase over main first"}, true},
+		{"typed with an image", queuedLine("2.1.302", `{"type":"queued_command","prompt":[{"type":"text","text":"this is the error i see"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBO"}}],"source_uuid":"a2","commandMode":"prompt","origin":{"kind":"human"},"humanTurn":true,"imagePasteIds":[1]}`, false), []string{"this is the error i see"}, true},
+		{"before humanTurn was recorded", queuedLine("2.1.274", `{"type":"queued_command","prompt":"install the cli too","source_uuid":"a3","commandMode":"prompt","origin":{"kind":"human"},"timestamp":"2026-09-18T10:00:00.000Z"}`, false), []string{"install the cli too"}, true},
+		{"before origin was recorded", queuedLine("2.1.173", `{"type":"queued_command","prompt":"pull it before you override it","commandMode":"prompt"}`, false), []string{"pull it before you override it"}, true},
+		{"task notification", queuedLine("2.1.302", `{"type":"queued_command","prompt":"<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>","source_uuid":"a4","commandMode":"task-notification","origin":{"kind":"task-notification","producer":"bash"},"runId":"r1"}`, false), nil, false},
+		{"task notification, no origin", queuedLine("2.1.179", `{"type":"queued_command","prompt":"<task-notification>done</task-notification>","commandMode":"task-notification"}`, false), nil, false},
+		{"another agent's message", queuedLine("2.1.302", `{"type":"queued_command","prompt":"lane 2: tests pass","commandMode":"prompt","origin":{"kind":"peer","from":"lane-2","name":"lane-2","body":"lane 2: tests pass"},"isMeta":true}`, false), nil, false},
+		{"a subagent's coordinator", queuedLine("2.1.302", `{"type":"queued_command","prompt":"stop and report","origin":{"kind":"coordinator"}}`, true), nil, false},
+		{"typed, in a sidechain", queuedLine("2.1.302", `{"type":"queued_command","prompt":"x","commandMode":"prompt","origin":{"kind":"human"},"humanTurn":true}`, true), nil, false},
+	} {
+		texts, typed, why, ok := ClaudeQueuedLine([]byte(c.line))
+		if !ok || typed != c.typed || (c.typed && strings.Join(texts, "|") != strings.Join(c.texts, "|")) {
+			t.Errorf("%s: %q %v (%s) %v", c.name, texts, typed, why, ok)
+		}
+	}
+	for _, line := range []string{
+		`{"type":"user","entrypoint":"cli","message":{"content":"queued_command"}}`,
+		`{"type":"attachment","attachment":{"type":"edited_text_file","filename":"queued_command.go"}}`,
+	} {
+		if _, _, _, ok := ClaudeQueuedLine([]byte(line)); ok {
+			t.Errorf("not a queued message: %s", line)
+		}
+	}
+}
+
+// What the owner types while the agent works is in the dreamer's digest as
+// theirs, where it was delivered; a queued task notification stays out.
+func TestLinesReadMidTurnMessages(t *testing.T) {
+	in := strings.Join([]string{
+		`{"type":"user","entrypoint":"cli","origin":{"kind":"human"},"promptSource":"typed","turnOrigin":"human","message":{"content":"fix the flaky checkout test"}}`,
+		`{"type":"assistant","entrypoint":"cli","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"go test ./..."}}]}}`,
+		`{"type":"user","entrypoint":"cli","message":{"content":[{"type":"tool_result","content":"ok"}]}}`,
+		queuedLine("2.1.302", `{"type":"queued_command","prompt":"never skip the race detector","commandMode":"prompt","origin":{"kind":"human"},"humanTurn":true}`, false),
+		queuedLine("2.1.302", `{"type":"queued_command","prompt":"<task-notification>build done</task-notification>","commandMode":"task-notification","origin":{"kind":"task-notification"}}`, false),
+		`{"type":"assistant","entrypoint":"cli","message":{"content":[{"type":"text","text":"Running with -race."}]}}`,
+	}, "\n") + "\n"
+	got := Lines(strings.NewReader(in), Claude, SessionWho("/h/.claude/projects/p/own.jsonl", []byte(in), Claude).Owner())
+	want := []string{"U: fix the flaky checkout test", "T: Bash go test ./...", "U: never skip the race detector", "A: Running with -race."}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("owner session:\n%s", strings.Join(got, "\n"))
+	}
+	// In an agent's session the same message is an agent's prompt.
+	got = Lines(strings.NewReader(in), Claude, false)
+	if got[2] != "P: never skip the race detector" {
+		t.Errorf("agent session: %q", got)
+	}
+}

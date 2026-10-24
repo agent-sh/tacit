@@ -398,3 +398,28 @@ func TestWindowsReadACodexSubagentAsAnAgent(t *testing.T) {
 		t.Fatalf("windows %d %v", len(ws), ws)
 	}
 }
+
+// What the owner typed while the agent worked (Claude Code's queued_command
+// attachment) is a U: line of the window, in order, and backs their quote.
+func TestWindowsReadTheOwnersMidTurnMessages(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "own.jsonl")
+	body := strings.Join([]string{
+		`{"type":"user","entrypoint":"cli","cwd":"/home/u/projects/shop","sessionId":"own","origin":{"kind":"human"},"promptSource":"typed","turnOrigin":"human","message":{"content":"fix the flaky checkout test"}}`,
+		`{"type":"assistant","entrypoint":"cli","sessionId":"own","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"go test ./..."}}]}}`,
+		`{"type":"user","entrypoint":"cli","sessionId":"own","message":{"content":[{"type":"tool_result","content":"ok"}]}}`,
+		`{"parentUuid":"9c1d","isSidechain":false,"attachment":{"type":"queued_command","prompt":"never skip the race detector in this repo","source_uuid":"a1","commandMode":"prompt","origin":{"kind":"human"},"humanTurn":true},"type":"attachment","uuid":"5b2e","entrypoint":"cli","cwd":"/home/u/projects/shop","sessionId":"own","version":"2.1.302"}`,
+		`{"type":"assistant","entrypoint":"cli","sessionId":"own","message":{"content":[{"type":"text","text":"Running with -race. ` + strings.Repeat("y", minNewBytes) + `"}]}}`,
+	}, "\n") + "\n"
+	os.WriteFile(f, []byte(body), 0o644)
+	st := &State{Offsets: map[string]int64{f: 0}}
+	ws, _ := Windows([]Source{{Glob: filepath.Join(dir, "*.jsonl"), Format: digest.Claude}}, st, false)
+	if len(ws) != 1 || len(ws[0].Lines) < 3 || ws[0].Lines[2] != "U: never skip the race detector in this repo" {
+		t.Fatalf("windows %d %v", len(ws), ws)
+	}
+	for _, kind := range []string{"user", "statement"} {
+		if got := CheckOwnerWords(Extracted{Kind: kind, Quote: Quote("never skip the race detector")}, ws[0].Lines); got.Kind != kind {
+			t.Errorf("%s from a mid-turn message: %+v", kind, got)
+		}
+	}
+}

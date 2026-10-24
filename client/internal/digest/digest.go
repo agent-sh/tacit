@@ -317,6 +317,27 @@ func HarnessText(f Format, txt string) bool {
 
 func claudeLine(o map[string]any, owner bool) []string {
 	t, _ := o["type"].(string)
+	if texts, typed, _, ok := ClaudeQueued(o); ok {
+		// A message typed while the agent worked: the owner's (U:) in their
+		// session, an agent's prompt (P:) in an agent's; a queued task
+		// notification or another agent's message is left out, as before.
+		if !typed {
+			return nil
+		}
+		var out []string
+		for _, txt := range texts {
+			switch {
+			case strings.TrimSpace(txt) == "":
+			case claudeHarness.MatchString(txt):
+				out = append(out, "H: "+clip(txt, hMax))
+			case owner:
+				out = append(out, "U: "+clip(txt, uMax))
+			default:
+				out = append(out, "P: "+clip(txt, uMax))
+			}
+		}
+		return out
+	}
 	if t != "user" && t != "assistant" {
 		return nil
 	}
