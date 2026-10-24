@@ -247,8 +247,20 @@ func claudeMsgs(owner bool, line []byte) []Msg {
 		Message struct {
 			Content json.RawMessage `json:"content"`
 		} `json:"message"`
+		Attachment struct {
+			Type   string `json:"type"`
+			Prompt string `json:"prompt"`
+		} `json:"attachment"`
 	}
-	if json.Unmarshal(line, &o) != nil || (o.Type != "user" && o.Type != "assistant") {
+	if json.Unmarshal(line, &o) != nil {
+		return nil
+	}
+	if o.Type == "attachment" && o.Attachment.Type == "queued_command" {
+		// A message delivered while the agent worked: the owner's when they
+		// typed it, else a note (a task notification).
+		return userMsg(digest.Claude, owner, line, []string{o.Attachment.Prompt})
+	}
+	if o.Type != "user" && o.Type != "assistant" {
 		return nil
 	}
 	var s string

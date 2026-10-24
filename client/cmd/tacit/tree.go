@@ -136,6 +136,11 @@ func treeWhose(ctx context.Context, ix *search.Index, out string) string {
 			label = "agent note holding your words"
 		case "agent":
 			label = "agent note"
+		case "confirmed":
+			label = "agent note you confirmed"
+		}
+		if m := search.ReviewMark(h.Review); m != "" && label != "" && h.Provenance() != "confirmed" {
+			label += ", " + m
 		}
 		if label == "" || strings.Contains(m[2], label) {
 			return l

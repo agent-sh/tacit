@@ -1264,8 +1264,8 @@ func (h Hit) Provenance() string {
 	return "agent"
 }
 
-// reviewMark is how a line marks the reviewer's verdict on an agent's note.
-func reviewMark(review string) string {
+// ReviewMark is how a line marks the reviewer's verdict on an agent's note.
+func ReviewMark(review string) string {
 	switch review {
 	case ledger.VerdictCorrect:
 		return "checked against its session"
@@ -1307,9 +1307,9 @@ func (h Hit) ProvenanceLabel() string {
 	case "confirmed":
 		return dated("you confirmed", day, "")
 	case "words":
-		return dated("agent note holding your words", day, reviewMark(h.Review))
+		return dated("agent note holding your words", day, ReviewMark(h.Review))
 	}
-	return dated("agent note", day, reviewMark(h.Review))
+	return dated("agent note", day, ReviewMark(h.Review))
 }
 
 // dated is label with the fact's day in parentheses, and extra after it.
@@ -1373,9 +1373,9 @@ func Block(hits []Hit, title string) string {
 			case "confirmed":
 				desc = dated("you confirmed", day, "") + ": " + desc
 			case "words":
-				desc = dated("agent note holding your words", day, reviewMark(h.Review)) + ": " + desc
+				desc = dated("agent note holding your words", day, ReviewMark(h.Review)) + ": " + desc
 			case "agent", "statement":
-				desc = dated("agent note", day, reviewMark(h.Review)) + ": " + desc
+				desc = dated("agent note", day, ReviewMark(h.Review)) + ": " + desc
 			}
 		}
 		if h.Inbox {

@@ -448,7 +448,7 @@ func correctionStatement(note *fact.Fact, words, from, day string, local bool) *
 	f := &fact.Fact{Meta: fact.Meta{
 		Name: name, Description: fact.ClipDescription(context, 200), Type: fact.StatementType, Scope: scope, AppliesTo: note.Meta.AppliesTo,
 		Source:  fact.Source{Harness: "curator", Host: store.ShortHost(), Kind: "observed", OwnerWords: words, OwnerWordsFrom: from},
-		Created: day, Origin: note.Meta.Name,
+		Created: day, // no origin: it is the owner's words, not a split of the note, and the note's verdict is not its
 	}, Body: fact.StatementBody(day, words, context, "")}
 	f.Path = scope + "/" + name + ".md"
 	if local {

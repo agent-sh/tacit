@@ -86,6 +86,8 @@ func TestReadTranscriptMarksOnlyTheOwnersTurns(t *testing.T) {
 		`{"type":"user","entrypoint":"cli","sessionId":"s1","origin":{"kind":"task-notification"},"message":{"content":"<task-notification>the owner wants pushes reviewed</task-notification>"}}`,
 		`{"type":"user","entrypoint":"cli","sessionId":"s1","origin":{"kind":"peer"},"message":{"content":"yes"}}`,
 		`{"type":"user","entrypoint":"cli","sessionId":"s1","message":{"content":[{"type":"tool_result","content":"ok"}]}}`,
+		`{"type":"attachment","entrypoint":"cli","sessionId":"s1","attachment":{"type":"queued_command","prompt":"in general rebase over main","origin":{"kind":"human"},"humanTurn":true}}`,
+		`{"type":"attachment","entrypoint":"cli","sessionId":"s1","attachment":{"type":"queued_command","prompt":"<task-notification>done</task-notification>","origin":{"kind":"task-notification"}}}`,
 	)
 	c, err := ReadTranscript(p, digest.Claude)
 	if err != nil {
@@ -103,11 +105,11 @@ func TestReadTranscriptMarksOnlyTheOwnersTurns(t *testing.T) {
 			notes++
 		}
 	}
-	if owner != 1 || notes != 2 {
+	if owner != 2 || notes != 3 {
 		t.Fatalf("owner %d notes %d: %+v", owner, notes, c.Msgs)
 	}
 	d := Digest(c.Msgs, DigestBudget, DigestRecent)
-	for _, want := range []string{"OWNER: never push to main", "AGENT: Saving it.", "  ran Bash", "NOTE: <task-notification>"} {
+	for _, want := range []string{"OWNER: never push to main", "AGENT: Saving it.", "  ran Bash", "NOTE: <task-notification>", "OWNER: in general rebase over main", "NOTE: <task-notification>done"} {
 		if !strings.Contains(d, want) {
 			t.Fatalf("digest lacks %q:\n%s", want, d)
 		}

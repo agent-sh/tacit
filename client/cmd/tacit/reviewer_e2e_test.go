@@ -491,12 +491,12 @@ func TestReviewerOnTheLocalLayerEndToEnd(t *testing.T) {
 	}
 	r.untouched()
 	ix = exactIndex(t, r.s)
-	hits, _ := ix.Query(ctx, search.Situation{Query: "walrus deploys rollback rig"}, 10, false)
+	hits, _ := ix.Query(ctx, search.Situation{Query: "walrus deploys rollback rig", RestrictRepos: true}, 10, false)
 	ix.Close()
 	var sawStatement bool
 	for _, h := range hits {
-		if h.Name == "note-unsure" && !h.Held() {
-			t.Fatalf("the corrected note is not held back: %+v", h)
+		if h.Name == "note-unsure" {
+			t.Fatalf("the corrected note reached the hooks: %+v", h)
 		}
 		if h.Name == "owner-corrects-note-unsure" {
 			sawStatement = true
