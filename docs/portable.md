@@ -131,7 +131,7 @@ The audit directory is optional. It contains private daily JSONL files with reda
 | `TACIT_<TOOL>_COMMAND` | tool name | executable path, e.g. `TACIT_MUSE_COMMAND` |
 | `TACIT_<TOOL>_ARGS` | | JSON argv array, e.g. `["--profile","work"]` |
 | `TACIT_CURATE_MODEL` | `opus` | curator split |
-| `TACIT_JUDGE_MODEL` | `haiku` | contradiction judge |
+| `TACIT_JUDGE_MODEL` | `opus` | contradiction judge and the curator's rulings pass |
 | `TACIT_DREAM_MODEL` | `opus` | dreamer |
 | `TACIT_VERIFY_ROOTS` | | extra read-only source directories, separated like `PATH`; each must exist. Claude auto-memory is included when present |
 | `TACIT_VERIFY_MODEL` | `opus` | verifier |
