@@ -271,6 +271,8 @@ Changes to the release workflow, archive builder or installer scripts run native
 
 `dream_max_runtime` in YAML or `TACIT_DREAM_MAX_RUNTIME` controls the extraction/persistence phase of a batch. Its existing default is `45m`. `tacit dream --max-runtime 1h` overrides it for a run; `0` disables the batch limit while per-attempt deadlines still apply. Preparation and pending-note recovery retain their separate bounds.
 
+`dream_agent_windows` in YAML or `TACIT_DREAM_AGENT_WINDOWS` decides what the dreamer does with a window that holds no turn of the owner's: `all` (the default) dreams it, `recent:<days>` only when it is that recent, `none` never. `tacit dream --agent-windows none` overrides it for a run. A passed-over window moves its transcript's cursor like a window with nothing to extract, and the run's summary counts it. Rules: SPEC.md "Owner windows and agent windows".
+
 Reaching the batch runtime or call limit is a pause with exit 0. Successful notes are already pushed and cursor/chunk progress is saved. The interrupted window remains pending. A prior genuine failure still makes that run exit 1; a model-attempt timeout on its own remains a failure. Accounting includes `pause_reason` (`runtime` or `call_limit`) and the number of `remaining_windows`.
 
 ### Idle dreaming and quick curation

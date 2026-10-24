@@ -167,6 +167,7 @@ Every YAML option is listed here:
 | `efforts` | `TACIT_<ROLE>_EFFORT` | Per-role reasoning effort; omitted uses the CLI default, empty clears an override |
 | `profiles` | `TACIT_<ROLE>_PROFILE` | Per-role Codex profile name; empty clears it |
 | `dream_max_runtime` | `TACIT_DREAM_MAX_RUNTIME` | Extraction batch runtime; default `45m`, `0` disables the batch limit; `dream --max-runtime` wins |
+| `dream_agent_windows` | `TACIT_DREAM_AGENT_WINDOWS` | Dream windows with no turn of the owner's: `all` (default), `recent:<days>` or `none`; an owner window whose agent content is not taken is cut to the owner's turns with 12 lines around each; `dream --agent-windows` wins (SPEC.md "Owner windows and agent windows") |
 | `stale_workers` | `TACIT_STALE_WORKERS` | Facts the stale step checks at once, each with its own git commands; default `4`; set `1` on a busy machine; `stale --workers` wins |
 | `timeouts` | `TACIT_<ROLE>_TIMEOUT` | Positive Go duration per model attempt, such as `10m`; default `20m` |
 | `commands` | `TACIT_<TOOL>_COMMAND` | Executable name or path; default is the tool name |
