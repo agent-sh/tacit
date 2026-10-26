@@ -137,6 +137,12 @@ esac
 
 // split sets the curator's answer to entries.
 func (r *localRig) split(entries ...map[string]any) {
+	for _, e := range entries {
+		// The owner's words come with their future use (SPEC.md, "Relevance").
+		if k := e["kind"]; (k == "user" || k == "statement") && e["relevance"] == nil {
+			e["relevance"] = map[string]any{"keep": true, "category": "instruction", "reason": "how the work is done from now on"}
+		}
+	}
 	b, _ := json.Marshal(entries)
 	out, _ := json.Marshal(map[string]any{"result": string(b), "total_cost_usd": .01})
 	r.t.Setenv("FIXTURE_SPLIT", string(out))
@@ -242,7 +248,7 @@ func TestLocalDreamWritesOnlyTheOverlay(t *testing.T) {
 		if !strings.Contains(prompt, "walrus") {
 			t.Errorf("the dream prompt holds no transcript: %q", prompt)
 		}
-		return `[{"description":"The walrus fixture driver listens on port 7790, token Zq7Vx9","type":"machine_fact","kind":"observed","applies_to":{}},{"description":"Never deploy the walrus service on fridays without a rollback plan","type":"user_standard","kind":"user","quote":"never deploy the walrus service on fridays without a rollback plan","applies_to":{}}]`, .02, 100, nil
+		return `[{"description":"The walrus fixture driver listens on port 7790, token Zq7Vx9","type":"machine_fact","kind":"observed","applies_to":{}},{"description":"Never deploy the walrus service on fridays without a rollback plan","type":"user_standard","kind":"user","quote":"never deploy the walrus service on fridays without a rollback plan","relevance":{"keep":true,"category":"instruction","reason":"how deploys are done"},"applies_to":{}}]`, .02, 100, nil
 	}
 	if code := runDream(nil); code != 0 {
 		t.Fatalf("local dream exit %d", code)

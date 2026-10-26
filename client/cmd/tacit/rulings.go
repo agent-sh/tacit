@@ -587,7 +587,7 @@ func runRulings(args []string) int {
 		return runOneOffs(args[1:])
 	}
 	if len(args) == 0 || args[0] != "audit" {
-		fmt.Fprintln(os.Stderr, "usage: tacit rulings audit [--dry-run] [--strict] [--recheck] [--digests DIR] [--digests-only] [--sample N] [--seed N] [--json FILE]\n       tacit rulings one-offs [--dry-run] [--digests DIR] [--json FILE]")
+		fmt.Fprintln(os.Stderr, "usage: tacit rulings audit [--dry-run] [--strict] [--recheck] [--digests DIR] [--digests-only] [--sample N] [--seed N] [--json FILE]\n       tacit rulings one-offs [--dry-run] [--json FILE] [--verdicts FILE] [--found FILE] [--no-gate] [--batch N] [--jobs N] [--sample N] [--env-file F]")
 		return 2
 	}
 	fs := flag.NewFlagSet("rulings audit", flag.ExitOnError)

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,6 +42,32 @@ func TestRulingsOneOffsBecomeStatements(t *testing.T) {
 	t.Setenv("TACIT_STATE_DIR", "")
 	t.Setenv("TACIT_STORE", r.clone)
 
+	// The relevance gate (a fake model): the release rule matters to future
+	// work, the cache remark is judged not to; the dry run's model leaves
+	// the cache remark unjudged.
+	calls := 0
+	gate := func(answerAll bool) {
+		oneOffsRun = func(_ context.Context, prompt string) (string, float64, string, error) {
+			calls++
+			var out []string
+			for n := 1; strings.Contains(prompt, fmt.Sprintf(`<item n="%d">`, n)); n++ {
+				item := prompt[strings.Index(prompt, fmt.Sprintf(`<item n="%d">`, n)):]
+				item = item[:strings.Index(item, "</item>")]
+				switch {
+				case strings.Contains(item, "tag a release"):
+					out = append(out, fmt.Sprintf(`{"n": %d, "keep": true, "category": "instruction", "reason": "how releases are tagged"}`, n))
+				case answerAll:
+					out = append(out, fmt.Sprintf(`{"n": %d, "keep": false, "category": "steering", "reason": "about that day's cache only"}`, n))
+				}
+			}
+			return "[" + strings.Join(out, ",") + "]", 0.02, "opus", nil
+		}
+	}
+	t.Cleanup(func() {
+		oneOffsRun = func(ctx context.Context, p string) (string, float64, string, error) { return reviewRun(ctx, p) }
+	})
+	gate(false)
+
 	head := r.serverHead()
 	out := filepath.Join(t.TempDir(), "dry.json")
 	if code := runOneOffs([]string{"--dry-run", "--digests", "", "--json", out}); code != 0 {
@@ -56,6 +84,16 @@ func TestRulingsOneOffsBecomeStatements(t *testing.T) {
 	for _, it := range rep.Items {
 		why[it.Name] = it.Why
 	}
+	if !rep.Gated || rep.GateKept != 1 || rep.GateDrop != 0 || rep.Unjudged != 1 || calls != 1 || rep.CostUSD != 0.02 {
+		t.Fatalf("gate: %+v, %d call(s)", rep, calls)
+	}
+	gates := map[string]string{}
+	for _, it := range rep.Items {
+		gates[it.Name] = it.Gate
+	}
+	if gates["typo-fixed"] != gateKeep || gates["observed-quoted"] != gateUnjudged || gates["quoted"] != "" {
+		t.Fatalf("gates %v", gates)
+	}
 	for n, w := range map[string]string{
 		"quoted":          "said in two sessions or more",
 		"kept-in-review":  "endorsed by them",
@@ -67,8 +105,20 @@ func TestRulingsOneOffsBecomeStatements(t *testing.T) {
 			t.Errorf("%s: %q, want %q (%+v)", n, why[n], w, why)
 		}
 	}
-	if code := runOneOffs([]string{"--digests", "", "--json", out}); code != 0 {
+	// --found and --no-gate are for a dry run only.
+	if code := runOneOffs([]string{"--no-gate"}); code != 2 {
+		t.Fatalf("--no-gate wrote: exit %d", code)
+	}
+	gate(true)
+	calls = 0
+	out2 := filepath.Join(t.TempDir(), "run.json")
+	if code := runOneOffs([]string{"--digests", "", "--verdicts", out, "--json", out2}); code != 0 {
 		t.Fatalf("exit %d", code)
+	}
+	var rep2 oneOffsReport
+	json.Unmarshal(readBytes(t, out2), &rep2)
+	if rep2.Reused != 1 || rep2.GateKept != 1 || rep2.GateDrop != 1 || calls != 1 {
+		t.Fatalf("the write's gate: %+v, %d call(s)", rep2, calls)
 	}
 	gitIn(t, r.clone, "pull", "-q", "--ff-only")
 	facts, _, err := fact.Walk(r.clone)
@@ -82,7 +132,14 @@ func TestRulingsOneOffsBecomeStatements(t *testing.T) {
 	if f := byName["quoted"]; f == nil || !fact.IsRuling(f) || f.Meta.SupersededBy != "" {
 		t.Fatalf("said twice, no longer a ruling: %+v", f)
 	}
-	for _, n := range []string{"observed-quoted", "typo-fixed"} {
+	// Dropped: retired, no statement, the reason in the statements log.
+	if f := byName["observed-quoted"]; f == nil || f.Meta.Retired == "" || f.Meta.SupersededBy != "" || byName["observed-quoted-said-once"] != nil {
+		t.Fatalf("the dropped remark: %+v", f)
+	}
+	if log := string(readBytes(t, filepath.Join(r.clone, filepath.FromSlash(ledger.StatementsPath)))); !strings.Contains(log, `"kind":"dropped","at"`) || !strings.Contains(log, "about that day") {
+		t.Fatalf("statements log: %s", log)
+	}
+	for _, n := range []string{"typo-fixed"} {
 		f, st := byName[n], byName[n+"-said-once"]
 		if f == nil || st == nil || f.Meta.SupersededBy != st.Meta.Name || !fact.IsStatement(st) || st.Meta.Source.OwnerWords != f.Meta.Source.OwnerQuote ||
 			st.Meta.Source.OwnerWordsFrom != f.Meta.Source.OwnerQuoteFrom || !st.WordsBacked {

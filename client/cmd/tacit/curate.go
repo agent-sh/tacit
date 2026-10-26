@@ -480,7 +480,10 @@ func runCurate(args []string) int {
 		// Second pass: rulings the split may have folded away.
 		var rulings []string
 		for _, e := range entries {
-			if e.Kind == "user" {
+			if ok, _ := curate.Gate(e); !ok {
+				// Judged not to matter: covered, not a ruling to recover.
+				rulings = append(rulings, "- ("+e.Origin+") "+e.Description+" [dropped]")
+			} else if e.Kind == "user" {
 				rulings = append(rulings, "- ("+e.Origin+") "+e.Description)
 			}
 		}
@@ -545,6 +548,16 @@ func runCurate(args []string) int {
 			if !batchOrigins[e.Origin] {
 				invalidBatch = true
 				break
+			}
+			// Not every sentence of the owner's is a statement (SPEC.md,
+			// "Relevance"): a remark that does not matter to future work is
+			// not curated; its note keeps it, the report says why.
+			if ok, d := curate.Gate(e); !ok {
+				rep.OwnerDropped = append(rep.OwnerDropped, d)
+				if *dry {
+					fmt.Printf("- dropped, the owner's remark in %s: %q: %s %s\n", d.Note, d.Words, d.Category, d.Reason)
+				}
+				continue
 			}
 			f := curate.ToFact(e, host, batchNames)
 			if env.RedirectFact(f) { // as the check saw it (entryCheck)

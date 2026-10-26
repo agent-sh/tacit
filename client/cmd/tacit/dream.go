@@ -414,6 +414,16 @@ func runDream(args []string) int {
 		var facts []*fact.Fact
 		for _, x := range extracted {
 			x = dream.CheckOwnerWords(x, lines)
+			// Not every sentence of the owner's is a statement: a remark that
+			// does not matter to future work is not written (SPEC.md,
+			// "Relevance").
+			if ok, d := dream.Gate(x, session); !ok {
+				meter.OwnerDropped = append(meter.OwnerDropped, d)
+				if *dry {
+					fmt.Printf("- dropped, the owner's remark (%s): %q: %s %s\n", session, d.Words, d.Category, d.Reason)
+				}
+				continue
+			}
 			f := dream.ToFact(x, w.Repo, host, session)
 			meter.Facts++
 			if *dry {
@@ -491,7 +501,7 @@ func runDream(args []string) int {
 	if local && !*dry {
 		fmt.Println("dream: local layer: notes go to this machine's overlay, " + filepath.Join(overlay.Dir(), overlay.InboxDir, "dreamer@"+host) + "; nothing is pushed")
 	}
-	fmt.Printf("dream: %d window(s), %d call(s), %d fact(s), %d written, %d in-tokens, %s, %d error(s)%s\n", meter.Windows, meter.Calls, meter.Facts, len(written), meter.InTokens, meter.ModelCalls.CostSummary(meter.CostUSD), meter.Errors, agentSummary(meter))
+	fmt.Printf("dream: %d window(s), %d call(s), %d fact(s), %d written, %d in-tokens, %s, %d error(s)%s\n", meter.Windows, meter.Calls, meter.Facts, len(written), meter.InTokens, meter.ModelCalls.CostSummary(meter.CostUSD), meter.Errors, agentSummary(meter)+droppedSummary(meter))
 	if meter.Errors > 0 {
 		return 1
 	}
@@ -505,6 +515,15 @@ func agentSummary(m dream.Meter) string {
 		return ""
 	}
 	return fmt.Sprintf("; agent windows %s: %d passed over (%d characters), %d owner window(s) cut to the owner's turns (%d characters left out)", m.AgentWindows, m.AgentPassed, m.AgentPassedChars, m.OwnerCut, m.OwnerCutChars)
+}
+
+// droppedSummary is the dream summary's count of the owner's remarks the
+// relevance gate did not write down: empty for none.
+func droppedSummary(m dream.Meter) string {
+	if len(m.OwnerDropped) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("; %d remark(s) of the owner's not written (no future use)", len(m.OwnerDropped))
 }
 
 // idleDefault lets --idle stand alone: with no duration after it, it is
