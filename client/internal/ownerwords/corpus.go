@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/ledger"
@@ -55,6 +56,7 @@ type Corpus struct {
 	starts []int  // offset of each turn's text in data
 	refs   []string
 	raw    []string // each turn as the owner wrote it
+	at     []int64  // when each turn was written (Unix seconds), 0 when its source does not say
 	sa     *suffixarray.Index
 	turns  map[string][]int // ref -> turn indexes, for the session a caller prefers
 
@@ -99,7 +101,12 @@ func (b *Builder) Has(ref string) bool { return b.known[ref] }
 // "hermes:<session>"). Text an
 // agent or a harness injected (AgentInjected) is left out, and so is text the owner
 // pasted.
-func (b *Builder) Add(source, ref, text string) {
+func (b *Builder) Add(source, ref, text string) { b.AddAt(source, ref, text, time.Time{}) }
+
+// AddAt is Add for a turn whose source records when it was written: the
+// day a statement of theirs was said is that turn's (SaidAt), never the day
+// a step read it.
+func (b *Builder) AddAt(source, ref, text string, at time.Time) {
 	if AgentInjected(text) {
 		b.c.Stats.AgentTurns++
 		return
@@ -126,6 +133,11 @@ func (b *Builder) Add(source, ref, text string) {
 	b.c.starts = append(b.c.starts, b.buf.Len())
 	b.c.refs = append(b.c.refs, ref)
 	b.c.raw = append(b.c.raw, text)
+	var sec int64
+	if !at.IsZero() && at.Unix() > 0 {
+		sec = at.Unix()
+	}
+	b.c.at = append(b.c.at, sec)
 	b.buf.WriteString(n)
 	b.buf.WriteString(" ")
 }
@@ -334,6 +346,112 @@ func (c *Corpus) TurnIn(quote, ref string) string {
 		}
 	}
 	return ""
+}
+
+// SaidAt is when the owner said quote as a statement of theirs (as SaidIn
+// counts it): the time of the earliest turn that holds it in the session ref,
+// the turn whose hash is turnHash (ledger.TurnHash of the turn as they wrote
+// it) first. Only when ref holds no such turn (its transcript is gone, or the
+// words are in a resumed or forked copy of it) is it the earliest such turn
+// in any session. Zero when no turn holding it records its time.
+func (c *Corpus) SaidAt(quote, ref, turnHash string) time.Time {
+	segs := Segments(quote)
+	if segs == nil || c == nil || c.sa == nil {
+		return time.Time{}
+	}
+	idx := c.candidates(segs[0])
+	var near []int
+	if len(segs) == 1 && len(strings.Fields(segs[0])) >= 4 {
+		near = c.nearCandidates(strings.Fields(segs[0]))
+	}
+	// match reports the turns holding the quote, in ref (want) or anywhere.
+	type hit struct {
+		at   int64
+		hash bool
+	}
+	collect := func(want string) []hit {
+		var out []hit
+		seen := map[int]bool{}
+		for k, set := range [][]int{idx, near} {
+			for _, i := range set {
+				if seen[i] || (want != "" && c.refs[i] != want) {
+					continue
+				}
+				seen[i] = true
+				if m, ok := c.matchTurn(i, segs, k == 1); ok && m.Clean() {
+					out = append(out, hit{at: c.at[i], hash: turnHash != "" && m.TurnHash == turnHash})
+				}
+			}
+		}
+		return out
+	}
+	earliest := func(hs []hit, hashOnly bool) int64 {
+		var best int64
+		for _, h := range hs {
+			if h.at > 0 && (!hashOnly || h.hash) && (best == 0 || h.at < best) {
+				best = h.at
+			}
+		}
+		return best
+	}
+	hs := []hit(nil)
+	if ref != "" && !strings.HasSuffix(ref, ":history") {
+		hs = collect(ref)
+	}
+	if len(hs) == 0 {
+		hs = collect("")
+	}
+	sec := earliest(hs, true)
+	if sec == 0 {
+		sec = earliest(hs, false)
+	}
+	if sec == 0 {
+		return time.Time{}
+	}
+	return time.Unix(sec, 0)
+}
+
+// SaidOn is SaidAt's day (YYYY-MM-DD, this machine's time zone), "" when
+// no turn holding the quote records its time.
+func (c *Corpus) SaidOn(quote, ref, turnHash string) string {
+	t := c.SaidAt(quote, ref, turnHash)
+	if t.IsZero() {
+		return ""
+	}
+	return t.Local().Format("2006-01-02")
+}
+
+// LineTime is a transcript line's own time: its top-level timestamp, as
+// Claude Code, Codex and pi write it (RFC 3339, or Unix seconds or
+// milliseconds); zero when it has none.
+func LineTime(line []byte) time.Time {
+	var o struct {
+		Timestamp json.RawMessage `json:"timestamp"`
+	}
+	if json.Unmarshal(line, &o) != nil || len(o.Timestamp) == 0 {
+		return time.Time{}
+	}
+	return jsonTime(o.Timestamp)
+}
+
+// jsonTime reads a JSON time: an RFC 3339 string, or Unix seconds or
+// milliseconds.
+func jsonTime(raw json.RawMessage) time.Time {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+			return t
+		}
+		return time.Time{}
+	}
+	var n float64
+	if json.Unmarshal(raw, &n) == nil && n > 0 {
+		if n > 1e12 {
+			n /= 1000 // milliseconds
+		}
+		return time.Unix(int64(n), 0)
+	}
+	return time.Time{}
 }
 
 // candidates are the turns holding seg exactly.
@@ -621,7 +739,7 @@ func (b *Builder) addTranscript(path string, f digest.Format) error {
 			}
 			if bytes.Contains(line, []byte(`"role":"user"`)) {
 				for _, t := range piUserTurns(line) {
-					b.Add("pi", ref, t)
+					b.AddAt("pi", ref, t, LineTime(line))
 				}
 			}
 			continue
@@ -632,8 +750,11 @@ func (b *Builder) addTranscript(path string, f digest.Format) error {
 			}
 			turns, skipped := claudeUserTurns(line)
 			b.c.Stats.AgentTurns += skipped
-			for _, t := range turns {
-				b.Add("transcript", ref, t)
+			if len(turns) > 0 {
+				at := LineTime(line)
+				for _, t := range turns {
+					b.AddAt("transcript", ref, t, at)
+				}
 			}
 			continue
 		}
@@ -648,8 +769,11 @@ func (b *Builder) addTranscript(path string, f digest.Format) error {
 		if ref == "" {
 			ref = "codex:" + strings.TrimSuffix(filepath.Base(path), ".jsonl")
 		}
-		for _, t := range codexUserTurns(line) {
-			b.Add("transcript", ref, t)
+		if turns := codexUserTurns(line); len(turns) > 0 {
+			at := LineTime(line)
+			for _, t := range turns {
+				b.AddAt("transcript", ref, t, at)
+			}
 		}
 	}
 	return sc.Err()

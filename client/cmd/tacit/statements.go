@@ -59,10 +59,13 @@ type stmtReport struct {
 	Judged, Decisions, Preferences, Rules, Superseded, Flagged, Differs, Refused int
 	// Reread: statements a check had flagged, read again (agents keep trying).
 	Reread int
+	// Redated: statements whose day disagreed with the day their words line
+	// says the owner said them, corrected.
+	Redated int
 }
 
 func (r stmtReport) String() string {
-	return fmt.Sprintf("%d judged (%d flagged before, read again), %d decision(s), %d preference(s), %d rule(s) promoted, %d superseded, %d flagged by a check, %d differ from a decision, %d answer(s) refused", r.Judged, r.Reread, r.Decisions, r.Preferences, r.Rules, r.Superseded, r.Flagged, r.Differs, r.Refused)
+	return fmt.Sprintf("%d judged (%d flagged before, read again), %d decision(s), %d preference(s), %d rule(s) promoted, %d superseded, %d flagged by a check, %d differ from a decision, %d answer(s) refused, %d redated", r.Judged, r.Reread, r.Decisions, r.Preferences, r.Rules, r.Superseded, r.Flagged, r.Differs, r.Refused, r.Redated)
 }
 
 // runStatements implements `tacit statements [--model M] [--dry-run]
@@ -155,6 +158,19 @@ func loadStmtWorld(s *store.Store, local bool) (*stmtWorld, error) {
 	b, _ := os.ReadFile(w.logPath())
 	w.log = statement.ReadLog(b)
 	return w, nil
+}
+
+// redates are the run's own statements whose day disagrees with the day
+// their words line says the owner said them (statementRedates, from the
+// ledger only: the owner's turns are read by `tacit rulings one-offs`).
+func (w *stmtWorld) redates() []statementRedate {
+	var out []statementRedate
+	for _, r := range statementRedates(w.facts, w.quotes, nil, w.today, w.ownStatement) {
+		if r.fix {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func (w *stmtWorld) logPath() string {
@@ -292,11 +308,22 @@ func statementsStep(ctx context.Context, s *store.Store, o statementsOpts, rep *
 			_ = ch.Forge.Save()
 		}
 	}()
+	// A statement dated by another day than its words line says the owner
+	// said it is corrected (the write below), and read with that day here.
+	reds := w.redates()
+	redated := map[string]string{}
+	for _, r := range reds {
+		redated[r.Name] = r.To
+	}
 	own := map[string]statement.Item{}
 	var pool []statement.Item // what a statement is compared with
 	for _, f := range w.facts {
 		if w.ownStatement(f) {
-			own[f.Meta.Name] = stmtItem(f)
+			it := stmtItem(f)
+			if d, ok := redated[f.Meta.Name]; ok {
+				it.Day = d
+			}
+			own[f.Meta.Name] = it
 		}
 		if local && !overlay.IsCurated(f.Path) && liveFact(f) && fact.IsStatement(f) {
 			pool = append(pool, stmtItem(f)) // the store's, read in
@@ -466,12 +493,15 @@ func statementsStep(ctx context.Context, s *store.Store, o statementsOpts, rep *
 	prom = w.promoted() // with the rulings read this run
 	acts := statement.Plan(statement.State{Statements: own, Promoted: prom, Log: w.log, Checks: checks})
 	if o.dry {
+		for _, r := range reds {
+			fmt.Printf("- %s redated: %s\n", r.Name, redateWhy(r))
+		}
 		for _, a := range acts {
 			fmt.Println("- " + describeAct(a))
 		}
 		return sr, errs
 	}
-	if len(acts) == 0 && len(newLog) == 0 {
+	if len(acts) == 0 && len(newLog) == 0 && len(reds) == 0 {
 		return sr, errs
 	}
 	if err := w.apply(ctx, s, acts, newLog, &sr); err != nil {
@@ -560,6 +590,24 @@ func (w *stmtWorld) apply(ctx context.Context, s *store.Store, acts []statement.
 			}
 			b, err := os.ReadFile(full)
 			return b, rel, err
+		}
+		for _, r := range w.redates() {
+			f := w.byName[r.Name]
+			if f == nil {
+				continue
+			}
+			b, rel, err := cur(f)
+			if err != nil {
+				return nil, err
+			}
+			nb, err := fact.RedateStatement(b, r.To, w.today)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", f.Path, err)
+			}
+			p.files[rel] = nb
+			p.log = append(p.log, statement.Entry{Kind: statement.LogRedated, At: w.today, Name: r.Name, Why: redateWhy(r)}.Line()...)
+			sr.Redated++
+			p.summary = append(p.summary, r.Name+": "+redateWhy(r))
 		}
 		supersede := func(name, into, by string) error {
 			f := w.byName[name]
@@ -801,6 +849,9 @@ func (w *stmtWorld) promotedFact(a statement.Action, taken map[string]bool) (*fa
 		hash = q.TurnHash
 	}
 	q := ledger.Quote{Name: name, Quote: words, From: from0, TurnHash: hash, At: w.today}
+	if fact.IsDate(a.Words.Day) && a.Words.Day <= w.today {
+		q.Said = a.Words.Day // the newest statement's day: the day they said these words
+	}
 	if a.Level == statement.LevelPreference {
 		m.Source.OwnerWords, m.Source.OwnerWordsFrom = words, from0
 		q.Words = true

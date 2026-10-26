@@ -70,6 +70,10 @@ const (
 	// the relevance gate judged not to matter (SPEC.md, "Relevance"): retired,
 	// no statement made; Words their remark, Says the category, Why the reason.
 	LogDropped = "dropped"
+	// LogRedated: a statement's day corrected to the day the owner said its
+	// words (their words line's said, or their turn's time); Why says from
+	// what day to what, and by which source.
+	LogRedated = "redated"
 )
 
 // Relation is a statement's relation to an earlier item.

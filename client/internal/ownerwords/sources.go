@@ -57,9 +57,10 @@ var pasted = regexp.MustCompile(`\[Pasted text #\d+[^\]]*\]|\[Image #\d+[^\]]*\]
 func (b *Builder) AddClaudeHistory(path string) error {
 	return b.jsonLines(path, func(line []byte) {
 		var h struct {
-			Display   string `json:"display"`
-			SessionID string `json:"sessionId"`
-			Project   string `json:"project"`
+			Display   string          `json:"display"`
+			SessionID string          `json:"sessionId"`
+			Project   string          `json:"project"`
+			Timestamp json.RawMessage `json:"timestamp"`
 		}
 		if json.Unmarshal(line, &h) != nil || h.Display == "" {
 			return
@@ -75,7 +76,7 @@ func (b *Builder) AddClaudeHistory(path string) error {
 		if h.SessionID != "" {
 			ref = "claude:" + h.SessionID
 		}
-		b.Add("claude-history", ref, pasted.ReplaceAllString(h.Display, " "))
+		b.AddAt("claude-history", ref, pasted.ReplaceAllString(h.Display, " "), jsonTime(h.Timestamp))
 	})
 }
 
@@ -85,8 +86,9 @@ func (b *Builder) AddClaudeHistory(path string) error {
 func (b *Builder) AddCodexHistory(path string) error {
 	return b.jsonLines(path, func(line []byte) {
 		var h struct {
-			SessionID string `json:"session_id"`
-			Text      string `json:"text"`
+			SessionID string          `json:"session_id"`
+			Text      string          `json:"text"`
+			TS        json.RawMessage `json:"ts"`
 		}
 		if json.Unmarshal(line, &h) != nil || h.Text == "" {
 			return
@@ -99,7 +101,7 @@ func (b *Builder) AddCodexHistory(path string) error {
 		if h.SessionID != "" {
 			ref = "codex:" + h.SessionID
 		}
-		b.Add("codex-history", ref, h.Text)
+		b.AddAt("codex-history", ref, h.Text, jsonTime(h.TS))
 	})
 }
 
@@ -183,7 +185,11 @@ func (b *Builder) AddHermes(path string) error {
 			if PastedBlob(t) {
 				continue // a pasted table or log, as for pi (Add drops a tag-framed turn)
 			}
-			b.Add("hermes", "hermes:"+s.ID, t)
+			var at time.Time
+			if m.Timestamp > 0 {
+				at = time.Unix(int64(m.Timestamp), 0)
+			}
+			b.AddAt("hermes", "hermes:"+s.ID, t, at)
 		}
 	}
 	return nil

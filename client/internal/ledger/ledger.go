@@ -141,6 +141,11 @@ type Quote struct {
 	TurnHash string `json:"turn_hash"`
 	At       string `json:"at"`
 	Words    bool   `json:"words,omitempty"`
+	// Said is the day the owner said the words (YYYY-MM-DD): the day of the
+	// turn the line names, when its transcript records the time. At is when
+	// the line was written, which is no day of theirs. A later line with the
+	// same Key carries a Said an earlier one lacked (Quotes keeps the last).
+	Said string `json:"said,omitempty"`
 }
 
 // Key is what a fact's evidence must match: its name, quote and where, and
