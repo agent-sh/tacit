@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/agent-sh/tacit/client/internal/ledger"
+	"github.com/agent-sh/tacit/client/internal/relevance"
 )
 
 // The digest numbers each message's line by its place in the conversation,
@@ -37,7 +38,7 @@ func TestDigestShownNumbersMessages(t *testing.T) {
 // The reply's doubt, kind and trim are read for an uncertain verdict only,
 // and only when well formed.
 func TestParseReadsTheTrim(t *testing.T) {
-	v, err := Parse(`{"verdict":"uncertain","reason":"r","doubt":"overreach","kind":"rule","trim":{"claims":[{"text":"a b","cites":[3]}],"removed":[{"text":"c","reason":"d"}],"one_off":{"words":"keep it","line":3,"context":"x"}}}`)
+	v, err := Parse(`{"verdict":"uncertain","reason":"r","doubt":"overreach","kind":"rule","trim":{"claims":[{"text":"a b","cites":[3]}],"removed":[{"text":"c","reason":"d"}],"one_off":{"words":"keep it","line":3,"context":"x","relevance":{"keep":true,"category":"instruction","reason":"r"}}}}`)
 	if err != nil || v.Doubt != DoubtOverreach || v.Kind != KindRule || v.Trim == nil || len(v.Trim.Claims) != 1 || v.Trim.Claims[0].Cites[0] != 3 || v.Trim.OneOff == nil || v.Trim.As() != ledger.TrimStatement {
 		t.Fatalf("%+v %v", v, err)
 	}
@@ -102,7 +103,10 @@ func TestCheckTrimOnlyRemovesOrNarrows(t *testing.T) {
 		{"the owner's authority from a note", KindFact, Trim{Claims: []ledger.Claim{claim("The owner wants walrus releases always on fridays", 4)}}, "cites no message the owner typed"},
 		{"a rule on their words without the remark", KindRule, Trim{Claims: []ledger.Claim{claim("walrus releases tagged by hand", 3)}}, "one_off is required"},
 		{"rule-worded on their words", KindFact, Trim{Claims: []ledger.Claim{claim("walrus releases always tagged by hand", 3)}}, "one_off is required"},
-		{"their remark", KindRule, Trim{Claims: []ledger.Claim{claim("walrus releases tagged by hand", 3)}, OneOff: &OneOff{Words: "tag this release by hand", Line: 3, Context: "the release bot was broken"}}, ""},
+		{"their remark", KindRule, Trim{Claims: []ledger.Claim{claim("walrus releases tagged by hand", 3)}, OneOff: &OneOff{Words: "tag this release by hand", Line: 3, Context: "the release bot was broken", Relevance: keepIt}}, ""},
+		{"their remark, no judgement of its use", KindRule, Trim{Claims: []ledger.Claim{claim("walrus releases tagged by hand", 3)}, OneOff: &OneOff{Words: "tag this release by hand", Line: 3, Context: "the release bot was broken"}}, "future use is not stated"},
+		{"their remark kept with no future use", KindRule, Trim{Claims: []ledger.Claim{claim("walrus releases tagged by hand", 3)}, OneOff: &OneOff{Words: "tag this release by hand", Line: 3, Context: "the release bot was broken", Relevance: &relevance.Judgement{Keep: true, Category: "important", Reason: "he said it"}}}, "needs its future use"},
+		{"their remark dropped", KindRule, Trim{Claims: []ledger.Claim{claim("walrus releases tagged by hand", 3)}, OneOff: &OneOff{Words: "tag this release by hand", Line: 3, Context: "the release bot was broken", Relevance: &relevance.Judgement{Keep: false, Category: "steering", Reason: "for today's release only"}}}, ""},
 		{"a remark they did not type", KindRule, Trim{Claims: []ledger.Claim{claim("walrus releases tagged by hand", 3)}, OneOff: &OneOff{Words: "releases are always on fridays", Line: 4, Context: "x"}}, "did not type"},
 		{"a remark not in their words", KindRule, Trim{Claims: []ledger.Claim{claim("walrus releases tagged by hand", 3)}, OneOff: &OneOff{Words: "always tag releases by hand", Line: 3, Context: "x"}}, "verbatim"},
 	} {
@@ -116,6 +120,19 @@ func TestCheckTrimOnlyRemovesOrNarrows(t *testing.T) {
 	plain := Note{Desc: "walrus releases are built with make release", Body: "", Scope: "user"}
 	if ps := CheckTrim(plain, msgs, shown, KindFact, Trim{Claims: []ledger.Claim{claim("The owner said walrus releases are built with make release", 2)}}); !strings.Contains(strings.Join(ps, ";"), "the note did not") {
 		t.Fatalf("added attribution passed: %v", ps)
+	}
+}
+
+var keepIt = &relevance.Judgement{Keep: true, Category: relevance.Instruction, Reason: "how releases are tagged while the bot is broken"}
+
+// A dropped remark is no statement: the trim is a note.
+func TestDroppedRemarkIsNoStatement(t *testing.T) {
+	o := &OneOff{Words: "now push", Line: 1, Context: "x", Relevance: &relevance.Judgement{Keep: false, Category: "steering", Reason: "one push"}}
+	if !o.Dropped() || (Trim{OneOff: o}).As() != ledger.TrimNote {
+		t.Fatal("a dropped remark made a statement")
+	}
+	if (&OneOff{Words: "w", Relevance: keepIt}).Dropped() || (*OneOff)(nil).Dropped() {
+		t.Fatal("a kept remark, or none, read as dropped")
 	}
 }
 

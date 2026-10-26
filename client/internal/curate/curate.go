@@ -22,6 +22,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/importer"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
+	"github.com/agent-sh/tacit/client/internal/relevance"
 )
 
 // The split model and conflict judge use independently configured routes.
@@ -63,11 +64,12 @@ Rules:
 ` + fact.ModelTypeLines() + `- ` + "`scope`" + ` is ` + "`user`, `system`, `projects/<repo>`, or `machines/<host>`" + ` (the curator's host is ` + "`%s`" + `; use machines/%s for facts about this machine: paths, tools, shell, hardware). projects/<repo> must name a repository that exists: as a rule the note's own project scope. Code refuses a scope that names no known repository or machine.
 - ` + "`kind`" + `: user only when the note quotes the owner's own words for it (see owner_quote), observed if an agent found it out or concluded it, web if it came from a fetched page. Only a kind user entry may say the owner ruled ("owner ruling", "owner rule").
 - Statements: owner words said once, where you are not sure they are a standing rule (a choice for the situation at hand, a remark about a name or a plan, an instruction that may hold only for now; a note may mark them "Said once"), are kind ` + "`statement`" + `, never kind user: ` + "`owner_quote`" + ` their words exactly as the note quotes them, character for character; ` + "`description`" + ` and ` + "`context`" + ` one line saying what was being discussed (not what they said); ` + "`body`" + ` your reading of what they meant (code labels it as yours); type the type the point would have. Code checks the words are theirs and keeps them verbatim, dated, never as a rule. A standing rule they clearly mean stays kind user.
+- Relevance, for every kind user or statement entry: ` + relevance.Rule + ` A remark you drop is not curated: code files nothing of it, and the note keeps it with your reason.
 - ` + "`applies_to`" + `: lists of repo-relative path globs (never absolute or ~ paths), repository names (only repositories that exist, never folder names, paths or owner/repo), host names and command prefixes that should trigger this fact. Empty lists when nothing specific applies.
 - Drop anything derivable from the code or from git log, anything that is only a session log, and anything purely about the past with no present consequence. Facts that mark a thing as obsolete, retired, renamed or dead ARE valuable (keep them).
 - If a note states the same fact twice, emit it once. Do not invent facts.
 - Output ONLY a JSON array, no prose, no code fence. Each item:
-  {"origin": "<note name>", "name": "<slug>", "description": "...", "type": "...", "scope": "...", "kind": "user|observed|web|statement", "owner_quote": "<kind user or statement only: their exact words from the note>", "context": "<kind statement only>", "applies_to": {"paths": [], "repos": [], "hosts": [], "commands": []}, "body": "..."}
+  {"origin": "<note name>", "name": "<slug>", "description": "...", "type": "...", "scope": "...", "kind": "user|observed|web|statement", "owner_quote": "<kind user or statement only: their exact words from the note>", "context": "<kind statement only>", "relevance": {"keep": true, "category": "...", "reason": "..."} (kind user or statement only), "applies_to": {"paths": [], "repos": [], "hosts": [], "commands": []}, "body": "..."}
 
 NOTES:
 %s
@@ -89,9 +91,9 @@ Output ONLY a JSON array of strings, one per pair in order, each exactly "contra
 // notes must have a kind:user entry. The first live split dropped a ruling
 // while keeping its surroundings (eval/VALUE.md, D6).
 const RulingsPrompt = `Below are agent memory notes and the list of OWNER RULINGS already extracted from them (kind user: something the owner said, decided or standardized).
-List every owner ruling in the notes that is NOT yet covered by the extracted list. A ruling is covered when an extracted entry states the same decision. A ruling is the owner's OWN WORDS as the note quotes them: list only those, never an agent's reading of what they want. ` + "`owner_quote`" + ` is their words exactly as the note gives them (at least six words, character for character, typos included) and the body holds that phrase in double quotes. Keep the date if visible, one entry per ruling, the note name as origin.
+List every owner ruling in the notes that is NOT yet covered by the extracted list. A ruling is covered when an extracted entry states the same decision. A ruling is the owner's OWN WORDS as the note quotes them: list only those, never an agent's reading of what they want. ` + "`owner_quote`" + ` is their words exactly as the note gives them (at least six words, character for character, typos included) and the body holds that phrase in double quotes. Keep the date if visible, one entry per ruling, the note name as origin. An extracted entry marked "dropped" was judged not to matter to future work: it is covered. ` + relevance.Rule + `
 Output ONLY a JSON array (possibly empty) of items:
-  {"origin": "<note name>", "name": "<slug>", "description": "...", "type": "user_standard|design_decision", "scope": "<same scope as the note>", "kind": "user", "owner_quote": "<their exact words from the note>", "applies_to": {"paths": [], "repos": [], "hosts": [], "commands": []}, "body": "..."}
+  {"origin": "<note name>", "name": "<slug>", "description": "...", "type": "user_standard|design_decision", "scope": "<same scope as the note>", "kind": "user", "owner_quote": "<their exact words from the note>", "relevance": {"keep": true, "category": "...", "reason": "..."}, "applies_to": {"paths": [], "repos": [], "hosts": [], "commands": []}, "body": "..."}
 
 EXTRACTED RULINGS:
 %s
@@ -158,6 +160,9 @@ type Entry struct {
 	// Context is a statement's line of context: what was being discussed
 	// when the owner said it (kind statement; its description says the same).
 	Context string `json:"context,omitempty"`
+	// Relevance is the model's judgement of a kind user or statement entry:
+	// whether the owner's remark matters to future work, and why (Gate).
+	Relevance *relevance.Judgement `json:"relevance,omitempty"`
 	// Propose is the entry's proposal of an area or topic no listed folder
 	// fits (FoldersSection); the entry itself is filed where it would be
 	// anyway.
@@ -382,19 +387,22 @@ func ParseVerdict(s string) Verdict {
 
 // Report is one curator run's accounting.
 type Report struct {
-	ModelCalls       *modelrun.Trace `json:"model_calls,omitempty"`
-	DeferredOwner    int             `json:"deferred_owner_notes,omitempty"`
-	DeferredRepo     int             `json:"deferred_repo_notes,omitempty"` // notes whose scope names a repository no catalog knows yet: they wait (maxRepoDefer)
-	At               string          `json:"at"`
-	Notes            int             `json:"notes"`
-	Restated         int             `json:"restated,omitempty"` // pending notes dropped before the split: they restate a curated fact or an earlier note
-	Batches          int             `json:"batches"`
-	Facts            int             `json:"facts"`
-	Absorbed         int             `json:"absorbed,omitempty"` // facts of the split not written: they only restate a curated fact (curate.Absorber)
-	Rulings          int             `json:"rulings"`
-	NotOwnerWords    int             `json:"not_owner_words,omitempty"` // kind user entries with no verified quote of theirs, filed as observed
-	Statements       int             `json:"statements,omitempty"`      // statements of the owner's the split kept (their words said once)
-	OneOffs          int             `json:"one_offs,omitempty"`        // rulings resting on words of theirs said in one session, kept as their statements (OneOff)
+	ModelCalls    *modelrun.Trace `json:"model_calls,omitempty"`
+	DeferredOwner int             `json:"deferred_owner_notes,omitempty"`
+	DeferredRepo  int             `json:"deferred_repo_notes,omitempty"` // notes whose scope names a repository no catalog knows yet: they wait (maxRepoDefer)
+	At            string          `json:"at"`
+	Notes         int             `json:"notes"`
+	Restated      int             `json:"restated,omitempty"` // pending notes dropped before the split: they restate a curated fact or an earlier note
+	Batches       int             `json:"batches"`
+	Facts         int             `json:"facts"`
+	Absorbed      int             `json:"absorbed,omitempty"` // facts of the split not written: they only restate a curated fact (curate.Absorber)
+	Rulings       int             `json:"rulings"`
+	NotOwnerWords int             `json:"not_owner_words,omitempty"` // kind user entries with no verified quote of theirs, filed as observed
+	Statements    int             `json:"statements,omitempty"`      // statements of the owner's the split kept (their words said once)
+	OneOffs       int             `json:"one_offs,omitempty"`        // rulings resting on words of theirs said in one session, kept as their statements (OneOff)
+	// OwnerDropped is the owner's remarks the relevance gate did not curate
+	// (Gate), each with why: their notes keep them, nothing else does.
+	OwnerDropped     []DroppedRemark `json:"owner_remarks_dropped,omitempty"`
 	RecoveredRulings int             `json:"recovered_rulings"`
 	Checked          int             `json:"conflict_checks"`
 	JudgeCalls       int             `json:"judge_calls"`
@@ -424,4 +432,37 @@ type Report struct {
 	Retries          int             `json:"validation_retries,omitempty"` // answers refused by the checks and sent back to the model once (curate.SplitChecked)
 	ReviewRefused    int             `json:"review_refused,omitempty"`     // agents' notes the reviewer judged wrong (or the owner said no to): not curated
 	NotesForReviewer int             `json:"reviewer_waiting,omitempty"`   // agents' notes waiting for the reviewer's verdict
+}
+
+// DroppedRemark is a remark of the owner's the relevance gate did not curate:
+// the note it is in, their words as the entry quoted them, and why.
+type DroppedRemark struct {
+	Note     string `json:"note"`
+	Words    string `json:"words"`
+	Category string `json:"category,omitempty"`
+	Reason   string `json:"reason"`
+}
+
+// Gate is the relevance gate on a split entry (SPEC.md, "Relevance"): a kind
+// user or statement entry is curated only when the model kept the owner's
+// remark with a stated future use (relevance.Check); one it dropped, or kept
+// with no category or reason, is not, and Gate says why. Code still checks
+// the words are theirs (ApplyEvidence, ApplyStatement). Entries of any other
+// kind pass.
+func Gate(e Entry) (bool, DroppedRemark) {
+	if e.Kind != "user" && e.Kind != KindStatement {
+		return true, DroppedRemark{}
+	}
+	j, problem := relevance.Check(e.Relevance)
+	if problem == "" && j.Keep {
+		return true, DroppedRemark{}
+	}
+	d := DroppedRemark{Note: e.Origin, Words: ClipLine(e.OwnerQuote, 300), Category: j.Category, Reason: j.Reason}
+	if problem != "" {
+		d.Reason = "refused: " + problem
+	}
+	if strings.TrimSpace(d.Words) == "" {
+		d.Words = ClipLine(e.Description, 300)
+	}
+	return false, d
 }

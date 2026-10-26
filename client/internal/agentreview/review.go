@@ -64,16 +64,7 @@ func harnessOfPath(p string) string {
 // the memory file), and the end of what the reviewer reads is a little
 // after it; len(msgs) when none is found.
 func savePoint(msgs []Msg, n Note) int {
-	var needles []string
-	if n.Name != "" {
-		needles = append(needles, n.Name)
-	}
-	if d := strings.Join(strings.Fields(n.Desc), " "); len(d) >= 24 {
-		needles = append(needles, d[:24])
-	}
-	if n.ImportedFrom != "" {
-		needles = append(needles, filepath.Base(n.ImportedFrom))
-	}
+	needles := noteNeedles(n)
 	for i := len(msgs) - 1; i >= 0; i-- {
 		for _, t := range msgs[i].Tools {
 			in := strings.Join(strings.Fields(t.Input), " ")
@@ -85,6 +76,22 @@ func savePoint(msgs []Msg, n Note) int {
 		}
 	}
 	return len(msgs)
+}
+
+// noteNeedles are what a tool call that saves the note holds: its name, the
+// start of its description, its memory file.
+func noteNeedles(n Note) []string {
+	var needles []string
+	if n.Name != "" {
+		needles = append(needles, n.Name)
+	}
+	if d := strings.Join(strings.Fields(n.Desc), " "); len(d) >= 24 {
+		needles = append(needles, d[:24])
+	}
+	if n.ImportedFrom != "" {
+		needles = append(needles, filepath.Base(n.ImportedFrom))
+	}
+	return needles
 }
 
 // afterSave is how many messages after the save the reviewer still reads:
@@ -131,8 +138,10 @@ func (rv Reviewer) Review(ctx context.Context, n Note) (Result, error) {
 	}
 	conv.Harness, conv.Session = harness, id
 	msgs := conv.Msgs[:savePoint(conv.Msgs, n)]
-	text, shown := DigestShown(msgs, DigestBudget, DigestRecent)
-	save := Save{Kind: "tacit note", Label: n.Type, Where: "tacit scope " + n.Scope + ", name " + n.Name, Text: n.Desc + "\n" + n.Body, Cwd: conv.Cwd}
+	text, shown, omitted := DigestCut(msgs, DigestBudget, DigestRecent)
+	hidden, clipped := Hidden(msgs, omitted, DigestRecent, noteNeedles(n)...)
+	save := Save{Kind: "tacit note", Label: n.Type, Where: "tacit scope " + n.Scope + ", name " + n.Name, Text: n.Desc + "\n" + n.Body, Cwd: conv.Cwd, Omitted: Omission(omitted, clipped, len(msgs))}
+	line.Omitted = len(omitted)
 	if n.ImportedFrom != "" {
 		save.Kind, save.Where = "memory file", "memory file "+n.ImportedFrom
 	}
@@ -156,13 +165,80 @@ func (rv Reviewer) Review(ctx context.Context, n Note) (Result, error) {
 	}
 	res.Line.Verdict, res.Line.Reason, res.Line.Doubt, res.Line.Kind = v.Verdict, v.Reason, v.Doubt, v.Kind
 	if v.Trim != nil {
+		t := *v.Trim
+		var ps []string
+		// A claim removed as unsupported whose words code finds in what the
+		// digest left out gets a second look with those messages.
+		if looks := SecondLooks(t, msgs, hidden); len(looks) > 0 {
+			t, ps = rv.secondLook(ctx, &res, save, t, looks, msgs, hidden, shown)
+		}
 		// The trim is checked against the conversation as the model read it
 		// (redacted): its citations name those messages.
-		if ps := CheckTrim(n, msgs, shown, v.Kind, *v.Trim); len(ps) > 0 {
+		ps = append(ps, CheckTrim(n, msgs, shown, v.Kind, t)...)
+		if t.OneOff != nil && t.OneOff.Relevance != nil {
+			j := *t.OneOff.Relevance
+			res.Line.Relevance = &j
+		}
+		if len(ps) > 0 {
 			res.TrimProblems = ps
 		} else {
-			res.Trim, res.Msgs = v.Trim, msgs
+			res.Trim, res.Msgs = &t, msgs
 		}
 	}
 	return res, nil
+}
+
+// secondLook asks the reviewer about the removed claims code found in the
+// left-out part, with those messages (redacted), and folds its answer into
+// the trim; the messages it read count as shown. A failed call is a problem
+// of the trim (the note keeps its uncertain verdict), not of the review.
+func (rv Reviewer) secondLook(ctx context.Context, res *Result, save Save, t Trim, looks []Look, msgs []Msg, hidden map[int]string, shown map[int]bool) (Trim, []string) {
+	nums := LookedAt(looks)
+	// Only the messages shown may be cited; a look past lookMax is cut to them.
+	in := map[int]bool{}
+	for _, k := range nums {
+		in[k] = true
+	}
+	var ps []string
+	var kept []Look
+	for _, l := range looks {
+		var keep []int
+		for _, k := range l.Msgs {
+			if in[k] {
+				keep = append(keep, k)
+			}
+		}
+		if len(keep) == 0 {
+			// Its messages are past the second look's bound: it is not
+			// removed as unsupported either.
+			ps = append(ps, fmt.Sprintf("removed claim %q as unsupported, but the part of the conversation the digest left out holds its words (messages %s)", cut(t.Removed[l.Removed].Text, 80), joinInts(l.Msgs)))
+			continue
+		}
+		l.Msgs = keep
+		kept = append(kept, l)
+	}
+	looks = kept
+	if len(looks) == 0 {
+		return t, ps
+	}
+	lines := LookLines(msgs, hidden, looks, nums)
+	red, err := rv.Redact(lines)
+	if err != nil || len(red) != len(lines) {
+		return t, append(ps, "the second look's messages could not be redacted: not sent")
+	}
+	res.Line.Looked = nums
+	out, cost, _, err := rv.Run(ctx, SecondLookPrompt(save, t, looks, red))
+	res.Line.CostUSD += cost
+	if err != nil {
+		return t, append(ps, "the second look failed: "+err.Error())
+	}
+	answers, err := ParseSecondLook(out)
+	if err != nil {
+		return t, append(ps, err.Error())
+	}
+	for _, k := range nums {
+		shown[k] = true // a claim kept on the second look cites them (CheckTrim)
+	}
+	t, more := ApplySecondLook(t, looks, answers, shown)
+	return t, append(ps, more...)
 }

@@ -279,6 +279,10 @@ func ContentStems(text string) []string {
 	return out
 }
 
+// Stopword reports a word that carries no subject (a function word, a word
+// every ruling is written with, an owner's name).
+func Stopword(w string) bool { return stopwords[w] }
+
 // stopwords carry no subject: function words, and the words every ruling
 // is written with ("owner", "rule", "always").
 var stopwords = map[string]bool{}

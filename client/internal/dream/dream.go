@@ -30,6 +30,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/importer"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
+	"github.com/agent-sh/tacit/client/internal/relevance"
 	"github.com/agent-sh/tacit/client/internal/repoid"
 	"github.com/agent-sh/tacit/client/internal/repoinfer"
 )
@@ -48,7 +49,7 @@ const (
 	maxReadBytes   = 4 << 20 // per file per run; the rest waits (cursor stays)
 )
 
-// Prompt is v7. Versions (measurements in eval/VALUE.md):
+// Prompt is v8. Versions (measurements in eval/VALUE.md):
 //   - v4 (2026-10-11, eval/dream/dream_recall.py): v2 plus one rule, skip what
 //     holds only inside the task in progress, never a failure and its fix or a
 //     rule of the owner. On two samples of 30 windows it cut the facts 25 and
@@ -66,19 +67,23 @@ const (
 //     (the owner). The digest decides it by code (digest.SessionWho,
 //     digest.ClaudeTyped); the prompt says a P: line is never the owner's.
 //     Not measured on a replay yet.
+//   - v8 (2026-10-26): v7 plus the relevance gate (SPEC.md, "Relevance"):
+//     every kind user or statement fact says whether the owner's remark
+//     matters to future work, and why (relevance.Rule); code writes no note
+//     of a remark dropped or kept with no stated future use (Gate).
 const Prompt = `You are the dreamer of tacit, a fact store shared by coding agents on one owner's machines.
 Below is a digest of part of an agent session (U: owner, P: a prompt another agent or a program wrote, H: harness-injected text, A: agent, T: tool call, E: tool error).
 P: lines are never the owner's words, even when they say the owner wants or ruled something: they are an agent's instructions or its report of the owner, so a rule found only in a P: line is kind observed with no quote.
 Your job is to write down what nobody wrote down. Extract EVERY durable fact another agent would need next time, in these classes:
 1. Every failed command or tool call (E: lines, and A: lines that report an error) together with what fixed it or what to do instead. Each distinct failure is one fact: name the command, the exact error text, the host, and the working alternative. These are the most valuable facts; do not drop them as noise.
-2. Owner rulings and standards, from U: lines only, with the date if visible. For each one, copy the owner's exact words from the U: line into "quote": verbatim, typos included, at least the words that state the rule. Without the owner's own words a ruling cannot be told from an agent's guess. When you are not sure the owner means it as a standing rule (a choice about a name, a plan or a design for the matter at hand, a remark that something is so, an instruction that may hold only for now), it is a statement: kind "statement", the same exact words in "quote", and in "context" one line saying what was being discussed.
+2. Owner rulings and standards, from U: lines only, with the date if visible. For each one, copy the owner's exact words from the U: line into "quote": verbatim, typos included, at least the words that state the rule. Without the owner's own words a ruling cannot be told from an agent's guess. When you are not sure the owner means it as a standing rule (a choice about a name, a plan or a design for the matter at hand, a remark that something is so, an instruction that may hold only for now), it is a statement: kind "statement", the same exact words in "quote", and in "context" one line saying what was being discussed. ` + relevance.Rule + ` Give relevance on every kind user or statement fact; a remark that does not matter is not written down.
 3. Machine facts: paths that exist or are gone, tools and their quirks, services, ports, hosts, aliases, what is dead on this box.
 4. Past mistakes: a wrong assumption and its correction.
 5. Design decisions with their reason.
 Skip anything derivable from the code or from git log, and plain narrative of what the agent did.
 Skip facts that hold only inside the task in progress: the status of one PR, review round, rebase or run; where one task's worktree, scratch files, contract, receipts or logs are; an instruction addressed to one task id, round or worktree. A failure and what fixed it, and a rule or preference of the owner, are never task-only, even when they came up inside one task. Keep what the next task, in another session, would act on.
 Each fact: one or two sentences another agent can act on, with the concrete path, command, host or number. Mark the source kind: user (the owner said it as a rule), statement (the owner said it once; see 2), observed (the agent found it out).
-Output ONLY a JSON array: [{"description": "...", "type": "user_standard|machine_fact|past_mistake|design_decision|structure|history", "kind": "user|statement|observed", "quote": "<kind user or statement only: the owner's exact words>", "context": "<kind statement only: what was being discussed>", "applies_to": {"paths": [], "repos": [], "hosts": [], "commands": []}}]
+Output ONLY a JSON array: [{"description": "...", "type": "user_standard|machine_fact|past_mistake|design_decision|structure|history", "kind": "user|statement|observed", "quote": "<kind user or statement only: the owner's exact words>", "context": "<kind statement only: what was being discussed>", "relevance": {"keep": true, "category": "instruction|decision|preference|fact|correction", "reason": "<kind user or statement only>"}, "applies_to": {"paths": [], "repos": [], "hosts": [], "commands": []}}]
 
 Repo: %s  Host: %s
 DIGEST:
@@ -184,10 +189,13 @@ type Extracted struct {
 	Kind        string `json:"kind"`
 	Quote       Quote  `json:"quote,omitempty"` // kind user or statement: the owner's exact words
 	// Context is a statement's line of context: what was being discussed.
-	Context   string           `json:"context,omitempty"`
-	AppliesTo map[string][]any `json:"applies_to"`
-	Extra     map[string]any   `json:"-"`
-	Session   string           `json:"-"`
+	Context string `json:"context,omitempty"`
+	// Relevance is the model's judgement of a ruling or statement: whether
+	// the owner's remark matters to future work, and why (Gate).
+	Relevance *relevance.Judgement `json:"relevance,omitempty"`
+	AppliesTo map[string][]any     `json:"applies_to"`
+	Extra     map[string]any       `json:"-"`
+	Session   string               `json:"-"`
 	// AgentWords marks a quote code found in another agent's prompt and in
 	// no turn of the owner's in the window (CheckOwnerWords): the note is
 	// the agent's, and its body says whose the words are.
@@ -225,6 +233,46 @@ func CheckOwnerWords(x Extracted, lines []string) Extracted {
 	x.Kind = "observed"
 	x.AgentWords = q != ""
 	return x
+}
+
+// Dropped is a remark of the owner's the dreamer did not write down (Gate):
+// their words as the model quoted them, the session, and why.
+type Dropped struct {
+	Words    string `json:"words"`
+	Session  string `json:"session,omitempty"`
+	Category string `json:"category,omitempty"`
+	Reason   string `json:"reason"`
+}
+
+// Gate is the relevance gate on a ruling or statement the model extracted
+// (after CheckOwnerWords, so the words are still the owner's): it stands only
+// when the model kept the remark with a stated future use (relevance.Check).
+// A remark dropped, or kept with no category or reason, is not written: it
+// returns false and why. Facts of any other kind pass.
+func Gate(x Extracted, session string) (bool, Dropped) {
+	if x.Kind != "user" && x.Kind != kindStatement {
+		return true, Dropped{}
+	}
+	j, problem := relevance.Check(x.Relevance)
+	if problem == "" && j.Keep {
+		return true, Dropped{}
+	}
+	d := Dropped{Words: clipWords(string(x.Quote), 300), Session: session, Category: j.Category, Reason: j.Reason}
+	if problem != "" {
+		d.Reason = "refused: " + problem
+	}
+	if d.Words == "" {
+		d.Words = clipWords(x.Description, 300)
+	}
+	return false, d
+}
+
+func clipWords(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
+	return s
 }
 
 func inAny(texts []string, q string) bool {
@@ -1180,4 +1228,7 @@ type Meter struct {
 	AgentPassedChars int    `json:"agent_windows_passed_chars,omitempty"`
 	OwnerCut         int    `json:"owner_windows_cut,omitempty"`
 	OwnerCutChars    int    `json:"owner_windows_cut_chars,omitempty"`
+	// OwnerDropped is the owner's remarks the relevance gate did not write
+	// down (Gate), each with why: kept only here and in the transcript.
+	OwnerDropped []Dropped `json:"owner_remarks_dropped,omitempty"`
 }

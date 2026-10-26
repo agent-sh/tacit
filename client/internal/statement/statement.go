@@ -66,6 +66,10 @@ const (
 	LogSuperseded = "superseded" // a statement or promoted fact replaced by a newer one
 	LogFlagged    = "flagged"    // a check disagrees with a statement
 	LogDiffers    = "differs"    // a statement differs from a decision or rule that stands
+	// LogDropped: a ruling resting on a remark of the owner's said once that
+	// the relevance gate judged not to matter (SPEC.md, "Relevance"): retired,
+	// no statement made; Words their remark, Says the category, Why the reason.
+	LogDropped = "dropped"
 )
 
 // Relation is a statement's relation to an earlier item.
@@ -108,6 +112,9 @@ type Entry struct {
 	// Hash says which check output a flag was for, so the same check flags
 	// a statement once.
 	Hash string `json:"hash,omitempty"`
+	// Words and Why: a dropped remark's words and the reason (dropped).
+	Words string `json:"words,omitempty"`
+	Why   string `json:"why,omitempty"`
 }
 
 // Line encodes a log line with its newline.

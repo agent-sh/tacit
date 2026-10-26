@@ -301,6 +301,41 @@ func (c *Corpus) SaidIn(quote string) []string {
 	return out
 }
 
+// TurnIn is the owner's turn, as they wrote it, that holds quote as a
+// statement of theirs (as SaidIn counts it) in the session ref, or in any
+// session when ref holds none; "" when no turn does.
+func (c *Corpus) TurnIn(quote, ref string) string {
+	segs := Segments(quote)
+	if segs == nil || c == nil || c.sa == nil {
+		return ""
+	}
+	find := func(idx []int, near bool, want string) string {
+		for _, i := range idx {
+			if want != "" && c.refs[i] != want {
+				continue
+			}
+			if m, ok := c.matchTurn(i, segs, near); ok && m.Clean() {
+				return c.raw[i]
+			}
+		}
+		return ""
+	}
+	exact := c.candidates(segs[0])
+	var near []int
+	if len(segs) == 1 && len(strings.Fields(segs[0])) >= 4 {
+		near = c.nearCandidates(strings.Fields(segs[0]))
+	}
+	for _, want := range []string{ref, ""} {
+		if t := find(exact, false, want); t != "" {
+			return t
+		}
+		if t := find(near, true, want); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
 // candidates are the turns holding seg exactly.
 func (c *Corpus) candidates(seg string) []int {
 	seen := map[int]bool{}
