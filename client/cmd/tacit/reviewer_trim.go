@@ -134,6 +134,22 @@ func trimStatement(note *fact.Fact, t *agentreview.Trim, msgs []agentreview.Msg,
 func applyTrim(w *reviewWork, note *fact.Fact, res agentreview.Result, curated []*fact.Fact, local, statements bool) (into string, as string, ok bool) {
 	t := *res.Trim
 	line := res.Line
+	if t.OneOff.Dropped() {
+		// Not every sentence of the owner's is a statement (SPEC.md,
+		// "Relevance"): their remark makes none, and the kept claims that
+		// rest on it are removed with why; what the session shows otherwise
+		// stays a trimmed note. With nothing left the note keeps its
+		// uncertain verdict, the reason on its line.
+		why := "rests on the owner's remark, which does not matter to later work (" + t.OneOff.Relevance.Category + ")"
+		t.Removed = append([]ledger.Removed(nil), t.Removed...)
+		for _, c := range ownerClaims(&t, res.Msgs, true) {
+			t.Removed = append(t.Removed, ledger.Removed{Text: c.Text, Reason: why, Basis: ledger.BasisDropped})
+		}
+		t.Claims, t.OneOff = ownerClaims(&t, res.Msgs, false), nil
+		if len(t.Claims) == 0 {
+			return "", trimDropped, false
+		}
+	}
 	if t.OneOff != nil && !local && !statements {
 		return "", "", false
 	}
@@ -195,6 +211,10 @@ func applyTrim(w *reviewWork, note *fact.Fact, res agentreview.Result, curated [
 	}
 	return into, line.As, true
 }
+
+// trimDropped is applyTrim's answer for a trim that rested only on a remark
+// of the owner's the reviewer judged not to matter: nothing is written.
+const trimDropped = "dropped"
 
 // projectActive reports a repository whose project record (the winner when
 // its folder is suppressed) is live and says active.

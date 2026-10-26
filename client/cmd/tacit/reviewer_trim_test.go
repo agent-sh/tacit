@@ -91,6 +91,7 @@ func TestReviewerTrimsEndToEnd(t *testing.T) {
 		{"note-norule", "user_standard", "demo always deploys from main"},
 		{"note-q", "design_decision", "demo pins its toolchain in the release image"},
 		{"note-fact", "design_decision", "demo keeps release notes in the changelog folder"},
+		{"note-drop", "user_standard", "demo releases are tagged by hand"},
 	}
 	// Messages: [1] the session's first turn, [2] and [3] the owner's turns
 	// (the third typed on 2026-10-20), then one save each.
@@ -116,11 +117,18 @@ func TestReviewerTrimsEndToEnd(t *testing.T) {
 	reviewReply(t, replies, "note-once", map[string]any{"verdict": "uncertain", "reason": "a one-time call made a standing rule", "doubt": "overreach", "kind": "rule",
 		"trim": map[string]any{"claims": []any{map[string]any{"text": "demo releases tagged by hand", "cites": []int{3}}},
 			"removed": []any{map[string]any{"text": "must always", "reason": "he said it for this release, while the bot was broken"}},
-			"one_off": map[string]any{"words": "tag this release by hand", "line": 3, "context": "cutting a demo release while the release bot was broken"}}})
+			"one_off": map[string]any{"words": "tag this release by hand", "line": 3, "context": "cutting a demo release while the release bot was broken",
+				"relevance": map[string]any{"keep": true, "category": "instruction", "reason": "how releases are tagged while the bot is broken"}}}})
 	reviewReply(t, replies, "note-bad", map[string]any{"verdict": "uncertain", "reason": "the bucket is not named", "doubt": "overreach", "kind": "fact",
 		"trim": map[string]any{"claims": []any{map[string]any{"text": "demo deploys run on kubernetes clusters", "cites": []int{2}}}}})
 	reviewReply(t, replies, "note-norule", map[string]any{"verdict": "uncertain", "reason": "said once", "doubt": "overreach", "kind": "fact",
 		"trim": map[string]any{"claims": []any{map[string]any{"text": "demo always deploys from main", "cites": []int{2}}}}})
+	// The owner's remark judged not to matter: no statement, the note stays
+	// uncertain with the judgement on its line.
+	reviewReply(t, replies, "note-drop", map[string]any{"verdict": "uncertain", "reason": "one release", "doubt": "overreach", "kind": "rule",
+		"trim": map[string]any{"claims": []any{map[string]any{"text": "demo releases tagged by hand", "cites": []int{3}}},
+			"one_off": map[string]any{"words": "tag this release by hand", "line": 3, "context": "one demo release",
+				"relevance": map[string]any{"keep": false, "category": "steering", "reason": "about that one release"}}}})
 	reviewReply(t, replies, "note-q", map[string]any{"verdict": "uncertain", "reason": "nothing says the toolchain is pinned", "doubt": "core", "kind": "decision"})
 	reviewReply(t, replies, "note-fact", map[string]any{"verdict": "uncertain", "reason": "the folder is not named", "doubt": "core", "kind": "fact"})
 
@@ -180,8 +188,14 @@ func TestReviewerTrimsEndToEnd(t *testing.T) {
 	if p := strings.Join(rep.TrimProblems[inbox+"note-norule.md"], "; "); !strings.Contains(p, "one_off is required") {
 		t.Fatalf("note-norule's problems: %s", p)
 	}
-	if rep.Trimmed != 1 || rep.TrimStatement != 1 || rep.TrimRefused != 2 {
+	if rep.Trimmed != 1 || rep.TrimStatement != 1 || rep.TrimRefused != 2 || rep.TrimDropped != 1 {
 		t.Fatalf("report: %+v", rep)
+	}
+	if l, _ := reviews.ForNote(inbox + "note-drop.md"); l.Verdict != ledger.VerdictUncertain || l.Relevance == nil || l.Relevance.Keep || l.Relevance.Category != "steering" {
+		t.Fatalf("note-drop: %+v", l)
+	}
+	if _, err := os.Stat(filepath.Join(s.Dir, "projects", "demo", "owner-said-once-note-drop.md")); err == nil {
+		t.Fatal("a dropped remark made a statement")
 	}
 
 	// Questions: only the doubted decision of the active project.
@@ -189,7 +203,7 @@ func TestReviewerTrimsEndToEnd(t *testing.T) {
 	if open := q.Open(); len(open) != 1 || open[0].Name != "note-q" {
 		t.Fatalf("queue: %+v", q.Items)
 	}
-	if rep.Silent[agentreview.NotCoreDoubt] != 2 || rep.Silent[agentreview.NotWeighty] != 1 {
+	if rep.Silent[agentreview.NotCoreDoubt] != 3 || rep.Silent[agentreview.NotWeighty] != 1 {
 		t.Fatalf("silent: %+v", rep.Silent)
 	}
 

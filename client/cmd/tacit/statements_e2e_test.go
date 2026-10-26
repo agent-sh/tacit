@@ -62,7 +62,7 @@ func TestStatementsEndToEnd(t *testing.T) {
 		for _, v := range said {
 			if strings.Contains(prompt, v.words) {
 				b, _ := json.Marshal([]map[string]any{{"description": "The owner said: " + v.words, "type": "design_decision", "kind": "statement",
-					"quote": v.words, "context": v.context, "applies_to": map[string]any{}}})
+					"quote": v.words, "context": v.context, "relevance": map[string]any{"keep": true, "category": "decision", "reason": "a choice later work follows"}, "applies_to": map[string]any{}}})
 				return string(b), .01, 10, nil
 			}
 		}
@@ -90,6 +90,7 @@ func TestStatementsEndToEnd(t *testing.T) {
 		}
 		e := entry(noteOf[v.id].Meta.Name, k+"-statement", v.context, "design_decision", scope)
 		e["kind"], e["owner_quote"], e["context"], e["body"] = "statement", v.words, v.context, "the owner's reading of "+k
+		e["relevance"] = map[string]any{"keep": true, "category": "decision", "reason": "a choice later work follows"}
 		entries = append(entries, e)
 	}
 	b, _ := json.Marshal(entries)

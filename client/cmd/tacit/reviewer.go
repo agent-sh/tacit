@@ -125,10 +125,17 @@ type reviewReport struct {
 	CostUSD    float64        `json:"cost_usd"`
 	// Trims: notes trimmed to a trusted agent's note, to the owner's
 	// statement, and trims code refused (the note stays uncertain), with why.
-	Trimmed       int                 `json:"trimmed,omitempty"`
-	TrimStatement int                 `json:"trim_statements,omitempty"`
-	TrimRefused   int                 `json:"trims_refused,omitempty"`
-	TrimProblems  map[string][]string `json:"trim_problems,omitempty"`
+	Trimmed       int `json:"trimmed,omitempty"`
+	TrimStatement int `json:"trim_statements,omitempty"`
+	TrimRefused   int `json:"trims_refused,omitempty"`
+	// TrimDropped: trims that rested only on a remark of the owner's the
+	// reviewer judged not to matter (SPEC.md, "Relevance"): nothing written,
+	// the note stays uncertain with the reason on its line.
+	TrimDropped int `json:"trims_dropped,omitempty"`
+	// SecondLooks: reviews whose removed claims got a second look at the
+	// part of the conversation the digest left out.
+	SecondLooks  int                 `json:"second_looks,omitempty"`
+	TrimProblems map[string][]string `json:"trim_problems,omitempty"`
 	// Retrim: notes judged again for their trim; a verdict other than
 	// uncertain is not written (the earlier one stands), counted here.
 	Retrimmed int            `json:"retrimmed,omitempty"`
@@ -323,6 +330,9 @@ func reviewStep(ctx context.Context, facts []*fact.Fact, reviews *ledger.Reviews
 			rep.NoSource++
 		}
 		convs[f.Path] = res.Conv
+		if len(res.Line.Looked) > 0 {
+			rep.SecondLooks++
+		}
 		if len(res.TrimProblems) > 0 {
 			rep.TrimRefused++
 			rep.TrimProblems[f.Path] = res.TrimProblems
@@ -336,9 +346,12 @@ func reviewStep(ctx context.Context, facts []*fact.Fact, reviews *ledger.Reviews
 				}
 				rep.Verdicts[ledger.VerdictReplaced]++
 				continue
+			} else if as == trimDropped {
+				rep.TrimDropped++
+			} else {
+				rep.TrimRefused++
+				rep.TrimProblems[f.Path] = append(rep.TrimProblems[f.Path], "the trim could not be written (a statement in a store whose format predates statements, or redaction)")
 			}
-			rep.TrimRefused++
-			rep.TrimProblems[f.Path] = append(rep.TrimProblems[f.Path], "the trim could not be written (a statement in a store whose format predates statements, or redaction)")
 		}
 		if !retrim[f.Path] {
 			rep.Verdicts[res.Line.Verdict]++
