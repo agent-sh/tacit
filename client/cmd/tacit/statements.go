@@ -42,6 +42,11 @@ var statementsRun curate.Runner = curate.RunCLI
 // statementsBatch is how many statements one model call reads.
 const statementsBatch = 8
 
+// stmtWriteReserve is the time a run keeps for its write: no batch starts
+// when less than this is left before its deadline, so the judgements made
+// are written, not lost with the deadline.
+const stmtWriteReserve = 10 * time.Minute
+
 // statementsWrite reports a store whose writers may write statements: its
 // format marker says every machine reads them (ledger.Format.Statements).
 func statementsWrite(dir string) bool {
@@ -60,21 +65,24 @@ type stmtReport struct {
 	// Reread: statements a check had flagged, read again (agents keep trying).
 	Reread int
 	// Redated: statements whose day disagreed with the day their words line
-	// says the owner said them, corrected.
-	Redated int
+	// says the owner said them, corrected. Left: statements not read because
+	// the run's time was nearly up (the next run reads them).
+	Redated, Left int
 }
 
 func (r stmtReport) String() string {
-	return fmt.Sprintf("%d judged (%d flagged before, read again), %d decision(s), %d preference(s), %d rule(s) promoted, %d superseded, %d flagged by a check, %d differ from a decision, %d answer(s) refused, %d redated", r.Judged, r.Reread, r.Decisions, r.Preferences, r.Rules, r.Superseded, r.Flagged, r.Differs, r.Refused, r.Redated)
+	return fmt.Sprintf("%d judged (%d flagged before, read again), %d decision(s), %d preference(s), %d rule(s) promoted, %d superseded, %d flagged by a check, %d differ from a decision, %d answer(s) refused, %d redated, %d left for the next run", r.Judged, r.Reread, r.Decisions, r.Preferences, r.Rules, r.Superseded, r.Flagged, r.Differs, r.Refused, r.Redated, r.Left)
 }
 
 // runStatements implements `tacit statements [--model M] [--dry-run]
-// [--env-file F]`: the step alone (it is also a step of the full curate,
-// before the assessment, so a decision reaches the folder records).
+// [--max-runtime D] [--env-file F]`: the step alone (it is also a step of the
+// full curate, before the assessment, so a decision reaches the folder
+// records).
 func runStatements(args []string) int {
 	fs := flag.NewFlagSet("statements", flag.ExitOnError)
 	model := fs.String("model", curate.DefaultModel, "the judging model")
 	dry := fs.Bool("dry-run", false, "judge and check; write nothing")
+	maxRuntime := fs.Duration("max-runtime", time.Hour, "stop asking the model when this is nearly up; what it judged is written, the rest waits for the next run")
 	envFile := fs.String("env-file", "", "KEY=VALUE lines with the runner's provider variables")
 	fs.Parse(args)
 	if *envFile != "" {
@@ -89,7 +97,11 @@ func runStatements(args []string) int {
 		fmt.Fprintln(os.Stderr, "statements: no store")
 		return 2
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	if *maxRuntime <= stmtWriteReserve {
+		fmt.Fprintf(os.Stderr, "statements: --max-runtime must be more than %s (the write's reserve)\n", stmtWriteReserve)
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *maxRuntime)
 	defer cancel()
 	rep := &curate.Report{At: time.Now().Format(time.RFC3339), ModelCalls: &modelrun.Trace{}}
 	ctx = modelrun.WithTrace(ctx, rep.ModelCalls)
@@ -429,6 +441,13 @@ func statementsStep(ctx context.Context, s *store.Store, o statementsOpts, rep *
 		batches = append(batches, asks[i:min(i+statementsBatch, len(asks))])
 	}
 	for len(batches) > 0 {
+		if dl, ok := ctx.Deadline(); ok && time.Until(dl) < stmtWriteReserve {
+			for _, b := range batches {
+				sr.Left += len(b)
+			}
+			fmt.Fprintf(os.Stderr, "statements: the run's time is nearly up; %d statement(s) wait for the next run\n", sr.Left)
+			break
+		}
 		batch := batches[0]
 		batches = batches[1:]
 		prompt := fmt.Sprintf(statement.Prompt, statement.Render(batch))
@@ -756,7 +775,7 @@ func (w *stmtWorld) apply(ctx context.Context, s *store.Store, acts []statement.
 		}
 		fresh.log = w.log
 		*w = *fresh
-		*sr = stmtReport{Judged: sr.Judged, Refused: sr.Refused, Reread: sr.Reread}
+		*sr = stmtReport{Judged: sr.Judged, Refused: sr.Refused, Reread: sr.Reread, Left: sr.Left}
 		p, err := plan()
 		if err != nil {
 			return nil, "", err

@@ -226,3 +226,25 @@ func TestStatementsStepRedatesFromTheLedger(t *testing.T) {
 		t.Fatalf("a second run: %+v, %d error(s)", sr, errs)
 	}
 }
+
+// With its time nearly up the statements step starts no model call: the
+// statements it has not read wait for the next run, counted, and the run is
+// no error (a deadline in the middle of the model calls lost every
+// judgement with the write).
+func TestStatementsStepLeavesTheRestWhenTimeIsUp(t *testing.T) {
+	r, _ := datesRig(t)
+	prev := statementsRun
+	t.Cleanup(func() { statementsRun = prev })
+	calls := 0
+	statementsRun = func(context.Context, string, string) (string, float64, error) { calls++; return "[]", 0, nil }
+	ctx, cancel := context.WithTimeout(context.Background(), stmtWriteReserve-time.Minute)
+	defer cancel()
+	head := r.serverHead()
+	sr, errs := statementsStep(ctx, r.s, statementsOpts{model: "opus"}, &curate.Report{})
+	if errs != 0 || calls != 0 || sr.Left < 1 || sr.Judged != 0 || r.serverHead() != head {
+		t.Fatalf("step: %+v, %d error(s), %d call(s)", sr, errs, calls)
+	}
+	if code := runStatements([]string{"--max-runtime", "5m"}); code != 2 {
+		t.Fatalf("a max runtime inside the write's reserve: exit %d", code)
+	}
+}
