@@ -243,6 +243,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		pending = recentLocalNotes(dir, pending, time.Now().Add(-quickWindow))
 	}
 	var where curate.Where
+	var saidIn func(quote string) []string // the sessions the owner said a quote in (one-offs)
 	noOwnerCorpus := false
 	deferredOwner := 0
 	if len(pending) > 0 {
@@ -256,6 +257,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		}
 		noOwnerCorpus = corpus.Empty()
 		where = whereFor(newRulingAuditor(nil, nil, nil, nil, corpus))
+		saidIn = corpus.SaidIn
 		if noOwnerCorpus {
 			var kept []*fact.Fact
 			for _, n := range pending {
@@ -451,7 +453,12 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 			// format: no other machine reads it.
 			var q ledger.Quote
 			ruling, said := false, false
-			if e.Kind == curate.KindStatement {
+			if e.Kind == curate.KindStatement && wordsMasked(e.OwnerQuote) {
+				// Words scrump masks are no longer the owner's turn: no
+				// statement, as with a ruling (writeLocalBatch).
+				f.Meta.Source.Kind = "observed"
+				notWords++
+			} else if e.Kind == curate.KindStatement {
 				q, said = curate.ApplyStatement(f, e, noteByName[e.Origin], where, true)
 				if !said && noOwnerCorpus {
 					invalidBatch, unbackedRuling = true, true
@@ -462,8 +469,18 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 				}
 			} else {
 				q, ruling = curate.ApplyEvidence(f, e, noteByName[e.Origin], where)
+				// A ruling resting on words said in one session is their
+				// statement, never a rule (SPEC.md, "One-offs").
+				// (Words scrump masks stay a ruling here, which the batch's
+				// write files as observed.)
+				if ruling && saidIn != nil && !wordsMasked(q.Quote) {
+					if wq, ok := curate.OneOff(f, e, q, saidIn(q.Quote), true); ok {
+						q, ruling, said = wq, false, true
+						rep.OneOffs++
+					}
+				}
 			}
-			if !ruling && e.Kind == "user" {
+			if !ruling && !said && e.Kind == "user" {
 				if noOwnerCorpus {
 					invalidBatch, unbackedRuling = true, true
 					break
@@ -776,4 +793,14 @@ func dropQuoteLine(lines []byte, name string) []byte {
 		out = append(out, l...)
 	}
 	return out
+}
+
+// wordsMasked reports the owner's words holding something scrump masks (or
+// redaction unavailable: fail closed): the layer writes no statement of them.
+func wordsMasked(words string) bool {
+	if strings.TrimSpace(words) == "" {
+		return false
+	}
+	red, err := digest.RedactAll([]string{words})
+	return err != nil || len(red) != 1 || red[0] != words
 }

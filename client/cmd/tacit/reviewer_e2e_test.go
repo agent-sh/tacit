@@ -15,14 +15,17 @@ import (
 	"github.com/agent-sh/tacit/client/internal/lint"
 	"github.com/agent-sh/tacit/client/internal/overlay"
 	"github.com/agent-sh/tacit/client/internal/platform"
+	"github.com/agent-sh/tacit/client/internal/record"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
 // reviewerCLI is a stand-in for the model CLI: the reviewer's prompt gets the
+// reply in $FIXTURE_REPLIES/<note name>.json when there is one, else the
 // verdict its note's name asks for (note-wrong: wrong, note-unsure:
-// uncertain, any other: correct), the rulings pass nothing, the split
-// $FIXTURE_SPLIT. Every prompt is logged to $FIXTURE_PROMPTS.
+// uncertain with its core in doubt, a decision; any other: correct), the
+// rulings pass nothing, the split $FIXTURE_SPLIT. Every prompt is logged to
+// $FIXTURE_PROMPTS.
 func reviewerCLI(t *testing.T, dir string) func() []string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -36,12 +39,15 @@ in=$(cat)
 printf '%s\n\036\n' "$in" >> "$FIXTURE_PROMPTS"
 case "$in" in
 *"You review a note an agent saved"*)
+  name=$(printf '%s\n' "$in" | sed -n 's/^where: tacit scope .*, name //p' | head -n 1)
+  if [ -n "$FIXTURE_REPLIES" ] && [ -f "$FIXTURE_REPLIES/$name.json" ]; then cat "$FIXTURE_REPLIES/$name.json"; exit 0; fi
+  x=""
   case "$in" in
   *"name note-wrong"*) v=wrong ;;
-  *"name note-unsure"*) v=uncertain ;;
+  *"name note-unsure"*) v=uncertain; x=',\"doubt\":\"core\",\"kind\":\"decision\"' ;;
   *) v=correct ;;
   esac
-  printf '{"result":"{\\"verdict\\":\\"%s\\",\\"reason\\":\\"fixture says %s\\"}","total_cost_usd":0.05}\n' "$v" "$v" ;;
+  printf '{"result":"{\\"verdict\\":\\"%s\\",\\"reason\\":\\"fixture says %s\\"%s}","total_cost_usd":0.05}\n' "$v" "$v" "$x" ;;
 *"OWNER RULINGS already extracted"*) printf '%s\n' '{"result":"[]","total_cost_usd":0.01}' ;;
 *) printf '%s\n' "$FIXTURE_SPLIT" ;;
 esac
@@ -169,6 +175,10 @@ func TestReviewerOnAStoreEndToEnd(t *testing.T) {
 	}
 	s := &store.Store{Dir: filepath.Join(root, "facts")}
 	ctx := context.Background()
+	// demo is an active project: its notes' doubts may be questions.
+	putRecordFile(t, s.Dir, testRec(record.KindRepo, "projects/demo"))
+	git(t, s.Dir, "add", "-A")
+	git(t, s.Dir, "commit", "-q", "-m", "demo's record")
 
 	notes := map[string]string{
 		"note-correct": "demo builds its release with make release",
@@ -392,6 +402,11 @@ func TestReviewerOnTheLocalLayerEndToEnd(t *testing.T) {
 	t.Setenv("PI_SESSION_ID", "")
 	ctx := context.Background()
 	work := "/home/u/work" // a transcript's cwd in a temp directory is an agent's (ownerwords.AgentCwd)
+	// walrus is a checkout here, and an active project in this machine's
+	// layer: a doubt about its notes may be a question.
+	walrus := filepath.Join(r.root, "projects", "walrus")
+	os.MkdirAll(filepath.Join(walrus, ".git"), 0o755)
+	putRecordFile(t, filepath.Join(r.local, "curated"), testRec(record.KindRepo, "projects/walrus"))
 	notes := map[string]string{
 		"note-correct": "the walrus driver listens on port 7790",
 		"note-unsure":  "walrus deploys always need the rig",
@@ -404,7 +419,11 @@ func TestReviewerOnTheLocalLayerEndToEnd(t *testing.T) {
 	claudeSession(t, r.home, "sess-m1", work, append([]string{ownerTurn("sess-m1", "the walrus driver is on port 7790, and never deploy walrus on fridays")}, calls...)...)
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-m1")
 	for _, n := range []string{"note-correct", "note-unsure", "note-wrong"} {
-		rel, err := addFact(ctx, r.s, "claude", fact.Meta{Name: n, Description: notes[n], Type: "machine_fact", Scope: "user"}, notes[n])
+		scope := "user"
+		if n == "note-unsure" {
+			scope = "projects/walrus"
+		}
+		rel, err := addFact(ctx, r.s, "claude", fact.Meta{Name: n, Description: notes[n], Type: "machine_fact", Scope: scope}, notes[n])
 		if err != nil || !strings.HasPrefix(rel, overlay.Prefix) {
 			t.Fatalf("%s: %s %v", n, rel, err)
 		}
@@ -453,7 +472,7 @@ func TestReviewerOnTheLocalLayerEndToEnd(t *testing.T) {
 		t.Fatalf("search's lines:\n%s", sb)
 	}
 	t2 := claudeSession(t, r.home, "sess-m2", work)
-	got := promptHook(t, "sess-m2", t2, work, "which port does the walrus driver listen on and when do walrus deploys happen")
+	got := promptHook(t, "sess-m2", t2, walrus, "which port does the walrus driver listen on and when do walrus deploys happen")
 	if strings.Contains(got, "- note-wrong") {
 		t.Fatalf("a note judged wrong was delivered:\n%s", got)
 	}
@@ -481,8 +500,8 @@ func TestReviewerOnTheLocalLayerEndToEnd(t *testing.T) {
 	if l.Verdict != ledger.VerdictCorrected || l.Words != "walrus deploys need a rollback plan, not the rig" || l.Statement != "owner-corrects-note-unsure" {
 		t.Fatalf("ledger: %+v", l)
 	}
-	st := filepath.Join(r.local, "curated", "user", "owner-corrects-note-unsure.md")
-	sf, err := fact.Parse("local/curated/user/owner-corrects-note-unsure.md", readBytes(t, st))
+	st := filepath.Join(r.local, "curated", "projects", "walrus", "owner-corrects-note-unsure.md")
+	sf, err := fact.Parse("local/curated/projects/walrus/owner-corrects-note-unsure.md", readBytes(t, st))
 	if err != nil || sf.Meta.Type != fact.StatementType || sf.Meta.Source.OwnerWords != "walrus deploys need a rollback plan, not the rig" || sf.Meta.Source.OwnerWordsFrom != "claude:sess-m2" {
 		t.Fatalf("statement: %+v %v", sf, err)
 	}
@@ -491,7 +510,7 @@ func TestReviewerOnTheLocalLayerEndToEnd(t *testing.T) {
 	}
 	r.untouched()
 	ix = exactIndex(t, r.s)
-	hits, _ := ix.Query(ctx, search.Situation{Query: "walrus deploys rollback rig", RestrictRepos: true}, 10, false)
+	hits, _ := ix.Query(ctx, search.Situation{Repo: "walrus", Query: "walrus deploys rollback rig", RestrictRepos: true}, 10, false)
 	ix.Close()
 	var sawStatement bool
 	for _, h := range hits {

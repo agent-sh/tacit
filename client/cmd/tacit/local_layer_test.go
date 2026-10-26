@@ -332,6 +332,12 @@ func TestLocalDreamWritesOnlyTheOverlay(t *testing.T) {
 func TestLocalCurateWritesTheOverlayAndNeverTheStore(t *testing.T) {
 	r := newLocalRig(t)
 	host := store.ShortHost()
+	// The owner said the walrus rule in a second session too: a ruling, not
+	// a one-off (SPEC.md, "One-offs").
+	again := filepath.Join(r.home, ".claude", "projects", "-home-u", "s10.jsonl")
+	if err := os.WriteFile(again, []byte(`{"type":"user","entrypoint":"cli","sessionId":"s10","message":{"content":"remember: never deploy the walrus service on fridays without a rollback plan"}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	// The dreamer's notes, through its own write path.
 	notes := []*fact.Fact{
 		dream.ToFact(dream.Extracted{Description: "The walrus fixture driver listens on port 7790 on this machine", Type: "machine_fact", Kind: "observed"}, "", host, "s9"),

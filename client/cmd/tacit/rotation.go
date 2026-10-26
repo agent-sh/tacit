@@ -428,9 +428,11 @@ func claimsOwner(f *fact.Fact) bool {
 // due are the facts this run checks: the facts that claim the owner's
 // authority without their words first (claimsOwner: no hook delivers them
 // until they are reworded as an agent's note or their quote is found), then
-// never checked, then the oldest check, then the oldest created, then by
-// name; a checked fact is due again after o.age days; at most o.max when it
-// is set.
+// those made from an agent's note the reviewer could not confirm (uncertain,
+// nosource: the silent notes no question is asked about, SPEC.md
+// "Questions"), then never checked, then the oldest check, then the oldest
+// created, then by name; a checked fact is due again after o.age days; at
+// most o.max when it is set.
 func (r *rotator) due(o rotationOpts) []*fact.Fact {
 	cut := time.Now().AddDate(0, 0, -o.age).Format("2006-01-02")
 	var out []*fact.Fact
@@ -456,6 +458,9 @@ func (r *rotator) due(o rotationOpts) []*fact.Fact {
 		a, b := out[i].Meta, out[j].Meta
 		if ci, cj := claims[out[i]], claims[out[j]]; ci != cj {
 			return ci
+		}
+		if ui, uj := unconfirmed(out[i]), unconfirmed(out[j]); ui != uj {
+			return ui
 		}
 		if a.LastChecked != b.LastChecked {
 			return a.LastChecked < b.LastChecked // "" (never) first
@@ -1108,4 +1113,10 @@ func (r *rotator) logBatch(n int, b rotationStats, cost float64, model string) {
 	line, _ := json.Marshal(map[string]any{"at": time.Now().Format(time.RFC3339), "model": model, "facts": n, "cost_usd": cost, "cost_per_fact": per, "local": r.local,
 		"still": b.Still, "stale": b.Stale, "superseded": b.Superseded, "fixed": b.Fixed, "compressed": b.Compressed, "reworded": b.Reworded, "claims": b.Claims, "unknown": b.Unknown, "asked": b.Asked, "refused": b.Refused, "unanswered": b.Unanswered})
 	fh.Write(append(line, '\n'))
+}
+
+// unconfirmed reports a fact made from an agent's note the reviewer could
+// not confirm: uncertain, or no session to judge it against.
+func unconfirmed(f *fact.Fact) bool {
+	return f.Review == ledger.VerdictUncertain || f.Review == ledger.VerdictNoSource
 }
