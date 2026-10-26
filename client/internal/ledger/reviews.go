@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+
+	"github.com/agent-sh/tacit/client/internal/relevance"
 )
 
 // ReviewsPath is the reviewer's ledger (SPEC.md, "The reviewer"): one line
@@ -53,11 +55,29 @@ type Claim struct {
 	Cites []int  `json:"cites"`
 }
 
-// Removed is one claim a trim took out of a note, and why.
+// Removed is one claim a trim took out of a note, why, and on what basis
+// (the Basis values; empty in lines written before them).
 type Removed struct {
 	Text   string `json:"text"`
 	Reason string `json:"reason"`
+	Basis  string `json:"basis,omitempty"`
 }
+
+// Why a trim removed a claim (Removed.Basis): nothing the reviewer read
+// supports it; the conversation contradicts it; it goes further than what
+// was said (a one-time call made standing, a scope widened); it gives the
+// owner's authority to what only an agent or a note said; or it rested on a
+// remark of the owner's the relevance gate dropped.
+const (
+	BasisUnsupported  = "unsupported"
+	BasisContradicted = "contradicted"
+	BasisWidens       = "widens"
+	BasisNotOwner     = "not_owner"
+	BasisDropped      = "dropped"
+)
+
+// Bases are the bases the reviewer may give.
+var Bases = map[string]bool{BasisUnsupported: true, BasisContradicted: true, BasisWidens: true, BasisNotOwner: true}
 
 // Reviewers: who gave a verdict.
 const (
@@ -117,6 +137,14 @@ type Review struct {
 	Kept      []Claim   `json:"kept,omitempty"`
 	Removed   []Removed `json:"removed,omitempty"`
 	CostUSD   float64   `json:"cost_usd,omitempty"`
+	// Relevance is the reviewer's judgement of the owner's remark a trim
+	// rested on (SPEC.md, "Relevance"); a dropped one is kept only here.
+	Relevance *relevance.Judgement `json:"relevance,omitempty"`
+	// Omitted is how many messages the digest the reviewer read left out
+	// (over its size), and Looked the left-out messages its second look
+	// read: those code found holding a removed claim's distinctive words.
+	Omitted int   `json:"omitted,omitempty"`
+	Looked  []int `json:"looked,omitempty"`
 	// Started marks the line that starts the reviewer on a store: notes
 	// created before its day are not reviewed unless asked (--backfill).
 	Started string `json:"started,omitempty"`

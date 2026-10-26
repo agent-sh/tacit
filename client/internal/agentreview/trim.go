@@ -7,6 +7,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
+	"github.com/agent-sh/tacit/client/internal/relevance"
 	"github.com/agent-sh/tacit/client/internal/validate"
 )
 
@@ -35,6 +36,19 @@ type OneOff struct {
 	Words   string `json:"words"`
 	Line    int    `json:"line"`
 	Context string `json:"context"`
+	// Relevance is the reviewer's judgement of the remark (SPEC.md,
+	// "Relevance"): kept as their statement only with a stated future use.
+	Relevance *relevance.Judgement `json:"relevance,omitempty"`
+}
+
+// Dropped reports a remark the reviewer judged not to matter to future work
+// (a judgement code's check passed): no statement is made of it.
+func (o *OneOff) Dropped() bool {
+	if o == nil {
+		return false
+	}
+	j, p := relevance.Check(o.Relevance)
+	return p == "" && !j.Keep
 }
 
 // Trim is the reviewer's cut of an uncertain note down to what its session
@@ -170,6 +184,11 @@ func checkOneOff(msgs []Msg, shown map[int]bool, o OneOff) []string {
 	if c := strings.TrimSpace(o.Context); c == "" || len([]rune(c)) > 300 {
 		ps = append(ps, "one_off needs one line of context")
 	}
+	// Not every sentence of the owner's is a statement: a remark is kept
+	// only with its future use stated (relevance.Check).
+	if _, p := relevance.Check(o.Relevance); p != "" {
+		ps = append(ps, "one_off: "+p)
+	}
 	return ps
 }
 
@@ -219,7 +238,7 @@ func stemSet(text string) map[string]bool {
 // trimmed agent's note, or the owner's statement when it rests on their one
 // remark.
 func (t Trim) As() string {
-	if t.OneOff != nil {
+	if t.OneOff != nil && !t.OneOff.Dropped() {
 		return ledger.TrimStatement
 	}
 	return ledger.TrimNote
