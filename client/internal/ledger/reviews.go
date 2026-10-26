@@ -21,17 +21,43 @@ const ReviewsFormat = 4
 
 // Verdicts. The reviewer's (by tacit or rulebook): correct, uncertain,
 // wrong, and nosource for a note with no conversation to judge it against.
-// The owner's (by owner): confirmed (yes), rejected (no), corrected (their
-// words replace it, as a statement).
+// The reviewer's trim (by tacit, SPEC.md "Trims"): replaced, on a note it
+// trimmed to what its session supports (the trimmed note, or the owner's
+// statement, stands in its place: Into), and trimmed, on the trimmed note
+// (Of: the note it was cut from), a trusted agent's note. The owner's (by
+// owner): confirmed (yes), rejected (no), corrected (their words replace it,
+// as a statement).
 const (
 	VerdictCorrect   = "correct"
 	VerdictUncertain = "uncertain"
 	VerdictWrong     = "wrong"
 	VerdictNoSource  = "nosource"
+	VerdictReplaced  = "replaced"
+	VerdictTrimmed   = "trimmed"
 	VerdictConfirmed = "confirmed"
 	VerdictRejected  = "rejected"
 	VerdictCorrected = "corrected"
 )
+
+// What a trim became (Review.As): a trimmed agent's note, or the owner's
+// statement when the note had made a standing rule of one remark of theirs.
+const (
+	TrimNote      = "note"
+	TrimStatement = "statement"
+)
+
+// Claim is one sentence a trim kept, with the conversation's messages that
+// support it (their numbers in the digest the reviewer read, 1-based).
+type Claim struct {
+	Text  string `json:"text"`
+	Cites []int  `json:"cites"`
+}
+
+// Removed is one claim a trim took out of a note, and why.
+type Removed struct {
+	Text   string `json:"text"`
+	Reason string `json:"reason"`
+}
 
 // Reviewers: who gave a verdict.
 const (
@@ -42,7 +68,14 @@ const (
 
 // Verdicts is every verdict a ledger line may hold.
 var Verdicts = map[string]bool{VerdictCorrect: true, VerdictUncertain: true, VerdictWrong: true, VerdictNoSource: true,
-	VerdictConfirmed: true, VerdictRejected: true, VerdictCorrected: true}
+	VerdictReplaced: true, VerdictTrimmed: true, VerdictConfirmed: true, VerdictRejected: true, VerdictCorrected: true}
+
+// Withheld reports a verdict under which no hook delivers the note and the
+// curator does not curate it: the reviewer found it wrong, its trim stands in
+// its place, or the owner said no to it or corrected it.
+func Withheld(v string) bool {
+	return v == VerdictWrong || v == VerdictReplaced || v == VerdictRejected || v == VerdictCorrected
+}
 
 // OwnerVerdict reports a verdict only the owner gives.
 func OwnerVerdict(v string) bool {
@@ -55,22 +88,35 @@ func OwnerVerdict(v string) bool {
 // (NoteHash). Session is the conversation it was judged against
 // (<harness>:<id>), From and TurnHash where the owner answered (their turn,
 // <harness>:<session>, or rulebook: their pane), Words their correction and
-// Statement the statement that holds it.
+// Statement the statement that holds it. Doubt and Kind are the reviewer's
+// reading of an uncertain note (what is in doubt, what its core is: the
+// questions' gate). A trim's lines: on the note it replaced, Into (the
+// trimmed note's path, or the statement's name), Also (with a statement, the
+// trimmed note that holds the kept claims the owner's words do not), As,
+// Kept and Removed; on the trimmed note, Of.
 type Review struct {
-	Note      string  `json:"note"`
-	Name      string  `json:"name"`
-	Hash      string  `json:"hash,omitempty"`
-	Verdict   string  `json:"verdict"`
-	Reason    string  `json:"reason,omitempty"`
-	By        string  `json:"by"`
-	Model     string  `json:"model,omitempty"`
-	Session   string  `json:"session,omitempty"`
-	At        string  `json:"at"`
-	From      string  `json:"from,omitempty"`
-	TurnHash  string  `json:"turn_hash,omitempty"`
-	Words     string  `json:"words,omitempty"`
-	Statement string  `json:"statement,omitempty"`
-	CostUSD   float64 `json:"cost_usd,omitempty"`
+	Note      string    `json:"note"`
+	Name      string    `json:"name"`
+	Hash      string    `json:"hash,omitempty"`
+	Verdict   string    `json:"verdict"`
+	Reason    string    `json:"reason,omitempty"`
+	By        string    `json:"by"`
+	Model     string    `json:"model,omitempty"`
+	Session   string    `json:"session,omitempty"`
+	At        string    `json:"at"`
+	From      string    `json:"from,omitempty"`
+	TurnHash  string    `json:"turn_hash,omitempty"`
+	Words     string    `json:"words,omitempty"`
+	Statement string    `json:"statement,omitempty"`
+	Doubt     string    `json:"doubt,omitempty"`
+	Kind      string    `json:"kind,omitempty"`
+	Into      string    `json:"into,omitempty"`
+	Also      string    `json:"also,omitempty"`
+	As        string    `json:"as,omitempty"`
+	Of        string    `json:"of,omitempty"`
+	Kept      []Claim   `json:"kept,omitempty"`
+	Removed   []Removed `json:"removed,omitempty"`
+	CostUSD   float64   `json:"cost_usd,omitempty"`
 	// Started marks the line that starts the reviewer on a store: notes
 	// created before its day are not reviewed unless asked (--backfill).
 	Started string `json:"started,omitempty"`
@@ -132,6 +178,12 @@ func ParseReviews(jsonl []byte) *Reviews {
 func ValidReview(x Review) bool {
 	if x.Note == "" || x.Name == "" || !Verdicts[x.Verdict] || x.At == "" {
 		return false
+	}
+	switch x.Verdict {
+	case VerdictReplaced:
+		return x.By == ByTacit && x.Into != "" && (x.As == TrimNote || x.As == TrimStatement) && len(x.Kept) > 0
+	case VerdictTrimmed:
+		return x.By == ByTacit && x.Of != ""
 	}
 	switch x.By {
 	case ByTacit, ByRulebook:

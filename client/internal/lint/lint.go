@@ -474,19 +474,20 @@ func reviewRules(f *fact.Fact, format ledger.Format) []Finding {
 		add(fmt.Sprintf("source.review in a store whose format marker is not %d or newer (%s): an older binary does not read it", ledger.ReviewsFormat, ledger.FormatPath))
 	}
 	switch s.Review {
-	case ledger.VerdictCorrect, ledger.VerdictUncertain, ledger.VerdictNoSource, ledger.VerdictConfirmed:
+	case ledger.VerdictCorrect, ledger.VerdictUncertain, ledger.VerdictNoSource, ledger.VerdictTrimmed, ledger.VerdictConfirmed:
 	default:
-		add(fmt.Sprintf("source.review %q is no verdict a curated fact carries (correct, uncertain, nosource, confirmed)", s.Review))
+		add(fmt.Sprintf("source.review %q is no verdict a curated fact carries (correct, uncertain, nosource, trimmed, confirmed)", s.Review))
 	}
 	if s.Review == "" || strings.TrimSpace(s.ReviewReason) == "" {
 		add("source.review and source.review_reason go together")
 	}
 	if f.Meta.Origin == "" {
 		add("source.review on a fact with no origin: the verdict is on the note a fact was made from")
-	} else if f.Review != s.Review && !(ledger.OwnerVerdict(f.Review) && s.Review != ledger.VerdictConfirmed) {
-		// The owner's answer (yes, no, a correction) may stand over the
-		// review the fact was stamped with; any other difference is a
-		// verdict the ledger does not hold.
+	} else if f.Review != s.Review && !(ledger.OwnerVerdict(f.Review) && s.Review != ledger.VerdictConfirmed) && f.Review != ledger.VerdictReplaced {
+		// The owner's answer (yes, no, a correction), or the note's trim
+		// (replaced: the fact points at what stands in its place), may stand
+		// over the review the fact was stamped with; any other difference is
+		// a verdict the ledger does not hold.
 		add(fmt.Sprintf("source.review %q is not the verdict the reviewer's ledger (%s) holds on its note %s (%q)", s.Review, ledger.ReviewsPath, f.Meta.Origin, f.Review))
 	}
 	return out

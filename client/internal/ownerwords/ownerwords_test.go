@@ -425,3 +425,28 @@ func TestCorpusTellsAgentsSessionsThatLookLikeTheOwners(t *testing.T) {
 		t.Errorf("agent sessions %d, want 3 (lane, codex subagent, codex exec)", c.Stats.AgentSessions)
 	}
 }
+
+// SaidIn counts the sessions the owner said a quote in as a statement of
+// theirs: exact words, not a question, not negated, a prompt history line
+// with no session not counted, a copied turn (a fork's) not counted again.
+func TestSaidInCountsSessions(t *testing.T) {
+	b := NewBuilder()
+	b.Add("transcript", "claude:s1", "ok and keep the hooks quiet when nothing matches the prompt")
+	b.Add("transcript", "claude:s1", "again: keep the hooks quiet when nothing matches the prompt")
+	b.Add("transcript", "codex:s2", "remember, keep the hooks quiet when nothing matches the prompt.")
+	b.Add("transcript", "pi:s3", "should we keep the hooks quiet when nothing matches the prompt?")
+	b.Add("transcript", "hermes:s4", "dont keep the hooks quiet when nothing matches the prompt")
+	b.Add("claude-history", "claude:history", "keep the hooks quiet when nothing matches the prompt")
+	b.Add("transcript", "codex:s2-fork", "remember, keep the hooks quiet when nothing matches the prompt.") // a fork's copy
+	c := b.Build()
+	if got := strings.Join(c.SaidIn("keep the hooks quiet when nothing matches the prompt"), ","); got != "claude:s1,codex:s2" {
+		t.Fatalf("SaidIn = %s", got)
+	}
+	if got := c.SaidIn("never seen words like these anywhere"); len(got) != 0 {
+		t.Fatalf("unknown words: %v", got)
+	}
+	var nilc *Corpus
+	if nilc.SaidIn("keep the hooks quiet") != nil {
+		t.Fatal("nil corpus")
+	}
+}
