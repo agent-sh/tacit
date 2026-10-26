@@ -276,9 +276,15 @@ func auditorFor(ctx context.Context, dir string, corpus *ownerwords.Corpus) ([]*
 // evidence (their words included) now, one whose text claims the owner's
 // authority (validate.ClaimsOwner: delivery holds it back until its quote is
 // found, which promotes it, or it is reworded), or one an older audit put to
-// them (it took the fact off kind user, whatever its type).
+// them (it took the fact off kind user, whatever its type). A statement is
+// never one (SPEC.md, "Statements"): code wrote it from their verified words,
+// with its words line, and it is their words said once, never a ruling. Its
+// body quotes those words ("You said once (<day>): ..."), so as a candidate
+// the words proved it a ruling: kind user, owner_quote in place of
+// owner_words, which lint L20 refuses. Only the statements step's ladder
+// promotes a statement, into a new fact.
 func (a *rulingAuditor) candidate(f *fact.Fact) bool {
-	if f.InInbox() || strings.HasPrefix(f.Meta.Scope, "derived/") {
+	if f.InInbox() || strings.HasPrefix(f.Meta.Scope, "derived/") || f.Meta.Type == fact.StatementType {
 		return false
 	}
 	_, legacy := a.legacy[f.Meta.Name]
