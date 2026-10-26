@@ -148,6 +148,50 @@ func TestOneOffsDateStatementsByTheOwnersTurn(t *testing.T) {
 	}
 }
 
+// The rulings audit never decides a statement: its body quotes the owner's
+// words, which as a candidate proved it a ruling (kind user, owner_quote in
+// place of owner_words), a change lint L20 refuses, so the audit wrote
+// nothing (the rebuild's "lint rejects the change"). After one-offs the audit
+// runs clean and leaves every statement as it was.
+func TestRulingsAuditLeavesStatements(t *testing.T) {
+	r, _ := datesRig(t)
+	if code := runOneOffs([]string{"--digests", ""}); code != 0 {
+		t.Fatalf("one-offs exit %d", code)
+	}
+	gitIn(t, r.clone, "pull", "-q", "--ff-only")
+	before := map[string]fact.Source{}
+	for n, f := range factsByName(t, r.clone) {
+		if f.Meta.Type == fact.StatementType {
+			before[n] = f.Meta.Source
+		}
+	}
+	if len(before) < 2 {
+		t.Fatalf("statements: %v", before)
+	}
+	c, err := ownerwords.LoadAll(os.Getenv("HOME"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := rulingsApply(ctxMinute(t), r.s, c, false, false)
+	if err != nil {
+		t.Fatalf("the audit after one-offs: %v", err)
+	}
+	for _, v := range rep.Verdicts {
+		if _, ok := before[v.Name]; ok {
+			t.Errorf("the audit decided statement %s: %+v", v.Name, v)
+		}
+	}
+	gitIn(t, r.clone, "pull", "-q", "--ff-only")
+	for n, f := range factsByName(t, r.clone) {
+		if src, ok := before[n]; ok && f.Meta.Source != src {
+			t.Errorf("%s changed: %+v -> %+v", n, src, f.Meta.Source)
+		}
+	}
+	if findings, err := lint.Run(r.clone); err != nil || len(findings) > 0 {
+		t.Fatalf("lint: %v %v", findings, err)
+	}
+}
+
 // The statements step corrects a statement whose day disagrees with the day
 // its words line records (no transcript needed), reads it with that day, logs
 // it, and the next run changes nothing.
