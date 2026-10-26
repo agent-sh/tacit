@@ -741,10 +741,16 @@ type Situation struct {
 	// RepoAliases are verified names for the current repository (e.g. a
 	// symlink checkout name). Hooks supply these; explicit search ignores them.
 	RepoAliases []string
-	Host        string
-	Query       string
-	Paths       []string
-	Command     string
+	// Workspace are the repositories of the session's workspace when cwd is
+	// in no repository but holds several (a Brazil workspace's src/<pkg>, a
+	// folder of checkouts), under every name delivery knows each by. Each is
+	// a delivery repository like Repo: its project scope, its applies_to
+	// name and its derived scope. Hooks and the MCP tools supply them.
+	Workspace []string
+	Host      string
+	Query     string
+	Paths     []string
+	Command   string
 	// Derived adds the repo's derived/<repo> scope (hot spots, module map).
 	// Off by default: derived facts are generated reference material, large
 	// next to a ruling, and must reach an agent only when something asks for
@@ -854,7 +860,7 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	}
 	all := terms(strings.Join(append([]string{sit.Query, sit.Command}, sit.Paths...), " "), minLen)
 	terms := distinctStems(all)
-	if len(terms) == 0 || (sit.OnlyDerived && sit.Repo == "") {
+	if len(terms) == 0 || (sit.OnlyDerived && sit.Repo == "" && len(sit.Workspace) == 0) {
 		return nil, nil
 	}
 	var evidence map[string]*RetrievalEvidence
@@ -874,7 +880,7 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 			route = "f.id IN (" + strings.Join(parts, ",") + ")"
 		}
 	}
-	deliveryRepos := []string{sit.Repo}
+	deliveryRepos := append([]string{sit.Repo}, sit.Workspace...)
 	if sit.RestrictRepos {
 		deliveryRepos = append(deliveryRepos, sit.RepoAliases...)
 		if sit.PromptRelevance {
@@ -920,13 +926,14 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 		scopes = append(scopes, "machines/"+strings.ToLower(sit.Host))
 	}
 	if sit.OnlyDerived {
-		if sit.Repo == "" {
-			return nil, nil
-		}
 		scopes = nil
 	}
-	if (sit.Derived || sit.OnlyDerived) && sit.Repo != "" {
-		scopes = append(scopes, "derived/"+strings.ToLower(sit.Repo))
+	if sit.Derived || sit.OnlyDerived {
+		for _, repo := range append([]string{sit.Repo}, sit.Workspace...) {
+			if repo != "" {
+				scopes = append(scopes, "derived/"+strings.ToLower(repo))
+			}
+		}
 	}
 	if len(sit.Scopes) > 0 {
 		scopes = append([]string(nil), sit.Scopes...)
