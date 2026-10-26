@@ -583,8 +583,11 @@ func whereFor(a *rulingAuditor) curate.Where {
 }
 
 func runRulings(args []string) int {
+	if len(args) > 0 && args[0] == "one-offs" {
+		return runOneOffs(args[1:])
+	}
 	if len(args) == 0 || args[0] != "audit" {
-		fmt.Fprintln(os.Stderr, "usage: tacit rulings audit [--dry-run] [--strict] [--recheck] [--digests DIR] [--digests-only] [--sample N] [--seed N] [--json FILE]")
+		fmt.Fprintln(os.Stderr, "usage: tacit rulings audit [--dry-run] [--strict] [--recheck] [--digests DIR] [--digests-only] [--sample N] [--seed N] [--json FILE]\n       tacit rulings one-offs [--dry-run] [--digests DIR] [--json FILE]")
 		return 2
 	}
 	fs := flag.NewFlagSet("rulings audit", flag.ExitOnError)
@@ -819,7 +822,7 @@ func curatorWrite(ctx context.Context, s *store.Store, plan func() (map[string][
 			}
 			rels := make([]string, 0, len(files)+1)
 			for rel := range files {
-				if !safeRel(rel) && rel != ledger.QuotesPath && rel != ledger.MarkerPath && rel != ledger.FormatPath && rel != ledger.FoldersPath && rel != ledger.StatementsPath && rel != ledger.DecisionsPath && rel != ledger.ReviewsPath && !reviewFileRel(rel) {
+				if !safeRel(rel) && rel != ledger.QuotesPath && rel != ledger.MarkerPath && rel != ledger.FormatPath && rel != ledger.FoldersPath && rel != ledger.StatementsPath && rel != ledger.DecisionsPath && rel != ledger.ReviewsPath && !reviewFileRel(rel) && !newTrimmedNote(s.Dir, rel) {
 					return fmt.Errorf("refusing path %s", rel)
 				}
 				rels = append(rels, rel)

@@ -97,6 +97,16 @@ type reviewOpts struct {
 	backfill bool            // also notes created before the reviewer started
 	quick    bool            // a quick curate's step
 	only     map[string]bool // review only these notes (measurement), by path
+	// retrim judges again the notes whose standing verdict is an uncertain
+	// one from before trims (no doubt recorded), for their trim: a store the
+	// reviewer ran on before this version.
+	retrim bool
+	// The questions' gate (agentreview.Gate): whether a repository's project
+	// is active, and whether the owner's words or a check settle a note
+	// (why, "" for not). nil: no project is active, nothing settles.
+	active       func(repo string) bool
+	ownerSettled func(note *fact.Fact) string
+	checkSettled func(note *fact.Fact) string
 }
 
 // reviewReport is what one run of the step did.
@@ -113,17 +123,30 @@ type reviewReport struct {
 	Waiting    int            `json:"waiting,omitempty"`
 	Verdicts   map[string]int `json:"verdicts,omitempty"`
 	CostUSD    float64        `json:"cost_usd"`
-	Queued     int            `json:"questions_queued,omitempty"`
-	Answered   int            `json:"answers_read,omitempty"`
-	Applied    int            `json:"answers_applied,omitempty"`
-	Settled    int            `json:"questions_settled,omitempty"`
-	Expired    int            `json:"questions_expired,omitempty"`
-	Errors     []string       `json:"errors,omitempty"`
+	// Trims: notes trimmed to a trusted agent's note, to the owner's
+	// statement, and trims code refused (the note stays uncertain), with why.
+	Trimmed       int                 `json:"trimmed,omitempty"`
+	TrimStatement int                 `json:"trim_statements,omitempty"`
+	TrimRefused   int                 `json:"trims_refused,omitempty"`
+	TrimProblems  map[string][]string `json:"trim_problems,omitempty"`
+	// Retrim: notes judged again for their trim; a verdict other than
+	// uncertain is not written (the earlier one stands), counted here.
+	Retrimmed int            `json:"retrimmed,omitempty"`
+	Rejudged  map[string]int `json:"rejudged,omitempty"`
+	// Silent: uncertain notes that are no question, by why (agentreview.Gate).
+	Silent    map[string]int    `json:"silent,omitempty"`
+	SilentWhy map[string]string `json:"silent_notes,omitempty"` // note -> why it is no question, in full
+	Queued    int               `json:"questions_queued,omitempty"`
+	Answered  int               `json:"answers_read,omitempty"`
+	Applied   int               `json:"answers_applied,omitempty"`
+	Settled   int               `json:"questions_settled,omitempty"`
+	Expired   int               `json:"questions_expired,omitempty"`
+	Errors    []string          `json:"errors,omitempty"`
 }
 
 func (r reviewReport) String() string {
 	var vs []string
-	for _, k := range []string{ledger.VerdictCorrect, ledger.VerdictUncertain, ledger.VerdictWrong, ledger.VerdictNoSource, ledger.VerdictConfirmed, ledger.VerdictRejected, ledger.VerdictCorrected} {
+	for _, k := range []string{ledger.VerdictCorrect, ledger.VerdictUncertain, ledger.VerdictWrong, ledger.VerdictNoSource, ledger.VerdictReplaced, ledger.VerdictTrimmed, ledger.VerdictConfirmed, ledger.VerdictRejected, ledger.VerdictCorrected} {
 		if n := r.Verdicts[k]; n > 0 {
 			vs = append(vs, fmt.Sprintf("%d %s", n, k))
 		}
@@ -132,8 +155,12 @@ func (r reviewReport) String() string {
 	if len(vs) > 0 {
 		v = strings.Join(vs, ", ")
 	}
-	return fmt.Sprintf("reviewer: %d note(s) to judge, %d judged by the model, %d from the rulebook, %d failed, %d waiting; verdicts: %s; $%.3f; questions: %d queued, %d answered, %d applied, %d settled, %d expired",
-		r.Candidates, r.Reviewed, r.Rulebook, r.Failed, r.Waiting, v, r.CostUSD, r.Queued, r.Answered, r.Applied, r.Settled, r.Expired)
+	silent := 0
+	for _, n := range r.Silent {
+		silent += n
+	}
+	return fmt.Sprintf("reviewer: %d note(s) to judge, %d judged by the model, %d from the rulebook, %d failed, %d waiting; verdicts: %s; trims: %d note(s), %d statement(s), %d refused; $%.3f; questions: %d queued, %d silent, %d answered, %d applied, %d settled, %d expired",
+		r.Candidates, r.Reviewed, r.Rulebook, r.Failed, r.Waiting, v, r.Trimmed, r.TrimStatement, r.TrimRefused, r.CostUSD, r.Queued, silent, r.Answered, r.Applied, r.Settled, r.Expired)
 }
 
 // reviewWork is what the step decided, for one writer to write: the
@@ -144,6 +171,7 @@ type reviewWork struct {
 	lines      []ledger.Review
 	quotes     []ledger.Quote
 	statements []*fact.Fact
+	trimmed    []*fact.Fact      // trimmed notes, in their notes' folders
 	retire     map[string]string // curated fact path -> the day
 	supersede  map[string]string // curated fact path -> the statement's name
 	confirm    map[string]bool   // curated fact path -> confirmed (frontmatter, format 4)
@@ -153,7 +181,7 @@ type reviewWork struct {
 // empty reports work with nothing to write: the start line goes into the
 // ledger only with the first verdict.
 func (w *reviewWork) empty() bool {
-	return len(w.lines) == 0 && len(w.quotes) == 0 && len(w.statements) == 0 && len(w.retire) == 0 && len(w.supersede) == 0 && len(w.confirm) == 0
+	return len(w.lines) == 0 && len(w.quotes) == 0 && len(w.statements) == 0 && len(w.trimmed) == 0 && len(w.retire) == 0 && len(w.supersede) == 0 && len(w.confirm) == 0
 }
 
 // reviewerStart is the day the reviewer first ran on this machine
@@ -181,7 +209,7 @@ func reviewStep(ctx context.Context, facts []*fact.Fact, reviews *ledger.Reviews
 	home, _ := os.UserHomeDir()
 	stateDir := platform.StateDir(home)
 	now := time.Now()
-	rep := reviewReport{At: now.UTC().Format(time.RFC3339), Local: local, Quick: o.quick, Verdicts: map[string]int{}}
+	rep := reviewReport{At: now.UTC().Format(time.RFC3339), Local: local, Quick: o.quick, Verdicts: map[string]int{}, TrimProblems: map[string][]string{}, Rejudged: map[string]int{}, Silent: map[string]int{}, SilentWhy: map[string]string{}}
 	w := &reviewWork{retire: map[string]string{}, supersede: map[string]string{}, confirm: map[string]bool{}}
 	started := reviews.Started
 	if started == "" {
@@ -206,12 +234,22 @@ func reviewStep(ctx context.Context, facts []*fact.Fact, reviews *ledger.Reviews
 	}
 	var todo []*fact.Fact
 	notes := map[string]*fact.Fact{}
+	// retrim: notes judged again for their trim (an uncertain verdict with no
+	// doubt recorded: rulebook's, or one from before trims).
+	retrim := map[string]bool{}
+	// The session a verdict was judged against, for a note that names none
+	// itself (a memory rulebook judged in the session that saved it).
+	judgedIn := map[string]string{}
 	for _, f := range facts {
 		if !reviewCandidate(f, local) {
 			continue
 		}
 		notes[f.Path] = f
-		if _, ok := reviews.ForNote(f.Path); ok {
+		if l, ok := reviews.ForNote(f.Path); ok {
+			if o.retrim && l.Verdict == ledger.VerdictUncertain && l.Doubt == "" && l.By != ledger.ByOwner && (o.only == nil || o.only[f.Path]) {
+				retrim[f.Path], judgedIn[f.Path] = true, l.Session
+				todo = append(todo, f)
+			}
 			continue
 		}
 		if o.only != nil && !o.only[f.Path] {
@@ -227,6 +265,12 @@ func reviewStep(ctx context.Context, facts []*fact.Fact, reviews *ledger.Reviews
 			w.lines = append(w.lines, l)
 			rep.Rulebook++
 			rep.Verdicts[l.Verdict]++
+			if l.Verdict == ledger.VerdictUncertain {
+				// Rulebook's uncertain is honoured; tacit's reviewer still
+				// reads the note for what is in doubt and its trim.
+				retrim[f.Path], judgedIn[f.Path] = true, l.Session
+				todo = append(todo, f)
+			}
 			continue
 		}
 		todo = append(todo, f)
@@ -238,6 +282,9 @@ func reviewStep(ctx context.Context, facts []*fact.Fact, reviews *ledger.Reviews
 	called := 0
 	for _, f := range todo {
 		n := reviewNote(f, home)
+		if _, _, ok := agentreview.SessionOf(n); !ok && judgedIn[f.Path] != "" {
+			n.Session = judgedIn[f.Path]
+		}
 		if _, _, ok := agentreview.SessionOf(n); ok {
 			if called >= o.max || (!o.until.IsZero() && time.Now().After(o.until)) || ctx.Err() != nil {
 				rep.Waiting++
@@ -258,14 +305,45 @@ func reviewStep(ctx context.Context, facts []*fact.Fact, reviews *ledger.Reviews
 			rep.Errors = append(rep.Errors, f.Path+": "+err.Error())
 			continue
 		}
-		if res.Called {
+		if retrim[f.Path] {
+			if !res.Called {
+				rep.NoSource++
+				continue // its session is gone: the verdict it has stands
+			}
+			rep.Retrimmed++
+			if res.Line.Verdict != ledger.VerdictUncertain {
+				// Judged again for a trim only: the verdict that stands is not
+				// overturned here.
+				rep.Rejudged[res.Line.Verdict]++
+				continue
+			}
+		} else if res.Called {
 			rep.Reviewed++
 		} else {
 			rep.NoSource++
 		}
-		rep.Verdicts[res.Line.Verdict]++
-		w.lines = append(w.lines, res.Line)
 		convs[f.Path] = res.Conv
+		if len(res.TrimProblems) > 0 {
+			rep.TrimRefused++
+			rep.TrimProblems[f.Path] = res.TrimProblems
+		}
+		if res.Trim != nil {
+			if _, as, ok := applyTrim(w, f, res, curatedFrom[f.Meta.Name], local, statements); ok {
+				if as == ledger.TrimStatement {
+					rep.TrimStatement++
+				} else {
+					rep.Trimmed++
+				}
+				rep.Verdicts[ledger.VerdictReplaced]++
+				continue
+			}
+			rep.TrimRefused++
+			rep.TrimProblems[f.Path] = append(rep.TrimProblems[f.Path], "the trim could not be written (a statement in a store whose format predates statements, or redaction)")
+		}
+		if !retrim[f.Path] {
+			rep.Verdicts[res.Line.Verdict]++
+		}
+		w.lines = append(w.lines, res.Line)
 	}
 	// The ledger as it will stand, for the questions.
 	all := append(append([]ledger.Review(nil), reviews.Lines...), w.lines...)
@@ -277,14 +355,34 @@ func reviewStep(ctx context.Context, facts []*fact.Fact, reviews *ledger.Reviews
 	qpath := agentreview.Path(stateDir)
 	err := agentreview.Locked(qpath, 10*time.Second, func(q *agentreview.Queue) bool {
 		changed := false
-		// Uncertain notes become questions (a rulebook uncertain too: the
-		// owner may not have seen its pane).
+		// An uncertain note is a question only where it matters
+		// (agentreview.Gate): its core in doubt, a rule, a decision or a past
+		// mistake, about an active project, settled neither by the owner's
+		// words nor by a check, and while fewer than 12 wait. Everything else
+		// stays a silent low-weight agent's note.
+		judged := map[string]bool{}
 		for _, l := range w.lines {
+			if judged[l.Note] {
+				continue
+			}
+			judged[l.Note] = true
+			if s, ok := merged.ForNote(l.Note); ok {
+				l = s
+			}
 			if l.Verdict != ledger.VerdictUncertain {
 				continue
 			}
 			f := notes[l.Note]
 			if f == nil {
+				continue
+			}
+			if why, full := questionGateWhy(l, f, o); why != "" {
+				rep.Silent[why]++
+				rep.SilentWhy[f.Path] = full
+				continue
+			}
+			if len(q.Open()) >= agentreview.MaxOpen && q.Find(f.Path) == nil {
+				rep.Silent[agentreview.NotFull]++
 				continue
 			}
 			it := agentreview.Item{Note: f.Path, Name: f.Meta.Name, Desc: f.Meta.Description, Day: f.Meta.Created, Repo: noteRepo(f), Reason: l.Reason}
@@ -335,6 +433,9 @@ func reviewStep(ctx context.Context, facts []*fact.Fact, reviews *ledger.Reviews
 					it.Close(agentreview.StateSettled, "a later verdict stands on it: "+l.Verdict+" by "+l.By, now)
 				case !local && it.Fact != "" && len(curatedFrom[f.Meta.Name]) == 0:
 					it.Close(agentreview.StateSettled, "every fact made from it was replaced or retired", now)
+				case ok && l.Doubt != "" && questionGate(l, f, o) != "":
+					// Read again for its trim: no longer worth a question.
+					it.Close(agentreview.StateSettled, "not a question: "+questionGate(l, f, o), now)
 				default:
 					continue
 				}
@@ -489,7 +590,7 @@ func writeReviewStore(ctx context.Context, s *store.Store, w *reviewWork) error 
 			}
 			files[ledger.QuotesPath] = q
 		}
-		for _, st := range w.statements {
+		for _, st := range append(append([]*fact.Fact(nil), w.statements...), w.trimmed...) {
 			if _, err := os.Stat(filepath.Join(s.Dir, filepath.FromSlash(st.Path))); err == nil {
 				continue // written before
 			}
@@ -563,7 +664,7 @@ func reviewCommitMessage(w *reviewWork) string {
 		n[l.Verdict]++
 	}
 	var parts []string
-	for _, k := range []string{ledger.VerdictCorrect, ledger.VerdictUncertain, ledger.VerdictWrong, ledger.VerdictNoSource, ledger.VerdictConfirmed, ledger.VerdictRejected, ledger.VerdictCorrected} {
+	for _, k := range []string{ledger.VerdictCorrect, ledger.VerdictUncertain, ledger.VerdictWrong, ledger.VerdictNoSource, ledger.VerdictReplaced, ledger.VerdictTrimmed, ledger.VerdictConfirmed, ledger.VerdictRejected, ledger.VerdictCorrected} {
 		if n[k] > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", n[k], k))
 		}
@@ -593,7 +694,7 @@ func writeReviewLocal(dir, storeDir string, w *reviewWork) error {
 	if w.started != "" && ledger.ParseReviews(cur).Started == "" {
 		add = append(add, ledger.Review{Started: w.started}.Line()...)
 	}
-	for _, st := range w.statements {
+	for _, st := range append(append([]*fact.Fact(nil), w.statements...), w.trimmed...) {
 		rel := strings.TrimPrefix(st.Path, overlay.Prefix)
 		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel))); err == nil {
 			continue
@@ -670,7 +771,9 @@ func curateReview(ctx context.Context, s *store.Store, facts []*fact.Fact, quick
 	if quick {
 		max = reviewMaxQuick
 	}
-	w, rep := reviewStep(ctx, facts, reviews, false, reviewOpts{dry: dry, max: max, until: until, quick: quick}, statementsWrite(s.Dir))
+	o := reviewOpts{dry: dry, max: max, until: until, quick: quick}
+	gateOpts(ctx, &o, s.Dir, facts, false)
+	w, rep := reviewStep(ctx, facts, reviews, false, o, statementsWrite(s.Dir))
 	fmt.Println(rep.String())
 	if dry {
 		return reviews, started
@@ -695,7 +798,9 @@ func localReview(ctx context.Context, s *store.Store, dir string, local []*fact.
 	if quick {
 		max = reviewMaxQuick
 	}
-	w, rep := reviewStep(ctx, local, ledger.ParseReviews(cur), true, reviewOpts{dry: dry, max: max, until: until, quick: quick}, true)
+	o := reviewOpts{dry: dry, max: max, until: until, quick: quick}
+	gateOpts(ctx, &o, s.Dir, local, true)
+	w, rep := reviewStep(ctx, local, ledger.ParseReviews(cur), true, o, true)
 	fmt.Println(rep.String())
 	if dry {
 		return
@@ -730,8 +835,8 @@ func gateReviewed(pending []*fact.Fact, reviews *ledger.Reviews, started string,
 		}
 		l, ok := reviews.ForNote(n.Path)
 		switch {
-		case ok && (l.Verdict == ledger.VerdictWrong || l.Verdict == ledger.VerdictRejected || l.Verdict == ledger.VerdictCorrected):
-			refused++
+		case ok && ledger.Withheld(l.Verdict):
+			refused++ // wrong, said no to, corrected, or replaced by its trim
 			continue
 		case ok:
 			if _, held := cst.ReviewWait[n.Meta.Name]; held {
@@ -766,12 +871,12 @@ func stampReview(f *fact.Fact, reviews *ledger.Reviews, frontmatter bool) {
 	if !frontmatter || f.Meta.Origin == "" {
 		return
 	}
-	if l, ok := reviews.ForOrigin(f.Meta.Origin); ok && l.Verdict != ledger.VerdictWrong && l.Verdict != ledger.VerdictRejected && l.Verdict != ledger.VerdictCorrected {
+	if l, ok := reviews.ForOrigin(f.Meta.Origin); ok && !ledger.Withheld(l.Verdict) {
 		f.Meta.Source.Review, f.Meta.Source.ReviewReason = l.Verdict, fact.ClipDescription(l.Reason, 300)
 	}
 }
 
-// runReviewer implements `tacit reviewer [--dry-run] [--max N] [--backfill]
+// runReviewer implements `tacit reviewer [--dry-run] [--max N] [--backfill] [--retrim]
 // [--note PATH]... [--json FILE] [--env-file F]`, and `tacit reviewer
 // questions [--json]`: the step alone (the curate runs it anyway), or the
 // questions waiting for the owner.
@@ -783,6 +888,7 @@ func runReviewer(args []string) int {
 	dry := fs.Bool("dry-run", false, "list the notes it would judge; write nothing")
 	max := fs.Int("max", reviewMaxFull, "model reviews at most")
 	backfill := fs.Bool("backfill", false, "also judge notes created before the reviewer started")
+	retrim := fs.Bool("retrim", false, "judge again, for their trim, the notes whose uncertain verdict is from before trims")
 	jsonOut := fs.String("json", "", "write the run's report to this file")
 	envFile := fs.String("env-file", "", "KEY=VALUE lines with the runner's provider variables")
 	var notes multiFlag
@@ -800,7 +906,7 @@ func runReviewer(args []string) int {
 		return 2
 	}
 	ctx := context.Background()
-	o := reviewOpts{dry: *dry, max: *max, backfill: *backfill}
+	o := reviewOpts{dry: *dry, max: *max, backfill: *backfill, retrim: *retrim}
 	if len(notes) > 0 {
 		o.only = map[string]bool{}
 		for _, n := range notes {
@@ -817,6 +923,7 @@ func runReviewer(args []string) int {
 		}
 		local, _ := overlay.Load(dir)
 		cur, _ := os.ReadFile(filepath.Join(dir, filepath.FromSlash(overlay.ReviewsRel)))
+		gateOpts(ctx, &o, s.Dir, local, true)
 		w, rep = reviewStep(ctx, local, ledger.ParseReviews(cur), true, o, true)
 		if !*dry {
 			err = writeReviewLocal(dir, s.Dir, w)
@@ -837,6 +944,7 @@ func runReviewer(args []string) int {
 			return 2
 		}
 		cur, _ := os.ReadFile(filepath.Join(s.Dir, filepath.FromSlash(ledger.ReviewsPath)))
+		gateOpts(ctx, &o, s.Dir, facts, false)
 		w, rep = reviewStep(ctx, facts, ledger.ParseReviews(cur), false, o, statementsWrite(s.Dir))
 		if !*dry {
 			err = writeReviewStore(ctx, s, w)
@@ -897,4 +1005,43 @@ func runReviewerQuestions(args []string) int {
 		fmt.Println(it.Text())
 	}
 	return 0
+}
+
+// questionGate is agentreview.Gate on a note's standing uncertain verdict,
+// with the step's project records and settling checks (each asked only when
+// the verdict passes the gate's first tests). It returns why it is no
+// question, "" for one.
+func questionGate(l ledger.Review, f *fact.Fact, o reviewOpts) string {
+	why, _ := questionGateWhy(l, f, o)
+	return why
+}
+
+// questionGateWhy is questionGate with the whole reason too (what settled it).
+func questionGateWhy(l ledger.Review, f *fact.Fact, o reviewOpts) (why, full string) {
+	if why := agentreview.Gate(l, true, ""); why != "" {
+		return why, why
+	}
+	if o.active == nil || !o.active(noteRepo(f)) {
+		return agentreview.NotActive, agentreview.NotActive + ": " + noteRepo(f)
+	}
+	settled := ""
+	if o.ownerSettled != nil {
+		settled = o.ownerSettled(f)
+	}
+	if settled == "" && o.checkSettled != nil {
+		settled = o.checkSettled(f)
+	}
+	if settled != "" {
+		return "settled: " + strings.SplitN(settled, ":", 2)[0], settled
+	}
+	return "", ""
+}
+
+// gateOpts sets the questions' gate on o from the store at dir: its folder
+// records (with the local layer's status for this machine), the owner's
+// words among facts, and the checks of a note's dry references.
+func gateOpts(ctx context.Context, o *reviewOpts, dir string, facts []*fact.Fact, local bool) {
+	o.active = projectActive(storeRecords(dir))
+	o.ownerSettled = ownerSettles(facts)
+	o.checkSettled = checkSettles(ctx, dir, local)
 }
