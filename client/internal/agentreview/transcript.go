@@ -244,28 +244,11 @@ func lineMsgs(f digest.Format, owner bool, line []byte) []Msg {
 	return ms
 }
 
-// lineTime is a transcript line's own time (its top-level timestamp, as
-// Claude Code, Codex and pi write it), RFC 3339 in UTC; "" when it has none.
+// lineTime is a transcript line's own time (ownerwords.LineTime), RFC 3339
+// in UTC; "" when it has none.
 func lineTime(line []byte) string {
-	var o struct {
-		Timestamp json.RawMessage `json:"timestamp"`
-	}
-	if json.Unmarshal(line, &o) != nil || len(o.Timestamp) == 0 {
-		return ""
-	}
-	var s string
-	if json.Unmarshal(o.Timestamp, &s) == nil {
-		if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
-			return t.UTC().Format(time.RFC3339)
-		}
-		return ""
-	}
-	var n float64
-	if json.Unmarshal(o.Timestamp, &n) == nil && n > 0 {
-		if n > 1e12 {
-			n /= 1000 // milliseconds
-		}
-		return time.Unix(int64(n), 0).UTC().Format(time.RFC3339)
+	if t := ownerwords.LineTime(line); !t.IsZero() {
+		return t.UTC().Format(time.RFC3339)
 	}
 	return ""
 }

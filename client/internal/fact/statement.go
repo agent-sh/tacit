@@ -126,3 +126,70 @@ func AppendCheckFlag(data []byte, line string) ([]byte, error) {
 	}
 	return out, nil
 }
+
+// RedateStatement sets the day a statement file says the owner said its
+// words: the day on its body's first line ("You said once (<day>): ...") and
+// its created date, which for a statement is that day. Every other byte stays
+// as it was, the words included; updated is set to today. It refuses a file
+// that is no statement, a day that is not a date, or one after today.
+func RedateStatement(data []byte, day, today string) ([]byte, error) {
+	if !IsDate(day) || !IsDate(today) || day > today {
+		return nil, errors.New("not a day the owner can have said it")
+	}
+	fm, body, ok := Split(data)
+	if !ok {
+		return nil, errors.New("no frontmatter block")
+	}
+	f, err := Parse("", data)
+	if err != nil {
+		return nil, err
+	}
+	old, words, ok := StatementLine(string(body))
+	if f.Meta.Type != StatementType || !ok {
+		return nil, errors.New("not a statement")
+	}
+	// The body's first line: only its day changes.
+	lead := len(body) - len(bytes.TrimLeft(body, "\r\n"))
+	from := []byte(statementOpen + old + "): \"")
+	if !bytes.HasPrefix(body[lead:], from) {
+		return nil, errors.New("the statement's first line is not as code writes it")
+	}
+	nb := append([]byte(nil), body[:lead]...)
+	nb = append(nb, statementOpen+day+"): \""...)
+	nb = append(nb, body[lead+len(from):]...)
+	// created: one line, as tacit writes it.
+	lines := strings.SplitAfter(string(fm), "\n")
+	set := false
+	for i, l := range lines {
+		if strings.HasPrefix(l, "created:") {
+			eol := l[len(strings.TrimRight(l, "\r\n")):]
+			lines[i] = "created: \"" + day + "\"" + eol
+			set = true
+			break
+		}
+	}
+	if !set {
+		return nil, errors.New("the statement has no created line")
+	}
+	nl := bytes.IndexByte(data, '\n')
+	opener := data[:nl+1]
+	closer := data[len(opener)+len(fm) : len(data)-len(body)]
+	out := append(append(append(append([]byte(nil), opener...), strings.Join(lines, "")...), closer...), nb...)
+	g, err := Parse(f.Path, out)
+	if err != nil {
+		return nil, err
+	}
+	g.Meta.Updated = today
+	if out, err = PatchRelations(out, g); err != nil {
+		return nil, err
+	}
+	got, err := Parse(f.Path, out)
+	if err != nil {
+		return nil, err
+	}
+	d, w, ok := StatementLine(got.Body)
+	if !ok || d != day || w != words || got.Meta.Created != day || got.Meta.Source != f.Meta.Source || got.Meta.Name != f.Meta.Name {
+		return nil, errors.New("the redated statement does not read back")
+	}
+	return out, nil
+}

@@ -244,6 +244,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 	}
 	var where curate.Where
 	var saidIn func(quote string) []string // the sessions the owner said a quote in (one-offs)
+	var saidOn curate.SaidOn               // the day the owner said a quote, from their turn
 	noOwnerCorpus := false
 	deferredOwner := 0
 	if len(pending) > 0 {
@@ -258,6 +259,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		noOwnerCorpus = corpus.Empty()
 		where = whereFor(newRulingAuditor(nil, nil, nil, nil, corpus))
 		saidIn = corpus.SaidIn
+		saidOn = corpus.SaidOn
 		if noOwnerCorpus {
 			var kept []*fact.Fact
 			for _, n := range pending {
@@ -472,7 +474,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 				f.Meta.Source.Kind = "observed"
 				notWords++
 			} else if e.Kind == curate.KindStatement {
-				q, said = curate.ApplyStatement(f, e, noteByName[e.Origin], where, true)
+				q, said = curate.ApplyStatement(f, e, noteByName[e.Origin], where, saidOn, true)
 				if !said && noOwnerCorpus {
 					invalidBatch, unbackedRuling = true, true
 					break
@@ -482,12 +484,15 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 				}
 			} else {
 				q, ruling = curate.ApplyEvidence(f, e, noteByName[e.Origin], where)
+				if ruling {
+					q.Said = curate.SaidDay(saidOn, q.Quote, q.From, q.TurnHash, q.At)
+				}
 				// A ruling resting on words said in one session is their
 				// statement, never a rule (SPEC.md, "One-offs").
 				// (Words scrump masks stay a ruling here, which the batch's
 				// write files as observed.)
 				if ruling && saidIn != nil && !wordsMasked(q.Quote) {
-					if wq, ok := curate.OneOff(f, e, q, saidIn(q.Quote), true); ok {
+					if wq, ok := curate.OneOff(f, e, q, saidIn(q.Quote), saidOn, true); ok {
 						q, ruling, said = wq, false, true
 						rep.OneOffs++
 					}

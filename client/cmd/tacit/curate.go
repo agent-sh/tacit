@@ -310,6 +310,7 @@ func runCurate(args []string) int {
 	}
 	var where curate.Where
 	var saidIn func(quote string) []string // the sessions the owner said a quote in (one-offs)
+	var saidOn curate.SaidOn               // the day the owner said a quote, from their turn
 	noOwnerCorpus := false
 	deferredOwner := 0
 	if len(pending) > 0 {
@@ -326,6 +327,7 @@ func runCurate(args []string) int {
 		}
 		where = whereFor(aud)
 		saidIn = corpus.SaidIn
+		saidOn = corpus.SaidOn
 		if noOwnerCorpus {
 			var kept []*fact.Fact
 			for _, n := range pending {
@@ -571,7 +573,7 @@ func runCurate(args []string) int {
 			var q ledger.Quote
 			ruling, said := false, false
 			if e.Kind == curate.KindStatement {
-				q, said = curate.ApplyStatement(f, e, noteByName[e.Origin], where, statementsOK)
+				q, said = curate.ApplyStatement(f, e, noteByName[e.Origin], where, saidOn, statementsOK)
 				if !said && noOwnerCorpus {
 					invalidBatch, unbackedRuling = true, true
 					break
@@ -581,10 +583,13 @@ func runCurate(args []string) int {
 				}
 			} else {
 				q, ruling = curate.ApplyEvidence(f, e, noteByName[e.Origin], where)
+				if ruling {
+					q.Said = curate.SaidDay(saidOn, q.Quote, q.From, q.TurnHash, q.At)
+				}
 				// A ruling resting on words said in one session is their
 				// statement, never a rule (SPEC.md, "One-offs").
 				if ruling && saidIn != nil {
-					if wq, ok := curate.OneOff(f, e, q, saidIn(q.Quote), statementsOK); ok {
+					if wq, ok := curate.OneOff(f, e, q, saidIn(q.Quote), saidOn, statementsOK); ok {
 						q, ruling, said = wq, false, true
 						rep.OneOffs++
 					}

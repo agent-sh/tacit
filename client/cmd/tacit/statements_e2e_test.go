@@ -43,15 +43,17 @@ func TestStatementsEndToEnd(t *testing.T) {
 	if err := os.Symlink("widget", filepath.Join(w.p, "gizmo")); err != nil {
 		t.Fatal(err)
 	}
-	said := map[string]struct{ id, cwd, words, context string }{
-		"pk":   {"11111111-0000-4000-8000-000000000001", pk, "the real name is pikadon, ginza is a name for now until we move it to public repo", "what the lab repository is called"},
-		"rel1": {"11111111-0000-4000-8000-000000000002", widget, "we ship widget from the release branch, never from main", "where widget releases are cut"},
-		"rel2": {"11111111-0000-4000-8000-000000000003", widget, "widget releases go out from the release branch", "cutting the widget release"},
-		"gz":   {"11111111-0000-4000-8000-000000000004", widget, "the real name of widget is gizmo", "what the widget repository is called"},
+	// Each said on its own day, weeks before the run: a statement is dated by
+	// the owner's turn, never by the day the dreamer or the curator ran.
+	said := map[string]struct{ id, cwd, words, context, day string }{
+		"pk":   {"11111111-0000-4000-8000-000000000001", pk, "the real name is pikadon, ginza is a name for now until we move it to public repo", "what the lab repository is called", "2026-09-14"},
+		"rel1": {"11111111-0000-4000-8000-000000000002", widget, "we ship widget from the release branch, never from main", "where widget releases are cut", "2026-09-20"},
+		"rel2": {"11111111-0000-4000-8000-000000000003", widget, "widget releases go out from the release branch", "cutting the widget release", "2026-10-02"},
+		"gz":   {"11111111-0000-4000-8000-000000000004", widget, "the real name of widget is gizmo", "what the widget repository is called", "2026-10-05"},
 	}
 	offsets := map[string]int64{}
 	for _, v := range said {
-		offsets[ownerSession(t, w.home, v.cwd, v.id, v.words)] = 0
+		offsets[ownerSession(t, w.home, v.cwd, v.id, v.words, v.day+"T12:00:00Z")] = 0
 	}
 	if err := dream.SaveState(filepath.Join(platform.StateDir(w.home), "dreamer.json"), &dream.State{Offsets: offsets}); err != nil {
 		t.Fatal(err)
@@ -158,8 +160,8 @@ func TestStatementsEndToEnd(t *testing.T) {
 		if f == nil || f.Meta.Type != fact.StatementType || f.Meta.Source.Kind != "observed" || f.Meta.Source.OwnerWords != said[k].words {
 			t.Fatalf("%s: %+v", k, f)
 		}
-		if day, words, ok := fact.StatementLine(f.Body); !ok || words != said[k].words || !fact.IsDate(day) || !strings.Contains(f.Body, fact.GlossLabel+"the owner's reading of "+k) {
-			t.Fatalf("%s body %q", k, f.Body)
+		if day, words, ok := fact.StatementLine(f.Body); !ok || words != said[k].words || day != said[k].day || f.Meta.Created != said[k].day || !strings.Contains(f.Body, fact.GlossLabel+"the owner's reading of "+k) {
+			t.Fatalf("%s: dated %q (created %s), said on %s; body %q", k, day, f.Meta.Created, said[k].day, f.Body)
 		}
 	}
 	// The one a check agrees with, and the repeated one, are decisions.
@@ -175,7 +177,8 @@ func TestStatementsEndToEnd(t *testing.T) {
 		t.Fatalf("pikadon's decision %+v\n%s", pkd.Meta, pkd.Body)
 	}
 	rd := dec("rel2")
-	if by["rel1-statement"].Meta.SupersededBy != rd.Meta.Name || !strings.Contains(rd.Body, "said in 2 separate sessions") || !fact.IsRuling(rd) {
+	if by["rel1-statement"].Meta.SupersededBy != rd.Meta.Name || !strings.Contains(rd.Body, "said in 2 separate sessions") || !fact.IsRuling(rd) ||
+		!strings.HasPrefix(strings.TrimLeft(rd.Body, "\n"), "You decided ("+said["rel2"].day+"): ") || !strings.Contains(rd.Body, "[[rel1-statement]] ("+said["rel1"].day+", ") {
 		t.Fatalf("the release decision %+v\n%s", rd.Meta, rd.Body)
 	}
 	// The refuted one stays a statement, flagged, an optional review item.
@@ -237,11 +240,12 @@ func TestStatementsEndToEnd(t *testing.T) {
 	}
 }
 
-// ownerSession writes one Claude Code session the owner typed words in, in
-// cwd, whose agent edits a file there.
-func ownerSession(t *testing.T, home, cwd, id, words string) string {
+// ownerSession writes one Claude Code session the owner typed words in, at
+// at (RFC 3339), in cwd, whose agent edits a file there.
+func ownerSession(t *testing.T, home, cwd, id, words, at string) string {
 	t.Helper()
 	line := func(v map[string]any) string {
+		v["timestamp"] = at
 		// A cwd outside the temporary directory: the owner never starts a
 		// session there (ownerwords.AgentCwd); the edit's path places it.
 		v["sessionId"], v["userType"], v["entrypoint"], v["isSidechain"], v["cwd"] = id, "external", "cli", false, "/home/u/projects"

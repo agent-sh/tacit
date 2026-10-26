@@ -67,6 +67,7 @@ type rulingVerdict struct {
 	Unclean    []string `json:"unclean,omitempty"` // phrases of theirs found only in a question or after a negation
 	src        fact.Source
 	turnHash   string
+	said       string // the day of their turn that holds the words, when it records one
 }
 
 // Ruling reports whether the fact stays (or becomes) a ruling.
@@ -405,6 +406,15 @@ func (a *rulingAuditor) scanQuotes(f *fact.Fact) proof {
 	return p
 }
 
+// saidOn is the day of the owner's turn a proof found, "" for a note of
+// theirs or a turn that records no time.
+func (a *rulingAuditor) saidOn(p proof) string {
+	if a.corpus == nil {
+		return ""
+	}
+	return curate.SaidDay(a.corpus.SaidOn, p.quote, p.at.from, p.at.turnHash, time.Now().Format("2006-01-02"))
+}
+
 // decide is the verdict for one candidate.
 func (a *rulingAuditor) decide(f *fact.Fact) rulingVerdict {
 	v := rulingVerdict{Name: f.Meta.Name, Path: f.Path, Type: f.Meta.Type, KindBefore: f.Meta.Source.Kind,
@@ -430,7 +440,7 @@ func (a *rulingAuditor) decide(f *fact.Fact) rulingVerdict {
 	if disowned {
 		v.Outcome, v.DisownedBy = ruledDisowned, dis.note
 	} else if p := a.findQuote(f); p.quote != "" && !p.short {
-		v.Quote, v.From, v.Near, v.turnHash = p.quote, p.at.from, p.at.near, p.at.turnHash
+		v.Quote, v.From, v.Near, v.turnHash, v.said = p.quote, p.at.from, p.at.near, p.at.turnHash, a.saidOn(p)
 		src.OwnerQuote, src.OwnerQuoteFrom = strings.Join(strings.Fields(p.quote), " "), p.at.from
 		src.Endorsed = end.ID
 		return keep(ruledQuote)
@@ -441,7 +451,7 @@ func (a *rulingAuditor) decide(f *fact.Fact) rulingVerdict {
 	} else if p.short {
 		// Their words, too few to prove the rule: an observation that carries
 		// them as evidence (ledger-backed), asked about only on a real conflict.
-		v.Outcome, v.Quote, v.From, v.Near, v.Tried, v.Unclean, v.turnHash = ruledShort, p.quote, p.at.from, p.at.near, p.tried, p.unclean, p.at.turnHash
+		v.Outcome, v.Quote, v.From, v.Near, v.Tried, v.Unclean, v.turnHash, v.said = ruledShort, p.quote, p.at.from, p.at.near, p.tried, p.unclean, p.at.turnHash, a.saidOn(p)
 		src.OwnerWords, src.OwnerWordsFrom = strings.Join(strings.Fields(p.quote), " "), p.at.from
 	} else {
 		v.Outcome, v.Tried, v.Unclean = ruledAgent, p.tried, p.unclean
@@ -513,9 +523,9 @@ func (rep *rulingsReport) writes(dir, head string, now time.Time) (map[string][]
 		var q ledger.Quote
 		switch v.Outcome {
 		case ruledQuote:
-			q = ledger.Quote{Name: v.Name, Quote: v.src.OwnerQuote, From: v.src.OwnerQuoteFrom, TurnHash: v.turnHash, At: now.Format("2006-01-02")}
+			q = ledger.Quote{Name: v.Name, Quote: v.src.OwnerQuote, From: v.src.OwnerQuoteFrom, TurnHash: v.turnHash, At: now.Format("2006-01-02"), Said: v.said}
 		case ruledShort:
-			q = ledger.Quote{Name: v.Name, Quote: v.src.OwnerWords, From: v.src.OwnerWordsFrom, TurnHash: v.turnHash, At: now.Format("2006-01-02"), Words: true}
+			q = ledger.Quote{Name: v.Name, Quote: v.src.OwnerWords, From: v.src.OwnerWordsFrom, TurnHash: v.turnHash, At: now.Format("2006-01-02"), Words: true, Said: v.said}
 		default:
 			continue
 		}

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/agent-sh/tacit/client/internal/agentreview"
 	"github.com/agent-sh/tacit/client/internal/check"
@@ -90,9 +91,16 @@ func ownerClaims(t *agentreview.Trim, msgs []agentreview.Msg, owner bool) []ledg
 func trimStatement(note *fact.Fact, t *agentreview.Trim, msgs []agentreview.Msg, conv agentreview.Conversation, local bool) (*fact.Fact, ledger.Quote) {
 	o := t.OneOff
 	m := msgs[o.Line-1]
-	day := note.Meta.Created
-	if len(m.At) >= 10 && fact.IsDate(m.At[:10]) {
-		day = m.At[:10]
+	// The day of the message they typed (this machine's day, as every
+	// statement's), never the day the reviewer read it.
+	day, said := note.Meta.Created, ""
+	if at, err := time.Parse(time.RFC3339, m.At); err == nil {
+		said = at.Local().Format("2006-01-02")
+	} else if len(m.At) >= 10 && fact.IsDate(m.At[:10]) {
+		said = m.At[:10]
+	}
+	if said != "" {
+		day = said
 	}
 	scope := note.Meta.Scope
 	if t.Scope != "" {
@@ -120,7 +128,7 @@ func trimStatement(note *fact.Fact, t *agentreview.Trim, msgs []agentreview.Msg,
 	if local {
 		f.Path = overlay.Prefix + overlay.CuratedDir + "/" + f.Path
 	}
-	q := ledger.Quote{Name: name, Quote: words, From: from, TurnHash: ledger.TurnHash(ownerwords.Normalize(m.Text)), At: day, Words: true}
+	q := ledger.Quote{Name: name, Quote: words, From: from, TurnHash: ledger.TurnHash(ownerwords.Normalize(m.Text)), At: time.Now().Format("2006-01-02"), Words: true, Said: said}
 	return f, q
 }
 

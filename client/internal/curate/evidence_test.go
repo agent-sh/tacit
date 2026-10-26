@@ -142,7 +142,7 @@ func TestOneOffRulingIsAStatement(t *testing.T) {
 		return f, q
 	}
 	f, q := mk()
-	wq, ok := OneOff(f, e, q, []string{"claude:s1"}, true)
+	wq, ok := OneOff(f, e, q, []string{"claude:s1"}, nil, true)
 	s := f.Meta.Source
 	if !ok || f.Meta.Type != fact.StatementType || s.Kind != "observed" || s.OwnerQuote != "" || s.OwnerWords != "never rename public endpoints without asking me" || s.OwnerWordsFrom != "claude:s1" ||
 		!wq.Words || wq.Quote != s.OwnerWords || f.Meta.Description != "renaming the billing endpoint" {
@@ -152,23 +152,84 @@ func TestOneOffRulingIsAStatement(t *testing.T) {
 		t.Fatalf("body: %q", f.Body)
 	}
 	// No transcript here holds it now: the ledger's one session stands.
-	if f, q := mk(); func() bool { _, ok := OneOff(f, e, q, nil, true); return ok }() == false {
+	if f, q := mk(); func() bool { _, ok := OneOff(f, e, q, nil, nil, true); return ok }() == false {
 		t.Fatal("a ruling no transcript holds now stayed a rule")
 	}
 	// Two sessions: a ruling still.
 	f, q = mk()
-	if _, ok := OneOff(f, e, q, []string{"claude:s1", "codex:s2"}, true); ok || f.Meta.Source.Kind != "user" {
+	if _, ok := OneOff(f, e, q, []string{"claude:s1", "codex:s2"}, nil, true); ok || f.Meta.Source.Kind != "user" {
 		t.Fatalf("two sessions: %+v", f.Meta.Source)
 	}
 	// Their app note: theirs, written on purpose.
 	f, q = mk()
 	q.From = "note:owner-note-x"
-	if _, ok := OneOff(f, e, q, nil, true); ok {
+	if _, ok := OneOff(f, e, q, nil, nil, true); ok {
 		t.Fatal("an app note became a one-off")
 	}
 	// A store before statements: an observed fact holding their words.
 	f, q = mk()
-	if _, ok := OneOff(f, e, q, []string{"claude:s1"}, false); !ok || f.Meta.Type != "user_standard" || f.Meta.Source.Kind != "observed" || f.Meta.Source.OwnerWords == "" {
+	if _, ok := OneOff(f, e, q, []string{"claude:s1"}, nil, false); !ok || f.Meta.Type != "user_standard" || f.Meta.Source.Kind != "observed" || f.Meta.Source.OwnerWords == "" {
 		t.Fatalf("before statements: %+v", f.Meta)
+	}
+}
+
+// A statement is dated by the owner's turn (SaidOn), never by the day the
+// dreamer read the session or the curator wrote the fact; the words line
+// records that day. With no turn time (or one after the write, which is no
+// day they said it) the note's day stands. A one-off takes the day its
+// ruling's line recorded, else its turn's.
+func TestStatementsTakeTheOwnersDay(t *testing.T) {
+	where := func(q, session string) (string, string) { return "claude:s1", "h1" }
+	n := note("n1", "dreamer", "The owner said \"keep the release notes short and plain\". Said once; context: the notes.")
+	n.Meta.Created = "2026-10-25"
+	e := Entry{Kind: KindStatement, OwnerQuote: "keep the release notes short and plain", Description: "Release notes stay short", Context: "the notes", Name: "notes", Scope: "user", Type: "user_standard", Origin: "n1"}
+	asked := ""
+	said := func(day string) SaidOn {
+		return func(q, from, hash string) string {
+			asked = q + "|" + from + "|" + hash
+			return day
+		}
+	}
+	for _, tc := range []struct{ turn, want, ledger string }{
+		{"2026-09-03", "2026-09-03", "2026-09-03"},
+		{"", "2026-10-25", ""},
+		{"2026-10-30", "2026-10-25", ""}, // after the write: no day of theirs
+	} {
+		f := ToFact(e, "host-a", map[string]bool{})
+		f.Meta.Created = "2026-10-25"
+		q, ok := ApplyStatement(f, e, n, where, said(tc.turn), true)
+		day, _, lineOK := fact.StatementLine(f.Body)
+		if !ok || !lineOK || day != tc.want || f.Meta.Created != tc.want || q.Said != tc.ledger || q.At != "2026-10-25" || asked != "keep the release notes short and plain|claude:s1|h1" {
+			t.Fatalf("turn %q: day %q created %q, line %+v (asked %q)", tc.turn, day, f.Meta.Created, q, asked)
+		}
+	}
+	// No lookup at all (a caller with no owner history): the note's day.
+	f := ToFact(e, "host-a", map[string]bool{})
+	f.Meta.Created = "2026-10-25"
+	if _, ok := ApplyStatement(f, e, n, where, nil, true); !ok || f.Meta.Created != "2026-10-25" {
+		t.Fatalf("no lookup: %+v", f.Meta)
+	}
+
+	// A one-off: the ruling's line's said first, else the turn's day.
+	re := Entry{Kind: "user", OwnerQuote: "never rename public endpoints without asking me", Description: "Public endpoints are not renamed without asking the owner",
+		Body: "Ask before renaming a public endpoint.", Context: "renaming the billing endpoint", Name: "f", Scope: "user", Type: "user_standard", Origin: "n2"}
+	rn := note("n2", "dreamer", "The owner said \"never rename public endpoints without asking me\".")
+	for _, tc := range []struct{ lineSaid, turn, want string }{
+		{"2026-09-01", "2026-09-07", "2026-09-01"},
+		{"", "2026-09-07", "2026-09-07"},
+		{"", "", "2026-10-25"},
+	} {
+		f := ToFact(re, "host-a", map[string]bool{})
+		f.Meta.Created = "2026-10-25"
+		q, ruling := ApplyEvidence(f, re, rn, where)
+		if !ruling {
+			t.Fatal("not a ruling")
+		}
+		q.Said = tc.lineSaid
+		wq, ok := OneOff(f, re, q, []string{"claude:s1"}, said(tc.turn), true)
+		day, _, _ := fact.StatementLine(f.Body)
+		if !ok || day != tc.want || f.Meta.Created != tc.want || wq.At != "2026-10-25" || (tc.want != "2026-10-25" && wq.Said != tc.want) {
+			t.Fatalf("one-off %+v: day %q created %q line %+v", tc, day, f.Meta.Created, wq)
+		}
 	}
 }

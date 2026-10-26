@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/agentreview"
+	"github.com/agent-sh/tacit/client/internal/curate"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/importer"
 	"github.com/agent-sh/tacit/client/internal/ledger"
@@ -59,6 +60,10 @@ type oneOff struct {
 	Description string `json:"description,omitempty"`
 	Created     string `json:"created,omitempty"`
 	Turn        string `json:"turn,omitempty"`
+	// SaidOn is the day the owner said the words: the ruling's quote
+	// ledger line's said, else the time of their turn the line names; ""
+	// when neither is known (the statement then takes the ruling's day).
+	SaidOn string `json:"said_on,omitempty"`
 	// Gate is the relevance gate's outcome on a one-off (gateKeep,
 	// gateDrop, gateUnjudged), Relevance the model's judgement, Problem why
 	// code did not take it.
@@ -88,6 +93,13 @@ type oneOffsReport struct {
 	WordsManySessions int      `json:"user_standard_words_many_sessions"`
 	Items             []oneOff `json:"items"`
 	Pushed            bool     `json:"pushed,omitempty"`
+	// Redated: statements already written whose day disagrees with the day
+	// the owner said their words (their words line's said, else their turn's
+	// time), corrected by the write; RedatedLedger: words lines given the day
+	// they lacked.
+	Redated       int               `json:"redated"`
+	RedatedLedger int               `json:"redated_ledger_lines"`
+	Redates       []statementRedate `json:"redates,omitempty"`
 	// The relevance gate: whether it ran, its outcomes, the categories, the
 	// judgements taken from an earlier report (--verdicts), its calls, cost
 	// and the model.
@@ -109,17 +121,20 @@ type oneOffsReport struct {
 type ownerLookup struct {
 	saidIn func(quote string) []string
 	turnIn func(quote, from string) string
+	// saidOn is the day of the turn that holds the quote
+	// (ownerwords.Corpus.SaidOn).
+	saidOn curate.SaidOn
 }
 
 func corpusLookup(c *ownerwords.Corpus) ownerLookup {
-	return ownerLookup{saidIn: c.SaidIn, turnIn: c.TurnIn}
+	return ownerLookup{saidIn: c.SaidIn, turnIn: c.TurnIn, saidOn: c.SaidOn}
 }
 
 // reportLookup is the lookup an earlier report (--found) recorded: the
 // sessions and the turn of each quote it looked at. A quote it does not hold
 // is in no session code can read (the ledger's one session stands).
 func reportLookup(r *oneOffsReport) ownerLookup {
-	sessions, turns := map[string][]string{}, map[string]string{}
+	sessions, turns, days := map[string][]string{}, map[string]string{}, map[string]string{}
 	for _, it := range r.Items {
 		k := ownerwords.Normalize(it.Quote)
 		if len(it.Sessions) > 0 {
@@ -128,16 +143,21 @@ func reportLookup(r *oneOffsReport) ownerLookup {
 		if it.Turn != "" {
 			turns[k] = it.Turn
 		}
+		if it.SaidOn != "" {
+			days[k+"\x00"+it.From] = it.SaidOn
+		}
 	}
 	return ownerLookup{
 		saidIn: func(q string) []string { return sessions[ownerwords.Normalize(q)] },
 		turnIn: func(q, _ string) string { return turns[ownerwords.Normalize(q)] },
+		saidOn: func(q, from, _ string) string { return days[ownerwords.Normalize(q)+"\x00"+from] },
 	}
 }
 
 // findOneOffs looks at the live curated rulings of facts with the owner's
-// words. promoted names the statements step's promoted facts.
-func findOneOffs(facts []*fact.Fact, look ownerLookup, promoted map[string]bool) *oneOffsReport {
+// words. promoted names the statements step's promoted facts; quotes is the
+// quote ledger, whose line for a ruling names the turn its words are dated by.
+func findOneOffs(facts []*fact.Fact, look ownerLookup, promoted map[string]bool, quotes map[string]ledger.Quote) *oneOffsReport {
 	rep := &oneOffsReport{At: time.Now().UTC().Format(time.RFC3339), Kept: map[string]int{}, ByType: map[string]int{}}
 	for _, f := range facts {
 		if f.InInbox() || f.Meta.SupersededBy != "" || f.Meta.Retired != "" || strings.HasPrefix(f.Path, "local/") {
@@ -184,6 +204,11 @@ func findOneOffs(facts []*fact.Fact, look ownerLookup, promoted map[string]bool)
 		it.Statement = importer.Slug(f.Meta.Name+"-said-once", 80)
 		it.Description, it.Created = f.Meta.Description, f.Meta.Created
 		it.Turn = clipRunes(strings.TrimSpace(look.turnIn(s.OwnerQuote, s.OwnerQuoteFrom)), maxGateTurn)
+		rq := quotes[ledger.Quote{Name: f.Meta.Name, Quote: s.OwnerQuote, From: s.OwnerQuoteFrom}.Key()]
+		it.SaidOn = rq.Said
+		if !fact.IsDate(it.SaidOn) {
+			it.SaidOn = curate.SaidDay(look.saidOn, s.OwnerQuote, s.OwnerQuoteFrom, rq.TurnHash, time.Now().Format("2006-01-02"))
+		}
 		rep.OneOffs++
 		rep.ByType[f.Meta.Type]++
 		rep.Items = append(rep.Items, it)
@@ -197,7 +222,11 @@ func oneOffStatement(f *fact.Fact, it oneOff, host string) *fact.Fact {
 	words := strings.Join(strings.Fields(it.Quote), " ")
 	context := strings.Join(strings.Fields(f.Meta.Description), " ")
 	gloss := strings.Join(strings.Fields(strings.ReplaceAll(f.Body, fmt.Sprintf(" In the owner's words: \"%s\"", words), "")), " ")
+	// The day they said it, never the day the ruling was curated.
 	day := f.Meta.Created
+	if fact.IsDate(it.SaidOn) && (day == "" || it.SaidOn <= day) {
+		day = it.SaidOn
+	}
 	st := &fact.Fact{Meta: fact.Meta{
 		Name: it.Statement, Description: fact.ClipDescription(context, 200), Type: fact.StatementType, Scope: f.Meta.Scope, AppliesTo: f.Meta.AppliesTo,
 		Source:  fact.Source{Harness: "curator", Host: host, Kind: "observed", OwnerWords: words, OwnerWordsFrom: it.From},
@@ -208,8 +237,9 @@ func oneOffStatement(f *fact.Fact, it oneOff, host string) *fact.Fact {
 }
 
 // oneOffWrites is the step's commit: each statement, its words line in the
-// quote ledger (the turn's hash the ruling's line recorded), and the ruling
-// pointing at it.
+// quote ledger (the turn's hash the ruling's line recorded, the day they said
+// it), the ruling pointing at it, and the statements written before whose day
+// disagrees with their source (rep.Redates), corrected.
 func oneOffWrites(dir string, rep *oneOffsReport, byName map[string]*fact.Fact, today string) (map[string][]byte, error) {
 	files := map[string][]byte{}
 	ql, _ := os.ReadFile(filepath.Join(dir, filepath.FromSlash(ledger.QuotesPath)))
@@ -257,7 +287,7 @@ func oneOffWrites(dir string, rep *oneOffsReport, byName map[string]*fact.Fact, 
 		}
 		files[st.Path] = b
 		rq := quotes[ledger.Quote{Name: f.Meta.Name, Quote: f.Meta.Source.OwnerQuote, From: f.Meta.Source.OwnerQuoteFrom}.Key()]
-		add = append(add, ledger.Quote{Name: st.Meta.Name, Quote: st.Meta.Source.OwnerWords, From: it.From, TurnHash: rq.TurnHash, At: st.Meta.Created, Words: true}.Line()...)
+		add = append(add, ledger.Quote{Name: st.Meta.Name, Quote: st.Meta.Source.OwnerWords, From: it.From, TurnHash: rq.TurnHash, At: today, Words: true, Said: it.SaidOn}.Line()...)
 		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(f.Path)))
 		if err != nil {
 			return nil, err
@@ -269,6 +299,28 @@ func oneOffWrites(dir string, rep *oneOffsReport, byName map[string]*fact.Fact, 
 			return nil, err
 		}
 		files[f.Path] = out
+	}
+	for _, r := range rep.Redates {
+		if r.line != nil {
+			add = append(add, r.line.Line()...)
+		}
+		if !r.fix {
+			continue
+		}
+		data, ok := files[r.Path]
+		if !ok {
+			b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(r.Path)))
+			if err != nil {
+				return nil, err
+			}
+			data = b
+		}
+		out, err := fact.RedateStatement(data, r.To, today)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", r.Path, err)
+		}
+		files[r.Path] = out
+		log = append(log, statement.Entry{Kind: statement.LogRedated, At: today, Name: r.Name, Why: redateWhy(r)}.Line()...)
 	}
 	if len(add) > base {
 		files[ledger.QuotesPath] = add
@@ -326,7 +378,11 @@ Judge his words in his message, not the agent's rule: the rule shows how an agen
 		if it.Turn != "" && ownerwords.Normalize(it.Turn) != ownerwords.Normalize(it.Quote) {
 			fmt.Fprintf(&b, "his whole message: %s\n", strings.Join(strings.Fields(it.Turn), " "))
 		}
-		fmt.Fprintf(&b, "the rule an agent made of it: %s\nscope: %s; type: %s; day: %s\n</item>\n\n", strings.Join(strings.Fields(it.Description), " "), it.Scope, it.Type, it.Created)
+		day := it.Created
+		if it.SaidOn != "" {
+			day = it.SaidOn
+		}
+		fmt.Fprintf(&b, "the rule an agent made of it: %s\nscope: %s; type: %s; day: %s\n</item>\n\n", strings.Join(strings.Fields(it.Description), " "), it.Scope, it.Type, day)
 	}
 	b.WriteString(`Reply with only a JSON array, one object per item in order, no other text:
 [{"n": 1, "keep": true | false, "category": "<category>", "reason": "<one plain sentence>"}]`)
@@ -565,7 +621,9 @@ func runOneOffs(args []string) int {
 			fmt.Fprintln(os.Stderr, "rulings one-offs:", err)
 			return 2
 		}
-		rep = findOneOffs(facts, look, promotedFacts(s.Dir))
+		rep = findOneOffs(facts, look, promotedFacts(s.Dir), storeQuotes(s.Dir))
+		rep.Redates = statementRedates(facts, storeQuotes(s.Dir), look.saidOn, time.Now().Format("2006-01-02"), storeStatement)
+		rep.Redated, rep.RedatedLedger = countRedates(rep.Redates)
 		if !*noGate {
 			failed = oneOffGate(ctx, rep, reuse, *batch, *jobs)
 		}
@@ -582,7 +640,7 @@ func runOneOffs(args []string) int {
 			fmt.Fprintln(os.Stderr, "rulings one-offs:", err)
 			return 2
 		}
-		first := findOneOffs(facts, look, promotedFacts(s.Dir))
+		first := findOneOffs(facts, look, promotedFacts(s.Dir), storeQuotes(s.Dir))
 		failed = oneOffGate(ctx, first, reuse, *batch, *jobs)
 		for k, v := range reusedVerdicts(first) {
 			reuse[k] = v
@@ -592,7 +650,7 @@ func runOneOffs(args []string) int {
 			if err != nil {
 				return nil, "", err
 			}
-			rep = findOneOffs(facts, look, promotedFacts(s.Dir))
+			rep = findOneOffs(facts, look, promotedFacts(s.Dir), storeQuotes(s.Dir))
 			failed += oneOffGate(ctx, rep, reuse, *batch, *jobs)
 			for k, v := range reusedVerdicts(rep) {
 				reuse[k] = v
@@ -608,8 +666,11 @@ func runOneOffs(args []string) int {
 			for _, f := range facts {
 				byName[f.Meta.Name] = f
 			}
-			files, err := oneOffWrites(s.Dir, rep, byName, time.Now().Format("2006-01-02"))
-			msg := fmt.Sprintf("curator: one-offs: %d ruling(s) said in one session are the owner's statements, %d retired as not mattering to future work\n\nSPEC.md, One-offs and Relevance: words said once are a statement, never a rule, and only\nwhen they would matter to future work; only the statements step's ladder (said again in a\nseparate session, or a check) promotes them. %d left unjudged for the next run.", rep.GateKept, rep.GateDrop, rep.Unjudged)
+			today := time.Now().Format("2006-01-02")
+			rep.Redates = statementRedates(facts, storeQuotes(s.Dir), look.saidOn, today, storeStatement)
+			rep.Redated, rep.RedatedLedger = countRedates(rep.Redates)
+			files, err := oneOffWrites(s.Dir, rep, byName, today)
+			msg := fmt.Sprintf("curator: one-offs: %d ruling(s) said in one session are the owner's statements, %d retired as not mattering to future work, %d statement(s) redated\n\nSPEC.md, One-offs and Relevance: words said once are a statement, never a rule, and only\nwhen they would matter to future work; only the statements step's ladder (said again in a\nseparate session, or a check) promotes them. %d left unjudged for the next run.\nA statement is dated by the day the owner said it (their turn), never the day a step ran:\n%d statement(s) written before were corrected, %d words line(s) given the day.", rep.GateKept, rep.GateDrop, rep.Redated, rep.Unjudged, rep.Redated, rep.RedatedLedger)
 			return files, msg, err
 		})
 		if err != nil {
@@ -620,6 +681,7 @@ func runOneOffs(args []string) int {
 	}
 	fmt.Printf("rulings one-offs: %d live ruling(s); %d said in one session (%d no longer in a transcript here); kept: %v; user_standard facts holding their words, no ruling: %d one session, %d more\n",
 		rep.Rulings, rep.OneOffs, rep.NotFound, rep.Kept, rep.WordsOneSession, rep.WordsManySessions)
+	fmt.Printf("rulings one-offs: statements dated by another day than the owner said them: %d corrected, %d words line(s) given the day%s\n", rep.Redated, rep.RedatedLedger, map[bool]string{true: " (dry run: nothing written)", false: ""}[*dry])
 	if rep.Gated {
 		fmt.Printf("rulings one-offs: relevance gate: %d kept as statements, %d dropped, %d unjudged (%d judgement(s) reused); %v; %d call(s), %d failed, $%.2f\n",
 			rep.GateKept, rep.GateDrop, rep.Unjudged, rep.Reused, rep.Categories, rep.GateCalls, rep.GateFailed, rep.CostUSD)
