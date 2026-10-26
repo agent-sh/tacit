@@ -37,7 +37,56 @@ const (
 	// metaCeiling: lines matched on applies_to paths and commands, per
 	// prompt and per tool call.
 	metaCeiling = 1
+	// The prompt block's ranking when the session has repositories
+	// (repoRanked): a rule, standard, decision, past mistake or statement
+	// tied to them weighs promptRepoBoost times its word score, and a fact
+	// of another project's folder that is not tied to them weighs
+	// 1/promptOtherPenalty of it, so it needs that much more match to clear
+	// the floor. Ranked over promptRankPool candidates. Measured on the
+	// crdm-bench cells and the 276-case replay (eval/VALUE.md, "Workspaces
+	// and the session's repositories first"): the held-out facts reached stay
+	// level up to a boost of 1.5 and fall above it; the same penalty on this
+	// machine's facts loses held-out facts the task needed (a machine's
+	// tools, its build quirks), so machine facts keep their score unless the
+	// prompt-penalize-machines setting is on.
+	promptRepoBoost    = 1.5
+	promptOtherPenalty = 1.5
+	promptRankPool     = 50
 )
+
+// deliveryWeight reads a weight setting above zero (TACIT_DELIVERY_<key>).
+func deliveryWeight(key string, def float64) float64 {
+	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("TACIT_DELIVERY_"+key)), 64); err == nil && v > 0 && v <= 10 {
+		return v
+	}
+	return def
+}
+
+// repoRanked orders a prompt's candidates for a session with repositories
+// (names, repoNames): the deciding facts tied to them (tier 0 and 1,
+// repoTied) weigh promptRepoBoost times their word score; a fact filed
+// under another project (and, with the prompt-penalize-machines setting,
+// under a machine) and not tied to them weighs 1/promptOtherPenalty; the
+// user's, the system's, an org's or a topic's facts, this machine's, and the
+// rest of the repositories' own keep their score. Best first, ties in the
+// word ranking's order.
+func repoRanked(hits []search.Hit, names []string) []search.Hit {
+	boost := deliveryWeight("PROMPT_REPO_BOOST", promptRepoBoost)
+	penalty := deliveryWeight("PROMPT_OTHER_PENALTY", promptOtherPenalty)
+	machines := deliveryOn("PROMPT_PENALIZE_MACHINES", false)
+	out := append([]search.Hit(nil), hits...)
+	for i, h := range out {
+		tied := repoTied(h, names)
+		switch {
+		case tied && tier(h) <= 1:
+			out[i].Score *= boost
+		case !tied && ((machines && strings.HasPrefix(h.Scope, "machines/")) || strings.HasPrefix(h.Scope, "projects/")):
+			out[i].Score /= penalty
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	return out
+}
 
 // deliveryOn reads an on/off delivery setting: TACIT_DELIVERY_<key>.
 func deliveryOn(key string, def bool) bool {
@@ -111,12 +160,12 @@ func subRank(h search.Hit) int {
 	return 3
 }
 
-// repoNames is the session's repo and its verified aliases, lowercased and
-// distinct.
+// repoNames is the session's repo and its verified aliases, or its
+// workspace's repositories (hooks_workspace.go), lowercased and distinct.
 func repoNames(sit search.Situation) []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, n := range append([]string{sit.Repo}, sit.RepoAliases...) {
+	for _, n := range append(append([]string{sit.Repo}, sit.RepoAliases...), sit.Workspace...) {
 		n = strings.ToLower(strings.TrimSpace(n))
 		if n != "" && !seen[n] {
 			seen[n] = true
@@ -156,7 +205,7 @@ func repoTied(h search.Hit, names []string) bool {
 // host block.
 func repoStartHits(ctx context.Context, ix *search.Index, sit search.Situation) (hits []search.Hit, ok bool, err error) {
 	names := repoNames(sit)
-	if sit.Repo == "" || len(names) == 0 {
+	if len(names) == 0 {
 		return nil, false, nil
 	}
 	tied, err := ix.Tied(ctx, names)
@@ -453,7 +502,7 @@ func withSeen(seen map[string]bool, hits ...[]search.Hit) map[string]bool {
 // whose applies_to paths cover a path the prompt names, or whose command
 // the prompt names.
 func promptMetaHits(ctx context.Context, ix *search.Index, sit search.Situation, p string, seen map[string]bool) []search.Hit {
-	if sit.Repo == "" || !deliveryOn("PROMPT_METADATA", true) {
+	if len(repoNames(sit)) == 0 || !deliveryOn("PROMPT_METADATA", true) {
 		return nil
 	}
 	all, err := ix.MetaFacts(ctx)
@@ -471,7 +520,7 @@ func promptMetaHits(ctx context.Context, ix *search.Index, sit search.Situation,
 // own test") rarely pass against task words. Like the rule slot it is not
 // backfilled: when the best one was seen, nothing is added.
 func promptActionHits(ctx context.Context, ix *search.Index, sit search.Situation, p string, seen map[string]bool, block []search.Hit) []search.Hit {
-	if sit.Repo == "" || !deliveryOn("PROMPT_ACTION", true) {
+	if len(repoNames(sit)) == 0 || !deliveryOn("PROMPT_ACTION", true) {
 		return nil
 	}
 	for _, h := range block {
@@ -490,7 +539,7 @@ func promptActionHits(ctx context.Context, ix *search.Index, sit search.Situatio
 		if h.Score < ruleSlotFloor {
 			break
 		}
-		if tier(h) <= 1 && repoTied(h, names) && !h.Local {
+		if actionEligible(h, names) {
 			if seen[h.Name] || slices.ContainsFunc(block, func(b search.Hit) bool { return b.Name == h.Name }) {
 				return nil
 			}
@@ -498,4 +547,13 @@ func promptActionHits(ctx context.Context, ix *search.Index, sit search.Situatio
 		}
 	}
 	return nil
+}
+
+// actionEligible: a fact the action line may carry, a rule, standard,
+// decision, past mistake or statement tied to the session's repositories,
+// from the store or the local curator (this machine's curated facts, which
+// compete like the store's elsewhere in delivery), never an unreviewed
+// local note.
+func actionEligible(h search.Hit, names []string) bool {
+	return tier(h) <= 1 && repoTied(h, names) && (!h.Local || overlay.IsCurated(h.Path))
 }

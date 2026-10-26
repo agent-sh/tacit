@@ -19,6 +19,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/follow"
 	"github.com/agent-sh/tacit/client/internal/overlay"
+	"github.com/agent-sh/tacit/client/internal/repoid"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
@@ -197,7 +198,8 @@ func runHook(args []string) int {
 		}
 		defer ix.Close()
 		recs := hookRecords(ctx, ix)
-		sit = withOrgs(withRecordAliases(withRootFolder(sit, recs, in.Cwd), recs), recs)
+		sit, _ = withWorkspace(withRootFolder(sit, recs, in.Cwd), in.Cwd)
+		sit = withOrgs(withRecordAliases(sit, recs), recs)
 		hits, err := sessionStartHits(ctx, ix, sit)
 		if err != nil {
 			return 0
@@ -228,12 +230,19 @@ func runHook(args []string) int {
 		defer ix.Close()
 		recs := hookRecords(ctx, ix)
 		// Outside a repo: a project folder whose record names the place, else
-		// the repo the prompt and the session's recent tool calls point at
-		// (started in home, a folder of checkouts).
-		sit = withRootFolder(sit, recs, in.Cwd)
+		// the workspace's repositories (hooks_workspace.go), else the repo the
+		// prompt and the session's recent tool calls point at (started in
+		// home, a big folder of checkouts). In a workspace those calls narrow
+		// it to the one of its repositories they point at, and to no other.
+		var ws []repoid.Repo
+		sit, ws = withWorkspace(withRootFolder(sit, recs, in.Cwd), in.Cwd)
 		if sit.Repo == "" {
 			home, _ := os.UserHomeDir()
-			sit.Repo = activityRepo(ctx, in, home)
+			if a := activityRepo(ctx, in, home); len(ws) == 0 {
+				sit.Repo = a
+			} else if r, ok := workspaceRepoNamed(ws, a); ok && a != "" {
+				sit = narrowTo(sit, r)
+			}
 		}
 		sit = withOrgs(withRecordAliases(sit, recs), recs)
 		if deliveryOn("TOPICS", true) {
@@ -258,16 +267,24 @@ func runHook(args []string) int {
 // startTreeLine is the SessionStart block's last line when the repo block
 // shows fewer of the repository's facts than it has (startCeiling, the type
 // filter): how many it has and the tree call that lists them by folder
-// (repoTreeLine), so a session knows there is more to browse. With the
-// tree-pointer setting off, or outside a repo, or with the repo block off,
-// nothing.
+// (repoTreeLine), so a session knows there is more to browse; in a
+// workspace, all of its repositories' facts and each folder that holds them.
+// With the tree-pointer setting off, or outside a repo and a workspace, or
+// with the repo block off, nothing.
 func startTreeLine(ctx context.Context, ix *search.Index, sit search.Situation, shown int, mcp bool) string {
-	if sit.Repo == "" || !deliveryOn("REPO_START", true) || !deliveryOn("TREE_POINTER", true) {
+	if len(repoNames(sit)) == 0 || !deliveryOn("REPO_START", true) || !deliveryOn("TREE_POINTER", true) {
 		return ""
 	}
 	tool := "`tacit tree"
 	if mcp {
 		tool = "`mcp__tacit__tacit_tree"
+	}
+	if len(sit.Workspace) > 0 {
+		n, folders := workspaceFacts(ctx, ix, sit.Workspace)
+		if n <= shown {
+			return ""
+		}
+		return workspaceTreeLine(n, folders, tool)
 	}
 	n, folder := repoFacts(ctx, ix, repoNames(sit))
 	if n <= shown {
@@ -293,7 +310,7 @@ func sessionStartHits(ctx context.Context, ix *search.Index, sit search.Situatio
 			return hits, err
 		}
 	}
-	sit.Query = sit.Repo
+	sit.Query = strings.TrimSpace(sit.Repo + " " + strings.Join(sit.Workspace, " "))
 	sit.RestrictRepos = true
 	sit.PromptRelevance = false
 	sit.Derived = false
@@ -344,9 +361,24 @@ func promptHits(ctx context.Context, ix *search.Index, sit search.Situation, p s
 	if utilityProvider() != "" {
 		ceiling = promptLimit // the scorer's pool and cap are its own (SPEC.md, Delivery)
 	}
-	hits, err := ix.Query(ctx, sit, ceiling*2, false)
+	// With session repositories the candidates are ranked by repoRanked
+	// over a wider pool, so a deciding fact of these repositories a little
+	// down the word ranking can climb; the block sees as many as before.
+	names := repoNames(sit)
+	ranked := len(names) > 0 && deliveryOn("PROMPT_REPO_RANK", true)
+	pool := ceiling * 2
+	if ranked {
+		pool = max(pool, deliveryInt("PROMPT_RANK_POOL", promptRankPool))
+	}
+	hits, err := ix.Query(ctx, sit, pool, false)
 	if err != nil {
 		return nil, err
+	}
+	if ranked {
+		hits = repoRanked(hits, names)
+		if len(hits) > ceiling*2 {
+			hits = hits[:ceiling*2]
+		}
 	}
 	sit.OnlyDerived, sit.Printable = true, true
 	dhits, err := ix.Query(ctx, sit, 1, false)
@@ -354,7 +386,7 @@ func promptHits(ctx context.Context, ix *search.Index, sit search.Situation, p s
 		dhits = nil // the curated block stands without them
 	}
 	floor := promptFloor
-	if sit.Repo == "" {
+	if len(names) == 0 {
 		floor = repoLessPromptFloor
 	}
 	out := utilityPromptSelection(ctx, p, hits, dhits, seen, floor)

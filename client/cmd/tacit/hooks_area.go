@@ -147,10 +147,10 @@ func hookRecords(ctx context.Context, ix *search.Index) map[string]*record.Recor
 // record's: "pikadon (GitHub: ginza)") and the org folders of its forge
 // organization (the records' org, tree.Session.Orgs).
 func withOrgs(sit search.Situation, recs map[string]*record.Record) search.Situation {
-	if sit.Repo == "" || len(recs) == 0 {
+	if len(recs) == 0 || len(repoNames(sit)) == 0 {
 		return sit
 	}
-	if f := record.RepoOwner(recs, sit.Repo); f != "" {
+	if f := record.RepoOwner(recs, sit.Repo); sit.Repo != "" && f != "" {
 		if w, _, err := record.Resolve(recs, f); err == nil && recs[w] != nil {
 			sit.RepoDisplay = recs[w].Display()
 			// A dead repository another project replaced: that project's rules
@@ -230,7 +230,14 @@ func successorStartHits(ctx context.Context, ix *search.Index, sit search.Situat
 // repository: a folder suppressed into it, the folder it is suppressed
 // into, and the winner's aliases (suppressionNames), read from the index.
 func withRecordAliases(sit search.Situation, recs map[string]*record.Record) search.Situation {
-	if sit.Repo == "" || len(recs) == 0 {
+	if len(recs) == 0 {
+		return sit
+	}
+	if sit.Repo == "" {
+		// A workspace: the names the records give each of its repositories.
+		if len(sit.Workspace) > 0 {
+			sit.Workspace = lowerDistinct(suppressionNames(recs, sit.Workspace))
+		}
 		return sit
 	}
 	names := suppressionNames(recs, repoNames(sit))
