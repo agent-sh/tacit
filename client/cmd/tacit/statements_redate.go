@@ -36,14 +36,16 @@ type statementRedate struct {
 	fix  bool
 }
 
-// statementRedates are the corrections due on facts: each live statement
-// (keep) whose words line in quotes has a said day, or, with said, whose turn
-// code finds with its time, and whose body says another day. A day after
-// today is no day they said it.
+// statementRedates are the corrections due on facts: each curated statement
+// keep takes (the statements step's own live ones; every one of the store's
+// for one-offs, superseded ones included, whose day is the record of when the
+// owner said them) whose words line in quotes has a said day, or, with said,
+// whose turn code finds with its time, and whose body says another day. A
+// day after today is no day they said it.
 func statementRedates(facts []*fact.Fact, quotes map[string]ledger.Quote, said curate.SaidOn, today string, keep func(*fact.Fact) bool) []statementRedate {
 	var out []statementRedate
 	for _, f := range facts {
-		if f.Meta.Type != fact.StatementType || !liveFact(f) || (keep != nil && !keep(f)) {
+		if f.Meta.Type != fact.StatementType || f.InInbox() || (keep != nil && !keep(f)) {
 			continue
 		}
 		s := f.Meta.Source
