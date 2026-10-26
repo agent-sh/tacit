@@ -45,15 +45,23 @@ func datesRig(t *testing.T) (*rig, map[string]string) {
 		"rename":  "2026-09-01T12:00:00Z",
 		"again":   "2026-09-02T12:00:00Z",
 		"runner":  "2026-08-30T12:00:00Z",
+		"notes":   "2026-08-25T12:00:00Z",
 	}
 	runner := "the nightly build stays on the old runner until the migration ends"
 	old := &fact.Fact{Path: "user/old-statement.md", Meta: fact.Meta{Name: "old-statement", Description: "where the nightly build runs", Type: fact.StatementType, Scope: "user",
 		Source:  fact.Source{Harness: "curator", Host: "host-a", Kind: "observed", OwnerWords: runner, OwnerWordsFrom: "claude:theirs"},
 		Created: "2026-10-25"}, Body: fact.StatementBody("2026-10-25", runner, "where the nightly build runs", "")}
 	writeFactFile(t, r.clone, old)
+	// Superseded since: its day is still the record of when they said it.
+	notes := "the release notes stay short and plain for every tag we cut"
+	sup := &fact.Fact{Path: "user/old-superseded.md", Meta: fact.Meta{Name: "old-superseded", Description: "how release notes read", Type: fact.StatementType, Scope: "user",
+		Source:  fact.Source{Harness: "curator", Host: "host-a", Kind: "observed", OwnerWords: notes, OwnerWordsFrom: "claude:theirs"},
+		Created: "2026-10-25", SupersededBy: "old-statement"}, Body: fact.StatementBody("2026-10-25", notes, "how release notes read", "")}
+	writeFactFile(t, r.clone, sup)
 	qp := filepath.Join(r.clone, filepath.FromSlash(ledger.QuotesPath))
 	ql, _ := os.ReadFile(qp)
 	ql = append(withNewline(ql), ledger.Quote{Name: "old-statement", Quote: runner, From: "claude:theirs", TurnHash: ledger.TurnHash(ownerwords.Normalize(runner)), At: "2026-10-25", Words: true}.Line()...)
+	ql = append(ql, ledger.Quote{Name: "old-superseded", Quote: notes, From: "claude:theirs", TurnHash: ledger.TurnHash(ownerwords.Normalize(notes)), At: "2026-10-25", Words: true}.Line()...)
 	os.WriteFile(qp, ql, 0o644)
 	r.commitAs("format, and a statement an older binary dated by its run")
 
@@ -67,6 +75,7 @@ func datesRig(t *testing.T) (*rig, map[string]string) {
 		line(at["rename"], "please never rename public endpoints without asking me, ok?"),
 		line(at["release"], "dont tag a release on fridays without cheking the changelog"),
 		line(at["runner"], runner),
+		line(at["notes"], notes),
 		line("2026-07-01T12:00:00Z", "Dont reset the shared cache on friday, those are mine"),
 	}, "\n")+"\n"), 0o644)
 	os.WriteFile(filepath.Join(proj, "again.jsonl"), []byte(line(at["again"], "as before: never rename public endpoints without asking me")+"\n"), 0o644)
@@ -104,7 +113,13 @@ func TestOneOffsDateStatementsByTheOwnersTurn(t *testing.T) {
 	if json.Unmarshal(readBytes(t, dry), &rep) != nil || r.serverHead() != head {
 		t.Fatal("no report, or the dry run wrote")
 	}
-	if rep.Redated != 1 || rep.RedatedLedger != 1 || len(rep.Redates) != 1 || rep.Redates[0].Name != "old-statement" || rep.Redates[0].To != dayOf(t, at["runner"]) || rep.Redates[0].By != "turn" {
+	to := map[string]string{}
+	for _, d := range rep.Redates {
+		if d.By == "turn" {
+			to[d.Name] = d.To
+		}
+	}
+	if rep.Redated != 2 || rep.RedatedLedger != 2 || len(rep.Redates) != 2 || to["old-statement"] != dayOf(t, at["runner"]) || to["old-superseded"] != dayOf(t, at["notes"]) {
 		t.Fatalf("dry run's redates: %d, %d, %+v", rep.Redated, rep.RedatedLedger, rep.Redates)
 	}
 	for _, it := range rep.Items {
@@ -118,9 +133,9 @@ func TestOneOffsDateStatementsByTheOwnersTurn(t *testing.T) {
 	gitIn(t, r.clone, "pull", "-q", "--ff-only")
 	by := factsByName(t, r.clone)
 	quotes := storeQuotes(r.clone)
-	for name, want := range map[string]string{"typo-fixed-said-once": dayOf(t, at["release"]), "old-statement": dayOf(t, at["runner"])} {
+	for name, want := range map[string]string{"typo-fixed-said-once": dayOf(t, at["release"]), "old-statement": dayOf(t, at["runner"]), "old-superseded": dayOf(t, at["notes"])} {
 		st := by[name]
-		if st == nil || !fact.IsStatement(st) {
+		if st == nil || st.Meta.Type != fact.StatementType || st.Meta.Source.OwnerWords == "" {
 			t.Fatalf("%s: %+v", name, st)
 		}
 		day, _, ok := fact.StatementLine(st.Body)
