@@ -1194,19 +1194,14 @@ func FactClaims(f *fact.Fact, local bool) bool {
 const ClaimMark = "claims owner authority without evidence"
 
 // HeldClause is the SQL condition the hooks' queries add: no agent's note
-// the reviewer judged wrong, the owner said no to, or the owner corrected.
-const HeldClause = "coalesce(f.review, '') NOT IN ('wrong', 'rejected', 'corrected')"
+// the reviewer judged wrong or replaced by its trim, the owner said no to,
+// or the owner corrected (ledger.Withheld).
+const HeldClause = "coalesce(f.review, '') NOT IN ('wrong', 'replaced', 'rejected', 'corrected')"
 
 // Held reports an agent's note no hook delivers: the reviewer judged it
 // wrong, or the owner said no to it or corrected it (SPEC.md, "The
 // reviewer"). Search and the tree still find it, marked.
-func (h Hit) Held() bool {
-	switch h.Review {
-	case ledger.VerdictWrong, ledger.VerdictRejected, ledger.VerdictCorrected:
-		return true
-	}
-	return false
-}
+func (h Hit) Held() bool { return ledger.Withheld(h.Review) }
 
 // HeldBack reports a fact no hook pushes: a claim of the owner's authority
 // without their words (Claim), or an agent's note turned down (Held).
@@ -1228,7 +1223,7 @@ func ReviewWeight(review string) float64 {
 	switch review {
 	case ledger.VerdictConfirmed:
 		return weightConfirmed
-	case ledger.VerdictCorrect:
+	case ledger.VerdictCorrect, ledger.VerdictTrimmed:
 		return weightCorrect
 	case ledger.VerdictUncertain, ledger.VerdictNoSource:
 		return weightUnsure
@@ -1269,6 +1264,10 @@ func ReviewMark(review string) string {
 	switch review {
 	case ledger.VerdictCorrect:
 		return "checked against its session"
+	case ledger.VerdictTrimmed:
+		return "trimmed to what its session supports"
+	case ledger.VerdictReplaced:
+		return "replaced by its trim"
 	case ledger.VerdictUncertain:
 		return "unconfirmed"
 	case ledger.VerdictNoSource:

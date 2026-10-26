@@ -6,6 +6,7 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/dream"
 	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
 )
 
@@ -120,5 +121,54 @@ func TestDreamedRulingKeepsTheOwnerOnlyWithTheirWords(t *testing.T) {
 		if strings.Contains(f.Body, "owner said") || (strings.Contains(f.Body, "owner's words") && !c.user) {
 			t.Errorf("%s: an attribution the evidence does not back: %q", c.name, f.Body)
 		}
+	}
+}
+
+// A ruling resting on words the owner said in one session is their
+// statement, never a rule; said in two sessions it stays a ruling; their app
+// note is never a one-off.
+func TestOneOffRulingIsAStatement(t *testing.T) {
+	where := func(q, session string) (string, string) { return "claude:s1", "h1" }
+	n := note("n1", "claude", "The owner said \"never rename public endpoints without asking me\" on 2026-09-21.")
+	e := Entry{Kind: "user", OwnerQuote: "never rename public endpoints without asking me", Description: "Public endpoints are not renamed without asking the owner",
+		Body: "Ask before renaming a public endpoint.", Context: "renaming the billing endpoint", Name: "f", Scope: "user", Type: "user_standard", Origin: "n1"}
+	mk := func() (*fact.Fact, ledger.Quote) {
+		f := ToFact(e, "host-a", map[string]bool{})
+		f.Meta.Created = "2026-09-21"
+		q, ruling := ApplyEvidence(f, e, n, where)
+		if !ruling {
+			t.Fatal("not a ruling")
+		}
+		return f, q
+	}
+	f, q := mk()
+	wq, ok := OneOff(f, e, q, []string{"claude:s1"}, true)
+	s := f.Meta.Source
+	if !ok || f.Meta.Type != fact.StatementType || s.Kind != "observed" || s.OwnerQuote != "" || s.OwnerWords != "never rename public endpoints without asking me" || s.OwnerWordsFrom != "claude:s1" ||
+		!wq.Words || wq.Quote != s.OwnerWords || f.Meta.Description != "renaming the billing endpoint" {
+		t.Fatalf("one session: %+v %+v %v", f.Meta, wq, ok)
+	}
+	if day, words, ok := fact.StatementLine(f.Body); !ok || day != "2026-09-21" || words != s.OwnerWords || !strings.Contains(f.Body, fact.GlossLabel+"Ask before renaming") {
+		t.Fatalf("body: %q", f.Body)
+	}
+	// No transcript here holds it now: the ledger's one session stands.
+	if f, q := mk(); func() bool { _, ok := OneOff(f, e, q, nil, true); return ok }() == false {
+		t.Fatal("a ruling no transcript holds now stayed a rule")
+	}
+	// Two sessions: a ruling still.
+	f, q = mk()
+	if _, ok := OneOff(f, e, q, []string{"claude:s1", "codex:s2"}, true); ok || f.Meta.Source.Kind != "user" {
+		t.Fatalf("two sessions: %+v", f.Meta.Source)
+	}
+	// Their app note: theirs, written on purpose.
+	f, q = mk()
+	q.From = "note:owner-note-x"
+	if _, ok := OneOff(f, e, q, nil, true); ok {
+		t.Fatal("an app note became a one-off")
+	}
+	// A store before statements: an observed fact holding their words.
+	f, q = mk()
+	if _, ok := OneOff(f, e, q, []string{"claude:s1"}, false); !ok || f.Meta.Type != "user_standard" || f.Meta.Source.Kind != "observed" || f.Meta.Source.OwnerWords == "" {
+		t.Fatalf("before statements: %+v", f.Meta)
 	}
 }

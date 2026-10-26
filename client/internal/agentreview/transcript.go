@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/hermes"
@@ -39,6 +40,9 @@ type Msg struct {
 	Text  string
 	Owner bool
 	Tools []Tool
+	// At is when the message was written (RFC 3339), when the transcript
+	// says: a statement made from an owner's turn is dated by it.
+	At string
 }
 
 // Conversation is a session read for the reviewer.
@@ -219,17 +223,51 @@ func cwdOf(line []byte) string {
 	return ""
 }
 
-// lineMsgs is the messages of one transcript line.
+// lineMsgs is the messages of one transcript line, with the line's time.
 func lineMsgs(f digest.Format, owner bool, line []byte) []Msg {
+	var ms []Msg
 	switch f {
 	case digest.Claude:
-		return claudeMsgs(owner, line)
+		ms = claudeMsgs(owner, line)
 	case digest.Codex:
-		return codexMsgs(owner, line)
+		ms = codexMsgs(owner, line)
 	case digest.Pi:
-		return piMsgs(owner, line)
+		ms = piMsgs(owner, line)
 	}
-	return nil
+	if len(ms) > 0 {
+		if at := lineTime(line); at != "" {
+			for i := range ms {
+				ms[i].At = at
+			}
+		}
+	}
+	return ms
+}
+
+// lineTime is a transcript line's own time (its top-level timestamp, as
+// Claude Code, Codex and pi write it), RFC 3339 in UTC; "" when it has none.
+func lineTime(line []byte) string {
+	var o struct {
+		Timestamp json.RawMessage `json:"timestamp"`
+	}
+	if json.Unmarshal(line, &o) != nil || len(o.Timestamp) == 0 {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(o.Timestamp, &s) == nil {
+		if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+			return t.UTC().Format(time.RFC3339)
+		}
+		return ""
+	}
+	var n float64
+	if json.Unmarshal(o.Timestamp, &n) == nil && n > 0 {
+		if n > 1e12 {
+			n /= 1000 // milliseconds
+		}
+		return time.Unix(int64(n), 0).UTC().Format(time.RFC3339)
+	}
+	return ""
 }
 
 func userMsg(f digest.Format, owner bool, line []byte, texts []string) []Msg {
@@ -466,6 +504,11 @@ func ReadHermesAfter(ctx context.Context, db, sid string, after int64) (Conversa
 		if r.Copy {
 			continue
 		}
+		at := ""
+		if r.Timestamp > 0 {
+			at = time.Unix(int64(r.Timestamp), 0).UTC().Format(time.RFC3339)
+		}
+		n := len(c.Msgs)
 		switch r.Role {
 		case "user":
 			if text, injected := digest.HermesOwnerText(r.Content, r.DisplayKind, r.Summary); owner && !injected && strings.TrimSpace(text) != "" && !ownerwords.AgentInjected(text) {
@@ -489,6 +532,9 @@ func ReadHermesAfter(ctx context.Context, db, sid string, after int64) (Conversa
 			if m.Text != "" || len(m.Tools) > 0 {
 				c.Msgs = append(c.Msgs, m)
 			}
+		}
+		for i := n; i < len(c.Msgs); i++ {
+			c.Msgs[i].At = at
 		}
 	}
 	return c, nil

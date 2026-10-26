@@ -394,6 +394,7 @@ type Report struct {
 	Rulings          int             `json:"rulings"`
 	NotOwnerWords    int             `json:"not_owner_words,omitempty"` // kind user entries with no verified quote of theirs, filed as observed
 	Statements       int             `json:"statements,omitempty"`      // statements of the owner's the split kept (their words said once)
+	OneOffs          int             `json:"one_offs,omitempty"`        // rulings resting on words of theirs said in one session, kept as their statements (OneOff)
 	RecoveredRulings int             `json:"recovered_rulings"`
 	Checked          int             `json:"conflict_checks"`
 	JudgeCalls       int             `json:"judge_calls"`

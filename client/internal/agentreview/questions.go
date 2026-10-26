@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/search"
 )
@@ -220,9 +221,11 @@ func (q *Queue) ByID(id string) *Item {
 }
 
 // Add queues a question for it unless the note has one already (whatever
-// its state: a note is asked about once). It reports whether it added.
+// its state: a note is asked about once) or MaxOpen wait already (the cap
+// holds when a question is queued, not only when one is put: a note past it
+// stays a low-weight agent's note). It reports whether it added.
 func (q *Queue) Add(it Item, now time.Time) bool {
-	if q.Find(it.Note) != nil {
+	if q.Find(it.Note) != nil || len(q.Open()) >= MaxOpen {
 		return false
 	}
 	it.ID = ItemID(it.Note)
@@ -418,4 +421,33 @@ func (q *Queue) Open() []Item {
 		}
 	}
 	return out
+}
+
+// Why a note the reviewer was unsure of is not a question (Gate).
+const (
+	NotCoreDoubt = "only an overreach is in doubt, or the reviewer did not say"
+	NotWeighty   = "not a rule, a decision or a past mistake"
+	NotActive    = "not about an active project"
+	NotFull      = "12 questions wait already"
+)
+
+// Gate decides by code whether an uncertain verdict is worth a question
+// (SPEC.md, "Questions"): its core is in doubt (not a true core with an
+// overreach), it is a rule, a decision or a past mistake, it is about a
+// project whose record says active, and neither the owner's words nor a
+// check settles it (settled: why, "" when nothing does). Anything else stays
+// a silent low-weight agent's note the rotation checks again. It returns
+// why not, "" for a question.
+func Gate(l ledger.Review, active bool, settled string) string {
+	switch {
+	case l.Verdict != ledger.VerdictUncertain || l.Doubt != DoubtCore:
+		return NotCoreDoubt
+	case l.Kind != KindRule && l.Kind != KindDecision && l.Kind != KindMistake:
+		return NotWeighty
+	case !active:
+		return NotActive
+	case settled != "":
+		return settled
+	}
+	return ""
 }

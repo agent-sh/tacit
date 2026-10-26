@@ -137,3 +137,40 @@ func ApplyStatement(f *fact.Fact, e Entry, note *fact.Fact, where Where, stateme
 	src.OwnerWords, src.OwnerWordsFrom = q, from
 	return ledger.Quote{Name: f.Meta.Name, Quote: q, From: from, TurnHash: hash, At: f.Meta.Created, Words: true}, true
 }
+
+// OneOff settles a ruling ApplyEvidence kept (SPEC.md, "One-offs"): words
+// the owner said in one session are a statement scoped to their moment,
+// never a standing rule (the owner, 2026-10-25: "not everything I say needs
+// to become a rule"). sessions is every session code finds the quote in, as a
+// statement of theirs (ownerwords.Corpus.SaidIn). Said in two or more, it
+// stays a ruling. Said in one (or none code can count), f becomes their
+// statement as ApplyStatement writes one: type statement, their words in
+// owner_words, the day the note was read, the entry's context, the model's
+// reading as the gloss; in a store whose format predates statements, an
+// observed fact of the entry's type holding their words. Only the
+// statements step's ladder (said again in a separate session, or a check
+// that agrees) makes a decision or a rule of it. q is the ruling's quote
+// ledger line; it returns the words line and whether f was changed.
+func OneOff(f *fact.Fact, e Entry, q ledger.Quote, sessions []string, statements bool) (ledger.Quote, bool) {
+	if len(sessions) >= 2 || q.Quote == "" || q.From == "" || strings.HasPrefix(q.From, "note:") {
+		return q, false
+	}
+	src := &f.Meta.Source
+	words := strings.Join(strings.Fields(q.Quote), " ")
+	src.Kind, src.OwnerQuote, src.OwnerQuoteFrom, src.Endorsed = "observed", "", "", ""
+	src.OwnerWords, src.OwnerWordsFrom = words, q.From
+	day := f.Meta.Created
+	context := strings.Join(strings.Fields(e.Context), " ")
+	if context == "" {
+		context = strings.Join(strings.Fields(f.Meta.Description), " ")
+	}
+	if statements {
+		gloss := strings.Join(strings.Fields(strings.ReplaceAll(f.Body, fmt.Sprintf(" In the owner's words: \"%s\"", words), "")), " ")
+		f.Meta.Type = fact.StatementType
+		f.Meta.Description = fact.ClipDescription(context, 200)
+		f.Body = fact.StatementBody(day, words, context, gloss)
+	} else if !ownerwords.In(f.Meta.Description+"\n"+f.Body, words) {
+		f.Body = strings.TrimRight(f.Body, "\n") + fmt.Sprintf(" In the owner's words, said once (%s): \"%s\"\n", day, words)
+	}
+	return ledger.Quote{Name: f.Meta.Name, Quote: words, From: q.From, TurnHash: q.TurnHash, At: day, Words: true}, true
+}

@@ -259,6 +259,48 @@ func (c *Corpus) Find(quote, session string, exactOnly bool) (Match, bool) {
 	return Match{}, false
 }
 
+// SaidIn is every session in which the owner said the quote as a statement
+// of theirs (exact words, or a typo of theirs the quote corrected as Find
+// forgives one; not their question, not negated): their refs, each once,
+// sorted. A prompt history line with no session (claude:history,
+// codex:history) names no session and is not counted, and neither is a
+// turn word for word the same as one already counted (a resumed, forked or
+// imported copy of the session: on the rig, Codex forks and Hermes
+// continuations repeat the owner's turns under new ids). Code counts sessions
+// with it (SPEC.md, "One-offs"): words said in one session are a statement,
+// never a rule.
+func (c *Corpus) SaidIn(quote string) []string {
+	segs := Segments(quote)
+	if segs == nil || c == nil || c.sa == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	turns := map[string]bool{} // the turns counted, by their normalized text
+	var out []string
+	try := func(idx []int, near bool) {
+		for _, i := range idx {
+			ref := c.refs[i]
+			if seen[ref] || strings.HasSuffix(ref, ":history") {
+				continue
+			}
+			text := Normalize(c.raw[i])
+			if turns[text] {
+				continue // a copy of a turn counted already
+			}
+			if m, ok := c.matchTurn(i, segs, near); ok && m.Clean() {
+				seen[ref], turns[text] = true, true
+				out = append(out, ref)
+			}
+		}
+	}
+	try(c.candidates(segs[0]), false)
+	if len(segs) == 1 && len(strings.Fields(segs[0])) >= 4 {
+		try(c.nearCandidates(strings.Fields(segs[0])), true)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // candidates are the turns holding seg exactly.
 func (c *Corpus) candidates(seg string) []int {
 	seen := map[int]bool{}

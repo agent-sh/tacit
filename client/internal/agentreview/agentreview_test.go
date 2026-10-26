@@ -204,9 +204,16 @@ func TestQueuePicksRelevantQuestionsWithinTheCaps(t *testing.T) {
 	if it := q.Pick(Situation{Harness: "codex", Session: "s4", Prompt: "write a poem"}, now); it != nil {
 		t.Fatalf("an unrelated session was asked %+v", it)
 	}
-	// Never piles up: past MaxOpen the oldest expire; past Expiry all do.
+	// Never piles up: past MaxOpen waiting, no question is queued (the cap
+	// holds at queue time); past Expiry all expire.
+	added := 0
 	for i := 0; i < MaxOpen+3; i++ {
-		q.Add(Item{Note: "inbox/x/" + string(rune('a'+i)) + ".md", Desc: "x", Day: "2026-10-21"}, now.Add(time.Hour+time.Duration(i)*time.Minute))
+		if q.Add(Item{Note: "inbox/x/" + string(rune('a'+i)) + ".md", Desc: "x", Day: "2026-10-21"}, now.Add(time.Hour+time.Duration(i)*time.Minute)) {
+			added++
+		}
+	}
+	if n := len(q.Open()); n != MaxOpen || added >= MaxOpen {
+		t.Fatalf("%d open, %d added past the cap", n, added)
 	}
 	q.Tidy(now.Add(2 * time.Hour))
 	if n := len(q.Open()); n != MaxOpen {

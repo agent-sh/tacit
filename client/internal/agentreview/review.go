@@ -92,11 +92,17 @@ func savePoint(msgs []Msg, n Note) int {
 const afterSave = 20
 
 // Result is one review: its ledger line, the conversation it was judged
-// against (Cwd for the question), and whether a model was asked.
+// against (Cwd for the question), and whether a model was asked. For an
+// uncertain note the reviewer cut down, Trim is its trim when code's check
+// passed it (CheckTrim), TrimProblems why not, and Msgs the messages the
+// trim's numbers name.
 type Result struct {
-	Line   ledger.Review
-	Conv   Conversation
-	Called bool
+	Line         ledger.Review
+	Conv         Conversation
+	Called       bool
+	Trim         *Trim
+	TrimProblems []string
+	Msgs         []Msg
 }
 
 // Review judges one note. A note with no session, or whose session is not on
@@ -125,7 +131,7 @@ func (rv Reviewer) Review(ctx context.Context, n Note) (Result, error) {
 	}
 	conv.Harness, conv.Session = harness, id
 	msgs := conv.Msgs[:savePoint(conv.Msgs, n)]
-	text := Digest(msgs, DigestBudget, DigestRecent)
+	text, shown := DigestShown(msgs, DigestBudget, DigestRecent)
 	save := Save{Kind: "tacit note", Label: n.Type, Where: "tacit scope " + n.Scope + ", name " + n.Name, Text: n.Desc + "\n" + n.Body, Cwd: conv.Cwd}
 	if n.ImportedFrom != "" {
 		save.Kind, save.Where = "memory file", "memory file "+n.ImportedFrom
@@ -148,6 +154,15 @@ func (rv Reviewer) Review(ctx context.Context, n Note) (Result, error) {
 	if err != nil {
 		return res, err
 	}
-	res.Line.Verdict, res.Line.Reason = v.Verdict, v.Reason
+	res.Line.Verdict, res.Line.Reason, res.Line.Doubt, res.Line.Kind = v.Verdict, v.Reason, v.Doubt, v.Kind
+	if v.Trim != nil {
+		// The trim is checked against the conversation as the model read it
+		// (redacted): its citations name those messages.
+		if ps := CheckTrim(n, msgs, shown, v.Kind, *v.Trim); len(ps) > 0 {
+			res.TrimProblems = ps
+		} else {
+			res.Trim, res.Msgs = v.Trim, msgs
+		}
+	}
 	return res, nil
 }
