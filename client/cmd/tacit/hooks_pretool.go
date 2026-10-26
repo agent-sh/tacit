@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -87,7 +88,9 @@ func repoRel(r repoid.Repo, cwd, p string) (string, bool) {
 //
 //   - in a repository, at most metaCeiling of this repo's rules, standards,
 //     decisions and past mistakes whose applies_to paths cover a file the
-//     call writes, or whose command the call runs;
+//     call writes, or whose command the call runs; in a workspace
+//     (hooks_workspace.go) the same for the workspace repository the file
+//     is in, or for all of them for a shell command;
 //   - anywhere, in a repository or not, for each area whose tool patterns
 //     match the call's tool name or whose commands it runs, the first time
 //     in the session: a few of the area's rules, standards, decisions and
@@ -118,6 +121,20 @@ func preTool(s *store.Store, in hookInput) {
 	var rel []string
 	var sit search.Situation
 	repo, inRepo := sessionRepo(in.Cwd)
+	// Outside a repository, in a workspace (hooks_workspace.go): a file the
+	// call writes narrows the session to its repository; a shell command
+	// alone is matched against every repository of the workspace.
+	var ws []repoid.Repo
+	if !inRepo && (len(paths) > 0 || command != "") {
+		home, _ := os.UserHomeDir()
+		ws = workspaceRepos(in.Cwd, home)
+		for _, p := range paths {
+			if r, ok := workspaceRepoOf(ws, in.Cwd, p); ok {
+				repo, inRepo = r, true
+				break
+			}
+		}
+	}
 	if inRepo {
 		sit = search.Situation{Repo: repo.Name, Host: store.ShortHost(), RepoAliases: repoAliases(repo)}
 		for _, p := range paths {
@@ -126,11 +143,15 @@ func preTool(s *store.Store, in hookInput) {
 			}
 		}
 	}
+	wsCommand := !inRepo && len(ws) > 0 && command != ""
+	if wsCommand {
+		sit = search.Situation{Host: store.ShortHost(), Workspace: workspaceNames(ws)}
+	}
 	// An area matches an MCP tool's name or a shell command (the matcher
 	// sends no other tool here but the edit tools): an edit outside a
 	// repository opens nothing, as before areas.
 	areas := deliveryOn("AREA_PUSH", true) && (strings.HasPrefix(in.ToolName, "mcp__") || command != "")
-	if !areas && (!inRepo || (len(rel) == 0 && command == "")) {
+	if !areas && !wsCommand && (!inRepo || (len(rel) == 0 && command == "")) {
 		return
 	}
 	ix, err := openHookIndex(ctx, s)
@@ -141,7 +162,7 @@ func preTool(s *store.Store, in hookInput) {
 	recs := hookRecords(ctx, ix)
 	seen := delivered(in.SessionID)
 	var hits []search.Hit
-	if inRepo && (len(rel) > 0 || command != "") {
+	if (inRepo && (len(rel) > 0 || command != "")) || wsCommand {
 		sit = withRecordAliases(sit, recs)
 		all, err := ix.MetaFacts(ctx)
 		if err != nil || ctx.Err() != nil {

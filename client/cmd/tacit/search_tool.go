@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -50,9 +51,11 @@ const (
 // readSession is the session a read of the store answers for (tree.Session,
 // the one rule of tacit_tree and tacit_search): the repository of cwd
 // (repoid) under every name delivery knows it by (repoAliases), unless repo
-// names another (that name alone), with the folders suppression joins it
-// with (suppressionNames), and host; recs are the store's folder records
-// (which areas and topics it reads).
+// names another (that name alone); outside a repository, the project folder
+// a record names for the place, else every repository of the workspace cwd
+// is (workspaceRepos); with the folders suppression joins them with
+// (suppressionNames), and host; recs are the store's folder records (which
+// areas and topics it reads).
 func readSession(recs map[string]*record.Record, cwd, repo, host string) tree.Session {
 	sess := tree.Session{Host: host, Records: recs}
 	if r, ok := sessionRepo(cwd); ok && cwd != "" && (repo == "" || strings.EqualFold(repo, r.Name)) {
@@ -60,9 +63,12 @@ func readSession(recs map[string]*record.Record, cwd, repo, host string) tree.Se
 	} else if repo != "" {
 		sess.Repos = []string{repo}
 	} else if home, _ := os.UserHomeDir(); cwd != "" {
-		// A project folder whose record names the place cwd is in.
+		// A project folder whose record names the place cwd is in, else
+		// the workspace cwd is: all of its repositories.
 		if n := rootFolder(recs, host, home, cwd); n != "" {
 			sess.Repos = []string{n}
+		} else if ws := workspaceRepos(cwd, home); len(ws) > 0 {
+			sess.Repos = workspaceNames(ws)
 		}
 	}
 	sess.Repos = suppressionNames(recs, sess.Repos)
@@ -92,7 +98,8 @@ func treeScopes(ctx context.Context, a *browseArgs) ([]string, error) {
 }
 
 // relPath is p relative to the checkout that holds cwd, when it is inside
-// (repoRel); otherwise p as given, with forward slashes.
+// (repoRel), or to the workspace repository it is in; otherwise p as given,
+// with forward slashes.
 func relPath(p, cwd string) string {
 	p = strings.TrimSpace(p)
 	if p == "" {
@@ -101,6 +108,13 @@ func relPath(p, cwd string) string {
 	if r, ok := sessionRepo(cwd); ok {
 		if rel, ok := repoRel(r, cwd, p); ok {
 			return rel
+		}
+	} else if home, _ := os.UserHomeDir(); cwd != "" {
+		// In a workspace: relative to the repository of the workspace p is in.
+		if r, ok := workspaceRepoOf(workspaceRepos(cwd, home), cwd, p); ok {
+			if rel, ok := repoRel(r, cwd, p); ok {
+				return rel
+			}
 		}
 	}
 	return filepath.ToSlash(p)
@@ -264,7 +278,12 @@ func treeSearch(ctx context.Context, ix *search.Index, a browseArgs) (string, er
 		if ranked && err == nil {
 			repos := readSession(a.Records, a.Cwd, a.Repo, store.ShortHost()).Repos
 			hits = sessionRepoFirst(hits, repos)
-			footer = repoTreeLine(ctx, ix, repos, "`tacit_tree")
+			if inWorkspace(a.Records, a.Cwd, a.Repo) {
+				n, folders := workspaceFacts(ctx, ix, repos)
+				footer = workspaceTreeLine(n, folders, "`tacit_tree")
+			} else {
+				footer = repoTreeLine(ctx, ix, repos, "`tacit_tree")
+			}
 		}
 		if a.Scope != "" {
 			var in []search.Hit
@@ -356,6 +375,40 @@ func treeLine(n int, folder, tool string) string {
 		return ""
 	}
 	return fmt.Sprintf("# this repo's %d facts by folder: %s %s`\n", n, tool, folder)
+}
+
+// workspaceTreeLine is treeLine for a workspace: its repositories' facts
+// and the tree call for each folder that holds them.
+func workspaceTreeLine(n int, folders []string, tool string) string {
+	if n == 0 || len(folders) == 0 {
+		return ""
+	}
+	calls := make([]string, len(folders))
+	for i, f := range folders {
+		calls[i] = tool + " " + f + "`"
+	}
+	return fmt.Sprintf("# the workspace's %d facts by folder: %s\n", n, strings.Join(calls, ", "))
+}
+
+// workspaceFacts counts the facts tied to a workspace's repositories (names,
+// workspaceNames) and names the project folders among them that hold any,
+// in names order.
+func workspaceFacts(ctx context.Context, ix *search.Index, names []string) (int, []string) {
+	tied, err := ix.Tied(ctx, names)
+	if err != nil || len(tied) == 0 {
+		return 0, nil
+	}
+	scopes := map[string]bool{}
+	for _, h := range tied {
+		scopes[h.Scope] = true
+	}
+	var folders []string
+	for _, r := range names {
+		if sc := "projects/" + strings.ToLower(r); scopes[sc] && !slices.Contains(folders, sc) {
+			folders = append(folders, sc)
+		}
+	}
+	return len(tied), folders
 }
 
 // repoFacts counts the facts tied to repos and names their project folder.
