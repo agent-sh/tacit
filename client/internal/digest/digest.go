@@ -233,6 +233,9 @@ func LinesAt(r io.Reader, f Format, owner bool) ([]string, []time.Time) {
 	// The options a Codex agent's questions offered, for the answers that
 	// follow (a window that starts after the question has none of them).
 	asked := CodexAsked{}
+	// The local commands Claude Code ran itself, whose arguments are not
+	// words to the agent (ClaudeCommands).
+	cmds := &ClaudeCommands{}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1<<20), 64<<20)
 	for sc.Scan() {
@@ -243,7 +246,7 @@ func LinesAt(r io.Reader, f Format, owner bool) ([]string, []time.Time) {
 		var ls []string
 		switch f {
 		case Claude:
-			ls = claudeLine(o, owner)
+			ls = claudeLine(o, owner, cmds.Local(o))
 		case Codex:
 			ls = codexLine(o, owner, asked)
 		case Pi:
@@ -372,7 +375,9 @@ func HarnessText(f Format, txt string) bool {
 	return codexHarness.MatchString(txt)
 }
 
-func claudeLine(o map[string]any, owner bool) []string {
+// claudeLine digests a Claude Code line; local is the echo of a command
+// Claude Code ran itself (ClaudeCommands): harness text, H:.
+func claudeLine(o map[string]any, owner, local bool) []string {
 	t, _ := o["type"].(string)
 	if texts, typed, _, ok := ClaudeQueued(o); ok {
 		// A message typed while the agent worked: the owner's (U:) in their
@@ -396,7 +401,7 @@ func claudeLine(o map[string]any, owner bool) []string {
 	// The summary Claude Code writes as a user turn after a compaction is the
 	// harness's text, not the owner's words.
 	summary, _ := o["isCompactSummary"].(bool)
-	meta = meta || summary
+	meta = meta || summary || local
 	typed := false
 	if t == "user" && owner {
 		typed, _ = ClaudeTyped(ClaudeMarksOf(o))

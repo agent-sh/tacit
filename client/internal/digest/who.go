@@ -521,7 +521,8 @@ var InjectedNotices = []string{
 //     that follow it are that agent's; what the person typed below the quote
 //     is theirs;
 //   - a slash command's echo is the harness's, its <command-args> the
-//     person's;
+//     person's, unless Claude Code ran the command itself (its
+//     <local-command-caveat>; ClaudeCommands, which the line readers ask);
 //   - a Codex question reply holds the person's answers, each in its answer
 //     field; the questions in it are the asking agent's, already in its
 //     turn;
@@ -578,7 +579,9 @@ func pieces(text string) []Piece {
 		return out
 	}
 	if strings.HasPrefix(t, "<") || claudeHarness.MatchString(t) || codexHarness.MatchString(t) {
-		if m := commandArgs.FindStringSubmatch(t); m != nil && strings.Contains(t, "<command-name>") {
+		// A local command's echo with its caveat (ClaudeCommands) is the
+		// harness's whole.
+		if m := commandArgs.FindStringSubmatch(t); m != nil && strings.Contains(t, "<command-name>") && !strings.Contains(t, "<local-command-caveat>") {
 			out := []Piece{{Who: Harness, Text: strings.TrimSpace(commandArgs.ReplaceAllString(t, ""))}}
 			if a := strings.TrimSpace(m[1]); a != "" {
 				out = append(out, pieces(a)...)
