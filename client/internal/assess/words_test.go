@@ -345,3 +345,12 @@ func TestNewBasis(t *testing.T) {
 		t.Errorf("same basis: %+v", r.Was)
 	}
 }
+
+// A repository the forge deleted is never active by its dates.
+func TestDeletedRepositoryNeverActive(t *testing.T) {
+	a := &Activity{Days: []ActivityDay{{Day: "2026-10-25", Source: "session"}}, Deleted: true}
+	a.Measure("2026-10-27")
+	if a.Status != record.StatusDormant || !strings.Contains(a.StatusWhy(), "the forge has it deleted") {
+		t.Errorf("deleted repository: %s %s", a.Status, a.StatusWhy())
+	}
+}

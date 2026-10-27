@@ -11,6 +11,7 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/assess"
 	"github.com/agent-sh/tacit/client/internal/curate"
+	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/lint"
 	"github.com/agent-sh/tacit/client/internal/record"
@@ -147,5 +148,26 @@ func TestAssessQuoteWorkAfterTheWords(t *testing.T) {
 	recs, _ = record.Walk(s.Dir)
 	if r := recs["projects/oldtool"]; r == nil || r.Status != record.StatusDead || r.Was[0].By != record.ByOwner || !strings.HasPrefix(r.Was[0].Why, "code: dead on the owner's words of "+daysAgo(28)) {
 		t.Fatalf("dead on words that end it: %+v", r)
+	}
+}
+
+// A session's work on a folder counts on its own day: a note filed today
+// (a rebuild files months of sessions on the days it runs) from a session
+// the owner last wrote in 28 days ago is no activity of today's.
+func TestAssessSessionDayIsTheOwners(t *testing.T) {
+	_, s := quoteHome(t, 40, 35, 30)
+	writeFactFile(t, s.Dir, &fact.Fact{Path: "projects/oldtool/oldtool-flags.md", Meta: fact.Meta{Name: "oldtool-flags", Type: "user_standard", Scope: "projects/oldtool",
+		Description: "oldtool flags go before the subcommand", Source: fact.Source{Harness: "curator", Host: "box", Session: "s9", Kind: "observed"}, Created: daysAgo(0)}, Body: "Flags first.\n"})
+	facts, _, _ := fact.Walk(s.Dir)
+	writeIndexesForTest(t, s.Dir, facts)
+	gitIn(t, s.Dir, "add", "-A")
+	gitIn(t, s.Dir, "commit", "-q", "-m", "a note filed today")
+	a, err := newAssessor(context.Background(), s, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := a.candidate("projects/oldtool", "", nil)
+	if c.Activity == nil || c.CodeStatus() != record.StatusDormant || c.Activity.Days[0].Day != daysAgo(28) {
+		t.Fatalf("activity %+v", c.Activity)
 	}
 }

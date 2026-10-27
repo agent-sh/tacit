@@ -1109,6 +1109,27 @@ func ParseDigestHeader(data []byte) DigestHeader {
 	return h
 }
 
+// LastTurn is when the owner last wrote in session id (any source: claude,
+// codex, pi, hermes), the zero time when the corpus holds no timed turn of
+// theirs there.
+func (c *Corpus) LastTurn(id string) time.Time {
+	if c == nil || id == "" {
+		return time.Time{}
+	}
+	var best int64
+	for _, src := range []string{"claude:", "codex:", "pi:", "hermes:"} {
+		for _, i := range c.turns[src+id] {
+			if c.at[i] > best {
+				best = c.at[i]
+			}
+		}
+	}
+	if best == 0 {
+		return time.Time{}
+	}
+	return time.Unix(best, 0)
+}
+
 // Mention is one of their turns that names a word: where (a session ref),
 // the hash of the turn, the turn as they wrote it (what of it is theirs:
 // AddAt), and when they wrote it (zero when its source does not say).
