@@ -24,9 +24,11 @@ func TurnTexts(f digest.Format, line []byte) []string {
 
 // TurnReader reads a transcript's lines in order, each as TurnTexts reads
 // it, keeping what it needs across them: the options a Codex agent's
-// questions offered (digest.CodexAsked).
+// questions offered (digest.CodexAsked), and the commands Claude Code ran
+// itself, whose arguments are not theirs (digest.ClaudeCommands).
 type TurnReader struct {
 	asked digest.CodexAsked
+	cmds  digest.ClaudeCommands
 }
 
 // Parts is what a person typed on line (as TurnTexts), and the other text
@@ -40,7 +42,9 @@ func (r *TurnReader) Parts(f digest.Format, line []byte) (own, other []string) {
 	var raw []string
 	switch f {
 	case digest.Claude:
-		raw, _ = claudeUserTurns(line)
+		if !r.cmds.LocalLine(line) {
+			raw, _ = claudeUserTurns(line)
+		}
 	case digest.Codex:
 		r.asked.NoteLine(line)
 		raw = codexUserTurns(line, r.asked)

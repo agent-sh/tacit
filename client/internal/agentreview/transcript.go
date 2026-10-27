@@ -12,7 +12,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -23,6 +22,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/hermes"
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
+	"github.com/agent-sh/tacit/client/internal/transcript"
 )
 
 // Tool is one tool call of an agent message: its name, its input as JSON.
@@ -76,7 +76,7 @@ type Sources struct {
 func DefaultSources(home string) Sources {
 	return Sources{
 		Claude:   []string{filepath.Join(home, ".claude", "projects", "*", "*.jsonl")},
-		Codex:    []string{filepath.Join(home, ".codex", "sessions", "*", "*", "*", "*.jsonl"), filepath.Join(home, ".codex", "sessions", "*", "*.jsonl")},
+		Codex:    []string{filepath.Join(home, ".codex", "sessions", "*", "*", "*", "*.jsonl"), filepath.Join(home, ".codex", "sessions", "*", "*.jsonl"), filepath.Join(home, ".codex", "archived_sessions", "*.jsonl")},
 		Pi:       []string{digest.PiSessionGlob(home)},
 		HermesDB: hermes.DefaultDB(home),
 	}
@@ -90,7 +90,8 @@ func ValidSession(id string) bool { return sessionID.MatchString(id) && !strings
 
 // Locate finds the transcript of a harness's session: a Claude Code
 // transcript named <id>.jsonl, a Codex rollout or pi session whose name ends
-// in <id>.jsonl. Hermes sessions are rows of its store (ReadHermes).
+// in <id>.jsonl, or the compressed copy of one (<id>.jsonl.zst). Hermes
+// sessions are rows of its store (ReadHermes).
 func (src Sources) Locate(harness, id string) (string, digest.Format, bool) {
 	if !ValidSession(id) {
 		return "", 0, false
@@ -110,9 +111,9 @@ func (src Sources) Locate(harness, id string) (string, digest.Format, bool) {
 	var found []string
 	for _, g := range globs {
 		dir, pat := filepath.Split(g)
-		matches, _ := filepath.Glob(filepath.Join(dir, strings.Replace(pat, "*.jsonl", "*"+id+".jsonl", 1)))
+		matches, _ := transcript.Glob(filepath.Join(dir, strings.Replace(pat, "*.jsonl", "*"+id+".jsonl", 1)))
 		for _, m := range matches {
-			base := strings.TrimSuffix(filepath.Base(m), ".jsonl")
+			base := transcript.Name(m)
 			if base == id || strings.HasSuffix(base, "-"+id) || strings.HasSuffix(base, "_"+id) {
 				if fi, err := os.Lstat(m); err == nil && fi.Mode().IsRegular() {
 					found = append(found, m)
@@ -191,30 +192,31 @@ func ReadTranscript(path string, f digest.Format) (Conversation, error) {
 // ReadTranscriptFrom reads a transcript's messages from byte offset on (a
 // question's answer is read from what came after it was asked); a negative
 // offset reads its last maxTranscript bytes. Whether a person types into the
-// session is decided on its first bytes either way.
+// session is decided on its first bytes either way. A transcript the harness
+// compressed since its path was recorded is read from its compressed copy
+// (transcript.Resolve); offsets are in its JSONL bytes either way.
 func ReadTranscriptFrom(path string, f digest.Format, offset int64) (Conversation, error) {
 	c := Conversation{Path: path}
-	fh, err := os.Open(path)
+	size, err := transcript.Size(path)
+	if err != nil {
+		return c, err
+	}
+	head := transcript.Head(path, headBytes)
+	owner := digest.SessionWho(transcript.Plain(path), head, f).Owner()
+	c.Cwd = cwdOf(head)
+	from := int64(0)
+	switch {
+	case offset >= 0:
+		from = offset
+	case size > maxTranscript:
+		from = size - maxTranscript
+	}
+	from = min(from, size)
+	fh, err := transcript.OpenAt(path, from)
 	if err != nil {
 		return c, err
 	}
 	defer fh.Close()
-	head := make([]byte, headBytes)
-	n, _ := io.ReadFull(fh, head)
-	head = head[:n]
-	owner := digest.SessionWho(path, head, f).Owner()
-	c.Cwd = cwdOf(head)
-	if offset >= 0 {
-		if _, err := fh.Seek(offset, io.SeekStart); err != nil {
-			return c, err
-		}
-	} else if fi, err := fh.Stat(); err == nil && fi.Size() > maxTranscript {
-		if _, err := fh.Seek(fi.Size()-maxTranscript, io.SeekStart); err != nil {
-			return c, err
-		}
-	} else if _, err := fh.Seek(0, io.SeekStart); err != nil {
-		return c, err
-	}
 	sc := bufio.NewScanner(fh)
 	sc.Buffer(make([]byte, 1<<20), 128<<20)
 	rd := reader{owner: owner, turns: &ownerwords.TurnReader{}}

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"index/suffixarray"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/ledger"
+	"github.com/agent-sh/tacit/client/internal/transcript"
 )
 
 // Owner sessions and turns are decided in one place, digest.SessionWho and
@@ -34,14 +34,17 @@ type Source struct {
 
 // DefaultSources are the transcripts of this machine: Claude Code projects
 // (top-level sessions only; subagent transcripts are agents talking to
-// agents), Codex sessions and pi sessions (top-level only: the glob,
-// digest.PiSessionGlob, does not reach a subagent's <session>/tasks/).
-// Hermes keeps its sessions in a database (AddHermes).
+// agents), Codex sessions (and the archived ones) and pi sessions (top-level
+// only: the glob, digest.PiSessionGlob, does not reach a subagent's
+// <session>/tasks/). Each glob takes the compressed copies of its
+// transcripts too (transcript.Glob: Codex's .jsonl.zst). Hermes keeps its
+// sessions in a database (AddHermes).
 func DefaultSources(home string) []Source {
 	return []Source{
 		{Glob: filepath.Join(home, ".claude", "projects", "*", "*.jsonl"), Format: digest.Claude},
 		{Glob: filepath.Join(home, ".codex", "sessions", "*", "*", "*", "*.jsonl"), Format: digest.Codex},
 		{Glob: filepath.Join(home, ".codex", "sessions", "*", "*.jsonl"), Format: digest.Codex},
+		{Glob: filepath.Join(home, ".codex", "archived_sessions", "*.jsonl"), Format: digest.Codex},
 		{Glob: digest.PiSessionGlob(home), Format: digest.Pi},
 	}
 }
@@ -654,23 +657,14 @@ func Who(path string, head []byte, f digest.Format) string {
 
 const headBytes = 256 << 10
 
-func readHead(path string) []byte {
-	fh, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer fh.Close()
-	b := make([]byte, headBytes)
-	n, _ := io.ReadFull(fh, b)
-	return b[:n]
-}
+func readHead(path string) []byte { return transcript.Head(path, headBytes) }
 
 // AddTranscripts adds the owner's turns of every owner session in sources.
 // A file that cannot be read is an error: a corpus missing their words would
 // decide facts against them.
 func (b *Builder) AddTranscripts(sources []Source) error {
 	for _, src := range sources {
-		files, err := filepath.Glob(src.Glob)
+		files, err := transcript.Glob(src.Glob)
 		if err != nil {
 			return err
 		}
@@ -700,7 +694,7 @@ func (b *Builder) AddTranscripts(sources []Source) error {
 // sessionRef is the corpus ref of a transcript's session, as addTranscript
 // names it.
 func sessionRef(path string, head []byte, f digest.Format) string {
-	name := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	name := transcript.Name(path)
 	switch f {
 	case digest.Pi:
 		if h, ok := digest.ReadPiHeader(head); ok && h.ID != "" {
@@ -717,15 +711,16 @@ func sessionRef(path string, head []byte, f digest.Format) string {
 }
 
 func (b *Builder) addTranscript(path string, f digest.Format) error {
-	fh, err := os.Open(path)
+	fh, err := transcript.Open(path)
 	if err != nil {
 		return err
 	}
 	defer fh.Close()
-	asked := digest.CodexAsked{} // the options a Codex agent's questions offered
+	asked := digest.CodexAsked{}    // the options a Codex agent's questions offered
+	cmds := digest.ClaudeCommands{} // the commands Claude Code ran itself
 	ref := ""
 	if f == digest.Claude {
-		ref = "claude:" + strings.TrimSuffix(filepath.Base(path), ".jsonl")
+		ref = "claude:" + transcript.Name(path)
 	}
 	sc := bufio.NewScanner(fh)
 	sc.Buffer(make([]byte, 1<<20), 128<<20)
@@ -736,7 +731,7 @@ func (b *Builder) addTranscript(path string, f digest.Format) error {
 				if h, ok := digest.ReadPiHeader(line); ok && h.ID != "" {
 					ref = "pi:" + h.ID
 				} else {
-					ref = "pi:" + strings.TrimSuffix(filepath.Base(path), ".jsonl")
+					ref = "pi:" + transcript.Name(path)
 				}
 			}
 			if bytes.Contains(line, []byte(`"role":"user"`)) {
@@ -749,6 +744,9 @@ func (b *Builder) addTranscript(path string, f digest.Format) error {
 		if f == digest.Claude {
 			if !bytes.Contains(line, []byte(`"type":"user"`)) && !bytes.Contains(line, []byte(`"queued_command"`)) {
 				continue
+			}
+			if cmds.LocalLine(line) {
+				continue // a local command's echo: input to Claude Code, not words of theirs
 			}
 			turns, skipped := claudeUserTurns(line)
 			b.c.Stats.AgentTurns += skipped
@@ -770,7 +768,7 @@ func (b *Builder) addTranscript(path string, f digest.Format) error {
 			continue
 		}
 		if ref == "" {
-			ref = "codex:" + strings.TrimSuffix(filepath.Base(path), ".jsonl")
+			ref = "codex:" + transcript.Name(path)
 		}
 		if turns := codexUserTurns(line, asked); len(turns) > 0 {
 			at := LineTime(line)
