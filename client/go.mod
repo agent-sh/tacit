@@ -3,6 +3,7 @@ module github.com/agent-sh/tacit/client
 go 1.27
 
 require (
+	github.com/klauspost/compress v1.20.3
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/wailsapp/wails/v2 v2.16.0
