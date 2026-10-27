@@ -39,7 +39,9 @@ const (
 type Note struct {
 	Name, Scope, Type, Created, Session string
 	Tier                                int
-	// Said is a statement's day (when the owner said it); Description and
+	// Said is the day the owner said the words a statement, a ruling or a
+	// fact holding their words rests on (their turn's day, from the quote
+	// ledger or their transcript; "" when neither records it); Description and
 	// Body are the fact's text, which an owner_status item's words must be in.
 	Said, Description, Body string
 	// Projects are the other project folders code finds its text names, each
@@ -60,10 +62,16 @@ func (n Note) OwnerTier() bool { return n.Tier <= TierDecision }
 func (n Note) tierLabel() string {
 	switch n.Tier {
 	case TierRuling:
+		if n.Said != "" {
+			return "the owner's ruling, said " + n.Said
+		}
 		return "the owner's ruling"
 	case TierStatement:
 		return "the owner's statement, said once " + n.Said
 	case TierWords:
+		if n.Said != "" {
+			return "holds the owner's words, said " + n.Said
+		}
 		return "holds the owner's words"
 	case TierDecision:
 		return "a decision"
@@ -129,6 +137,9 @@ type OwnerWords struct {
 	From  string `json:"from"`
 	// Successor: the project the words say replaces this one, if any.
 	Successor string `json:"successor,omitempty"`
+	// Temporal: the words of Words that limit them in time ("for now"), as
+	// the model reads them; code refuses dead on them.
+	Temporal string `json:"temporal,omitempty"`
 }
 
 // OwnerWordsList reads a JSON object or an array of them.
@@ -310,6 +321,10 @@ func CheckOwnerWords(c Candidate, d Decision) ([]Said, []string) {
 			ps = append(ps, fmt.Sprintf("%s.words: copy the words exactly from note:%s (two words or more)", label, n.Name))
 			continue
 		}
+		if p := temporalProblem(label+".temporal", it.Temporal, it.Words, it.Says); p != "" {
+			ps = append(ps, p)
+			continue
+		}
 		succ := strings.TrimPrefix(strings.TrimSpace(it.Successor), "projects/")
 		if succ != "" && it.Says != record.StatusDead {
 			ps = append(ps, fmt.Sprintf("%s.successor: only a dead folder has a successor (says %s)", label, it.Says))
@@ -362,7 +377,7 @@ func WordsOutcome(c Candidate, d Decision, s Said, successor string, ch Changes)
 	what := strings.TrimSpace(d.Why)
 	quote := fmt.Sprintf("note:%s (%s): %q", s.Note.Name, s.Day, oneLine(s.Words, 300))
 	cs := c.CodeStatus()
-	if ch.Changed() && cs != "" {
+	if c.WorkOverrides(s.Says, ch) && cs != "" {
 		d.Status = cs
 		d.Why = c.Activity.StatusWhy() + fmt.Sprintf(" Owner activity after the %s statement (%s), so the dates stand: %s.", s.Day, quote, ch.Summary(4))
 		d.Words = nil
@@ -373,7 +388,7 @@ func WordsOutcome(c Candidate, d Decision, s Said, successor string, ch Changes)
 		if successor != "" && s.Says == record.StatusDead {
 			w += "; replaced by " + successor
 		}
-		w += "; " + ch.Summary(4)
+		w += "; " + ch.Summary(4) + c.goneNote(s.Says, ch)
 		if cs != "" && cs != s.Says {
 			w += fmt.Sprintf(" (its dates alone say %s; the owner's words beat dates)", cs)
 		}
@@ -388,7 +403,25 @@ func WordsOutcome(c Candidate, d Decision, s Said, successor string, ch Changes)
 	if what != "" {
 		d.Why += " What it is: " + what
 	}
-	return d, !ch.Changed() || cs == ""
+	return d, !c.WorkOverrides(s.Says, ch) || cs == ""
+}
+
+// WorkOverrides reports the owner's real work after the day of words that
+// say says (ch): the sign of a changed mind, so the folder's dates stand.
+// Not for words that say dead of a repository the forge has deleted or
+// archived since (ForgeGone): no commit follows that, so it came after the
+// work, and the words stand.
+func (c Candidate) WorkOverrides(says string, ch Changes) bool {
+	return ch.Changed() && !(says == record.StatusDead && c.ForgeGone())
+}
+
+// goneNote is what the why of a status on words says of work after them
+// that the forge's deletion or archive overrides.
+func (c Candidate) goneNote(says string, ch Changes) string {
+	if !ch.Changed() || c.WorkOverrides(says, ch) {
+		return ""
+	}
+	return " (the owner worked on it after that day, but the forge has the repository deleted or archived since, so the words stand)"
 }
 
 // NoteDay is the day a note shown for c that why cites (note:<name>) was
@@ -408,4 +441,92 @@ func NoteDay(c Candidate, why string) (Note, string, bool) {
 		}
 	}
 	return Note{}, "", false
+}
+
+// temporalProblem refuses dead on words whose own text limits them in time,
+// as the model flagged it (temporal, copied from words): a pause is dormant.
+// Flagged words that are not in words are a problem too.
+func temporalProblem(field, temporal, words, says string) string {
+	t := norm(temporal)
+	switch {
+	case t == "":
+		return ""
+	case !strings.Contains(norm(words), t):
+		return fmt.Sprintf("%s: copy the words exactly from the owner's words that limit them in time (got %q)", field, temporal)
+	case says == record.StatusDead:
+		return fmt.Sprintf("%s: the words limit themselves in time (%q): stopping or pausing it for a while is dormant, not dead; answer dormant, or cite other words of the owner's that end it", field, temporal)
+	}
+	return ""
+}
+
+// ForgeGone reports a folder whose repository the forge has deleted or
+// archived: evidence that it ended, besides the owner's words.
+func (c Candidate) ForgeGone() bool {
+	a := c.Activity
+	return a != nil && (a.Deleted || a.Forge != nil && a.Forge.Archived)
+}
+
+// CheckQuoteStatus checks what a decision resting on the owner's quote
+// (owner_quote) says of the folder's status, as the model reads the words:
+// flagged words that limit them in time (owner_quote_temporal) refuse dead,
+// and dead needs words of the quote that make an end of the folder
+// (owner_quote_final) or the forge's word that the repository is gone
+// (ForgeGone). Each is copied from the quote. The words of the quote are
+// the owner's; what they say of its status is the model's reading, which
+// code holds to what it can check.
+func CheckQuoteStatus(c Candidate, d Decision) []string {
+	q := strings.TrimSpace(d.OwnerQuote)
+	if q == "" {
+		return nil
+	}
+	var ps []string
+	if p := temporalProblem("owner_quote_temporal", d.OwnerQuoteTemporal, q, d.Status); p != "" {
+		ps = append(ps, p)
+	}
+	if f := norm(d.OwnerQuoteFinal); f != "" && !strings.Contains(norm(q), f) {
+		ps = append(ps, fmt.Sprintf("owner_quote_final: copy the words exactly from owner_quote (got %q)", d.OwnerQuoteFinal))
+	}
+	if d.Status == record.StatusDead && norm(d.OwnerQuoteFinal) == "" && !c.ForgeGone() {
+		ps = append(ps, "status dead on owner_quote: the words must make an end of it (owner_quote_final: words of the quote that drop, kill, delete, remove or replace it), or the forge must show the repository deleted or archived; stopping, banking or pausing work is dormant")
+	}
+	return ps
+}
+
+// QuoteOutcome is code's decision for a folder whose status rests on the
+// owner's quote (owner_quote, verified by the caller; CheckQuoteStatus has
+// passed), said on day: as for a note's words (WordsOutcome), the dead,
+// shipped or dormant status the words give stands against the dates unless
+// ch holds the owner's real work on the folder after that day; then code's
+// status from its dates stands, and the decision no longer rests on the
+// quote (its owner_quote is cleared: the entry is not the owner's). An
+// active status on their words stands: work since agrees with it. It
+// returns the decision and whether the words stood.
+func QuoteOutcome(c Candidate, d Decision, day string, ch Changes) (Decision, bool) {
+	what := strings.TrimSpace(d.Why)
+	q := strings.TrimSpace(d.OwnerQuote)
+	quote := fmt.Sprintf("%s (%s): %q", strings.TrimSpace(d.OwnerQuoteFrom), day, oneLine(q, 300))
+	cs := c.CodeStatus()
+	switch d.Status {
+	case record.StatusDead, record.StatusShipped, record.StatusDormant:
+	default:
+		return d, true
+	}
+	if c.WorkOverrides(d.Status, ch) && cs != "" {
+		d.Status = cs
+		d.Why = c.Activity.StatusWhy() + fmt.Sprintf(" Owner activity after the %s words (%s), so the dates stand: %s.", day, quote, ch.Summary(4))
+		d.OwnerQuote, d.OwnerQuoteFrom, d.OwnerQuoteTemporal, d.OwnerQuoteFinal = "", "", "", ""
+		if what != "" {
+			d.Why += " What it is: " + what
+		}
+		return d, false
+	}
+	w := fmt.Sprintf("%s%s on the owner's words of %s, %s; %s", WordsWhy, d.Status, day, quote, ch.Summary(4)+c.goneNote(d.Status, ch))
+	if cs != "" && cs != d.Status {
+		w += fmt.Sprintf(" (its dates alone say %s; the owner's words beat dates)", cs)
+	}
+	d.Why = w + "."
+	if what != "" {
+		d.Why += " What it is: " + what
+	}
+	return d, true
 }

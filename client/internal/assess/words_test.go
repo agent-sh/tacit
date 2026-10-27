@@ -252,3 +252,96 @@ func TestClaimNoteIsNoOwnerWord(t *testing.T) {
 		t.Fatal("a dead answer on another shown note was overridden")
 	}
 }
+
+// Words the model itself reads as limited in time never make a folder dead:
+// a pause is dormant. Flagged words must be the note's.
+func TestOwnerWordsPauseIsNotDead(t *testing.T) {
+	c := wordsCand(record.StatusActive)
+	c.Notes = append(c.Notes, Note{Name: "oldtool-paused", Scope: "user", Type: "design_decision", Created: "2026-10-08", Tier: TierStatement, Said: "2026-09-28",
+		Description: "The owner stopped oldtool: \"bank what you have, no more oldtool work for now\"."})
+	for _, c2 := range []struct {
+		item string
+		ok   bool
+		want string
+	}{
+		{`{"says":"dead","words":"no more oldtool work for now","from":"note:oldtool-paused","temporal":"for now"}`, false, "stopping or pausing it for a while is dormant"},
+		{`{"says":"dormant","words":"no more oldtool work for now","from":"note:oldtool-paused","temporal":"for now"}`, true, ""},
+		{`{"says":"dead","words":"no more oldtool work for now","from":"note:oldtool-paused","temporal":"until spring"}`, false, "copy the words exactly"},
+	} {
+		var d Decision
+		if err := json.Unmarshal([]byte(`{"folder":"projects/oldtool","kind":"repo","status":"dormant","why":"x","owner_status":[`+c2.item+`]}`), &d); err != nil {
+			t.Fatal(err)
+		}
+		said, ps := CheckOwnerWords(c, d)
+		if (len(said) == 1) != c2.ok || (!c2.ok && (len(ps) != 1 || !strings.Contains(ps[0], c2.want))) {
+			t.Errorf("%s: said %+v problems %q", c2.item, said, ps)
+		}
+		if c2.ok && said[0].Day != "2026-09-28" {
+			t.Errorf("dated by the day said: %+v", said[0])
+		}
+	}
+}
+
+// A status on the owner's quote: dead needs words that end the folder (or
+// the forge's word it is gone); the words stand from the day they were said
+// unless the owner worked on it after.
+func TestQuoteOutcome(t *testing.T) {
+	c := wordsCand(record.StatusActive)
+	d := Decision{Folder: "projects/oldtool", Kind: "repo", Status: "dead", Why: "the owner's tool", OwnerQuote: "we are stopping development of oldtool, bank it", OwnerQuoteFrom: "claude:s9"}
+	if ps := CheckQuoteStatus(c, d); len(ps) != 1 || !strings.Contains(ps[0], "owner_quote_final") {
+		t.Errorf("dead without words that end it: %q", ps)
+	}
+	gone := c
+	gone.Activity = &Activity{Status: record.StatusDormant, Deleted: true}
+	if ps := CheckQuoteStatus(gone, d); len(ps) != 0 {
+		t.Errorf("dead with the forge's word it is gone: %q", ps)
+	}
+	d.OwnerQuoteFinal = "drop it"
+	if ps := CheckQuoteStatus(c, d); len(ps) != 1 || !strings.Contains(ps[0], "copy the words exactly") {
+		t.Errorf("final words not in the quote: %q", ps)
+	}
+	d.Status, d.OwnerQuoteFinal = "dormant", ""
+	nd, stood := QuoteOutcome(c, d, "2026-09-28", Changes{})
+	if !stood || nd.Status != "dormant" || nd.OwnerQuote == "" || !strings.HasPrefix(nd.Why, "code: dormant on the owner's words of 2026-09-28, claude:s9") || !strings.Contains(nd.Why, "its dates alone say active") {
+		t.Errorf("words stand: %+v", nd)
+	}
+	nd, stood = QuoteOutcome(c, d, "2026-09-28", Changes{Real: []Work{{Day: "2026-10-06", Kind: "commit", Cite: "commit:abc1234", Real: true}}})
+	if stood || nd.Status != "active" || nd.OwnerQuote != "" || !strings.Contains(nd.Why, "Owner activity after the 2026-09-28 words") {
+		t.Errorf("dates stand: %+v", nd)
+	}
+	// Work after the words, then the forge deleted the repository: no commit
+	// follows that, so dead words stand.
+	gone.Activity = &Activity{Status: record.StatusDormant, Deleted: true, Days: []ActivityDay{{Day: "2026-10-06", Source: "commit"}}, Today: "2026-10-27", TypicalGap: 8, Window: 16, Idle: 21}
+	dd := d
+	dd.Status = "dead"
+	work := Changes{Real: []Work{{Day: "2026-10-06", Kind: "commit", Cite: "commit:abc1234", Real: true}}}
+	if nd, stood := QuoteOutcome(gone, dd, "2026-09-28", work); !stood || nd.Status != "dead" || !strings.Contains(nd.Why, "the forge has the repository deleted or archived since") {
+		t.Errorf("dead on a deleted repository: %+v", nd)
+	}
+	if nd, stood := QuoteOutcome(gone, d, "2026-09-28", work); stood || nd.Status != "dormant" || nd.OwnerQuote != "" {
+		t.Errorf("dormant words, work after, the dates stand: %+v", nd)
+	}
+	d.Status = "active"
+	if nd, stood := QuoteOutcome(c, d, "2026-09-28", Changes{}); !stood || nd.Why != d.Why {
+		t.Errorf("active on their words stands as given: %+v", nd)
+	}
+}
+
+// A record whose status stays but now rests on other words of the owner's,
+// or on the same words dated by when they said them, gets a new entry; the
+// same basis adds none.
+func TestNewBasis(t *testing.T) {
+	old := &record.Record{Folder: "projects/oldtool", Name: "oldtool", Kind: record.KindRepo, Status: record.StatusDead, Created: "2026-10-26", CreatedBy: record.ByOpus,
+		Was: []record.Entry{{Status: record.StatusDead, Date: "2026-10-26", By: record.ByOpus, Why: "code: dead on the owner's words of 2026-10-25, note:a (2026-10-25): \"x\"", Words: "x y", WordsFrom: "note:a", WordsOn: "2026-10-25"}}}
+	c := Candidate{Folder: "projects/oldtool", Old: old}
+	d := Decision{Kind: record.KindRepo, Status: record.StatusDead, Why: "code: dead on the owner's words of 2026-10-06, note:b (2026-10-06): \"z w\"",
+		Words: &record.Entry{Words: "z w", WordsFrom: "note:b", WordsOn: "2026-10-06"}}
+	if r := Build(c, d, "2026-10-27", nil); len(r.Was) != 2 || r.Was[0].WordsOn != "2026-10-06" {
+		t.Errorf("new basis: %+v", r.Was)
+	}
+	d.Words = &record.Entry{Words: "x y", WordsFrom: "note:a", WordsOn: "2026-10-25"}
+	d.Why = old.Was[0].Why
+	if r := Build(c, d, "2026-10-27", nil); len(r.Was) != 1 {
+		t.Errorf("same basis: %+v", r.Was)
+	}
+}

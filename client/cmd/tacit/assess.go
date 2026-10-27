@@ -61,6 +61,10 @@ type assessOpts struct {
 	// retry: the rotation's run on the folders left for review it found due;
 	// they are asked whatever their fingerprint.
 	retry bool
+	// recheckQuoted: every record whose status rests on the owner's words
+	// (a quote of theirs, their words on a note) is asked again, its words
+	// dated by when they said them and read with the status checks.
+	recheckQuoted bool
 }
 
 // runAssess implements `tacit assess [--model M] [--max N] [--dry-run]`:
@@ -70,6 +74,8 @@ func runAssess(args []string) int {
 	model := fs.String("model", curate.DefaultModel, "the deciding model")
 	max := fs.Int("max", assessMax, "candidates per run")
 	dry := fs.Bool("dry-run", false, "gather, ask and check; write nothing")
+	recheckQuoted := fs.Bool("recheck-quoted", false, "ask again about every record whose status rests on the owner's words (a quote of theirs, their words on a note), dated by when they said them")
+	folders := fs.String("folders", "", "decide only these folders (comma separated, e.g. projects/memra,projects/ship): a bounded re-run")
 	envFile := fs.String("env-file", "", "KEY=VALUE lines with the runner's provider variables")
 	fs.Parse(args)
 	if *envFile != "" {
@@ -101,7 +107,16 @@ func runAssess(args []string) int {
 			return 1
 		}
 	}
-	errs := assessStep(ctx, s, assessOpts{model: *model, max: *max, dry: *dry}, rep)
+	o := assessOpts{model: *model, max: *max, dry: *dry, recheckQuoted: *recheckQuoted}
+	for _, f := range strings.Split(*folders, ",") {
+		if f = strings.Trim(strings.TrimSpace(f), "/"); f != "" {
+			if o.only == nil {
+				o.only = map[string]bool{}
+			}
+			o.only[f] = true
+		}
+	}
+	errs := assessStep(ctx, s, o, rep)
 	fmt.Printf("assess: %d candidate(s), %d record(s) written, %d refused, %d waiting on unchanged evidence, %d decision(s) refuted by a check, %d left for review asked again (%d settled, %d still for review), %d left for review waiting (their wider search found nothing new), %s, %d error(s)\n", rep.AssessCandidates, rep.AssessRecords, rep.AssessRefused, rep.AssessHeld, rep.CheckRefused, rep.ReviewRetried, rep.ReviewSettled, rep.ReviewRetried-rep.ReviewSettled, rep.ReviewWaiting, rep.ModelCalls.CostSummary(rep.CostUSD), errs)
 	if errs > 0 {
 		return 1
@@ -148,6 +163,7 @@ type assessor struct {
 	decisions              map[string]ownerDecision
 	lowText                map[*fact.Fact]string       // facts' lowered text, for the re-attempts' store search
 	retry                  bool                        // assessOpts.retry
+	recheckQuoted          bool                        // assessOpts.recheckQuoted
 	attempts               []reviewAttempt             // this run's re-attempts, for the log
 	reviewWaiting          int                         // folders left for review that wait this run
 	ancIx                  *ancestorIndex              // where facts put folders (assess_ancestor.go)
@@ -375,6 +391,17 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 			}
 			continue
 		}
+		if a.recheckQuoted && r.Live() && len(r.Was) > 0 && (r.Was[0].Quote != "" || r.Was[0].Words != "") {
+			from := r.Was[0].QuoteFrom
+			if from == "" {
+				from = r.Was[0].WordsFrom
+			}
+			seen[f] = true
+			c.Reason = fmt.Sprintf("asked again: its %s status rests on the owner's words (%s), which code dates by when they said them and reads with its status checks", r.Status, from)
+			a.applyGraph(&c)
+			out = append(out, c)
+			continue
+		}
 		if why := materialChange(r, ev, a.host); why != "" {
 			seen[f] = true
 			c.Reason = why
@@ -390,7 +417,7 @@ func (a *assessor) candidates(max int, only map[string]bool) []assess.Candidate 
 		// real work after the day of the words (assess_words.go).
 		if len(r.Was) > 0 && r.Live() {
 			if day, ok := restsOnWords(r.Was[0]); ok {
-				if ch := c.Changes(day); ch.Changed() {
+				if ch := c.Changes(day); c.WorkOverrides(r.Status, ch) {
 					seen[f] = true
 					c.Reason = fmt.Sprintf("the owner worked on it after the %s words its %s status rests on (%s)", day, r.Status, ch.Summary(3))
 					a.applyGraph(&c)
@@ -1145,7 +1172,7 @@ func (a *assessor) verifyOwner(folder string, d assess.Decision) (*assess.Owner,
 	// backs (a promoted statement, a ruling from another machine's session)
 	// are theirs without this machine's history.
 	if hash, ok := a.ledgerDecision(q, from); ok {
-		line := ledger.Quote{Name: ledger.RecordQuoteName(folder), Quote: q, From: from, TurnHash: hash, At: a.today}.Line()
+		line := ledger.Quote{Name: ledger.RecordQuoteName(folder), Quote: q, From: from, TurnHash: hash, At: a.today, Said: a.quoteDay(q, from)}.Line()
 		return &assess.Owner{Quote: q, From: from}, line, ""
 	}
 	if a.corpus == nil {
@@ -1155,8 +1182,41 @@ func (a *assessor) verifyOwner(folder string, d assess.Decision) (*assess.Owner,
 	if !ok || !m.Clean() || m.Ref != from {
 		return nil, nil, "owner_quote is not the owner's statement in " + from + ": copy their words exactly, or leave it out and cite them in why"
 	}
-	line := ledger.Quote{Name: ledger.RecordQuoteName(folder), Quote: q, From: from, TurnHash: m.TurnHash, At: a.today}.Line()
+	line := ledger.Quote{Name: ledger.RecordQuoteName(folder), Quote: q, From: from, TurnHash: m.TurnHash, At: a.today, Said: a.corpus.SaidOn(q, from, m.TurnHash)}.Line()
 	return &assess.Owner{Quote: q, From: from}, line, ""
+}
+
+// quoteStatus reports a decision whose status rests on the owner's quote:
+// a project folder's (not a proposal, kind none or a fold), with
+// owner_quote.
+func (a *assessor) quoteStatus(c assess.Candidate, d assess.Decision) bool {
+	return strings.TrimSpace(d.OwnerQuote) != "" && c.Kind == "" && d.Kind != assess.KindNone && strings.TrimSpace(d.SuppressedBy) == ""
+}
+
+// quoteDay is the day the owner said q in from (YYYY-MM-DD): their turn's
+// day in the history on this machine (Corpus.SaidOn), else the day a line of
+// the quote ledger records for the same words from there (a turn whose
+// transcript is gone). "" when neither does: never the day a step read them.
+func (a *assessor) quoteDay(q, from string) string {
+	q, from = strings.TrimSpace(q), strings.TrimSpace(from)
+	if q == "" || from == "" {
+		return ""
+	}
+	if a.corpus != nil {
+		if m, ok := a.corpus.Find(q, record.CiteID(from), true); ok && m.Ref == from {
+			if day := a.corpus.SaidOn(q, from, m.TurnHash); day != "" {
+				return day
+			}
+		}
+	}
+	norm := strings.Join(strings.Fields(q), " ")
+	day := ""
+	for _, l := range ledger.Quotes(a.ledgerBytes) {
+		if l.From == from && l.Said != "" && strings.Join(strings.Fields(l.Quote), " ") == norm && (day == "" || l.Said < day) {
+			day = l.Said
+		}
+	}
+	return day
 }
 
 // ledgerDecision reports words of the owner's that a live ruling or decision
@@ -1280,6 +1340,28 @@ func (a *assessor) check(cands []assess.Candidate, ds []assess.Decision, pending
 		ps = append(ps, wps...)
 		if words != nil {
 			d = *words
+		} else if a.quoteStatus(c, d) {
+			// The owner's quote on its status: what the words say is the
+			// model's reading, which code holds to what it can check, and the
+			// words stand against the dates as a note's do, from the day the
+			// owner said them.
+			if qps := assess.CheckQuoteStatus(c, d); len(qps) > 0 {
+				ps = append(ps, qps...)
+			} else if day := a.quoteDay(d.OwnerQuote, d.OwnerQuoteFrom); day != "" {
+				var ch assess.Changes
+				if d.Status == record.StatusDead || d.Status == record.StatusShipped || d.Status == record.StatusDormant {
+					ch = c.Changes(day)
+				}
+				nd, stood := assess.QuoteOutcome(c, d, day, ch)
+				if !stood {
+					fmt.Fprintf(os.Stderr, "assess: %s: the owner's words of %s (%s) say %s, but the owner worked on it since: code's %s from its dates; %s\n", c.Folder, day, d.OwnerQuoteFrom, d.Status, nd.Status, ch.Summary(3))
+					review = append(review, checkLine(ledger.RecordQuoteName(c.Folder), c.Folder, "activity", a.today),
+						fmt.Sprintf("  %s: the owner's words of %s (%s: %q) say %s, but the owner worked on it after that day, so its dates stand: %s", c.Folder, day, d.OwnerQuoteFrom, clipOne(d.OwnerQuote, 200), d.Status, ch.Summary(4)))
+				}
+				d = nd
+			} else {
+				fmt.Fprintf(os.Stderr, "assess: %s: no turn of the owner's records the day of the words in %s; they stand as given\n", c.Folder, d.OwnerQuoteFrom)
+			}
 		} else {
 			// Nothing says what it is: code's needs-review, unless the decision
 			// rests on evidence code showed.
@@ -1632,7 +1714,7 @@ func assessStep(ctx context.Context, s *store.Store, o assessOpts, rep *curate.R
 		fmt.Fprintln(os.Stderr, "assess:", err)
 		return 1
 	}
-	a.retry = o.retry
+	a.retry, a.recheckQuoted = o.retry, o.recheckQuoted
 	max := o.max
 	if max <= 0 {
 		max = assessMax
