@@ -145,14 +145,7 @@ func piLine(o map[string]any, owner bool) []string {
 		if strings.TrimSpace(txt) == "" {
 			break
 		}
-		switch {
-		case piHarness.MatchString(txt):
-			out = append(out, "H: "+clip(txt, hMax))
-		case owner:
-			out = append(out, "U: "+clip(txt, uMax))
-		default:
-			out = append(out, "P: "+clip(txt, uMax))
-		}
+		out = append(out, userLines(Pi, txt, owner, nil)...)
 	case "assistant":
 		cs, _ := m["content"].([]any)
 		for _, b := range cs {

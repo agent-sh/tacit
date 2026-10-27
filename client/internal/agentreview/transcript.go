@@ -160,6 +160,26 @@ func OwnerTurn(f digest.Format, ownerSession bool, line []byte) []string {
 	return ownerwords.TurnTexts(f, line)
 }
 
+// reader is how a transcript's lines are read in order: whether a person
+// types into the session, and the owner's turns read across its lines
+// (ownerwords.TurnReader, as OwnerTurn reads one).
+type reader struct {
+	owner bool
+	turns *ownerwords.TurnReader
+}
+
+// ownerParts is OwnerTurn on a line read in order, with the text another
+// agent wrote into that turn of theirs (a side agent's note they answered).
+func (r reader) ownerParts(f digest.Format, line []byte) (own, other []string) {
+	if !r.owner {
+		return nil, nil
+	}
+	if r.turns == nil {
+		return ownerwords.TurnTexts(f, line), nil
+	}
+	return r.turns.Parts(f, line)
+}
+
 // headBytes is how much of a transcript decides whether a person types into it.
 const headBytes = 256 << 10
 
@@ -197,6 +217,7 @@ func ReadTranscriptFrom(path string, f digest.Format, offset int64) (Conversatio
 	}
 	sc := bufio.NewScanner(fh)
 	sc.Buffer(make([]byte, 1<<20), 128<<20)
+	rd := reader{owner: owner, turns: &ownerwords.TurnReader{}}
 	first := true
 	for sc.Scan() {
 		line := sc.Bytes()
@@ -209,7 +230,7 @@ func ReadTranscriptFrom(path string, f digest.Format, offset int64) (Conversatio
 		if c.Cwd == "" {
 			c.Cwd = cwdOf(line)
 		}
-		c.Msgs = append(c.Msgs, lineMsgs(f, owner, line)...)
+		c.Msgs = append(c.Msgs, lineMsgs(f, rd, line)...)
 	}
 	return c, sc.Err()
 }
@@ -224,7 +245,7 @@ func cwdOf(line []byte) string {
 }
 
 // lineMsgs is the messages of one transcript line, with the line's time.
-func lineMsgs(f digest.Format, owner bool, line []byte) []Msg {
+func lineMsgs(f digest.Format, owner reader, line []byte) []Msg {
 	var ms []Msg
 	switch f {
 	case digest.Claude:
@@ -253,9 +274,13 @@ func lineTime(line []byte) string {
 	return ""
 }
 
-func userMsg(f digest.Format, owner bool, line []byte, texts []string) []Msg {
-	if mine := OwnerTurn(f, owner, line); len(mine) > 0 {
-		return []Msg{{Role: "user", Owner: true, Text: strings.Join(mine, "\n")}}
+func userMsg(f digest.Format, owner reader, line []byte, texts []string) []Msg {
+	if mine, other := owner.ownerParts(f, line); len(mine) > 0 {
+		var ms []Msg
+		if note := strings.TrimSpace(strings.Join(other, "\n")); note != "" {
+			ms = append(ms, Msg{Role: "user", Text: note}) // what they answered: another agent's
+		}
+		return append(ms, Msg{Role: "user", Owner: true, Text: strings.Join(mine, "\n")})
 	}
 	t := strings.TrimSpace(strings.Join(texts, "\n"))
 	if t == "" {
@@ -264,7 +289,7 @@ func userMsg(f digest.Format, owner bool, line []byte, texts []string) []Msg {
 	return []Msg{{Role: "user", Text: t}}
 }
 
-func claudeMsgs(owner bool, line []byte) []Msg {
+func claudeMsgs(owner reader, line []byte) []Msg {
 	var o struct {
 		Type    string `json:"type"`
 		Message struct {
@@ -328,7 +353,7 @@ func claudeMsgs(owner bool, line []byte) []Msg {
 	return []Msg{m}
 }
 
-func codexMsgs(owner bool, line []byte) []Msg {
+func codexMsgs(owner reader, line []byte) []Msg {
 	var o struct {
 		Type    string `json:"type"`
 		Payload struct {
@@ -376,7 +401,7 @@ func codexMsgs(owner bool, line []byte) []Msg {
 	return nil
 }
 
-func piMsgs(owner bool, line []byte) []Msg {
+func piMsgs(owner reader, line []byte) []Msg {
 	var o struct {
 		Type    string `json:"type"`
 		Message struct {
@@ -494,8 +519,9 @@ func ReadHermesAfter(ctx context.Context, db, sid string, after int64) (Conversa
 		n := len(c.Msgs)
 		switch r.Role {
 		case "user":
-			if text, injected := digest.HermesOwnerText(r.Content, r.DisplayKind, r.Summary); owner && !injected && strings.TrimSpace(text) != "" && !ownerwords.AgentInjected(text) {
-				c.Msgs = append(c.Msgs, Msg{Role: "user", Owner: true, Text: text})
+			text, injected := digest.HermesOwnerText(r.Content, r.DisplayKind, r.Summary)
+			if own, ok := ownerwords.OwnerPart(text); owner && !injected && ok {
+				c.Msgs = append(c.Msgs, Msg{Role: "user", Owner: true, Text: own})
 			} else if t := strings.TrimSpace(r.Content); t != "" {
 				c.Msgs = append(c.Msgs, Msg{Role: "user", Text: t})
 			}

@@ -424,3 +424,34 @@ func TestReadCodexAndPiSessions(t *testing.T) {
 		t.Fatal("a path was taken for a session id")
 	}
 }
+
+// A side agent's note in a typed turn is what the owner answered, not their
+// words; their reply below it is. A reminder in front of their message is
+// the harness's.
+func TestReadTranscriptSplitsSideAgentNotes(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "s1.jsonl")
+	note, _ := json.Marshal("Here is a note offered by a side agent:\n\n> Heads up · Your rule says every merge waits for a clean review.\n>\n> - **Consider a final review round at the cap.**\n\nits the correct decision, run a self review at the cap")
+	alone, _ := json.Marshal("Here is a note offered by a side agent:\n\n> Heads up · The server may restart on its own.")
+	queued, _ := json.Marshal("<system-reminder>\nThe user started your suggested background task task_c1 in a separate cloud session.\n</system-reminder>\n\nno more shop work for now")
+	writeLines(t, p,
+		`{"type":"user","entrypoint":"cli","cwd":"/h/projects/shop","sessionId":"s1","promptSource":"typed","turnOrigin":"human","origin":{"kind":"human"},"message":{"content":`+string(note)+`}}`,
+		`{"type":"user","entrypoint":"cli","sessionId":"s1","promptSource":"typed","turnOrigin":"human","origin":{"kind":"human"},"message":{"content":`+string(alone)+`}}`,
+		`{"type":"attachment","entrypoint":"cli","sessionId":"s1","attachment":{"type":"queued_command","prompt":`+string(queued)+`,"commandMode":"prompt","origin":{"kind":"human"},"humanTurn":true}}`,
+	)
+	c, err := ReadTranscript(p, digest.Claude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, m := range c.Msgs {
+		who := "NOTE"
+		if m.Owner {
+			who = "OWNER"
+		}
+		got = append(got, who+": "+strings.SplitN(m.Text, "\n", 2)[0])
+	}
+	want := []string{"NOTE: Here is a note offered by a side agent:", "OWNER: its the correct decision, run a self review at the cap", "NOTE: Here is a note offered by a side agent:", "OWNER: no more shop work for now"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("messages:\n%s", strings.Join(got, "\n"))
+	}
+}
