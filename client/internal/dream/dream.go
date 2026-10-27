@@ -33,6 +33,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/relevance"
 	"github.com/agent-sh/tacit/client/internal/repoid"
 	"github.com/agent-sh/tacit/client/internal/repoinfer"
+	"github.com/agent-sh/tacit/client/internal/transcript"
 )
 
 // DefaultModel is the extraction model: $TACIT_DREAM_MODEL (a provider's
@@ -90,9 +91,13 @@ DIGEST:
 %s
 `
 
-// State is the per-file read cursor, persisted between runs. A Hermes
-// session's cursor is in Offsets too, under hermes.Key ("hermes:<db>#<session
-// id>"), and holds the id of the last message read, not a byte offset.
+// State is the per-file read cursor, persisted between runs. A transcript's
+// cursor is keyed by its plain path (transcript.Plain) and is an offset in
+// its JSONL bytes, so it holds when the harness compresses the file (Codex's
+// .jsonl.zst) and, by the session id, when it moves the file (Codex's
+// archived_sessions; State.follow). A Hermes session's cursor is in Offsets
+// too, under hermes.Key ("hermes:<db>#<session id>"), and holds the id of the
+// last message read, not a byte offset.
 type State struct {
 	Offsets   map[string]int64    `json:"offsets"`
 	Skipped   int                 `json:"skipped_long_lines,omitempty"` // lines longer than maxReadBytes passed over
@@ -101,6 +106,9 @@ type State struct {
 	// Sources are the transcript roots (a glob, a Hermes store) whose cursors
 	// were recorded: a root not listed, with no cursor yet, starts at its end,
 	// so a source added to a running dreamer is not replayed from the start.
+	// A glob's compressed copies are a root of their own (Source.packedRoot):
+	// a dreamer from before it read them records the ones it never read at
+	// their end, as for any new root.
 	Sources []string `json:"sources,omitempty"`
 	// FailedAt is, per transcript (a cursor key), when a window of it last
 	// failed (a model, redaction or push error; RFC 3339). An idle or session
@@ -108,6 +116,46 @@ type State struct {
 	// window the model cannot answer is not sent again every 10 minutes; the
 	// full run retries it. Cleared when the transcript's cursor moves.
 	FailedAt map[string]string `json:"failed_at,omitempty"`
+	// Packed is, per compressed copy (its path), its file's size and time and
+	// its size in JSONL bytes: a copy's size is read from its frames, which
+	// for a few thousand Codex sessions takes seconds, and a copy does not
+	// change. Kept for the copies the last full run found.
+	Packed map[string]Packed `json:"packed,omitempty"`
+}
+
+// Packed is a compressed copy's file size and modification time (Unix
+// nanoseconds) and its size in JSONL bytes.
+type Packed struct {
+	Bytes int64 `json:"bytes"`
+	Mod   int64 `json:"mod"`
+	Size  int64 `json:"size"`
+}
+
+// stat is transcript.Stat with the sizes of compressed copies kept in the
+// state (State.Packed); seen collects the copies a scan found.
+func (st *State) stat(f string, seen map[string]Packed) (os.FileInfo, int64, error) {
+	if !transcript.Compressed(f) {
+		return transcript.Stat(f)
+	}
+	fi, err := os.Stat(f)
+	if err != nil {
+		return nil, 0, err
+	}
+	if p, ok := st.Packed[f]; ok && p.Bytes == fi.Size() && p.Mod == fi.ModTime().UnixNano() {
+		seen[f] = p
+		return fi, p.Size, nil
+	}
+	fi, n, err := transcript.Stat(f)
+	if err != nil {
+		return nil, 0, err
+	}
+	p := Packed{Bytes: fi.Size(), Mod: fi.ModTime().UnixNano(), Size: n}
+	seen[f] = p
+	if st.Packed == nil {
+		st.Packed = map[string]Packed{}
+	}
+	st.Packed[f] = p
+	return fi, n, nil
 }
 
 // FailureBackoff is how long idle and session runs leave a failed transcript
@@ -144,6 +192,75 @@ func (s Source) root() string {
 	return s.Glob
 }
 
+// packedRoot names the compressed copies of a glob's transcripts in
+// State.Sources: the glob with the compressed ending ("*.jsonl.zst").
+func (s Source) packedRoot() string { return s.Glob + transcript.Zst }
+
+// followed are the cursors of the sessions in a run's sources, by format and
+// session id, for a transcript that moved (State.follow).
+type followed map[string][]string
+
+func followKey(f digest.Format, session string) string { return fmt.Sprint(int(f)) + "\x00" + session }
+
+// sessionCursors indexes the transcript cursors of sources by session id.
+func (st *State) sessionCursors(sources []Source) followed {
+	out := followed{}
+	for k := range st.Offsets {
+		for _, src := range sources {
+			if src.Format == digest.Hermes || src.Glob == "" {
+				continue
+			}
+			if ok, _ := filepath.Match(src.Glob, k); ok {
+				fk := followKey(src.Format, sessionOf(k, src.Format))
+				out[fk] = append(out[fk], k)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// follow moves a session's cursor to its transcript's new path (key): a
+// harness moved the file (Codex moves an archived session to
+// archived_sessions, and back), so the old path is gone and one cursor of the
+// same session, in the same format, is left with no file. Its offsets, done
+// windows and failure time go with it. A session with a cursor at another
+// path that still holds a file is another copy (an import, a fork) and keeps
+// its own.
+func (st *State) follow(idx followed, f digest.Format, session, key string) (int64, bool) {
+	fk := followKey(f, session)
+	var gone []string
+	for _, k := range idx[fk] {
+		if k == key {
+			return st.Offsets[k], true
+		}
+		if _, err := os.Lstat(k); err == nil {
+			continue
+		}
+		if _, err := os.Lstat(k + transcript.Zst); err == nil {
+			continue
+		}
+		gone = append(gone, k)
+	}
+	if len(gone) != 1 {
+		return 0, false
+	}
+	old := gone[0]
+	off := st.Offsets[old]
+	st.Offsets[key] = off
+	delete(st.Offsets, old)
+	if w, ok := st.Completed[old]; ok {
+		st.Completed[key] = w
+		delete(st.Completed, old)
+	}
+	if t, ok := st.FailedAt[old]; ok {
+		st.FailedAt[key] = t
+		delete(st.FailedAt, old)
+	}
+	idx[fk] = []string{key}
+	return off, true
+}
+
 // started reports whether the state has cursors for a source: it is listed,
 // or a cursor is for one of its files or sessions (a state from before the
 // list).
@@ -163,14 +280,17 @@ func (st *State) started(src Source) bool {
 	return false
 }
 
-// DefaultSources on this machine: Claude Code projects, Codex sessions, pi
-// sessions (digest.PiSessionGlob) and, when there is one, the Hermes store
-// (hermes.DefaultDB).
+// DefaultSources on this machine: Claude Code projects, Codex sessions (and
+// the ones archived in archived_sessions), pi sessions
+// (digest.PiSessionGlob) and, when there is one, the Hermes store
+// (hermes.DefaultDB). Each glob takes the compressed copies of its
+// transcripts too (transcript.Glob).
 func DefaultSources(home string) []Source {
 	srcs := []Source{
 		{Glob: filepath.Join(home, ".claude", "projects", "*", "*.jsonl"), Format: digest.Claude},
 		{Glob: filepath.Join(home, ".codex", "sessions", "*", "*", "*", "*.jsonl"), Format: digest.Codex},
 		{Glob: filepath.Join(home, ".codex", "sessions", "*", "*.jsonl"), Format: digest.Codex},
+		{Glob: filepath.Join(home, ".codex", "archived_sessions", "*.jsonl"), Format: digest.Codex},
 		{Glob: digest.PiSessionGlob(home), Format: digest.Pi},
 	}
 	if db := hermes.DefaultDB(home); db != "" {
@@ -490,11 +610,14 @@ func ScanWindows(sources []Source, st *State, fresh bool, sel Select) (Scan, err
 	// A separate clone of a checkout in the projects directory is that
 	// repository (repoid.Mains); scanned once per run.
 	mains := repoid.LoadMains(home, repoid.ProjectsDir(home))
+	var cursors followed // by session, built when a transcript has no cursor at its path
+	packed := map[string]Packed{}
 	for _, src := range sources {
 		if sel.Only != "" && !st.started(src) {
 			continue
 		}
-		fresh := fresh || !st.started(src)
+		started := st.started(src)
+		fresh := fresh || !started
 		if !slices.Contains(st.Sources, src.root()) {
 			st.Sources = append(st.Sources, src.root())
 		}
@@ -504,37 +627,62 @@ func ScanWindows(sources []Source, st *State, fresh bool, sel Select) (Scan, err
 			passed.add(hp)
 			continue
 		}
-		files, _ := filepath.Glob(src.Glob)
+		// Compressed copies are read since v0.9.11: a dreamer that read only
+		// plain transcripts records the copies it has no cursor for at their
+		// end, as for a new root, so the history they hold is not replayed.
+		freshPacked := fresh || !slices.Contains(st.Sources, src.packedRoot())
+		files, _ := transcript.Glob(src.Glob)
 		for _, f := range files {
-			if sel.Only != "" && !sameFile(f, sel.Only) {
+			key := transcript.Plain(f)
+			if sel.Only != "" && !sameFile(f, sel.Only) && !sameFile(key, sel.Only) {
 				continue
 			}
 			session := sessionOf(f, src.Format)
-			if exclude[strings.TrimSuffix(filepath.Base(f), ".jsonl")] || exclude[session] {
+			if exclude[transcript.Name(f)] || exclude[session] {
 				continue
 			}
-			info, err := os.Stat(f)
+			info, size, err := st.stat(f, packed)
 			if err != nil || info.IsDir() {
+				if err != nil && transcript.Compressed(f) {
+					fmt.Fprintf(os.Stderr, "dream: %s: %v\n", f, err)
+				}
 				continue
 			}
-			off, seen := st.Offsets[f]
+			off, seen := st.Offsets[key]
 			if !seen {
-				if fresh {
-					st.Offsets[f] = info.Size()
+				if cursors == nil {
+					cursors = st.sessionCursors(sources)
+				}
+				off, seen = st.follow(cursors, src.Format, session, key)
+			}
+			if !seen {
+				if fresh || transcript.Compressed(f) && freshPacked {
+					st.Offsets[key] = size
 					continue
 				}
 				off = 0
 			}
-			if info.Size() < off {
-				st.Offsets[f] = info.Size()
+			if size < off {
+				st.Offsets[key] = size
 				continue
 			}
-			if seen && info.Size() <= off+minNewBytes {
+			if seen && size <= off+minNewBytes {
 				continue
 			}
-			fw, fp := fileWindows(f, src.Format, session, off, info, st, home, mains, sel, now)
+			fw, fp := fileWindows(f, src.Format, session, off, size, info, st, home, mains, sel, now)
 			ws = append(ws, fw...)
 			passed.add(fp)
+		}
+		// A run of one transcript (sel.Only) recorded no other copy.
+		if sel.Only == "" && !slices.Contains(st.Sources, src.packedRoot()) {
+			st.Sources = append(st.Sources, src.packedRoot())
+		}
+	}
+	if sel.Only == "" {
+		// The sizes of the copies this run found; the rest are gone.
+		st.Packed = packed
+		if len(packed) == 0 {
+			st.Packed = nil
 		}
 	}
 	return Scan{Windows: ws, Passed: passed}, nil
@@ -542,17 +690,17 @@ func ScanWindows(sources []Source, st *State, fresh bool, sel Select) (Scan, err
 
 // fileWindows digests a transcript's delta from off (at most maxReadBytes)
 // and names its windows; the ones sel.Agent passes over are counted, not
-// returned.
-func fileWindows(f string, format digest.Format, session string, off int64, info os.FileInfo, st *State, home string, mains *repoid.Mains, sel Select, now time.Time) ([]Window, Passed) {
-	fh, err := os.Open(f)
+// returned. size is the transcript's size in JSONL bytes (transcript.Stat:
+// a compressed copy's decompressed size); the cursor is keyed by its plain
+// path.
+func fileWindows(f string, format digest.Format, session string, off, size int64, info os.FileInfo, st *State, home string, mains *repoid.Mains, sel Select, now time.Time) ([]Window, Passed) {
+	key := transcript.Plain(f)
+	fh, err := transcript.OpenAt(f, off)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "dream: %s: %v\n", f, err)
 		return nil, Passed{}
 	}
-	if _, err := fh.Seek(off, 0); err != nil {
-		fh.Close()
-		return nil, Passed{}
-	}
-	want := info.Size() - off
+	want := size - off
 	if want > maxReadBytes {
 		want = maxReadBytes
 	}
@@ -572,9 +720,9 @@ func fileWindows(f string, format digest.Format, session string, off int64, info
 			if next, ok := nextLineStart(f, off+int64(n)); ok {
 				// Not when the file was replaced or cut meanwhile: the
 				// offset would land inside other content.
-				if fi, err := os.Stat(f); err == nil && fi.Size() >= next {
+				if now, err := transcript.Size(f); err == nil && now >= next {
 					fmt.Fprintf(os.Stderr, "dream: %s: a line of %d bytes at %d is longer than the read cap; passed over\n", f, next-off, off)
-					st.Offsets[f] = next
+					st.Offsets[key] = next
 					st.Skipped++
 				}
 			}
@@ -599,8 +747,8 @@ func fileWindows(f string, format digest.Format, session string, off int64, info
 	// Who typed the session's user turns is read from its start
 	// (digest.SessionWho): a delta from the middle of an agent's session
 	// holds its prompts as P: lines, never U:.
-	start := readHead(f)
-	who := digest.SessionWho(f, start, format)
+	start := transcript.Head(f, 256<<10)
+	who := digest.SessionWho(key, start, format)
 	lines, at := digest.LinesAt(bytes.NewReader(buf), format, who.Owner())
 	head := buf
 	if format == digest.Pi {
@@ -608,7 +756,7 @@ func fileWindows(f string, format digest.Format, session string, off int64, info
 		head = start
 	}
 	if !digest.Interesting(lines) {
-		st.Offsets[f] = end
+		st.Offsets[key] = end
 		return nil, Passed{}
 	}
 	// The cwd's repo, else the repo the window's own paths are in. Per
@@ -617,11 +765,11 @@ func fileWindows(f string, format digest.Format, session string, off int64, info
 	cwdRepo, cwd := repoOf(head, home, mains)
 	resolver := repoinfer.NewResolver(home).WithMains(mains)
 	all := windowsOf(lines, at, cwdRepo, cwd, home, mains, resolver, func(part int, c []string) Window {
-		return Window{File: f, Session: session, Lines: c, Start: off, End: end, Part: part, Why: why}
+		return Window{File: key, Session: session, Lines: c, Start: off, End: end, Part: part, Why: why}
 	})
 	kept, passed := sel.Agent.apply(all, now)
 	if len(kept) == 0 {
-		st.Offsets[f] = end // every window passed over: the delta is done
+		st.Offsets[key] = end // every window passed over: the delta is done
 	}
 	return kept, passed
 }
@@ -639,28 +787,17 @@ func sameFile(a, b string) bool {
 	return err == nil && os.SameFile(fa, fb)
 }
 
-// sessionOf is the session id of a transcript file: its name, less the time
-// pi puts before the id (<time>_<id>.jsonl).
+// sessionOf is the session id of a transcript file: its name (less
+// .jsonl and a compression ending), less the time pi puts before the id
+// (<time>_<id>.jsonl).
 func sessionOf(file string, f digest.Format) string {
-	name := strings.TrimSuffix(filepath.Base(file), ".jsonl")
+	name := transcript.Name(file)
 	if f == digest.Pi {
 		if i := strings.LastIndexByte(name, '_'); i >= 0 {
 			return name[i+1:]
 		}
 	}
 	return name
-}
-
-// readHead is a transcript's first 256 KiB.
-func readHead(path string) []byte {
-	fh, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer fh.Close()
-	b := make([]byte, 256<<10)
-	n, _ := io.ReadFull(fh, b)
-	return b[:n]
 }
 
 // hermesTimeout bounds one run's reads of a Hermes store.
@@ -812,14 +949,11 @@ func hermesTime(ts float64) time.Time {
 // nextLineStart is the offset just after the first newline at or after from,
 // and false when the file ends first (the line is not complete yet).
 func nextLineStart(path string, from int64) (int64, bool) {
-	fh, err := os.Open(path)
+	fh, err := transcript.OpenAt(path, from)
 	if err != nil {
 		return 0, false
 	}
 	defer fh.Close()
-	if _, err := fh.Seek(from, 0); err != nil {
-		return 0, false
-	}
 	buf := make([]byte, 1<<20)
 	pos := from
 	for {
