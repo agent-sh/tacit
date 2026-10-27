@@ -75,8 +75,8 @@ func TestAssessQuoteStopIsDormant(t *testing.T) {
 	if rep.AssessRecords != 0 || rep.AssessRefused != 1 || len(fa.prompts) != 2 {
 		t.Fatalf("dead on a stop and on a pause: report %+v, %d prompts", rep, len(fa.prompts))
 	}
-	if !strings.Contains(fa.prompts[0], `owner's turn (claude:s9): "we are banking our work and releasing boxes, no more oldtool work for now"`) {
-		t.Errorf("the owner's words after the reminder:\n%s", fa.prompts[0])
+	if !strings.Contains(fa.prompts[0], `owner's turn (claude:s9, `+daysAgo(28)+`): "we are banking our work and releasing boxes, no more oldtool work for now"`) {
+		t.Errorf("the owner's words after the reminder, dated:\n%s", fa.prompts[0])
 	}
 	if !strings.Contains(fa.prompts[1], "owner_quote_final") || !strings.Contains(fa.prompts[1], "stopping, banking or pausing work is dormant") {
 		t.Errorf("the refusal:\n%s", fa.prompts[1][strings.Index(fa.prompts[1], "CODE REFUSED"):])

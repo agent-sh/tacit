@@ -1095,7 +1095,7 @@ func (a *assessor) ownerWords(name string) []string {
 		return out
 	}
 	for i, m := range ms {
-		out = append(out, fmt.Sprintf("owner's turn (%s): %q", m.Ref, red[i]))
+		out = append(out, fmt.Sprintf("owner's turn (%s): %q", turnCite(m), red[i]))
 	}
 	return out
 }
