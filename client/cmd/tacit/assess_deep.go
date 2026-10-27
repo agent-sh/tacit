@@ -26,6 +26,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/overlay"
+	"github.com/agent-sh/tacit/client/internal/ownerwords"
 	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/record"
 )
@@ -403,26 +404,51 @@ func oneLineClip(s string, n int) string {
 	return s
 }
 
-// extraTurns are the owner's turns that name the folder by any of its
-// names (redacted; left out when redaction fails).
+// turnsPerSession bounds the owner's turns one session gives the wider
+// search: its newest that name the folder.
+const turnsPerSession = 2
+
+// extraTurns are the owner's turns that name the folder by any of its names
+// (redacted; left out when redaction fails), at most n: the newest first,
+// at most turnsPerSession of one session, each with its day. What they said
+// last decides a folder, so the newest are the ones shown, never a
+// session's first. Only what of a turn is theirs is in the corpus (a side
+// agent's note, a harness's reminder are not: digest.TurnPieces).
 func (a *assessor) extraTurns(names []string, n int) []assess.Extra {
 	if a.corpus == nil {
 		return nil
 	}
-	var texts, refs []string
-	seen := map[string]bool{}
+	type turn struct {
+		m  ownerwords.Mention
+		nm string
+	}
+	var all []turn
+	seenTurn := map[string]bool{}
 	for _, nm := range names {
 		if strings.Contains(nm, "/") {
 			continue
 		}
-		for _, m := range a.corpus.Mentions(nm, n) {
-			if seen[m.Ref] {
-				continue
+		for _, m := range a.corpus.Mentions(nm, 20*n) {
+			if k := m.Ref + "@" + m.TurnHash; !seenTurn[k] {
+				seenTurn[k] = true
+				all = append(all, turn{m, nm})
 			}
-			seen[m.Ref] = true
-			texts = append(texts, clipAround(m.Text, nm, 400))
-			refs = append(refs, m.Ref)
 		}
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].m.At.After(all[j].m.At) })
+	var texts []string
+	var picked []ownerwords.Mention
+	perRef := map[string]int{}
+	for _, t := range all {
+		if len(picked) == n {
+			break
+		}
+		if perRef[t.m.Ref] == turnsPerSession {
+			continue
+		}
+		perRef[t.m.Ref]++
+		texts = append(texts, clipAround(t.m.Text, t.nm, 400))
+		picked = append(picked, t.m)
 	}
 	if len(texts) == 0 {
 		return nil
@@ -431,11 +457,20 @@ func (a *assessor) extraTurns(names []string, n int) []assess.Extra {
 	if err != nil {
 		return nil
 	}
-	out := []assess.Extra{{Line: fmt.Sprintf("the owner's turns that name it (%d):", len(texts))}}
-	for i := range texts {
-		out = append(out, assess.Extra{Key: "turn:" + refs[i], Line: fmt.Sprintf("  - owner's turn (%s): %q", refs[i], red[i])})
+	out := []assess.Extra{{Line: fmt.Sprintf("the owner's turns that name it, newest first (%d):", len(texts))}}
+	for i, m := range picked {
+		out = append(out, assess.Extra{Key: "turn:" + m.Ref + "@" + m.TurnHash, Line: fmt.Sprintf("  - owner's turn (%s): %q", turnCite(m), red[i])})
 	}
 	return out
+}
+
+// turnCite is how a prompt names one of the owner's turns: its session ref,
+// and the day they wrote it when its source records that.
+func turnCite(m ownerwords.Mention) string {
+	if m.At.IsZero() {
+		return m.Ref
+	}
+	return m.Ref + ", " + m.At.Local().Format("2006-01-02")
 }
 
 // reviewAttempt is one line of the attempts' log: a folder left for review

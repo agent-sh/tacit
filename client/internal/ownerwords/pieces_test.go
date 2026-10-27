@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 )
@@ -108,4 +109,26 @@ func TestCorpusCodexImportsAndAnswers(t *testing.T) {
 			t.Errorf("Find(%q) = %+v, want %q", q, m, want)
 		}
 	}
+}
+
+// Mentions are the newest turns first, with their times.
+func TestMentionsNewestFirst(t *testing.T) {
+	b := NewBuilder()
+	b.AddAt("transcript", "claude:a", "tower crane is being set up today", mustTime("2026-10-06T10:00:00Z"))
+	b.AddAt("transcript", "claude:a", "drop tower crane, it is the most fragile project", mustTime("2026-10-25T20:35:29Z"))
+	b.AddAt("transcript", "claude:b", "tower crane ships tonight", mustTime("2026-10-20T10:00:00Z"))
+	b.Add("digest", "claude:c", "tower crane from a digest with no time")
+	c := b.Build()
+	ms := c.Mentions("tower-crane", 10)
+	if len(ms) != 4 || !strings.HasPrefix(ms[0].Text, "drop tower crane") || ms[0].At.Format("2006-01-02") != "2026-10-25" || ms[1].Ref != "claude:b" || !ms[3].At.IsZero() {
+		t.Errorf("mentions: %+v", ms)
+	}
+}
+
+func mustTime(s string) time.Time {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		panic(err)
+	}
+	return t
 }

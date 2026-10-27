@@ -1110,22 +1110,32 @@ func ParseDigestHeader(data []byte) DigestHeader {
 }
 
 // Mention is one of their turns that names a word: where (a session ref),
-// the hash of the turn, and the turn as they wrote it.
+// the hash of the turn, the turn as they wrote it (what of it is theirs:
+// AddAt), and when they wrote it (zero when its source does not say).
 type Mention struct {
 	Ref, TurnHash, Text string
+	At                  time.Time
 }
 
 // Mentions are up to max of their turns that hold name as words (name
-// normalized: "valkey-review-bot" is the words valkey review bot), newest
-// sessions not preferred, in corpus order.
+// normalized: "valkey-review-bot" is the words valkey review bot), the
+// newest first; turns whose source records no time come last, in corpus
+// order. What they said last about a thing is what decides it, so the
+// newest are the ones shown.
 func (c *Corpus) Mentions(name string, max int) []Mention {
 	n := Normalize(name)
-	if c == nil || c.sa == nil || n == "" {
+	if c == nil || c.sa == nil || n == "" || max <= 0 {
 		return nil
 	}
+	idx := c.candidates(n)
+	sort.SliceStable(idx, func(i, j int) bool { return c.at[idx[i]] > c.at[idx[j]] })
 	var out []Mention
-	for _, i := range c.candidates(n) {
-		out = append(out, Mention{Ref: c.refs[i], TurnHash: ledger.TurnHash(Normalize(c.raw[i])), Text: c.raw[i]})
+	for _, i := range idx {
+		m := Mention{Ref: c.refs[i], TurnHash: ledger.TurnHash(Normalize(c.raw[i])), Text: c.raw[i]}
+		if c.at[i] > 0 {
+			m.At = time.Unix(c.at[i], 0)
+		}
+		out = append(out, m)
 		if len(out) >= max {
 			break
 		}
