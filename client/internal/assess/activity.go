@@ -118,7 +118,8 @@ func parseDay(s string) (time.Time, bool) {
 }
 
 // Measure sorts the days and sets the rhythm and code's status as of today.
-// An archived repository is never active (its owner archived it): dormant,
+// An archived repository is never active (its owner archived it), nor is
+// one the forge has deleted: dormant,
 // or dead or shipped on the explicit evidence the model cites.
 func (a *Activity) Measure(today string) {
 	a.Today = today
@@ -148,7 +149,9 @@ func (a *Activity) Measure(today string) {
 	a.Window = min(max(rhythmFactor*a.TypicalGap, minWindowDays), maxWindowDays)
 	a.Idle = int(now.Sub(days[0]).Hours() / 24)
 	a.Status = record.StatusDormant
-	if a.Idle <= a.Window && (a.Forge == nil || !a.Forge.Archived) {
+	// A repository the forge has archived or deleted is not worked on,
+	// whatever sessions still name it.
+	if a.Idle <= a.Window && (a.Forge == nil || !a.Forge.Archived) && !a.Deleted {
 		a.Status = record.StatusActive
 	}
 }
@@ -213,6 +216,9 @@ func (a *Activity) StatusWhy() string {
 	s := fmt.Sprintf("code: %s from its dates: the owner's last activity is %s (%s), %d days before %s; %s, so it is active while idle at most %d days", a.Status, last.Day, src, a.Idle, a.Today, rhythm, a.Window)
 	if a.Forge != nil && a.Forge.Archived {
 		s += "; the forge has it archived, so it is not active"
+	}
+	if a.Deleted {
+		s += "; the forge has it deleted, so it is not active"
 	}
 	if c := a.Cite(); c != "" && c != last.Cite {
 		s += " (" + c + ")"

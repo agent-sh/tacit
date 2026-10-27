@@ -165,8 +165,8 @@ func (a *assessor) realWork(folder string, act *assess.Activity, after string) a
 			addCommit(cm.Day, cm.Hash, cm.Files, "")
 		}
 		for _, w := range a.catalog.Work(r.Root) {
-			if w.Seen > after {
-				ch.Real = append(ch.Real, assess.Work{Day: w.Seen, Kind: "session", Cite: "session:" + w.Session, Why: "worked in its checkout here", Real: true})
+			if day := a.sessionDay(w.Session, w.Seen); day > after {
+				ch.Real = append(ch.Real, assess.Work{Day: day, Kind: "session", Cite: "session:" + w.Session, Why: "worked in its checkout here", Real: true})
 			}
 		}
 	} else if a.host != "" {
@@ -175,8 +175,8 @@ func (a *assessor) realWork(folder string, act *assess.Activity, after string) a
 				continue
 			}
 			for _, w := range ws {
-				if w.Seen > after {
-					ch.Real = append(ch.Real, assess.Work{Day: w.Seen, Kind: "session", Cite: "session:" + w.Session, Why: "worked in its folder here", Real: true})
+				if day := a.sessionDay(w.Session, w.Seen); day > after {
+					ch.Real = append(ch.Real, assess.Work{Day: day, Kind: "session", Cite: "session:" + w.Session, Why: "worked in its folder here", Real: true})
 				}
 			}
 		}

@@ -22,6 +22,27 @@ import (
 	"github.com/agent-sh/tacit/client/internal/repoid"
 )
 
+// sessionDay is the day a session's work on a folder counts on: the day
+// code saw it (the dreamer's registry) or filed its note, but never after
+// the owner's last turn in that session, when their history here has one. A
+// rebuild dreams and files months of sessions on the days it runs, and a
+// session that ended in September is no activity of the owner's in October.
+func (a *assessor) sessionDay(id, day string) string {
+	if a.corpus == nil || day == "" {
+		return day
+	}
+	t := a.corpus.LastTurn(id)
+	if t.IsZero() && strings.HasPrefix(id, "rollout-") && len(id) > 36 {
+		t = a.corpus.LastTurn(id[len(id)-36:]) // a Codex transcript's name ends in its thread's id
+	}
+	if !t.IsZero() {
+		if d := t.Local().Format("2006-01-02"); d < day {
+			return d
+		}
+	}
+	return day
+}
+
 // forgeActivityCommits is how many of the forge's newest commits a folder's
 // rhythm reads: one call of the forge's API either way (it pages at 100),
 // and 20 (v0.9.2's) is one busy day of a busy repository.
@@ -59,13 +80,13 @@ func (a *assessor) activity(c *assess.Candidate) {
 		}
 		cancel()
 		for _, w := range a.catalog.Work(r.Root) {
-			act.AddDay(w.Seen, "session", "session:"+w.Session)
+			act.AddDay(a.sessionDay(w.Session, w.Seen), "session", "session:"+w.Session)
 		}
 	} else if a.host != "" {
 		for p, ws := range repoid.FolderWork(a.reg) {
 			if filepath.Base(p) == name {
 				for _, w := range ws {
-					act.AddDay(w.Seen, "session", "session:"+w.Session)
+					act.AddDay(a.sessionDay(w.Session, w.Seen), "session", "session:"+w.Session)
 				}
 			}
 		}
@@ -89,7 +110,7 @@ func (a *assessor) activity(c *assess.Candidate) {
 		}
 	}
 	for _, id := range sortedKeysStr(last) {
-		act.AddDay(last[id], "session", "session:"+id)
+		act.AddDay(a.sessionDay(id, last[id]), "session", "session:"+id)
 	}
 	a.forgeActivity(c, act)
 	if len(act.Days) == 0 && act.Forge == nil && !act.Deleted {
