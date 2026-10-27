@@ -3,6 +3,7 @@ package digest
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -458,4 +459,245 @@ func ClaudeQueuedLine(line []byte) (texts []string, typed bool, why string, ok b
 		return nil, false, "", false
 	}
 	return ClaudeQueued(o)
+}
+
+// Harness is who wrote a piece of a turn that a harness put there (a
+// reminder, a notification, a command echo, a summary, a frame): no one's
+// words.
+const Harness Who = "harness"
+
+// Piece is a part of a user turn's text and who wrote it: Owner (the person
+// whose turn it is), Agent (another agent's text inside it) or Harness.
+type Piece struct {
+	Who  Who
+	Text string
+	// Item is the question a Codex answer replies to (the reply's
+	// questionItemId), "" for any other piece: an answer that is one of the
+	// options its question offered is the model's words (CodexAsked).
+	Item string
+}
+
+var (
+	// systemReminder is a whole block Claude Code wraps its own notes in.
+	systemReminder = regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>`)
+	// sideNote opens a note a side agent offers: Claude Code delivers it as
+	// a turn of the person's (origin.kind "human", promptSource "typed"),
+	// the note's body quoted line by line with "> ", and what the person
+	// typed in reply below it. A copy pasted from the terminal starts with
+	// its prompt mark, "❯ ", and keeps the quote's indent.
+	sideNote = regexp.MustCompile(`^\s*(?:❯\s*)?Here is a note offered by a side agent:`)
+	// questionReply is Codex's reply to the questions an agent asked the
+	// person (request_user_input): a JSON list of {answer, question,
+	// questionItemId}.
+	questionReply = regexp.MustCompile(`(?s)^\s*<send_user_message_question_reply>\s*(.*?)\s*</send_user_message_question_reply>\s*$`)
+	commandArgs   = regexp.MustCompile(`(?s)<command-args>(.*?)</command-args>`)
+)
+
+// InjectedNotices open turns a harness or a front end wrote into a person's
+// session: Claude Code's summary of a compacted conversation, a front end's
+// status prompts, scheduled automations, an interruption mark, and a Relay
+// hand-off of a conversation to another harness (which then holds the
+// transcript as one user message).
+var InjectedNotices = []string{
+	"This session is being continued from a previous conversation",
+	"Continue the current task",
+	"Status check so I can identify which conversation",
+	"Automation:",
+	"[Request interrupted",
+	"The app was quit while you were working",
+	"The user moved this existing Relay conversation to you",
+}
+
+// TurnPieces splits the text of a user turn into who wrote each part. It is
+// the one rule for what in a turn's text is the person's, for the dreamer's
+// digest (U:, P:, H:) and the owner corpus alike; whether the turn is a
+// person's at all is decided first, from the line (ClaudeTyped,
+// ClaudeQueued, SessionWho). In order:
+//   - every whole <system-reminder> block is the harness's: Claude Code puts
+//     one before (or after) a message the person typed (a background task
+//     they started, the scratch folder of a session with no project), and
+//     the rest is decided on its own;
+//   - a note a side agent offers (sideNote): its header and the quoted lines
+//     that follow it are that agent's; what the person typed below the quote
+//     is theirs;
+//   - a slash command's echo is the harness's, its <command-args> the
+//     person's;
+//   - a Codex question reply holds the person's answers, each in its answer
+//     field; the questions in it are the asking agent's, already in its
+//     turn;
+//   - any other text that opens with a tag (Claude Code's and Codex's
+//     frames, a delegation, a task notification, an attached file), a
+//     harness's own heading (HarnessText) or one of InjectedNotices is the
+//     harness's;
+//   - an orchestrator's role prompt ("You are manager-01 ...", "You are a
+//     worker for ..."): an agent's; the person writes in lower case, and no
+//     turn of theirs opens that way;
+//   - the rest is the person's.
+func TurnPieces(text string) []Piece {
+	var out []Piece
+	rest := systemReminder.ReplaceAllStringFunc(text, func(b string) string {
+		out = append(out, Piece{Who: Harness, Text: b})
+		return "\n"
+	})
+	return append(out, pieces(rest)...)
+}
+
+// pieces is TurnPieces on text with no reminder block left.
+func pieces(text string) []Piece {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return nil
+	}
+	if sideNote.MatchString(t) {
+		ls := strings.Split(t, "\n")
+		j := 1
+		for j < len(ls) && (strings.TrimSpace(ls[j]) == "" || strings.HasPrefix(strings.TrimLeft(ls[j], " \t"), ">")) {
+			j++
+		}
+		out := []Piece{{Who: Agent, Text: strings.TrimSpace(strings.Join(ls[:j], "\n"))}}
+		return append(out, pieces(strings.Join(ls[j:], "\n"))...)
+	}
+	if m := questionReply.FindStringSubmatch(t); m != nil {
+		var items []struct {
+			Answer   string `json:"answer"`
+			Question string `json:"question"`
+			Item     string `json:"questionItemId"`
+		}
+		if json.Unmarshal([]byte(m[1]), &items) != nil {
+			return []Piece{{Who: Harness, Text: t}}
+		}
+		var out []Piece
+		for _, it := range items {
+			if q := strings.TrimSpace(it.Question); q != "" {
+				out = append(out, Piece{Who: Harness, Text: q})
+			}
+			if a := strings.TrimSpace(it.Answer); a != "" {
+				out = append(out, Piece{Who: Owner, Text: a, Item: it.Item})
+			}
+		}
+		return out
+	}
+	if strings.HasPrefix(t, "<") || claudeHarness.MatchString(t) || codexHarness.MatchString(t) {
+		if m := commandArgs.FindStringSubmatch(t); m != nil && strings.Contains(t, "<command-name>") {
+			out := []Piece{{Who: Harness, Text: strings.TrimSpace(commandArgs.ReplaceAllString(t, ""))}}
+			if a := strings.TrimSpace(m[1]); a != "" {
+				out = append(out, pieces(a)...)
+			}
+			return out
+		}
+		return []Piece{{Who: Harness, Text: t}}
+	}
+	for _, p := range InjectedNotices {
+		if strings.HasPrefix(t, p) {
+			return []Piece{{Who: Harness, Text: t}}
+		}
+	}
+	if strings.HasPrefix(t, "You are ") {
+		return []Piece{{Who: Agent, Text: t}}
+	}
+	return []Piece{{Who: Owner, Text: t}}
+}
+
+// OwnerPieces are the texts of ps that are the person's.
+func OwnerPieces(ps []Piece) []string {
+	var out []string
+	for _, p := range ps {
+		if p.Who == Owner {
+			out = append(out, p.Text)
+		}
+	}
+	return out
+}
+
+// CodexAsked is what the questions a Codex agent asked the person offered:
+// a request_user_input call lists options for each question, and the reply
+// names the question each answer is for (questionItemId: the tool, the
+// call's id and the question's index). An answer that is one of its
+// question's options is a choice the person made among the model's words,
+// not words of theirs, as ClaudeTyped holds an accepted suggestion. Keyed by
+// call id and index ("call_x#0").
+type CodexAsked map[string][]string
+
+// Note records the options of a Codex request_user_input call on a decoded
+// transcript line; any other line is left alone.
+func (a CodexAsked) Note(o map[string]any) {
+	if a == nil || o["type"] != "response_item" {
+		return
+	}
+	p, _ := o["payload"].(map[string]any)
+	name, _ := p["name"].(string)
+	if p["type"] != "function_call" || !strings.HasPrefix(name, "request_user_input") {
+		return
+	}
+	id, _ := p["call_id"].(string)
+	args, _ := p["arguments"].(string)
+	var in struct {
+		Questions []struct {
+			Options []json.RawMessage `json:"options"`
+		} `json:"questions"`
+	}
+	if id == "" || json.Unmarshal([]byte(args), &in) != nil {
+		return
+	}
+	for i, q := range in.Questions {
+		var opts []string
+		for _, raw := range q.Options {
+			var s string
+			var lab struct {
+				Label string `json:"label"`
+			}
+			switch {
+			case json.Unmarshal(raw, &s) == nil:
+			case json.Unmarshal(raw, &lab) == nil:
+				s = lab.Label
+			}
+			if s = strings.TrimSpace(s); s != "" {
+				opts = append(opts, s)
+			}
+		}
+		a[fmt.Sprintf("%s#%d", id, i)] = opts
+	}
+}
+
+// NoteLine is Note on a raw transcript line.
+func (a CodexAsked) NoteLine(line []byte) {
+	if !bytes.Contains(line, []byte(`"request_user_input`)) || !bytes.Contains(line, []byte(`"function_call"`)) {
+		return
+	}
+	var o map[string]any
+	if json.Unmarshal(line, &o) == nil {
+		a.Note(o)
+	}
+}
+
+// Offered reports an answer that is one of the options the question it
+// replies to (item, a questionItemId) offered.
+func (a CodexAsked) Offered(item, answer string) bool {
+	var id []any
+	if a == nil || json.Unmarshal([]byte(item), &id) != nil || len(id) < 3 {
+		return false
+	}
+	call, _ := id[1].(string)
+	idx, ok := id[2].(float64)
+	if !ok {
+		return false
+	}
+	ans := strings.Join(strings.Fields(answer), " ")
+	for _, o := range a[fmt.Sprintf("%s#%d", call, int(idx))] {
+		if strings.EqualFold(strings.Join(strings.Fields(o), " "), ans) {
+			return true
+		}
+	}
+	return false
+}
+
+// Chosen is ps with each answer that is an option its question offered
+// (Offered) made the harness's: the person chose it, the model wrote it.
+func (a CodexAsked) Chosen(ps []Piece) []Piece {
+	for i, p := range ps {
+		if p.Who == Owner && p.Item != "" && a.Offered(p.Item, p.Text) {
+			ps[i].Who, ps[i].Text = Harness, "the person chose the option offered: "+p.Text
+		}
+	}
+	return ps
 }

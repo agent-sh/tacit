@@ -230,6 +230,9 @@ func Lines(r io.Reader, f Format, owner bool) []string {
 func LinesAt(r io.Reader, f Format, owner bool) ([]string, []time.Time) {
 	var out []string
 	var at []time.Time
+	// The options a Codex agent's questions offered, for the answers that
+	// follow (a window that starts after the question has none of them).
+	asked := CodexAsked{}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1<<20), 64<<20)
 	for sc.Scan() {
@@ -242,7 +245,7 @@ func LinesAt(r io.Reader, f Format, owner bool) ([]string, []time.Time) {
 		case Claude:
 			ls = claudeLine(o, owner)
 		case Codex:
-			ls = codexLine(o, owner)
+			ls = codexLine(o, owner, asked)
 		case Pi:
 			ls = piLine(o, owner)
 		}
@@ -259,6 +262,39 @@ func LinesAt(r io.Reader, f Format, owner bool) ([]string, []time.Time) {
 		}
 	}
 	return out, at
+}
+
+// userLines are the digest lines of a user turn's text. In a turn the
+// person typed (typed) it is split by who wrote each part (TurnPieces, with
+// a Codex answer that is an option its question offered the model's,
+// asked): their words U:, an agent's text inside their turn P:, the
+// harness's H:. Any other turn is another agent's prompt, P:, or harness
+// text, H:, whole.
+func userLines(f Format, txt string, typed bool, asked CodexAsked) []string {
+	if strings.TrimSpace(txt) == "" {
+		return nil
+	}
+	if !typed {
+		if HarnessText(f, txt) {
+			return []string{"H: " + clip(txt, hMax)}
+		}
+		return []string{"P: " + clip(txt, uMax)}
+	}
+	var out []string
+	for _, p := range asked.Chosen(TurnPieces(txt)) {
+		if strings.TrimSpace(p.Text) == "" {
+			continue
+		}
+		switch p.Who {
+		case Harness:
+			out = append(out, "H: "+clip(p.Text, hMax))
+		case Owner:
+			out = append(out, "U: "+clip(p.Text, uMax))
+		default:
+			out = append(out, "P: "+clip(p.Text, uMax))
+		}
+	}
+	return out
 }
 
 // capFor is the final width of a digest line by its prefix.
@@ -347,15 +383,7 @@ func claudeLine(o map[string]any, owner bool) []string {
 		}
 		var out []string
 		for _, txt := range texts {
-			switch {
-			case strings.TrimSpace(txt) == "":
-			case claudeHarness.MatchString(txt):
-				out = append(out, "H: "+clip(txt, hMax))
-			case owner:
-				out = append(out, "U: "+clip(txt, uMax))
-			default:
-				out = append(out, "P: "+clip(txt, uMax))
-			}
+			out = append(out, userLines(Claude, txt, owner, nil)...)
 		}
 		return out
 	}
@@ -377,12 +405,10 @@ func claudeLine(o map[string]any, owner bool) []string {
 	userText := func(txt string) {
 		switch {
 		case strings.TrimSpace(txt) == "":
-		case meta || claudeHarness.MatchString(txt):
+		case meta:
 			out = append(out, "H: "+clip(txt, hMax))
-		case typed:
-			out = append(out, "U: "+clip(txt, uMax))
 		default:
-			out = append(out, "P: "+clip(txt, uMax))
+			out = append(out, userLines(Claude, txt, typed, nil)...)
 		}
 	}
 	switch c := content.(type) {
@@ -416,10 +442,11 @@ func claudeLine(o map[string]any, owner bool) []string {
 	return out
 }
 
-func codexLine(o map[string]any, owner bool) []string {
+func codexLine(o map[string]any, owner bool, asked CodexAsked) []string {
 	if o["type"] != "response_item" {
 		return nil
 	}
+	asked.Note(o)
 	p, _ := o["payload"].(map[string]any)
 	pt, _ := p["type"].(string)
 	var out []string
@@ -435,14 +462,10 @@ func codexLine(o map[string]any, owner bool) []string {
 			}
 			switch role {
 			case "user":
-				switch {
-				case codexHarness.MatchString(txt):
-					out = append(out, "H: "+clip(txt, hMax))
-				case owner:
-					out = append(out, "U: "+clip(txt, uMax))
-				default:
-					out = append(out, "P: "+clip(txt, uMax))
-				}
+				// A session imported from another harness (a Relay hand-off of
+				// a Claude Code conversation) holds that harness's frames too:
+				// one rule for every format (TurnPieces).
+				out = append(out, userLines(Codex, txt, owner, asked)...)
 			case "assistant":
 				if !strings.HasPrefix(txt, "[Recorded tool history]") {
 					out = append(out, "A: "+clip(txt, aMax))

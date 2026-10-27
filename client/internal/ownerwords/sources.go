@@ -17,31 +17,24 @@ import (
 	"github.com/agent-sh/tacit/client/internal/hermes"
 )
 
-// agentInjected are user turns that an agent or a harness wrote into one of
-// the owner's sessions: Claude Code's summary of a compacted conversation,
-// a front end's status prompts, and scheduled automations.
-var agentInjected = []string{
-	"This session is being continued from a previous conversation",
-	"Continue the current task",
-	"Status check so I can identify which conversation",
-	"Automation:",
-	"[Request interrupted",
-	"The app was quit while you were working",
+// AgentInjected reports text that sits in a user turn of an owner session but
+// holds nothing of theirs: it is all a harness's or another agent's
+// (digest.TurnPieces: a notice, a framed message, a side agent's note, an
+// orchestrator's role prompt).
+func AgentInjected(text string) bool {
+	_, ok := OwnerPart(text)
+	return !ok
 }
 
-// AgentInjected reports text that sits in a user turn of an owner session but
-// was written by an agent or a harness: the notices above, a framed message
-// (harnessFrame), and an orchestrator's role prompt ("You are manager-01 ...",
-// "You are a worker for ..."; the owner writes in lower case, and no turn of theirs on
-// this machine opens that way).
-func AgentInjected(text string) bool {
-	t := strings.TrimSpace(text)
-	for _, p := range agentInjected {
-		if strings.HasPrefix(t, p) {
-			return true
-		}
+// OwnerPart is what of a user turn's text is the owner's (digest.TurnPieces:
+// a harness's reminders and frames, a side agent's note and agents' prompts
+// left out), one piece per line; ok is false when nothing is.
+func OwnerPart(text string) (string, bool) {
+	own := digest.OwnerPieces(digest.TurnPieces(text))
+	if len(own) == 0 {
+		return "", false
 	}
-	return strings.HasPrefix(t, "You are ") || harnessFrame(t)
+	return strings.Join(own, "\n"), true
 }
 
 // pasted is Claude Code's placeholder for a paste in the prompt history; the

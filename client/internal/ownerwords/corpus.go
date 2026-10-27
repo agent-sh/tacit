@@ -107,7 +107,8 @@ func (b *Builder) Add(source, ref, text string) { b.AddAt(source, ref, text, tim
 // day a statement of theirs was said is that turn's (SaidAt), never the day
 // a step read it.
 func (b *Builder) AddAt(source, ref, text string, at time.Time) {
-	if AgentInjected(text) {
+	text, ok := OwnerPart(text)
+	if !ok {
 		b.c.Stats.AgentTurns++
 		return
 	}
@@ -721,6 +722,7 @@ func (b *Builder) addTranscript(path string, f digest.Format) error {
 		return err
 	}
 	defer fh.Close()
+	asked := digest.CodexAsked{} // the options a Codex agent's questions offered
 	ref := ""
 	if f == digest.Claude {
 		ref = "claude:" + strings.TrimSuffix(filepath.Base(path), ".jsonl")
@@ -758,6 +760,7 @@ func (b *Builder) addTranscript(path string, f digest.Format) error {
 			}
 			continue
 		}
+		asked.NoteLine(line)
 		if ref == "" && bytes.Contains(line, []byte(`"session_meta"`)) {
 			if m := sessionIDRx.FindSubmatch(line); m != nil {
 				ref = "codex:" + string(m[1])
@@ -769,7 +772,7 @@ func (b *Builder) addTranscript(path string, f digest.Format) error {
 		if ref == "" {
 			ref = "codex:" + strings.TrimSuffix(filepath.Base(path), ".jsonl")
 		}
-		if turns := codexUserTurns(line); len(turns) > 0 {
+		if turns := codexUserTurns(line, asked); len(turns) > 0 {
 			at := LineTime(line)
 			for _, t := range turns {
 				b.AddAt("transcript", ref, t, at)
@@ -835,24 +838,22 @@ func claudeUserTurns(line []byte) (out []string, skipped int) {
 }
 
 // typedTexts is the owner's words in the texts of a turn a person typed:
-// pasted blocks and harness text left out, a slash command's arguments kept.
+// pasted blocks left out, and what a harness or another agent wrote into
+// the turn (digest.TurnPieces: reminders, frames, a side agent's note; a
+// slash command's arguments are theirs). skipped counts the texts with
+// nothing of theirs.
 func typedTexts(texts []string) (out []string, skipped int) {
 	for _, t := range texts {
 		t = pastedBlock.ReplaceAllString(t, " ")
 		if strings.TrimSpace(t) == "" {
 			continue
 		}
-		if digest.HarnessText(digest.Claude, t) {
-			// A slash command the owner typed (/goal, /loop) is echoed in harness tags;
-			// its arguments are their words.
-			if m := commandArgs.FindStringSubmatch(t); m != nil && strings.Contains(t, "<command-name>") {
-				out = append(out, m[1])
-			} else {
-				skipped++
-			}
+		own := digest.OwnerPieces(digest.TurnPieces(t))
+		if len(own) == 0 {
+			skipped++
 			continue
 		}
-		out = append(out, t)
+		out = append(out, own...)
 	}
 	return out, skipped
 }
@@ -877,10 +878,7 @@ func hasText(content json.RawMessage) bool {
 	return false
 }
 
-var (
-	commandArgs = regexp.MustCompile(`(?s)<command-args>(.*?)</command-args>`)
-	pastedBlock = regexp.MustCompile(`(?s)<pasted_content\b[^>]*>.*?</pasted_content>`)
-)
+var pastedBlock = regexp.MustCompile(`(?s)<pasted_content\b[^>]*>.*?</pasted_content>`)
 
 // piUserTurns is what the owner typed in one pi user message: its text
 // blocks, less harness frames (an attached file, a skill expansion) and
@@ -914,15 +912,21 @@ func piUserTurns(line []byte) []string {
 	}
 	var out []string
 	for _, t := range texts {
-		if strings.TrimSpace(t) == "" || harnessFrame(t) || PastedBlob(t) {
-			continue
+		for _, own := range digest.OwnerPieces(digest.TurnPieces(t)) {
+			if !PastedBlob(own) {
+				out = append(out, own)
+			}
 		}
-		out = append(out, t)
 	}
 	return out
 }
 
-func codexUserTurns(line []byte) []string {
+// codexUserTurns is what the owner typed in one Codex user message: its
+// texts split by who wrote each part (digest.TurnPieces: a session imported
+// from Claude Code holds its frames and notices too; a question reply holds
+// their answers), an answer that is an option its question offered (asked)
+// and pasted tables or logs left out.
+func codexUserTurns(line []byte, asked digest.CodexAsked) []string {
 	var o struct {
 		Type    string `json:"type"`
 		Payload struct {
@@ -938,11 +942,11 @@ func codexUserTurns(line []byte) []string {
 	}
 	var out []string
 	for _, c := range o.Payload.Content {
-		t := c.Text
-		if strings.TrimSpace(t) == "" || harnessFrame(t) || PastedBlob(t) {
-			continue
+		for _, own := range digest.OwnerPieces(asked.Chosen(digest.TurnPieces(c.Text))) {
+			if !PastedBlob(own) {
+				out = append(out, own)
+			}
 		}
-		out = append(out, t)
 	}
 	return out
 }
