@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/agent-sh/tacit/client/internal/check"
+	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
 	"github.com/agent-sh/tacit/client/internal/record"
 )
@@ -327,6 +328,13 @@ type Decision struct {
 	Repos          []string      `json:"repos,omitempty"`
 	OwnerQuote     string        `json:"owner_quote,omitempty"`
 	OwnerQuoteFrom string        `json:"owner_quote_from,omitempty"`
+	// OwnerQuoteTemporal: the words of owner_quote, copied exactly, that
+	// limit it in time ("for now", "until ..."), as the model reads them;
+	// OwnerQuoteFinal: the words of it that make an end of the folder (drop,
+	// kill, delete, replace), which a dead status on the quote needs
+	// (CheckQuoteStatus).
+	OwnerQuoteTemporal string `json:"owner_quote_temporal,omitempty"`
+	OwnerQuoteFinal    string `json:"owner_quote_final,omitempty"`
 	// Reject: for a proposed area or topic, the model's no (Why says why);
 	// FoldInto: the existing folder it belongs to instead (it gains the
 	// proposed name as an alias).
@@ -359,9 +367,11 @@ For each folder decide:
 - roots: kind folder only, optional: [{"host": ..., "path": ...}] where it lives.
 - tools, commands: an area only: tool-name patterns (globs such as "mcp__*__Ticketing*") and command prefixes its sessions used, only ones the evidence lists.
 - repos: a topic only, optional: repositories it is tied to.
-- owner_quote, owner_quote_from: only when the owner's own words shown below state the decision for THIS folder (its name or alias in them): copy their words exactly and the ref they came from. Words that only mention the folder are evidence for your why, not a quote here.
+- owner_quote, owner_quote_from: only when the owner's own words shown below state the decision for THIS folder (its name or alias in them): copy their words exactly and the ref they came from. Words that only mention the folder are evidence for your why, not a quote here. Read what the words say of its status as the owner meant it: stopping work, banking it, pausing it or putting it off ("stop", "bank what you have", "pause", "for now", "not now") is dormant, not dead: the owner can take it up again. Dead needs permanence: words of theirs that end it (drop it, kill it, delete it, replace it with another) or evidence code shows (the forge has the repository deleted or archived). Code dates the words by when the owner said them (the turn's day, not today) and lets the folder's dates stand when the owner really worked on it after that day.
+- owner_quote_temporal: with owner_quote, the words of it, copied exactly, that limit it in time ("for now", "until the release", "this week"), when it has any; "" when nothing in it does. Code refuses dead on words you flag here.
+- owner_quote_final: with owner_quote and status dead, the words of it, copied exactly, that make an end of the folder (drop, kill, delete, remove, replace with another), unless the forge shows the repository deleted or archived. Code refuses dead on owner_quote without them.
 - reject (true) or fold_into ("<existing folder>"): a proposed area or topic only, when it should not be made, with why.
-- owner_status: optional, [{"says": ..., "words": ..., "from": "note:<name>", "successor": ...}], one item for each note code lists for THIS folder ("notes in other folders that name it") that is the owner's ruling, statement, words or decision and states THIS folder's status: says "dead" (obsolete, abandoned, removed, to be deleted, replaced by another), "shipped" (done and delivered) or "dormant" (paused); words copied exactly from that note (the part that says it); successor, for dead only, the project the words say replaces this one, when they name one: the words you copy must name it and THIS folder (its name or another name of it) themselves, in the same words (the rest of the note, a related plan, or a project the same words retire with this folder never names a successor; with no successor in the words, give none, which is dead with no successor); give its folder name as code lists it after the note ("names projects: ..."; a name renamed or suppressed into another leads there). When the words say another project replaces this one, the successor is part of the item. A note that lists several folders states the status of each it names that way. Words that only mention the folder, or say something else of it, are no item. The owner's word beats dates: code takes the newest item's status (and successor) over its dates unless the owner really worked on it after the day of the words (sessions that worked in it, commits changing more than dependency, CI or version files), which code checks; answer status as the newest item says. A successor is another project that took this one's place: this folder stays, dead, its facts kept as its history, and the record links to the successor; it is not suppressed_by, which is for the same project under another name or a part of one (its facts move there).
+- owner_status: optional, [{"says": ..., "words": ..., "from": "note:<name>", "successor": ...}], one item for each note code lists for THIS folder ("notes in other folders that name it") that is the owner's ruling, statement, words or decision and states THIS folder's status: says "dead" (obsolete, abandoned, removed, to be deleted, replaced by another), "shipped" (done and delivered) or "dormant" (paused, stopped or banked for now: words that stop or put off work without ending it are dormant, never dead); temporal: the words of the item, copied exactly, that limit it in time ("for now", "until ..."), "" when none (code refuses dead on words you flag here); words copied exactly from that note (the part that says it); successor, for dead only, the project the words say replaces this one, when they name one: the words you copy must name it and THIS folder (its name or another name of it) themselves, in the same words (the rest of the note, a related plan, or a project the same words retire with this folder never names a successor; with no successor in the words, give none, which is dead with no successor); give its folder name as code lists it after the note ("names projects: ..."; a name renamed or suppressed into another leads there). When the words say another project replaces this one, the successor is part of the item. A note that lists several folders states the status of each it names that way. Words that only mention the folder, or say something else of it, are no item. The owner's word beats dates: code takes the newest item's status (and successor) over its dates unless the owner really worked on it after the day of the words (sessions that worked in it, commits changing more than dependency, CI or version files), which code checks; answer status as the newest item says. A successor is another project that took this one's place: this folder stays, dead, its facts kept as its history, and the record links to the successor; it is not suppressed_by, which is for the same project under another name or a part of one (its facts move there).
 
 Find the ancestor. A folder that is clearly related to another is part of it: worktrees, clones, scratch folders, task folders and subfolders almost always belong to a project. Code lists such a folder's "ancestor candidates", best first, with the evidence (git metadata of a worktree or clone, paths that put the folder inside the ancestor's tree, a name that contains the ancestor's, sessions that worked in both with facts that point at it). Such a folder is presumed part of one of them: set suppressed_by to the one its evidence supports. It stands alone (any decision without suppressed_by: a status of its own, needs-review or kind none) only on evidence of an identity of its own, which code lists as "independence" items (its own commits, a remote or forge repository of its own that no ancestor has, work done in a folder of its own name across sessions): cite their keys in independent. Code refuses a folder with ancestor candidates that stands alone without such a citation, and when code lists no independence item it must take one of the candidates. One whose independence shows its own commits and a remote or forge repository of its own is another repository than its ancestors: it stands alone, and code refuses folding it into one of them. Code resolves chains (a part of b, b part of c: c is the ancestor, shown "by way of b"), and the evidence includes where the store talks about the folder: most of the facts of other project folders that name it are the ancestor's. Folders that share an ancestor come in one batch, the ancestor first: decide them together and alike.
 
@@ -377,7 +387,7 @@ A folder left for review comes back on later runs with "extra evidence" code gat
 Folders whose names follow one pattern (kv-013-g1, kv-140-g2) come together, with the decisions already made on folders like them: decide alike folders alike, and when one differs say in why what in its evidence differs.
 
 Output ONLY a JSON array, one object per folder, no prose, no code fence:
-  {"folder": "...", "kind": "...", "status": "...", "why": "...", "description": "...", "body": "...", "aliases": [], "suppressed_by": "", "roots": [], "tools": [], "commands": [], "repos": [], "owner_quote": "", "owner_quote_from": "", "reject": false, "fold_into": "", "independent": [], "owner_status": []}
+  {"folder": "...", "kind": "...", "status": "...", "why": "...", "description": "...", "body": "...", "aliases": [], "suppressed_by": "", "roots": [], "tools": [], "commands": [], "repos": [], "owner_quote": "", "owner_quote_from": "", "owner_quote_temporal": "", "owner_quote_final": "", "reject": false, "fold_into": "", "independent": [], "owner_status": []}
 
 FOLDERS:
 %s
@@ -615,7 +625,7 @@ func Build(c Candidate, d Decision, today string, owner *Owner) *record.Record {
 	var r *record.Record
 	if c.Old != nil {
 		r = c.Old.Clone()
-		if status != r.Status || kind != r.Kind {
+		if status != r.Status || kind != r.Kind || newBasis(r.Was, entry) {
 			r.Was = append([]record.Entry{entry}, r.Was...)
 			r.Status, r.Kind = status, kind
 		}
@@ -660,6 +670,33 @@ func Build(c Candidate, d Decision, today string, owner *Owner) *record.Record {
 	}
 	r.Evidence = c.Evidence
 	return r
+}
+
+// WordsDay is the day of the owner's words a record entry's status rests
+// on: its words' day (store format 3), or the day in a why code wrote on
+// their words (WordsOutcome, QuoteOutcome); "" when it rests on none.
+func WordsDay(e record.Entry) string {
+	if day, ok := e.RestsOnWords(); ok {
+		return day
+	}
+	pre := WordsWhy + e.Status + " on the owner's words of "
+	if rest, ok := strings.CutPrefix(e.Why, pre); ok && len(rest) >= 10 && fact.IsDate(rest[:10]) {
+		return rest[:10]
+	}
+	return ""
+}
+
+// newBasis reports a decision whose status is the record's but rests on
+// other words of the owner's, or the same words dated now (fresh), than its
+// last entry: a new entry says so, so the record never keeps a day or words
+// a later check corrected.
+func newBasis(was []record.Entry, fresh record.Entry) bool {
+	day := WordsDay(fresh)
+	if len(was) == 0 || day == "" {
+		return false
+	}
+	old := was[0]
+	return WordsDay(old) != day || old.Quote != fresh.Quote || old.QuoteFrom != fresh.QuoteFrom || old.Words != fresh.Words || old.WordsFrom != fresh.WordsFrom
 }
 
 // EvidenceRoots are the roots code's evidence shows for a folder: each

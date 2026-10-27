@@ -311,7 +311,12 @@ func Validate(old, rec *Record, by string, env Env) []Problem {
 			add("was[0].quote", "is not a quote of the owner's that the ledger backs and that names the folder", "")
 		}
 		// The owner's status is never silently lost: Opus may only flag it.
-		if old != nil && len(old.Was) > 0 && old.Was[0].By == ByOwner && fresh.By == ByOpus && rec.Status != StatusNeedsReview {
+		// A status that rests on a quote of theirs is their words as an agent
+		// read them, and moves as their words on a note do: to code's status
+		// from its dates (its why is code's), on the owner's real work after
+		// the day of the words.
+		if old != nil && len(old.Was) > 0 && old.Was[0].By == ByOwner && fresh.By == ByOpus && rec.Status != StatusNeedsReview &&
+			!(old.Was[0].Quote != "" && strings.HasPrefix(fresh.Why, "code: ") && env.CodeStatus != nil && env.CodeStatus(folder) == rec.Status) {
 			add("status", "the owner set this folder's status: an agent may only flag it for review", fmt.Sprintf("use %s; the owner's %q stays in was", StatusNeedsReview, old.Status))
 		}
 	}

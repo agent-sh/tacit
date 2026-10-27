@@ -83,10 +83,17 @@ func (a *assessor) notes(c *assess.Candidate) {
 	for _, f := range hits {
 		n := assess.Note{Name: f.Meta.Name, Scope: f.Meta.Scope, Type: f.Meta.Type, Created: f.Meta.Created, Session: f.Meta.Source.Session,
 			Tier: noteTier(f), Claim: noteClaims(f), Description: f.Meta.Description, Body: f.Body}
-		if n.Tier == assess.TierStatement {
+		switch n.Tier {
+		case assess.TierStatement:
 			if day, _, ok := fact.StatementLine(f.Body); ok {
 				n.Said = day
 			}
+		case assess.TierRuling:
+			// The day the owner said the ruling's words, not the day a step
+			// filed it.
+			n.Said = a.quoteDay(f.Meta.Source.OwnerQuote, f.Meta.Source.OwnerQuoteFrom)
+		case assess.TierWords:
+			n.Said = a.quoteDay(fact.OwnerWordsOf(f), f.Meta.Source.OwnerWordsFrom)
 		}
 		n.Projects = append([]string(nil), f.Meta.AppliesTo.Repos...) // resolved below, for the notes shown
 		ns = append(ns, n)
@@ -305,14 +312,8 @@ func wordsReview(c assess.Candidate, s assess.Said, ch assess.Changes, today str
 // words (code wrote it: WordsOutcome), and their day: a status the dates do
 // not move (statusDrift) until the owner's real work after that day.
 func restsOnWords(e record.Entry) (string, bool) {
-	if day, ok := e.RestsOnWords(); ok {
-		return day, true
-	}
-	pre := assess.WordsWhy + e.Status + " on the owner's words of "
-	if rest, ok := strings.CutPrefix(e.Why, pre); ok && len(rest) >= 10 && fact.IsDate(rest[:10]) {
-		return rest[:10], true
-	}
-	return "", false
+	day := assess.WordsDay(e)
+	return day, day != ""
 }
 
 // ownerWordsOutcome checks d's owner_status for c and, when its newest item

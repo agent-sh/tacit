@@ -154,6 +154,18 @@ func TestValidateHistoryIsAppendOnlyAndOwnerStatusKept(t *testing.T) {
 	if flag.Was[1].Status != StatusShipped {
 		t.Fatal("the owner's value is not kept in was")
 	}
+	// A status on a quote of theirs moves to code's status from its dates
+	// (the owner worked on it after the day of the words), and to nothing else.
+	quoted := owned.Clone()
+	quoted.Was[0].Quote, quoted.Was[0].QuoteFrom = "we are stopping widget for now", "claude:s1"
+	dates := quoted.Clone()
+	dates.Status = StatusActive
+	dates.Was = append([]Entry{{Status: StatusActive, Date: today, By: ByOpus, Why: "code: active from its dates: the owner's last activity is ... Owner activity after the 2026-09-28 words (claude:s1 ...), so the dates stand"}}, dates.Was...)
+	ce := env(quoted)
+	ce.CodeStatus = func(string) string { return StatusActive }
+	expect(t, Validate(quoted, dates, ByOpus, ce), "")
+	ce.CodeStatus = func(string) string { return StatusDormant }
+	expect(t, Validate(quoted, dates, ByOpus, ce), "the owner set this folder's status")
 	// The owner's pointer stays.
 	ptr := owned.Clone()
 	ptr.SuppressedBy = "projects/gadget"
