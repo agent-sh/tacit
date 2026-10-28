@@ -484,6 +484,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		inBatch := curate.NewAbsorber(nil)
 		absorbed := map[string]string{}
 		nAbsorbed := 0
+		var batchAbsorbed []curate.Absorption // each absorbed fact and its cover, for the report
 		var ledgerLines []byte
 		var proposals []byte // the overlay's review/folders.jsonl lines of area and topic proposals
 		produced := map[string]bool{}
@@ -555,17 +556,19 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 				}
 				notWords++
 			}
-			by := absorber.Restates(f, ruling)
-			if by == "" {
-				by = inBatch.Restates(f, ruling)
+			ab, isCopy := absorber.Absorbs(f, ruling, noteByName[e.Origin])
+			if !isCopy {
+				ab, isCopy = inBatch.Absorbs(f, ruling, noteByName[e.Origin])
 			}
-			if by != "" {
+			if isCopy {
+				ab.Note = e.Origin
 				if absorbed[e.Origin] == "" {
-					absorbed[e.Origin] = by
+					absorbed[e.Origin] = ab.By
 				}
 				nAbsorbed++
+				batchAbsorbed = append(batchAbsorbed, ab)
 				if o.dry {
-					fmt.Printf("- absorbed: [%s] %s (restates [[%s]])\n", f.Meta.Scope, f.Meta.Description, by)
+					fmt.Printf("- absorbed: [%s] %s (restates [[%s]], %s rule)\n", f.Meta.Scope, f.Meta.Description, ab.By, ab.Rule)
 				}
 				continue
 			}
@@ -618,6 +621,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		}
 		rep.Facts += len(newFacts)
 		rep.Absorbed += nAbsorbed
+		rep.AbsorbedBy = append(rep.AbsorbedBy, batchAbsorbed...)
 		rep.Rulings += nRulings
 		rep.NotOwnerWords += notWords
 		rep.RecoveredRulings += recovered
