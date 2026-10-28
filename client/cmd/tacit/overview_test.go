@@ -51,7 +51,7 @@ func TestOverviewStepWritesCheckedOverviews(t *testing.T) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		n, errs := overviewStep(ctx, r.s, "m", 10, false, &curate.Report{ModelCalls: &modelrun.Trace{}})
+		n, _, errs := overviewStep(ctx, r.s, "m", 10, false, &curate.Report{ModelCalls: &modelrun.Trace{}})
 		if errs > 0 {
 			t.Fatalf("errors %d", errs)
 		}

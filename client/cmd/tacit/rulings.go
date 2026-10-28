@@ -34,6 +34,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/lint"
+	"github.com/agent-sh/tacit/client/internal/overview"
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
@@ -814,6 +815,16 @@ func oneLine(s string) string {
 // not have, a refusal or a failure puts every file back; a lost push race
 // plans again (up to four times). It reports whether a commit was pushed.
 func curatorWrite(ctx context.Context, s *store.Store, plan func() (map[string][]byte, string, error)) (bool, error) {
+	return curatorChange(ctx, s, func() (map[string][]byte, []string, string, error) {
+		files, msg, err := plan()
+		return files, nil, msg, err
+	})
+}
+
+// curatorChange is curatorWrite for a plan that also removes files: only
+// generated files a curator step owns (removableRel), and only those the
+// fresh clone still has.
+func curatorChange(ctx context.Context, s *store.Store, plan func() (map[string][]byte, []string, string, error)) (bool, error) {
 	pushed := false
 	err := s.WithLock(ctx, func() error {
 		for attempt := 0; attempt < 4; attempt++ {
@@ -823,20 +834,36 @@ func curatorWrite(ctx context.Context, s *store.Store, plan func() (map[string][
 					return fmt.Errorf("sync: %w", err)
 				}
 			}
-			files, msg, err := plan()
+			files, removes, msg, err := plan()
 			if err != nil {
 				return err
 			}
-			if len(files) == 0 {
+			var gone []string
+			for _, rel := range removes {
+				if _, ok := files[rel]; ok {
+					return fmt.Errorf("%s is both written and removed", rel)
+				}
+				if !removableRel(rel) {
+					return fmt.Errorf("refusing to remove %s", rel)
+				}
+				if _, err := os.Stat(filepath.Join(s.Dir, filepath.FromSlash(rel))); err == nil {
+					gone = append(gone, rel)
+				}
+			}
+			if len(files) == 0 && len(gone) == 0 {
 				return nil
 			}
 			// A file with changes nobody committed is not this step's to push.
+			named := append([]string(nil), gone...)
 			for rel := range files {
+				named = append(named, rel)
+			}
+			for _, rel := range named {
 				if out, _ := store.Git(ctx, s.Dir, "status", "--porcelain", "--", rel); strings.TrimSpace(out) != "" {
 					return fmt.Errorf("%s has uncommitted changes in the clone; nothing written", rel)
 				}
 			}
-			rels := make([]string, 0, len(files)+1)
+			rels := make([]string, 0, len(files)+len(gone)+1)
 			for rel := range files {
 				if !safeRel(rel) && rel != ledger.QuotesPath && rel != ledger.MarkerPath && rel != ledger.FormatPath && rel != ledger.FoldersPath && rel != ledger.StatementsPath && rel != ledger.DecisionsPath && rel != ledger.ReviewsPath && !reviewFileRel(rel) && !newTrimmedNote(s.Dir, rel) {
 					return fmt.Errorf("refusing path %s", rel)
@@ -845,6 +872,8 @@ func curatorWrite(ctx context.Context, s *store.Store, plan func() (map[string][
 			}
 			sort.Strings(rels)
 			nFiles := len(rels)
+			sort.Strings(gone)
+			rels = append(rels, gone...)
 			rels = append(rels, memoryPaths(ctx, s.Dir)...)
 			head, _ := s.Head(ctx)
 			before, err := lint.Run(s.Dir)
@@ -861,6 +890,11 @@ func curatorWrite(ctx context.Context, s *store.Store, plan func() (map[string][
 			untracked := untrackedFacts(ctx, s)
 			for _, rel := range rels[:nFiles] {
 				if err := writeFileAtomic(s.Dir, rel, files[rel]); err != nil {
+					return fail(err)
+				}
+			}
+			for _, rel := range gone {
+				if err := os.Remove(filepath.Join(s.Dir, filepath.FromSlash(rel))); err != nil && !os.IsNotExist(err) {
 					return fail(err)
 				}
 			}
@@ -907,6 +941,12 @@ func curatorWrite(ctx context.Context, s *store.Store, plan func() (map[string][
 		return errors.New("the store kept changing on the server; nothing written")
 	})
 	return pushed, err
+}
+
+// removableRel reports a generated file a curator step may remove: a folder
+// overview (SPEC.md, "Overviews") under a scope root.
+func removableRel(rel string) bool {
+	return safeRel(rel) && strings.HasSuffix(rel, "/"+overview.File)
 }
 
 // reviewFileRel reports a review file a curator step writes: review/<x>.md,
