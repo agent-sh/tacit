@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/curate"
+	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/lint"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
@@ -277,5 +278,30 @@ func TestCuratorChangeRemovesOnlyGeneratedFiles(t *testing.T) {
 	}
 	if out := strings.TrimSpace(gitIn(t, r.clone, "status", "--porcelain")); out != "" {
 		t.Fatalf("the clone is dirty:\n%s", out)
+	}
+}
+
+// The order is by tier, and the tier decides alone: a red overview goes
+// before a forced change whose share passes 1 (on the rig, projects/hqmtp
+// with share 0 came after 34 forced folders and was never reached), a forced
+// change before a folder with none, and that before an unforced share.
+func TestOverviewCandidatesOrderByTier(t *testing.T) {
+	old := &overview.Overview{}
+	none := []*fact.Fact{{}, {}, {}}
+	cs := []overviewCand{
+		{folder: "a-share", old: old, change: overview.Change{Share: 1.6}},
+		{folder: "b-new", facts: none},
+		{folder: "c-forced", old: old, change: overview.Change{Share: 1.52, Forced: []string{"x"}}},
+		{folder: "d-red", old: old, red: true, change: overview.Change{Forced: []string{"x"}}},
+		{folder: "e-forced", old: old, change: overview.Change{Share: 0.1, Forced: []string{"x"}}},
+		{folder: "f-new", facts: append(none, &fact.Fact{})},
+	}
+	sortCands(cs)
+	var got []string
+	for _, c := range cs {
+		got = append(got, c.folder)
+	}
+	if want := "d-red c-forced e-forced f-new b-new a-share"; strings.Join(got, " ") != want {
+		t.Fatalf("order %v, want %s", got, want)
 	}
 }
