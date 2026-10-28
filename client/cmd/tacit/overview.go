@@ -6,7 +6,12 @@ package main
 // live facts (and, for a project, the facts tied to it from elsewhere);
 // code checks every citation and writes the frontmatter. A folder gets a
 // new overview only on a material change (overview.Changed), at most
-// overviewMax in a run, the largest change first.
+// overviewMax in a run, the largest change first. An overview whose folder
+// is no longer due one (no live facts, fewer than overviewMinFacts, no live
+// record) is removed, at most overviewDropMax in a run in one commit, and so
+// is one whose rewrite was refused twice while it cites a fact the store no
+// longer has (a removed derived fact): an overview is generated, like the
+// folder index, and lint L19 holds every citation to a fact the store has.
 
 import (
 	"context"
@@ -43,6 +48,9 @@ const (
 	// added, replaced or retired since its overview for a new one, absent a
 	// forced reason. Not measured on a replay yet. TACIT_OVERVIEW_CHANGE_PCT.
 	overviewShare = 0.2
+	// overviewDropMax is how many stale overviews one run removes, in one
+	// commit and with no model call.
+	overviewDropMax = 50
 )
 
 // curateOverviewStep is the full curate's overview step; tests substitute it.
@@ -50,11 +58,33 @@ var curateOverviewStep = func(ctx context.Context, s *store.Store, model string,
 	if ok, _ := fact.FormatWrites(s.Dir); !ok {
 		return 0
 	}
-	n, errs := overviewStep(ctx, s, model, envInt("TACIT_OVERVIEW_MAX", overviewMax), dry, rep)
-	if n > 0 || errs > 0 {
-		fmt.Printf("curate: overviews: %d written, %d error(s)\n", n, errs)
+	n, dropped, errs := overviewStep(ctx, s, model, envInt("TACIT_OVERVIEW_MAX", overviewMax), dry, rep)
+	if n > 0 || dropped > 0 || errs > 0 {
+		fmt.Printf("curate: overviews: %d written, %d removed, %d error(s)\n", n, dropped, errs)
 	}
 	return errs
+}
+
+// overviewDrop is an overview to remove and why.
+type overviewDrop struct {
+	folder string
+	why    string
+}
+
+// overviewDue is "" for a folder due an overview (a live record and at
+// least overviewMinFacts live facts), else why it is not.
+func overviewDue(r *record.Record, live int) string {
+	switch {
+	case live == 0:
+		return "no live facts"
+	case r == nil:
+		return "no record"
+	case !r.Live():
+		return "its record is redirected"
+	case live < overviewMinFacts:
+		return fmt.Sprintf("%d live fact(s), fewer than %d", live, overviewMinFacts)
+	}
+	return ""
 }
 
 type overviewCand struct {
@@ -66,11 +96,18 @@ type overviewCand struct {
 	all    []*fact.Fact // every fact of the folder, live or not
 	status string
 	desc   string // the record's description
+	// red: the old overview cites a fact the store no longer has (lint L19).
+	red bool
 }
 
+// weight orders the candidates: an overview lint holds red first, then a
+// folder with none, then a forced change, then the largest share.
 func (c overviewCand) weight() float64 {
 	if c.old == nil {
 		return 1 + float64(len(c.facts))/1e6
+	}
+	if c.red {
+		return 3 + c.change.Share
 	}
 	if len(c.change.Forced) > 0 {
 		return 2 + c.change.Share
@@ -78,21 +115,22 @@ func (c overviewCand) weight() float64 {
 	return c.change.Share
 }
 
-// overviewStep writes the overviews due, into the store, or into the
-// overlay for this machine's local folders. It returns how many it wrote.
-func overviewStep(ctx context.Context, s *store.Store, model string, max int, dry bool, rep *curate.Report) (int, int) {
+// overviewStep removes the overviews no longer due and writes the overviews
+// due, into the store, or into the overlay for this machine's local
+// folders. It returns how many it wrote, how many it removed and the errors.
+func overviewStep(ctx context.Context, s *store.Store, model string, max int, dry bool, rep *curate.Report) (int, int, int) {
 	local := localLayer(ctx, s)
 	if local && !overlay.Outside(overlay.Dir(), s.Dir) {
 		fmt.Fprintln(os.Stderr, "overview:", overlay.ErrInside)
-		return 0, 1
+		return 0, 0, 1
 	}
 	if !local && !dry {
 		if err := writerCheck(ctx, s, "curator"); err != nil {
 			fmt.Fprintln(os.Stderr, "overview: nothing done:", err)
-			return 0, 1
+			return 0, 0, 1
 		}
 	}
-	cands, byName := overviewCands(s.Dir, local)
+	cands, drops, byName := overviewCands(s.Dir, local)
 	if max <= 0 {
 		max = overviewMax
 	}
@@ -100,6 +138,11 @@ func overviewStep(ctx context.Context, s *store.Store, model string, max int, dr
 		cands = cands[:max]
 	}
 	written, errs := 0, 0
+	dropped, err := dropOverviews(ctx, s, local, dry, drops)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "overview: removing stale overviews: %v\n", err)
+		errs++
+	}
 	for _, c := range cands {
 		if ctx.Err() != nil {
 			errs++
@@ -113,6 +156,21 @@ func overviewStep(ctx context.Context, s *store.Store, model string, max int, dr
 			continue
 		}
 		if body == "" {
+			// An old overview citing a fact the store no longer has is red
+			// under lint L19 until it is rewritten: removed instead, and the
+			// next run writes the folder a new one.
+			if c.old != nil {
+				if gone := missingCites(c.old.Body, byName); len(gone) > 0 {
+					d := overviewDrop{folder: c.folder, why: "cites " + strings.Join(gone, ", ") + ", which the store no longer has, and the rewrite was refused twice"}
+					n, err := dropOverviews(ctx, s, local, dry, []overviewDrop{d})
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "overview: %s: remove: %v\n", c.folder, err)
+						errs++
+					}
+					dropped += n
+					continue
+				}
+			}
 			fmt.Fprintf(os.Stderr, "overview: %s: refused twice, left for the next run\n", c.folder)
 			continue
 		}
@@ -154,7 +212,92 @@ func overviewStep(ctx context.Context, s *store.Store, model string, max int, dr
 		}
 		written++
 	}
-	return written, errs
+	return written, dropped, errs
+}
+
+// missingCites are the [[names]] body cites that name no fact.
+func missingCites(body string, byName map[string]*fact.Fact) []string {
+	var out []string
+	for _, n := range overview.Cites(body) {
+		if byName[n] == nil {
+			out = append(out, "[["+n+"]]")
+		}
+	}
+	return out
+}
+
+// dropOverviews removes the overviews of drops (at most overviewDropMax),
+// from the store in one curator commit or from the overlay; the store's are
+// checked again on the fresh clone under the lock. It returns how many.
+func dropOverviews(ctx context.Context, s *store.Store, local, dry bool, drops []overviewDrop) (int, error) {
+	if len(drops) > overviewDropMax {
+		drops = drops[:overviewDropMax]
+	}
+	if len(drops) == 0 {
+		return 0, nil
+	}
+	if dry {
+		for _, d := range drops {
+			fmt.Printf("--- remove %s (%s)\n", overview.Rel(d.folder), d.why)
+		}
+		return len(drops), nil
+	}
+	if local {
+		n := 0
+		for _, d := range drops {
+			if err := overlay.Remove(overlay.Dir(), s.Dir, overlay.CuratedDir+"/"+overview.Rel(d.folder)); err != nil {
+				return n, err
+			}
+			fmt.Fprintf(os.Stderr, "overview: %s: removed (%s)\n", d.folder, d.why)
+			n++
+		}
+		return n, nil
+	}
+	var done []overviewDrop
+	_, err := curatorChange(ctx, s, func() (map[string][]byte, []string, string, error) {
+		done = nil
+		_, fresh, byName := overviewCands(s.Dir, false)
+		still := map[string]bool{}
+		for _, d := range fresh {
+			still[d.folder] = true
+		}
+		var rels []string
+		for _, d := range drops {
+			if still[d.folder] {
+				done = append(done, d)
+				rels = append(rels, overview.Rel(d.folder))
+				continue
+			}
+			// No longer stale as such; one whose rewrite was refused stays
+			// removable while it cites a fact the store does not have.
+			if b, err := os.ReadFile(filepath.Join(s.Dir, filepath.FromSlash(overview.Rel(d.folder)))); err == nil && strings.HasPrefix(d.why, "cites ") {
+				if o, err := overview.Parse(b); err != nil || len(missingCites(o.Body, byName)) > 0 {
+					done = append(done, d)
+					rels = append(rels, overview.Rel(d.folder))
+				}
+			}
+		}
+		if len(done) == 0 {
+			return nil, nil, "", nil
+		}
+		var parts []string
+		for i, d := range done {
+			if i == 5 {
+				parts = append(parts, fmt.Sprintf("and %d more", len(done)-5))
+				break
+			}
+			parts = append(parts, d.folder+" ("+d.why+")")
+		}
+		msg := fmt.Sprintf("curator: overview: removed %d stale overview(s): %s", len(done), strings.Join(parts, ", "))
+		return nil, rels, msg, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	for _, d := range done {
+		fmt.Fprintf(os.Stderr, "overview: %s: removed (%s)\n", d.folder, d.why)
+	}
+	return len(done), nil
 }
 
 // ruledHere reports the owner's rule, in the store or the local layer.
@@ -166,16 +309,18 @@ func ruledHere(f *fact.Fact) bool {
 }
 
 // overviewCands are the folders due an overview, the largest change first,
-// and every curated fact by name.
-func overviewCands(dir string, local bool) ([]overviewCand, map[string]*fact.Fact) {
+// the overviews of folders no longer due one, by folder, and every curated
+// fact by name.
+func overviewCands(dir string, local bool) ([]overviewCand, []overviewDrop, map[string]*fact.Fact) {
 	facts, _, _ := fact.Walk(dir)
 	root := dir
 	recs, _ := record.Walk(dir)
+	var storeRecs map[string]*record.Record
 	if local {
 		lf, _ := overlay.Load(overlay.Dir())
 		facts = append(facts, lf...)
 		root = filepath.Join(overlay.Dir(), filepath.FromSlash(overlay.CuratedDir))
-		storeRecs := recs
+		storeRecs = recs
 		recs, _ = record.Walk(root)
 		for f := range storeRecs {
 			delete(recs, f) // the store's folders keep the store's overview
@@ -200,7 +345,7 @@ func overviewCands(dir string, local bool) ([]overviewCand, map[string]*fact.Fac
 	}
 	var out []overviewCand
 	for folder, r := range recs {
-		if !r.Live() || len(inFolder[folder]) < overviewMinFacts {
+		if overviewDue(r, len(inFolder[folder])) != "" {
 			continue
 		}
 		c := overviewCand{folder: folder, facts: inFolder[folder], all: allIn[folder], status: r.Status, desc: r.Description}
@@ -224,6 +369,7 @@ func overviewCands(dir string, local bool) ([]overviewCand, map[string]*fact.Fac
 		if b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(overview.Rel(folder)))); err == nil {
 			if o, err := overview.Parse(b); err == nil {
 				c.old = o
+				c.red = len(missingCites(o.Body, byName)) > 0
 				n, basis, rulings := overview.Basis(c.facts, ruledHere)
 				live := liveSet(c)
 				c.change = overview.Changed(o, c.all, n, basis, rulings, c.status, func(n string) bool { return live[n] })
@@ -240,7 +386,39 @@ func overviewCands(dir string, local bool) ([]overviewCand, map[string]*fact.Fac
 		}
 		return out[i].folder < out[j].folder
 	})
-	return out, byName
+	var drops []overviewDrop
+	for _, folder := range overviewFolders(root) {
+		if storeRecs[folder] != nil {
+			continue // the local layer leaves the store's folders alone
+		}
+		if why := overviewDue(recs[folder], len(inFolder[folder])); why != "" {
+			drops = append(drops, overviewDrop{folder: folder, why: why})
+		}
+	}
+	return out, drops, byName
+}
+
+// overviewFolders are the folders under root that hold an overview, sorted.
+func overviewFolders(root string) []string {
+	var out []string
+	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() && p != root && strings.HasPrefix(d.Name(), ".") {
+			return filepath.SkipDir
+		}
+		if d.IsDir() || d.Name() != overview.File || !d.Type().IsRegular() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, filepath.Dir(p))
+		if err == nil && rel != "." {
+			out = append(out, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	sort.Strings(out)
+	return out
 }
 
 func liveSet(c overviewCand) map[string]bool {

@@ -224,7 +224,7 @@ func TestMacReadOnlyCloneSendsNothing(t *testing.T) {
 	overviewRun = func(_ context.Context, _, prompt string) (string, float64, error) {
 		return "The gizmo build [[gizmo-build-tracker]] [[gizmo-runs-tests]] [[gizmo-ships-weekly]].", 0.01, nil
 	}
-	if n, errs := overviewStep(ctx, r.s, "m", 5, false, &curate.Report{ModelCalls: &modelrun.Trace{}}); n != 1 || errs != 0 {
+	if n, _, errs := overviewStep(ctx, r.s, "m", 5, false, &curate.Report{ModelCalls: &modelrun.Trace{}}); n != 1 || errs != 0 {
 		t.Fatalf("local overview: %d written, %d errors", n, errs)
 	}
 	check("overview")
