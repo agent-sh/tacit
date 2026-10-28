@@ -590,6 +590,7 @@ func runCurate(args []string) int {
 		inBatch := curate.NewAbsorber(nil) // the batch's own facts, for a second entry restating a first
 		absorbed := map[string]string{}    // note -> the fact one of its entries restates
 		nAbsorbed := 0
+		var batchAbsorbed []curate.Absorption // each absorbed fact and its cover, for the report
 		var ledgerLines []byte
 		var proposals []byte // review/folders.jsonl lines of the batch's area and topic proposals
 		produced := map[string]bool{}
@@ -659,17 +660,19 @@ func runCurate(args []string) int {
 			// The same fact again, in other words: the note is absorbed by the
 			// fact it restates, and no second copy is written. A ruling is only
 			// absorbed by a ruling with the same quote (curate.Absorber).
-			by := absorber.Restates(f, ruling)
-			if by == "" {
-				by = inBatch.Restates(f, ruling)
+			ab, isCopy := absorber.Absorbs(f, ruling, noteByName[e.Origin])
+			if !isCopy {
+				ab, isCopy = inBatch.Absorbs(f, ruling, noteByName[e.Origin])
 			}
-			if by != "" {
+			if isCopy {
+				ab.Note = e.Origin
 				if absorbed[e.Origin] == "" {
-					absorbed[e.Origin] = by
+					absorbed[e.Origin] = ab.By
 				}
 				nAbsorbed++
+				batchAbsorbed = append(batchAbsorbed, ab)
 				if *dry {
-					fmt.Printf("- absorbed: [%s] %s (restates [[%s]])\n", f.Meta.Scope, f.Meta.Description, by)
+					fmt.Printf("- absorbed: [%s] %s (restates [[%s]], %s rule)\n", f.Meta.Scope, f.Meta.Description, ab.By, ab.Rule)
 				}
 				continue
 			}
@@ -737,6 +740,7 @@ func runCurate(args []string) int {
 		}
 		rep.Facts += len(newFacts)
 		rep.Absorbed += nAbsorbed
+		rep.AbsorbedBy = append(rep.AbsorbedBy, batchAbsorbed...)
 		rep.Rulings += nRulings
 		rep.NotOwnerWords += notWords
 		rep.RecoveredRulings += recovered

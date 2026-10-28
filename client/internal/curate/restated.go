@@ -110,7 +110,7 @@ func newStatement(f *fact.Fact, user, curated bool) *statement {
 	if phrase == "" {
 		phrase = f.Meta.Source.OwnerWords
 	}
-	return &statement{f: f, terms: allTerms(f.Meta.Description), spec: specifics(text), idents: identifiers(text), changes: changes(text), descChanges: changes(f.Meta.Description), user: user, phrase: ownerwords.Normalize(phrase), curated: curated}
+	return &statement{f: f, terms: allTerms(f.Meta.Description), spec: contentSpecifics(text), idents: identifiers(text), changes: changes(text), descChanges: changes(f.Meta.Description), user: user, phrase: ownerwords.Normalize(phrase), curated: curated}
 }
 
 // pool indexes statements by description term.
@@ -345,6 +345,7 @@ outer:
 // fact, as Restated does for a whole note.
 type Absorber struct {
 	p pool
+	c contentPool // the same facts by every term of their text (the content rule, content.go)
 	// Refuted reports that code's checks refute the absorbing fact's dry
 	// references where the new fact's hold (check.Refutes): the new fact is
 	// then not absorbed. Nil: no checks.
@@ -365,7 +366,9 @@ func NewAbsorber(curated []*fact.Fact) *Absorber {
 // Add puts a fact into the pool; ruling says it is the owner's ruling (a new
 // fact's evidence is settled by ApplyEvidence, before Walk could mark it).
 func (a *Absorber) Add(f *fact.Fact, ruling bool) {
-	a.p.add(newStatement(f, ruling, true))
+	e := newStatement(f, ruling, true)
+	a.p.add(e)
+	a.c.add(e)
 }
 
 // Drop takes the fact at path out of the pool: the run retired it (a
