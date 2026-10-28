@@ -316,8 +316,16 @@ func TestFailedJudgeKeepsThePaidSplit(t *testing.T) {
 	judged := 0
 	prev := judgeRun
 	t.Cleanup(func() { judgeRun = prev })
+	probed := false
 	judgeRun = func(_ context.Context, _, prompt string) (string, float64, error) {
 		judged++
+		if strings.Contains(prompt, "connectivity check") {
+			probed = !judgeDown
+			if judgeDown {
+				return "", 0, modelrun.ProviderFailure(503, "", "unavailable")
+			}
+			return "OK", .001, nil
+		}
 		if judgeDown {
 			return "", 0, modelrun.ProviderFailure(503, "", "unavailable")
 		}
@@ -348,10 +356,13 @@ func TestFailedJudgeKeepsThePaidSplit(t *testing.T) {
 	if code := runCurate(quick); code != 0 {
 		t.Fatalf("recovered run exit %d", code)
 	}
-	ps := prompts()
-	// The probe (judge route, through the CLI) and no second split.
-	if len(ps) != 2 || !strings.Contains(ps[1], "connectivity check") {
-		t.Fatalf("recovered run: %d prompt(s), last %q", len(ps), ps[len(ps)-1])
+	// No second split; the probe went through the judge's call, as the
+	// judge does.
+	if ps := prompts(); len(ps) != 1 {
+		t.Fatalf("recovered run: %d split prompt(s)", len(ps))
+	}
+	if !probed {
+		t.Fatal("the judge route was not probed before the run paid")
 	}
 	s := &store.Store{Dir: filepath.Join(home, "store")}
 	if _, ok := findFact(s.Dir, "quokka-driver-port"); !ok {
