@@ -364,6 +364,26 @@ func runDream(args []string) int {
 		}
 		return false
 	}
+	// The job's backoff after failed runs (runguard.go): a selecting run
+	// waits for its next try, and any run first probes the failing route.
+	var guard *runGuard
+	var out runOutcome
+	if !*dry && len(windows) > 0 {
+		guard = loadGuard("dream", filepath.Join(stateDir, "dream-backoff.json"))
+		if !guard.admit(ctx, !selecting) {
+			if guard.probes == 0 {
+				return 0 // before the next try: nothing paid, no meter line
+			}
+			meter.BackedOff, meter.Probes, meter.Errors = true, guard.probes, 1
+			meter.CostUSD += guard.cost
+			meter.RemainingWindows = len(remaining)
+			if f, err := os.OpenFile(filepath.Join(stateDir, "dreamer.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+				json.NewEncoder(f).Encode(meter)
+				f.Close()
+			}
+			return 1
+		}
+	}
 	// Cursor per file advances only when every window of that file succeeded.
 	failed := map[string]bool{}
 	for _, w := range windows {
@@ -374,6 +394,11 @@ func runDream(args []string) int {
 			}
 			break
 		}
+		if guard != nil && !guard.next(ctx) {
+			meter.Errors++
+			meter.PauseReason = "route"
+			break
+		}
 		// Redact here, one scrump call per window that is actually sent, and
 		// never move the cursor past a window whose redaction failed.
 		lines, err := digest.Finish(w.Sent())
@@ -381,6 +406,7 @@ func runDream(args []string) int {
 			meter.Errors++
 			failed[w.File] = true
 			pending[w.File]--
+			out.Reason, out.Role, out.Model = "redaction", "", ""
 			fmt.Fprintln(os.Stderr, "dream: redaction:", err)
 			continue
 		}
@@ -392,10 +418,16 @@ func runDream(args []string) int {
 			break
 		}
 		prompt := fmt.Sprintf(dream.Prompt, w.Repo, host, strings.Join(lines, "\n"))
+		out.Attempted++
 		res, cost, in, err := dreamRun(ctx, *model, prompt)
 		var extracted []dream.Extracted
 		if err == nil {
 			extracted, err = dream.ParseChecked(res)
+		} else if routeFailure(ctx, err) {
+			out.Reason, out.Role, out.Model = "dream: "+modelrun.FailureKind(err), "dream", *model
+			if guard != nil {
+				guard.failed("dream", *model, err)
+			}
 		}
 		meter.Calls++
 		meter.CostUSD += cost
@@ -452,6 +484,7 @@ func runDream(args []string) int {
 				fmt.Fprintln(os.Stderr, "dream: persist:", err)
 			} else {
 				completed++
+				out.Done++
 				written = append(written, paths...)
 				if st.Completed == nil {
 					st.Completed = map[string][]string{}
@@ -479,6 +512,11 @@ func runDream(args []string) int {
 	}
 	for f := range failed {
 		st.Failed(f, now)
+	}
+	if guard != nil {
+		meter.Probes = guard.probes
+		meter.CostUSD += guard.cost
+		guard.finish(out)
 	}
 	meter.RemainingWindows = len(remaining) - completed
 	if meter.PauseReason == "" && len(remaining) > *maxCalls {
