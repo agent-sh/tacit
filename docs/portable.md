@@ -273,6 +273,8 @@ Changes to the release workflow, archive builder or installer scripts run native
 
 `dream_agent_windows` in YAML or `TACIT_DREAM_AGENT_WINDOWS` decides what the dreamer does with a window that holds no turn of the owner's: `all` (the default) dreams it, `recent:<days>` only when it is that recent, `none` never. `tacit dream --agent-windows none` overrides it for a run. A passed-over window moves its transcript's cursor like a window with nothing to extract, and the run's summary counts it. Rules: SPEC.md "Owner windows and agent windows".
 
+`dream_held_chars` in YAML or `TACIT_DREAM_HELD_CHARS` lists, in each dream window's prompt, the curated facts already held for its repository and machine that the window is about, so the dreamer does not write them again: `off` (the default), `on` (4,000 characters) or a size in characters. Measured on the rig it cut repeated notes a little for 11 percent more dreamer cost, within run-to-run noise, so it is off by default. Rules: SPEC.md "Facts already held".
+
 Reaching the batch runtime or call limit is a pause with exit 0. Successful notes are already pushed and cursor/chunk progress is saved. The interrupted window remains pending. A prior genuine failure still makes that run exit 1; a model-attempt timeout on its own remains a failure. Accounting includes `pause_reason` (`runtime` or `call_limit`) and the number of `remaining_windows`.
 
 ### Idle dreaming and quick curation
