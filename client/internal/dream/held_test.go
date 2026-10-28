@@ -1,0 +1,76 @@
+package dream
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/agent-sh/tacit/client/internal/fact"
+)
+
+func curatedHeld(scope, name, desc string) *fact.Fact {
+	return &fact.Fact{Path: scope + "/" + name + ".md", Meta: fact.Meta{Name: name, Description: desc, Type: "machine_fact", Scope: scope, Created: "2026-10-20", Source: fact.Source{Kind: "observed", Harness: "curator"}}, Body: desc + "\n"}
+}
+
+func TestHeldListsWhatTheWindowIsAbout(t *testing.T) {
+	waitfor := curatedHeld("machines/box", "waitfor", "waitfor blocks on a condition: `waitfor --until '<probe cmd>' --every 2m --timeout 1h`.")
+	heartbeat := curatedHeld("projects/darklanes", "wrx-heartbeat", "wrx heartbeat: `timeout 40 ssh wrx 'cd ~/negeig-next/box/orch; tail -3 orch.log'`.")
+	other := curatedHeld("projects/elsewhere", "walrus", "The walrus cache lives in /srv/walrus/cache and is pruned by walrus-prune.")
+	tied := curatedHeld("system", "tied", "The quokka scheduler listens on 7781.")
+	unrelated := curatedHeld("machines/box", "restic", "Local restic backups live in ~/backups/restic.")
+	rule := curatedHeld("user", "rule", "Never force-push to main.")
+	rule.Meta.Source.Kind = "user"
+	words := curatedHeld("machines/box", "words", "waitfor is what the owner wants for every wait.")
+	words.Meta.Source.OwnerWords = "use waitfor"
+	retired := curatedHeld("machines/box", "old-waitfor", "waitfor lives in ~/bin/waitfor.")
+	retired.Meta.SupersededBy = "waitfor"
+	overview := curatedHeld("projects/darklanes", "_overview", "darklanes: wrx heartbeat, orch.log, the negeig box.")
+	inbox := curatedHeld("machines/box", "pending", "waitfor --until polls every 2m.")
+	inbox.Path = "inbox/dreamer@box/pending.md"
+	p := NewHeldPool([]*fact.Fact{waitfor, heartbeat, other, tied, unrelated, rule, words, retired, overview, inbox})
+	lines := []string{
+		"A: waitfor blocks on a condition, so I'll wait with waitfor --until '<probe cmd>' --every 2m --timeout 1h",
+		"T: timeout 40 ssh wrx 'cd ~/negeig-next/box/orch; tail -3 orch.log'",
+		"A: the walrus cache in /srv/walrus/cache was pruned by walrus-prune",
+		"U: never force-push to main",
+	}
+	got := p.Held("darklanes", "box", lines, HeldChars)
+	want := []string{"- " + waitfor.Meta.Description, "- " + heartbeat.Meta.Description}
+	if strings.Join(sortedCopy(got), "\n") != strings.Join(sortedCopy(want), "\n") {
+		t.Fatalf("held:\n%s", strings.Join(got, "\n"))
+	}
+	// The cap keeps the best that fit.
+	if got := p.Held("darklanes", "box", lines, len(want[0])+2); len(got) != 1 {
+		t.Fatalf("capped: %q", got)
+	}
+	if got := p.Held("darklanes", "box", lines, 0); got != nil {
+		t.Fatalf("off: %q", got)
+	}
+	// Another repository's fact is not held for this one.
+	if got := p.Held("elsewhere", "other", lines[2:3], HeldChars); len(got) != 1 || !strings.Contains(got[0], "walrus") {
+		t.Fatalf("its own repository's fact: %q", got)
+	}
+}
+
+func sortedCopy(xs []string) []string {
+	out := append([]string(nil), xs...)
+	for i := range out {
+		for j := i + 1; j < len(out); j++ {
+			if out[j] < out[i] {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out
+}
+
+func TestPromptForWithoutHeldIsThePrompt(t *testing.T) {
+	lines := []string{"U: hello", "A: done"}
+	if got, want := PromptFor("r", "h", nil, lines), fmt.Sprintf(Prompt, "r", "h", strings.Join(lines, "\n")); got != want {
+		t.Fatal("the prompt with nothing held changed")
+	}
+	got := PromptFor("r", "h", []string{"- a held fact"}, lines)
+	if !strings.Contains(got, "ALREADY HELD") || !strings.Contains(got, "- a held fact\n") || !strings.HasSuffix(got, "DIGEST:\nU: hello\nA: done\n") || !strings.Contains(got, "Repo: r  Host: h\n") || strings.Index(got, "ALREADY HELD") < strings.Index(got, "Repo: r") {
+		t.Fatalf("held prompt:\n%s", got)
+	}
+}

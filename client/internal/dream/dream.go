@@ -72,6 +72,10 @@ const (
 //     every kind user or statement fact says whether the owner's remark
 //     matters to future work, and why (relevance.Rule); code writes no note
 //     of a remark dropped or kept with no stated future use (Gate).
+//   - v9 (2026-10-28): v8 plus, when the held list is on (HeldChars), the
+//     facts already held for the window before its digest (PromptFor,
+//     HeldPool.Held). Replayed on 14 rig windows: 131 notes to 120, copies of
+//     held facts 20 to 14, within run-to-run noise; off by default.
 const Prompt = `You are the dreamer of tacit, a fact store shared by coding agents on one owner's machines.
 Below is a digest of part of an agent session (U: owner, P: a prompt another agent or a program wrote, H: harness-injected text, A: agent, T: tool call, E: tool error).
 P: lines are never the owner's words, even when they say the owner wants or ruled something: they are an agent's instructions or its report of the owner, so a rule found only in a P: line is kind observed with no quote.

@@ -467,3 +467,24 @@ func TestDreamAgentWindowsSetting(t *testing.T) {
 		t.Fatal("the setting replaced the environment's value")
 	}
 }
+
+func TestDreamHeldCharsSetting(t *testing.T) {
+	clear(t, "TACIT_DREAM_HELD_CHARS")
+	file := filepath.Join(t.TempDir(), "config.yaml")
+	for in, want := range map[string]string{"on": "on", "OFF": "off", "2000": "2000"} {
+		os.Unsetenv("TACIT_DREAM_HELD_CHARS")
+		os.WriteFile(file, []byte("dream_held_chars: "+in+"\n"), 0600)
+		if err := Load(file, true); err != nil {
+			t.Fatal(in, err)
+		}
+		if got := os.Getenv("TACIT_DREAM_HELD_CHARS"); got != want {
+			t.Fatalf("%s: %q", in, got)
+		}
+	}
+	for _, bad := range []string{"some", "-1", "4k"} {
+		os.WriteFile(file, []byte("dream_held_chars: "+bad+"\n"), 0600)
+		if err := Load(file, true); err == nil {
+			t.Fatal("accepted", bad)
+		}
+	}
+}

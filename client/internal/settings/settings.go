@@ -72,6 +72,10 @@ type Config struct {
 	// turn of the owner's (TACIT_DREAM_AGENT_WINDOWS): all (the default),
 	// recent:<days> or none.
 	DreamAgentWindows string `yaml:"dream_agent_windows"`
+	// DreamHeldChars is the list of facts already held a dream window's
+	// prompt carries (TACIT_DREAM_HELD_CHARS): off (the default), on, or a
+	// size in characters.
+	DreamHeldChars string `yaml:"dream_held_chars"`
 	// StaleWorkers is how many facts the curator's stale step checks at once
 	// (git commands in parallel); 0 is the default, 4.
 	StaleWorkers int                        `yaml:"stale_workers"`
@@ -188,6 +192,11 @@ func Load(path string, required bool) error {
 			return fmt.Errorf("dream_agent_windows must be all, none or recent:<days> (1 to 3650)")
 		}
 	}
+	if v := strings.ToLower(strings.TrimSpace(c.DreamHeldChars)); v != "" && v != "on" && v != "off" {
+		if n, err := strconv.Atoi(v); err != nil || n < 0 {
+			return fmt.Errorf("dream_held_chars must be on, off or a number of characters")
+		}
+	}
 	switch strings.ToLower(c.LocalLayer) {
 	case "", "on", "off", "true", "false":
 	default:
@@ -280,6 +289,7 @@ func Load(path string, required bool) error {
 	values["TACIT_RUNNER"] = c.Runner
 	values["TACIT_DREAM_MAX_RUNTIME"] = c.DreamMaxRuntime
 	values["TACIT_DREAM_AGENT_WINDOWS"] = strings.ToLower(strings.TrimSpace(c.DreamAgentWindows))
+	values["TACIT_DREAM_HELD_CHARS"] = strings.ToLower(strings.TrimSpace(c.DreamHeldChars))
 	if c.StaleWorkers > 0 {
 		values["TACIT_STALE_WORKERS"] = strconv.Itoa(c.StaleWorkers)
 	}

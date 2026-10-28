@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -342,6 +343,8 @@ func runDream(args []string) int {
 	}
 
 	meter := dream.Meter{At: time.Now().Format(time.RFC3339), Windows: len(windows), Local: local}
+	heldChars := dreamHeldChars()
+	var pool *dream.HeldPool // read at the first window that is sent
 	if !agentPolicy.All() {
 		meter.AgentWindows = agentPolicy.String()
 		meter.AgentPassed, meter.AgentPassedChars = scan.Passed.Windows, scan.Passed.Chars
@@ -417,7 +420,20 @@ func runDream(args []string) int {
 			}
 			break
 		}
-		prompt := fmt.Sprintf(dream.Prompt, w.Repo, host, strings.Join(lines, "\n"))
+		// The facts already held for the window's repository and machine,
+		// so the dreamer does not write them again (dream.Held).
+		var held []string
+		if heldChars > 0 {
+			if pool == nil {
+				pool = loadHeldPool(s, local)
+			}
+			held = pool.Held(w.Repo, host, lines, heldChars)
+		}
+		meter.Held += len(held)
+		for _, h := range held {
+			meter.HeldChars += len(h) + 1
+		}
+		prompt := dream.PromptFor(w.Repo, host, held, lines)
 		out.Attempted++
 		res, cost, in, err := dreamRun(ctx, *model, prompt)
 		var extracted []dream.Extracted
@@ -807,4 +823,40 @@ func writeDreamNote(path string, content io.Reader) error {
 		return err
 	}
 	return os.Rename(f.Name(), path)
+}
+
+// dreamHeldChars is the size of the held list a window's prompt carries:
+// TACIT_DREAM_HELD_CHARS, off (0) when unset; "on" is dream.HeldChars.
+func dreamHeldChars() int {
+	v := strings.TrimSpace(os.Getenv("TACIT_DREAM_HELD_CHARS"))
+	switch v {
+	case "", "0", "off":
+		return 0
+	case "on":
+		return dream.HeldChars
+	}
+	if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+		return n
+	}
+	fmt.Fprintln(os.Stderr, "dream: TACIT_DREAM_HELD_CHARS takes a number of characters, on or off; the list stays off")
+	return 0
+}
+
+// loadHeldPool is the facts a run's windows may be shown as held: the
+// store's (the clone's, with the local layer, and the overlay's curated
+// facts too).
+func loadHeldPool(s *store.Store, local bool) *dream.HeldPool {
+	var facts []*fact.Fact
+	if s != nil && s.Exists() {
+		facts, _, _ = fact.Walk(s.Dir)
+	}
+	if local {
+		ov, _ := overlay.Load(overlay.Dir())
+		for _, f := range ov {
+			if overlay.IsCurated(f.Path) {
+				facts = append(facts, f)
+			}
+		}
+	}
+	return dream.NewHeldPool(facts)
 }
