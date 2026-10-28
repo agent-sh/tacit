@@ -400,3 +400,14 @@ func subset(a, b map[string]bool) bool {
 }
 
 func norm(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// Absorption is one fact of a split the curator did not write because a
+// curated fact already says it (Absorber), as the run's report records it.
+type Absorption struct {
+	Note     string  `json:"note"`               // the note the fact came from
+	Fact     string  `json:"fact"`               // the description of the fact not written
+	By       string  `json:"by"`                 // the curated fact that says it
+	ByPath   string  `json:"by_path,omitempty"`  // its path
+	Rule     string  `json:"rule"`               // "description" (restatesFact) or "content" (every claim covered)
+	Coverage float64 `json:"coverage,omitempty"` // rule content: the least share of a claim's terms the cover holds
+}

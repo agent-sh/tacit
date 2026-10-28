@@ -432,6 +432,19 @@ type Report struct {
 	Retries          int             `json:"validation_retries,omitempty"` // answers refused by the checks and sent back to the model once (curate.SplitChecked)
 	ReviewRefused    int             `json:"review_refused,omitempty"`     // agents' notes the reviewer judged wrong (or the owner said no to): not curated
 	NotesForReviewer int             `json:"reviewer_waiting,omitempty"`   // agents' notes waiting for the reviewer's verdict
+	// BackedOff is a run that paid for no batch: earlier runs failed and the
+	// backoff's next try had not come, or the failing route's probe failed.
+	BackedOff bool `json:"backed_off,omitempty"`
+	// Probes is the route probes the run sent (a backoff's, or one after a
+	// batch failed on its route); their cost is in CostUSD.
+	Probes int `json:"probes,omitempty"`
+	// SplitsReused is the batches whose split answer a failed run had paid
+	// for: taken from the cache, not asked again.
+	SplitsReused int `json:"splits_reused,omitempty"`
+	// AbsorbedBy is every fact of the split not written because it restates
+	// a curated one (Absorber): the note, the fact's description, the fact
+	// that covers it and by which rule.
+	AbsorbedBy []Absorption `json:"absorbed_by,omitempty"`
 }
 
 // DroppedRemark is a remark of the owner's the relevance gate did not curate:

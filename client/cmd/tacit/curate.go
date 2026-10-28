@@ -386,7 +386,15 @@ func runCurate(args []string) int {
 	rep := curate.Report{At: time.Now().Format(time.RFC3339), Notes: len(pending), Restated: len(restated), DeferredOwner: deferredOwner, DeferredRepo: deferredRepo, Quick: *quick, ReviewRefused: reviewRefused, NotesForReviewer: reviewWaiting}
 	rep.ModelCalls = &modelrun.Trace{}
 	ctx = modelrun.WithTrace(ctx, rep.ModelCalls)
-	batches := curate.Batches(pending)
+	// A failed run's paid answers, and the job's backoff (runguard.go): a
+	// dry run reads and writes neither.
+	var guard *runGuard
+	var cache *splitCache
+	if !*dry {
+		guard = loadGuard("curate", filepath.Join(stateDir, "curate-backoff.json"))
+		cache = loadSplitCache(filepath.Join(stateDir, "curate-splits.json"), time.Now())
+	}
+	batches, _ := cache.batches(pending)
 	if len(batches) > *maxBatches {
 		batches = batches[:*maxBatches]
 	}
@@ -430,6 +438,28 @@ func runCurate(args []string) int {
 	bi := -1
 	valid := 0               // batches whose answer was valid this run
 	var failedAlone []string // notes that failed alone this run, counted at the end
+	var out runOutcome       // what the run did with what it paid for, for the backoff
+	// fail notes a batch's failure for the backoff: a lone note's invalid
+	// answer is the note's (its strikes count it), anything else the run's;
+	// a failure of the route itself is probed before the next batch pays.
+	fail := func(batch []*fact.Fact, pass, role, model string, err error) {
+		if errors.Is(err, modelrun.ErrInvalidResult) && len(batch) == 1 {
+			return
+		}
+		out.Reason, out.Role, out.Model = pass+": "+modelrun.FailureKind(err), role, model
+		if !routeFailure(ctx, err) {
+			out.Role, out.Model = "", ""
+		} else if guard != nil {
+			guard.failed(role, model, err)
+		}
+	}
+	if len(queue) > 0 && guard != nil && !guard.admit(ctx, !*quick) {
+		rep.BackedOff = true
+		if guard.probes > 0 {
+			rep.Errors++ // the probe failed: the route is still down
+		}
+		queue = nil
+	}
 	retry := func(batch []*fact.Fact, err error, counts bool) bool {
 		if !errors.Is(err, modelrun.ErrInvalidResult) {
 			return false
@@ -463,21 +493,37 @@ func runCurate(args []string) int {
 			fmt.Fprintf(os.Stderr, "curate: budget %s spent, %d batch(es) wait for the next run\n", *budget, len(queue)+1)
 			break
 		}
-		// The model's metadata is checked by code (internal/validate); a refused
-		// answer goes back to the model once with the problems.
-		check := entryCheck(env, host, batch, noteByName, where, noOwnerCorpus)
-		entries, err := splitChecked(ctx, &rep, "split", curate.RunCLI, *model, splitPrompt(env, host, batch), check)
-		if err != nil {
-			if errors.Is(err, modelrun.ErrInvalidResult) {
-				logInvalid(&rep, "split", err)
-				if retry(batch, err, true) {
-					continue
-				}
-			}
+		if guard != nil && !guard.next(ctx) {
 			rep.Errors++
-			rep.FailedBatches++
-			fmt.Fprintln(os.Stderr, "curate:", err)
-			continue
+			fmt.Fprintf(os.Stderr, "curate: %d batch(es) wait for the next run\n", len(queue)+1)
+			break
+		}
+		out.Attempted++
+		// The model's metadata is checked by code (internal/validate); a refused
+		// answer goes back to the model once with the problems. A split a
+		// failed run paid for is taken from the cache when the checks still
+		// pass it.
+		check := entryCheck(env, host, batch, noteByName, where, noOwnerCorpus)
+		entries, cachedRulings, rulingsCached, fromCache := cachedSplitFor(cache, batch, check)
+		if fromCache {
+			rep.SplitsReused++
+		} else {
+			var err error
+			entries, err = splitChecked(ctx, &rep, "split", curate.RunCLI, *model, splitPrompt(env, host, batch), check)
+			if err != nil {
+				if errors.Is(err, modelrun.ErrInvalidResult) {
+					logInvalid(&rep, "split", err)
+					if retry(batch, err, true) {
+						continue
+					}
+				}
+				fail(batch, "split", "curate", *model, err)
+				rep.Errors++
+				rep.FailedBatches++
+				fmt.Fprintln(os.Stderr, "curate:", err)
+				continue
+			}
+			cache.putSplit(batch, entries, *model, time.Now())
 		}
 		// Second pass: rulings the split may have folded away.
 		var rulings []string
@@ -509,20 +555,28 @@ func runCurate(args []string) int {
 				}
 				return check(us)
 			}
-			recoveredEntries, rerr := splitChecked(ctx, &rep, "rulings", curate.JudgeCLI, curate.JudgeModel, fmt.Sprintf(curate.RulingsPrompt, strings.Join(rulings, "\n"), curate.Render(batch)), rcheck)
-			if rerr != nil && errors.Is(rerr, modelrun.ErrInvalidResult) {
-				// Only a malformed or refused answer is split: a runner error
-				// says nothing about the notes.
-				logInvalid(&rep, "rulings", rerr)
-				if retry(batch, rerr, true) {
+			var recoveredEntries []curate.Entry
+			if rulingsCached && len(rcheck(cachedRulings)) == 0 {
+				recoveredEntries = cachedRulings
+			} else {
+				var rerr error
+				recoveredEntries, rerr = splitChecked(ctx, &rep, "rulings", curate.JudgeCLI, curate.JudgeModel, fmt.Sprintf(curate.RulingsPrompt, strings.Join(rulings, "\n"), curate.Render(batch)), rcheck)
+				if rerr != nil && errors.Is(rerr, modelrun.ErrInvalidResult) {
+					// Only a malformed or refused answer is split: a runner error
+					// says nothing about the notes.
+					logInvalid(&rep, "rulings", rerr)
+					if retry(batch, rerr, true) {
+						continue
+					}
+				}
+				if rerr != nil {
+					fail(batch, "rulings", "judge", curate.JudgeModel, rerr)
+					rep.Errors++
+					rep.FailedBatches++
+					fmt.Fprintln(os.Stderr, "curate: rulings:", rerr)
 					continue
 				}
-			}
-			if rerr != nil {
-				rep.Errors++
-				rep.FailedBatches++
-				fmt.Fprintln(os.Stderr, "curate: rulings:", rerr)
-				continue
+				cache.putRulings(batch, recoveredEntries)
 			}
 			for _, e := range recoveredEntries {
 				e.Kind = "user"
@@ -635,6 +689,7 @@ func runCurate(args []string) int {
 		}
 
 		if invalidBatch {
+			cache.drop(batch) // the answer does not stand: the halves are split again
 			// An unbacked ruling is invalid only because this machine has no
 			// owner history: split to isolate it, but never count it against the
 			// note, which curates once the history is here.
@@ -662,6 +717,7 @@ func runCurate(args []string) int {
 			// run stops here and exits non-zero.
 			rep.Errors++
 			rep.FailedBatches++
+			out.Reason, out.Role, out.Model = "conflict index", "", ""
 			fmt.Fprintf(os.Stderr, "curate: conflict check failed, batch %d not written and its %d note(s) stay pending: %v\n", bi+1, len(batch), err)
 			break
 		}
@@ -673,6 +729,7 @@ func runCurate(args []string) int {
 			rep.Errors++
 		}
 		if err != nil {
+			fail(batch, "judge", "judge", curate.JudgeModel, err)
 			rep.Errors++
 			rep.FailedBatches++
 			fmt.Fprintln(os.Stderr, "curate: conflict judge; batch stays pending:", err)
@@ -690,6 +747,8 @@ func runCurate(args []string) int {
 					markDone(cst, n.Meta.Name, absorbed)
 				}
 			}
+			out.Done++
+			cache.drop(batch)
 			continue
 		}
 		if *dry {
@@ -784,8 +843,18 @@ func runCurate(args []string) int {
 			}
 		}
 		names = batchNames
+		out.Done++
+		cache.drop(batch)
 		fmt.Printf("curate: batch %d pushed: %d fact(s) from %d note(s)\n", bi+1, len(newFacts), len(batch))
 	}
+	if guard != nil {
+		rep.Probes = guard.probes
+		rep.CostUSD += guard.cost
+		if !rep.BackedOff {
+			guard.finish(out)
+		}
+	}
+	cache.save()
 
 	if valid > 0 && !*quick {
 		// Only the full run counts a strike: the quick one comes every 10

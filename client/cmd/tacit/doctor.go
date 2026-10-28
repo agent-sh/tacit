@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"time"
@@ -151,6 +152,22 @@ func doctorChecks(models bool, role string) ([]doctorCheck, bool) {
 	add("tacit", "info", fmt.Sprintf("binary %s, writes store format %d", version, ledger.FormatVersion))
 	st, detail := staleProcsCheck()
 	add("tacit processes", st, detail)
+	// The model jobs' backoff after failed runs (runguard.go): a job backing
+	// off pays for nothing until its route answers a probe.
+	if home, err := os.UserHomeDir(); err == nil {
+		dir := platform.StateDir(home)
+		for _, j := range []struct{ name, file, job string }{{"curate backoff", "curate-backoff.json", "curate"}, {"curate (local layer) backoff", "curate-local-backoff.json", "curate"}, {"dream backoff", "dream-backoff.json", "dream"}} {
+			if role != "" && (role == "dream") != (j.job == "dream") || role == "verify" {
+				continue // --role: that job's line only (the judge's failures are the curate run's)
+			}
+			path := filepath.Join(dir, j.file)
+			if _, err := os.Stat(path); err != nil && j.file == "curate-local-backoff.json" {
+				continue // no local layer, or never failed: no line
+			}
+			status, detail := backoffLine(path)
+			add(j.name, status, detail)
+		}
+	}
 	if s, err := store.Default(); err == nil && s.Exists() {
 		switch f, ok, err := ledger.ReadFormat(s.Dir); {
 		case err != nil:

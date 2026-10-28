@@ -1365,4 +1365,13 @@ type Meter struct {
 	// OwnerDropped is the owner's remarks the relevance gate did not write
 	// down (Gate), each with why: kept only here and in the transcript.
 	OwnerDropped []Dropped `json:"owner_remarks_dropped,omitempty"`
+	// BackedOff is a run that paid for no window: earlier runs failed on the
+	// route and its probe failed again. Probes is the route probes the run
+	// sent; their cost is in CostUSD.
+	BackedOff bool `json:"backed_off,omitempty"`
+	Probes    int  `json:"probes,omitempty"`
+	// Held and HeldChars are the facts already held that the prompts listed
+	// (Held), and their characters, over every window of the run.
+	Held      int `json:"held,omitempty"`
+	HeldChars int `json:"held_chars,omitempty"`
 }

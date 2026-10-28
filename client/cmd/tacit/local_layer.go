@@ -299,7 +299,15 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 	rep := curate.Report{At: time.Now().Format(time.RFC3339), Notes: len(pending), Restated: len(restated), DeferredOwner: deferredOwner, DeferredRepo: deferredRepo, Quick: o.quick, Local: true}
 	rep.ModelCalls = &modelrun.Trace{}
 	ctx = modelrun.WithTrace(ctx, rep.ModelCalls)
-	batches := curate.Batches(pending)
+	// A failed run's paid answers, and the job's backoff (runguard.go): the
+	// layer's own files, as its notes are this machine's.
+	var guard *runGuard
+	var cache *splitCache
+	if !o.dry {
+		guard = loadGuard("curate", filepath.Join(stateDir, "curate-local-backoff.json"))
+		cache = loadSplitCache(filepath.Join(stateDir, "curate-local-splits.json"), time.Now())
+	}
+	batches, _ := cache.batches(pending)
 	if len(batches) > o.maxBatches {
 		batches = batches[:o.maxBatches]
 	}
@@ -355,6 +363,25 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		fmt.Fprintf(os.Stderr, "curate: %v; splitting the batch of %d note(s) in two\n", err, len(batch))
 		return true
 	}
+	var out runOutcome
+	fail := func(batch []*fact.Fact, pass, role, model string, err error) {
+		if errors.Is(err, modelrun.ErrInvalidResult) && len(batch) == 1 {
+			return
+		}
+		out.Reason, out.Role, out.Model = pass+": "+modelrun.FailureKind(err), role, model
+		if !routeFailure(ctx, err) {
+			out.Role, out.Model = "", ""
+		} else if guard != nil {
+			guard.failed(role, model, err)
+		}
+	}
+	if guard != nil && !guard.admit(ctx, !o.quick) {
+		rep.BackedOff = true
+		if guard.probes > 0 {
+			rep.Errors++
+		}
+		queue = nil
+	}
 	wrote := 0
 	for len(queue) > 0 {
 		batch := queue[0]
@@ -368,21 +395,36 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 			fmt.Fprintf(os.Stderr, "curate: budget %s spent, %d batch(es) wait for the next run\n", o.budget, len(queue)+1)
 			break
 		}
-		// The model's metadata is checked by code (internal/validate); a refused
-		// answer goes back to the model once with the problems.
-		check := entryCheck(env, host, batch, noteByName, where, noOwnerCorpus)
-		entries, err := splitChecked(ctx, &rep, "split", curate.RunCLI, o.model, splitPrompt(env, host, batch), check)
-		if err != nil {
-			if errors.Is(err, modelrun.ErrInvalidResult) {
-				logInvalid(&rep, "split", err)
-				if retry(batch, err, true) {
-					continue
-				}
-			}
+		if guard != nil && !guard.next(ctx) {
 			rep.Errors++
-			rep.FailedBatches++
-			fmt.Fprintln(os.Stderr, "curate:", err)
-			continue
+			fmt.Fprintf(os.Stderr, "curate: %d batch(es) wait for the next run\n", len(queue)+1)
+			break
+		}
+		out.Attempted++
+		// The model's metadata is checked by code (internal/validate); a refused
+		// answer goes back to the model once with the problems. A split a
+		// failed run paid for is taken from the cache.
+		check := entryCheck(env, host, batch, noteByName, where, noOwnerCorpus)
+		entries, cachedRulings, rulingsCached, fromCache := cachedSplitFor(cache, batch, check)
+		if fromCache {
+			rep.SplitsReused++
+		} else {
+			var err error
+			entries, err = splitChecked(ctx, &rep, "split", curate.RunCLI, o.model, splitPrompt(env, host, batch), check)
+			if err != nil {
+				if errors.Is(err, modelrun.ErrInvalidResult) {
+					logInvalid(&rep, "split", err)
+					if retry(batch, err, true) {
+						continue
+					}
+				}
+				fail(batch, "split", "curate", o.model, err)
+				rep.Errors++
+				rep.FailedBatches++
+				fmt.Fprintln(os.Stderr, "curate:", err)
+				continue
+			}
+			cache.putSplit(batch, entries, o.model, time.Now())
 		}
 		var rulings []string
 		for _, e := range entries {
@@ -407,20 +449,28 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 				}
 				return check(us)
 			}
-			recoveredEntries, rerr := splitChecked(ctx, &rep, "rulings", curate.JudgeCLI, curate.JudgeModel, fmt.Sprintf(curate.RulingsPrompt, strings.Join(rulings, "\n"), curate.Render(batch)), rcheck)
-			if rerr != nil && errors.Is(rerr, modelrun.ErrInvalidResult) {
-				// Only a malformed or refused answer is split: a runner error
-				// says nothing about the notes.
-				logInvalid(&rep, "rulings", rerr)
-				if retry(batch, rerr, true) {
+			var recoveredEntries []curate.Entry
+			if rulingsCached && len(rcheck(cachedRulings)) == 0 {
+				recoveredEntries = cachedRulings
+			} else {
+				var rerr error
+				recoveredEntries, rerr = splitChecked(ctx, &rep, "rulings", curate.JudgeCLI, curate.JudgeModel, fmt.Sprintf(curate.RulingsPrompt, strings.Join(rulings, "\n"), curate.Render(batch)), rcheck)
+				if rerr != nil && errors.Is(rerr, modelrun.ErrInvalidResult) {
+					// Only a malformed or refused answer is split: a runner error
+					// says nothing about the notes.
+					logInvalid(&rep, "rulings", rerr)
+					if retry(batch, rerr, true) {
+						continue
+					}
+				}
+				if rerr != nil {
+					fail(batch, "rulings", "judge", curate.JudgeModel, rerr)
+					rep.Errors++
+					rep.FailedBatches++
+					fmt.Fprintln(os.Stderr, "curate: rulings:", rerr)
 					continue
 				}
-			}
-			if rerr != nil {
-				rep.Errors++
-				rep.FailedBatches++
-				fmt.Fprintln(os.Stderr, "curate: rulings:", rerr)
-				continue
+				cache.putRulings(batch, recoveredEntries)
 			}
 			for _, e := range recoveredEntries {
 				e.Kind = "user"
@@ -534,6 +584,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 			proposals = append(proposals, proposalLines(env, e, f.Meta.Name, noteByName[e.Origin])...)
 		}
 		if invalidBatch {
+			cache.drop(batch)
 			if retry(batch, fmt.Errorf("%w: invalid origin or unbacked owner ruling", modelrun.ErrInvalidResult), !unbackedRuling) {
 				continue
 			}
@@ -552,12 +603,14 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		if err != nil {
 			rep.Errors++
 			rep.FailedBatches++
+			out.Reason, out.Role, out.Model = "conflict index", "", ""
 			fmt.Fprintf(os.Stderr, "curate: conflict check failed, batch %d not written and its %d note(s) stay pending: %v\n", bi+1, len(batch), err)
 			break
 		}
 		rep.Checked += len(pairs)
 		review, supersede, err := judgeLocalPairs(ctx, dir, pairs, refs, newFacts, &rep)
 		if err != nil {
+			fail(batch, "judge", "judge", curate.JudgeModel, err)
 			rep.Errors++
 			rep.FailedBatches++
 			fmt.Fprintln(os.Stderr, "curate: conflict judge; batch stays pending:", err)
@@ -599,8 +652,18 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 			absorber.Drop(p)
 		}
 		names = batchNames
+		out.Done++
+		cache.drop(batch)
 		fmt.Printf("curate: batch %d written to this machine: %d fact(s) from %d note(s)\n", bi+1, len(newFacts), len(batch))
 	}
+	if guard != nil {
+		rep.Probes = guard.probes
+		rep.CostUSD += guard.cost
+		if !rep.BackedOff {
+			guard.finish(out)
+		}
+	}
+	cache.save()
 	if valid > 0 && !o.quick {
 		for _, n := range failedAlone {
 			cst.Failed[n]++
