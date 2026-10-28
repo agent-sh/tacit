@@ -65,10 +65,12 @@ var curateOverviewStep = func(ctx context.Context, s *store.Store, model string,
 	return errs
 }
 
-// overviewDrop is an overview to remove and why.
+// overviewDrop is an overview to remove and why. refused: its rewrite was
+// refused twice while it cites a fact the store no longer has.
 type overviewDrop struct {
-	folder string
-	why    string
+	folder  string
+	why     string
+	refused bool
 }
 
 // overviewDue is "" for a folder due an overview (a live record and at
@@ -101,7 +103,7 @@ type overviewCand struct {
 }
 
 // weight orders the candidates: an overview lint holds red first, then a
-// folder with none, then a forced change, then the largest share.
+// forced change, then a folder with none, then the largest share.
 func (c overviewCand) weight() float64 {
 	if c.old == nil {
 		return 1 + float64(len(c.facts))/1e6
@@ -161,7 +163,7 @@ func overviewStep(ctx context.Context, s *store.Store, model string, max int, dr
 			// next run writes the folder a new one.
 			if c.old != nil {
 				if gone := missingCites(c.old.Body, byName); len(gone) > 0 {
-					d := overviewDrop{folder: c.folder, why: "cites " + strings.Join(gone, ", ") + ", which the store no longer has, and the rewrite was refused twice"}
+					d := overviewDrop{folder: c.folder, why: "cites " + strings.Join(gone, ", ") + ", which the store no longer has, and the rewrite was refused twice", refused: true}
 					n, err := dropOverviews(ctx, s, local, dry, []overviewDrop{d})
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "overview: %s: remove: %v\n", c.folder, err)
@@ -270,7 +272,10 @@ func dropOverviews(ctx context.Context, s *store.Store, local, dry bool, drops [
 			}
 			// No longer stale as such; one whose rewrite was refused stays
 			// removable while it cites a fact the store does not have.
-			if b, err := os.ReadFile(filepath.Join(s.Dir, filepath.FromSlash(overview.Rel(d.folder)))); err == nil && strings.HasPrefix(d.why, "cites ") {
+			if !d.refused {
+				continue
+			}
+			if b, err := os.ReadFile(filepath.Join(s.Dir, filepath.FromSlash(overview.Rel(d.folder)))); err == nil {
 				if o, err := overview.Parse(b); err != nil || len(missingCites(o.Body, byName)) > 0 {
 					done = append(done, d)
 					rels = append(rels, overview.Rel(d.folder))
