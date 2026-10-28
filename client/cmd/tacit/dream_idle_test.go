@@ -130,13 +130,14 @@ func TestFailedTranscriptWaitsForTheFullRun(t *testing.T) {
 			t.Fatalf("%v within the backoff: exit %d, %d call(s)", args, code, calls)
 		}
 	}
-	// The full run retries (and fails again); then it succeeds, and the
-	// record goes with the moved cursor.
+	// The full run probes the route first (the run failed on it, runguard.go):
+	// the probe fails, so the window is not sent; then the model is back, the
+	// probe and the window pass, and the record goes with the moved cursor.
 	if code := runDream(nil); code != 1 || calls != 2 {
 		t.Fatalf("full run: exit %d, %d call(s)", code, calls)
 	}
 	fail = false
-	if code := runDream(nil); code != 0 || calls != 3 {
+	if code := runDream(nil); code != 0 || calls != 4 {
 		t.Fatalf("full run, model back: exit %d, %d call(s)", code, calls)
 	}
 	if st, _ := dream.LoadState(statePath); st.Offsets[transcript] == 0 || len(st.FailedAt) != 0 {
@@ -148,14 +149,22 @@ func TestFailedTranscriptWaitsForTheFullRun(t *testing.T) {
 	f.Close()
 	os.Chtimes(transcript, quiet, quiet)
 	fail = true
-	if code := runDream([]string{"--idle", "20m"}); code != 1 || calls != 4 {
+	if code := runDream([]string{"--idle", "20m"}); code != 1 || calls != 5 {
 		t.Fatalf("failing again: exit %d, %d call(s)", code, calls)
 	}
+	// Past the transcript's wait and the run's backoff, the idle run probes
+	// and takes the failed transcript again.
 	st, _ = dream.LoadState(statePath)
 	st.FailedAt[transcript] = time.Now().Add(-dream.FailureBackoff - time.Minute).Format(time.RFC3339)
 	dream.SaveState(statePath, st)
+	backoff := loadGuard("dream", filepath.Join(filepath.Dir(statePath), "dream-backoff.json"))
+	if backoff.st.Failures != 1 {
+		t.Fatalf("the failed idle run left no backoff: %+v", backoff.st)
+	}
+	backoff.st.Next = time.Now().Add(-time.Minute)
+	backoff.save()
 	fail = false
-	if code := runDream([]string{"--idle", "20m"}); code != 0 || calls != 5 {
+	if code := runDream([]string{"--idle", "20m"}); code != 0 || calls != 7 {
 		t.Fatalf("past the backoff: exit %d, %d call(s)", code, calls)
 	}
 }

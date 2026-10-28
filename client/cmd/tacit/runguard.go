@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-sh/tacit/client/internal/dream"
+	"github.com/agent-sh/tacit/client/internal/curate"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
 )
 
@@ -71,12 +71,15 @@ type jobBackoff struct {
 var backoffNow = time.Now
 
 // probePrompt is the probe's whole prompt: a route that answers it can take
-// a batch.
-const probePrompt = "This is a connectivity check of a scheduled job. Reply with the single word OK and nothing else."
+// a batch. The dreamer's route answers in its JSON schema, an empty facts
+// list.
+const probePrompt = "This is a connectivity check of a scheduled job, not a task. Reply with the single word OK, or with an empty list if a JSON answer is required."
 
-// probeRoute sends probePrompt on role's route (and its fallback, as a batch
-// would) and returns what it cost. The probe's session is excluded from
-// dreaming, as every job call's is. Tests substitute it.
+// probeRoute sends probePrompt on role's route through the same call the
+// job makes (the dreamer's dreamRun, the judge's judgeRun, the split's
+// curate.RunCLI: the route and its fallback, each call's session excluded
+// from dreaming), and returns what it cost. Tests substitute it, or the
+// job's call it goes through.
 var probeRoute = func(ctx context.Context, role, model string) (float64, error) {
 	timeout, err := modelrun.Timeout(role)
 	if err != nil {
@@ -84,16 +87,20 @@ var probeRoute = func(ctx context.Context, role, model string) (float64, error) 
 	}
 	ctx, cancel := context.WithTimeout(ctx, min(timeout, 5*time.Minute))
 	defer cancel()
-	sid := dream.NewSessionID()
-	_ = dream.Exclude(sid)
-	res, err := modelrun.RunWithFallback(ctx, role, model, probePrompt, sid)
-	if res.SessionID != "" {
-		_ = dream.Exclude(res.SessionID)
+	var answer string
+	var cost float64
+	switch role {
+	case "dream":
+		answer, cost, _, err = dreamRun(ctx, model, probePrompt)
+	case "judge":
+		answer, cost, err = judgeRun(ctx, model, probePrompt)
+	default:
+		answer, cost, err = curate.RunCLI(ctx, model, probePrompt)
 	}
-	if err == nil && strings.TrimSpace(res.Text) == "" {
+	if err == nil && strings.TrimSpace(answer) == "" {
 		err = fmt.Errorf("%w: empty answer to the probe", modelrun.ErrInvalidResult)
 	}
-	return res.CostUSD, err
+	return cost, err
 }
 
 // runGuard is one run's view of its job's backoff: whether the run may pay
