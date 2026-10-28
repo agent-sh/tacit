@@ -103,18 +103,34 @@ type overviewCand struct {
 }
 
 // weight orders the candidates: an overview lint holds red first, then a
-// forced change, then a folder with none, then the largest share.
-func (c overviewCand) weight() float64 {
-	if c.old == nil {
-		return 1 + float64(len(c.facts))/1e6
+// forced change, then a folder with none, then the rest; in a tier, the
+// largest share (a folder with none: the most facts) first. The tier
+// decides alone: a share can pass 1.
+func (c overviewCand) weight() (int, float64) {
+	switch {
+	case c.old == nil:
+		return 1, float64(len(c.facts))
+	case c.red:
+		return 3, c.change.Share
+	case len(c.change.Forced) > 0:
+		return 2, c.change.Share
 	}
-	if c.red {
-		return 3 + c.change.Share
-	}
-	if len(c.change.Forced) > 0 {
-		return 2 + c.change.Share
-	}
-	return c.change.Share
+	return 0, c.change.Share
+}
+
+// sortCands puts the candidates in the order the step writes them.
+func sortCands(cs []overviewCand) {
+	sort.SliceStable(cs, func(i, j int) bool {
+		ti, wi := cs[i].weight()
+		tj, wj := cs[j].weight()
+		if ti != tj {
+			return ti > tj
+		}
+		if wi != wj {
+			return wi > wj
+		}
+		return cs[i].folder < cs[j].folder
+	})
 }
 
 // overviewStep removes the overviews no longer due and writes the overviews
@@ -385,12 +401,7 @@ func overviewCands(dir string, local bool) ([]overviewCand, []overviewDrop, map[
 		}
 		out = append(out, c)
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if a, b := out[i].weight(), out[j].weight(); a != b {
-			return a > b
-		}
-		return out[i].folder < out[j].folder
-	})
+	sortCands(out)
 	var drops []overviewDrop
 	for _, folder := range overviewFolders(root) {
 		if storeRecs[folder] != nil {
