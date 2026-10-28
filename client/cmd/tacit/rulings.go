@@ -24,6 +24,7 @@ import (
 	"io"
 	"math/rand"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -34,7 +35,6 @@ import (
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/lint"
-	"github.com/agent-sh/tacit/client/internal/overview"
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
@@ -943,10 +943,16 @@ func curatorChange(ctx context.Context, s *store.Store, plan func() (map[string]
 	return pushed, err
 }
 
-// removableRel reports a generated file a curator step may remove: a folder
-// overview (SPEC.md, "Overviews") under a scope root.
+// removableRel reports a generated file a curator step may remove: a
+// folder's overview or index (SPEC.md, "Overviews") under a scope root.
+// Never a fact, a record or anything else: a fact is superseded or retired,
+// never deleted.
 func removableRel(rel string) bool {
-	return safeRel(rel) && strings.HasSuffix(rel, "/"+overview.File)
+	if !safeRel(rel) {
+		return false
+	}
+	base := path.Base(rel)
+	return base == fact.OverviewFile || base == fact.IndexFile
 }
 
 // reviewFileRel reports a review file a curator step writes: review/<x>.md,
