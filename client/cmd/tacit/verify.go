@@ -334,6 +334,18 @@ func runVerify(args []string) int {
 	fsf.Parse(args)
 	if *requeue != "" {
 		home, _ := os.UserHomeDir()
+		// A run holds the counters in memory and writes them back after
+		// each batch, which would undo a requeue made meanwhile.
+		release, err := tryJobLock(platform.StateDir(home), "verifier")
+		if errors.Is(err, platform.ErrBusy) {
+			fmt.Fprintln(os.Stderr, "verify: a verify run holds "+filepath.Join(platform.StateDir(home), "verifier.lock")+"; requeue once it ends")
+			return 1
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "verify: lock:", err)
+			return 2
+		}
+		defer release()
 		return requeueVerify(filepath.Join(platform.StateDir(home), "verify"), *requeue)
 	}
 	if *batch < 1 || *max < 0 || *budget <= 0 {
@@ -390,6 +402,19 @@ func runVerify(args []string) int {
 			r.only = append(r.only, it.ID)
 		}
 	}
+	if !r.dry {
+		// One run at a time writes the counters (and a requeue waits for it).
+		release, err := tryJobLock(platform.StateDir(home), "verifier")
+		if errors.Is(err, platform.ErrBusy) {
+			fmt.Println("verify: busy (another verify holds " + filepath.Join(platform.StateDir(home), "verifier.lock") + "); nothing done")
+			return 0
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "verify: lock:", err)
+			return 2
+		}
+		defer release()
+	}
 	trace := &modelrun.Trace{}
 	n, cost, err := r.run(modelrun.WithTrace(context.Background(), trace), s, configuredVerifier)
 	if !r.dry {
@@ -424,6 +449,7 @@ type verifyRun struct {
 	cwd, stateDir        string
 	attemptsBefore       int                      // a finding is sent at most this many times (default verifyAttempts)
 	fails                map[string]verifyFailure // why each finding's last counted attempt failed (failures.json)
+	fresh                map[string]string        // reasons recorded since the last save, not yet redacted
 	tl                   *gitev.Builder           // builds the git timeline a stale finding carries; nil builds the usual one
 }
 

@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/agent-sh/tacit/client/internal/digest"
 )
 
 // verifyAttempts is how many verifier runs a finding is sent to without a
@@ -30,24 +32,45 @@ func (r *verifyRun) failures() map[string]verifyFailure {
 	return m
 }
 
-// failed records why the attempt on finding id failed; saveAttempts writes
-// it. A dry run records nothing, as it counts nothing.
+// failed records why the attempt on finding id failed; saveAttempts
+// redacts and writes it. A dry run records nothing, as it counts nothing.
 func (r *verifyRun) failed(id, why string) {
 	if r.dry {
+		return
+	}
+	if r.fresh == nil {
+		r.fresh = map[string]string{}
+	}
+	r.fresh[id] = why
+}
+
+// saveFailures keeps the failures of the findings that still have attempts
+// counted: a verdict that landed, a finding that left the review files and
+// a requeue drop the line with the counter. A reason can carry text from a
+// model's answer or an error, so the new ones go through the redactor in one
+// call first; when it cannot run, the reason says only that.
+func (r *verifyRun) saveFailures(tries map[string]int) {
+	if r.fails == nil && len(r.fresh) == 0 {
 		return
 	}
 	if r.fails == nil {
 		r.fails = r.failures()
 	}
-	r.fails[id] = verifyFailure{At: time.Now().Format(time.RFC3339), Why: capText(why, 300)}
-}
-
-// saveFailures keeps the failures of the findings that still have attempts
-// counted: a verdict that landed, a finding that left the review files and
-// a requeue drop the line with the counter.
-func (r *verifyRun) saveFailures(tries map[string]int) {
-	if r.fails == nil {
-		return
+	if len(r.fresh) > 0 {
+		var ids, texts []string
+		for id, why := range r.fresh {
+			ids, texts = append(ids, id), append(texts, why)
+		}
+		red, err := digest.RedactAll(texts)
+		now := time.Now().Format(time.RFC3339)
+		for i, id := range ids {
+			why := "the reason could not be redacted, so it is not kept"
+			if err == nil {
+				why = capText(red[i], 300)
+			}
+			r.fails[id] = verifyFailure{At: now, Why: why}
+		}
+		r.fresh = nil
 	}
 	for id := range r.fails {
 		if tries[id] <= 0 {
@@ -56,10 +79,14 @@ func (r *verifyRun) saveFailures(tries map[string]int) {
 	}
 	b, _ := json.Marshal(r.fails)
 	tmp := filepath.Join(r.stateDir, "failures.json.tmp")
-	if os.WriteFile(tmp, b, 0o644) == nil {
+	if os.WriteFile(tmp, b, 0o600) == nil {
 		_ = os.Rename(tmp, filepath.Join(r.stateDir, "failures.json"))
 	}
 }
+
+// verdictMarks are the marks of the verifier's answer schema: the only text
+// of a verdict a failure line repeats.
+var verdictMarks = map[string]bool{"both": true, "keep": true, "query": true, "owner": true, "retire": true, "fix": true}
 
 // verdictGap says why a finding of a batch that came back got no mark: the
 // verifier gave it no verdict, or one this finding cannot take.
@@ -70,13 +97,15 @@ func verdictGap(vs []verifyVerdict, id string, names ...string) string {
 		}
 		switch {
 		case v.Mark == "keep" && len(names) == 2 && v.Keep != names[0] && v.Keep != names[1]:
-			return fmt.Sprintf("the verdict keeps %q, which is neither fact", v.Keep)
+			return "the verdict keeps a fact that is neither of the two"
 		case v.Mark == "owner" && strings.TrimSpace(v.Question) == "":
 			return "the verdict asks the owner without a question"
 		case v.Mark == "fix" && strings.TrimSpace(v.Fix) == "":
 			return "the verdict is a fix without the fix"
-		default:
+		case verdictMarks[v.Mark]:
 			return fmt.Sprintf("the verdict's mark %q is not one this finding takes", v.Mark)
+		default:
+			return "the verdict's mark is not one this finding takes"
 		}
 	}
 	return "no verdict came back for it"

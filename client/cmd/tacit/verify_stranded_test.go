@@ -26,7 +26,10 @@ func TestVerifyNamesStrandedFindingsAndRequeuesThem(t *testing.T) {
 	os.WriteFile(p, []byte(strings.Replace(string(b), "created:", "superseded_by: c\ncreated:", 1)), 0o644)
 	git(t, rs.s.Dir, "commit", "-q", "-am", "a retired by c")
 	git(t, rs.s.Dir, "push", "-q", "origin", "HEAD:main")
-	ab, dc := itemFor(t, rs, "a", "b"), itemFor(t, rs, "d", "c")
+	ab, dc, bc := itemFor(t, rs, "a", "b"), itemFor(t, rs, "d", "c"), itemFor(t, rs, "b", "c")
+	// A verdict that keeps a name that is neither fact; the name is shaped
+	// like a token, built here, and must not reach the failure record.
+	token := "ghp_" + strings.Repeat("Q", 36)
 	sent := map[string]int{}
 	call := func(_ context.Context, _, prompt, _ string, _ float64) ([]verifyVerdict, string, float64, error) {
 		var vs []verifyVerdict
@@ -35,9 +38,12 @@ func TestVerifyNamesStrandedFindingsAndRequeuesThem(t *testing.T) {
 				continue
 			}
 			sent[it.ID]++
-			// Only a/b gets a verdict; the others, d/c among them, none.
-			if it.ID == ab.ID {
+			// a/b and b/c get a verdict; the others, d/c among them, none.
+			switch it.ID {
+			case ab.ID:
 				vs = append(vs, verifyVerdict{ID: it.ID, Mark: "keep", Keep: "b", Evidence: "b is current"})
+			case bc.ID:
+				vs = append(vs, verifyVerdict{ID: it.ID, Mark: "keep", Keep: token, Evidence: "x"})
 			}
 		}
 		return vs, "raw", 0.1, nil
@@ -56,11 +62,29 @@ func TestVerifyNamesStrandedFindingsAndRequeuesThem(t *testing.T) {
 		"verify: 5 finding(s) reached 3 failed attempts and are no longer sent",
 		"verify: stranded " + ab.ID + ", supersede-proposed a / b: keep b: that mark is not possible for this finding now (",
 		"verify: stranded " + dc.ID + ", contradiction d / c: no verdict came back for it (",
+		"verify: stranded " + bc.ID + ", supersede-proposed b / c: the verdict keeps a fact that is neither of the two (",
 	} {
 		if !strings.Contains(last, want) {
 			t.Fatalf("the run does not say %q:\n%s", want, last)
 		}
 	}
+	rec, err := os.ReadFile(filepath.Join(state, "verify", "failures.json"))
+	if err != nil || strings.Contains(string(rec), token) || strings.Contains(last, token) {
+		t.Fatalf("a verdict's text reached the failure record: %v\n%s", err, rec)
+	}
+	if st, err := os.Stat(filepath.Join(state, "verify", "failures.json")); err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("failures.json mode: %v %v", st.Mode(), err)
+	}
+	// A run holds the counters in memory: a requeue while one runs is
+	// refused, not undone by the run's next save.
+	held, err := tryJobLock(state, "verifier")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := runVerify([]string{"--requeue", ab.ID}); code != 1 || r.attempts()[ab.ID] != 3 {
+		t.Fatalf("requeue during a run: exit %d, attempts %v", code, r.attempts())
+	}
+	held()
 	// Requeue one by id, then the rest with all: each is sent again once.
 	if code := runVerify([]string{"--requeue", ab.ID}); code != 0 {
 		t.Fatalf("requeue exit %d", code)
