@@ -25,6 +25,7 @@ Your own inputs (`truth.jsonl`, `ab/tasks.json`, `ab/results/`, a corpus manifes
 | `curate/split.py` | Rewrites bundled memory notes as one-fact entries into a scratch store. | one per batch |
 | `curate/recheck.py` | Offline contradiction pass over a curated store, report only. | one per 25 pairs |
 | `derived/backtest.py` | The thresholds behind derived hot spots and co-change, from plain git history. | none |
+| `secrets/sk_rule.py` | The pre-receive secret scan on random `sk-` keys of each provider's shape and on fact names with an `sk-` segment: the share each regex refuses. Needs GNU grep. | none |
 
 ## Inputs
 
