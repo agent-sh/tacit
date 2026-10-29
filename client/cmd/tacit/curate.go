@@ -825,7 +825,13 @@ func runCurate(args []string) int {
 			rep.Errors++
 			var rej *store.Rejected
 			if errors.As(err, &rej) {
-				fmt.Fprintln(os.Stderr, "curate: server refused the batch; files set aside:", rej.Files)
+				// The server's own lines name the file and the rule; without
+				// them a refusal repeats every run with nothing to act on.
+				why := rej.Reason
+				if len(rej.Remote) > 0 {
+					why = strings.Join(rej.Remote, " | ")
+				}
+				fmt.Fprintf(os.Stderr, "curate: server refused the batch: %s; files set aside: %v\n", why, rej.Files)
 			} else {
 				fmt.Fprintln(os.Stderr, "curate: push:", err)
 			}
