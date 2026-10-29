@@ -156,6 +156,11 @@ func (r *verifyRun) runStale(ctx context.Context, s *store.Store, rs *reviewServ
 					tries[it.ID]--
 				}
 				r.saveAttempts(tries)
+			} else if !r.dry {
+				for _, it := range batch {
+					r.failed(it.ID, "the verifier call failed: "+shortErr(err))
+				}
+				r.saveAttempts(tries)
 			}
 			continue
 		}
@@ -174,6 +179,15 @@ func (r *verifyRun) runStale(ctx context.Context, s *store.Store, rs *reviewServ
 		for k := range ops {
 			ops[k].Model = model
 		}
+		marked := map[string]bool{}
+		for _, o := range ops {
+			marked[o.ID] = true
+		}
+		for _, it := range batch {
+			if !marked[it.ID] {
+				r.failed(it.ID, verdictGap(vs, it.ID))
+			}
+		}
 		if r.dry {
 			b, _ := json.MarshalIndent(ops, "", "  ")
 			fmt.Println(string(b))
@@ -182,6 +196,7 @@ func (r *verifyRun) runStale(ctx context.Context, s *store.Store, rs *reviewServ
 			continue
 		}
 		if len(ops) == 0 {
+			r.saveAttempts(tries)
 			continue
 		}
 		actx, acancel := context.WithTimeout(ctx, 3*time.Minute)
@@ -189,6 +204,10 @@ func (r *verifyRun) runStale(ctx context.Context, s *store.Store, rs *reviewServ
 		acancel()
 		if err != nil {
 			var rej *store.Rejected
+			for _, o := range ops {
+				r.failed(o.ID, "the marks were not written: "+shortErr(err))
+			}
+			r.saveAttempts(tries)
 			if errors.As(err, &rej) {
 				fmt.Fprintf(os.Stderr, "verify: stale batch %d refused by the server: %s\n", batchNumber, rej.Reason)
 				lastErr = err
@@ -199,6 +218,7 @@ func (r *verifyRun) runStale(ctx context.Context, s *store.Store, rs *reviewServ
 		for k, e := range errs {
 			if e != nil {
 				fmt.Fprintf(os.Stderr, "verify: %s: %v\n", ops[k].ID, e)
+				r.failed(ops[k].ID, ops[k].Mark+": "+e.Error())
 				continue
 			}
 			delete(tries, ops[k].ID)

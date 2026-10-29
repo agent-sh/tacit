@@ -330,7 +330,12 @@ func runVerify(args []string) int {
 	budget := fsf.Float64("budget", 4, "dollars per model call")
 	dry := fsf.Bool("dry-run", false, "print verdicts, change nothing")
 	ids := fsf.String("ids", "", "replay: JSON array of {id} findings to verify, in that order, instead of every open finding")
+	requeue := fsf.String("requeue", "", "send findings that reached the attempt limit again: all, or finding ids separated by commas; calls no model")
 	fsf.Parse(args)
+	if *requeue != "" {
+		home, _ := os.UserHomeDir()
+		return requeueVerify(filepath.Join(platform.StateDir(home), "verify"), *requeue)
+	}
 	if *batch < 1 || *max < 0 || *budget <= 0 {
 		fmt.Fprintln(os.Stderr, "verify: --batch must be at least 1, --max at least 0, --budget above 0")
 		return 2
@@ -417,8 +422,9 @@ type verifyRun struct {
 	budget               float64
 	dry                  bool
 	cwd, stateDir        string
-	attemptsBefore       int            // a finding is sent at most this many times (default 3)
-	tl                   *gitev.Builder // builds the git timeline a stale finding carries; nil builds the usual one
+	attemptsBefore       int                      // a finding is sent at most this many times (default verifyAttempts)
+	fails                map[string]verifyFailure // why each finding's last counted attempt failed (failures.json)
+	tl                   *gitev.Builder           // builds the git timeline a stale finding carries; nil builds the usual one
 }
 
 // attempts counts the verifier runs a finding has been sent to without a
@@ -439,6 +445,7 @@ func (r *verifyRun) saveAttempts(m map[string]int) {
 	if os.WriteFile(tmp, b, 0o644) == nil {
 		_ = os.Rename(tmp, filepath.Join(r.stateDir, "attempts.json"))
 	}
+	r.saveFailures(m)
 }
 
 // run sends open findings to the verifier in batches grouped by scope and
@@ -446,7 +453,7 @@ func (r *verifyRun) saveAttempts(m map[string]int) {
 // reopen) are theirs and are never sent.
 func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner) (int, float64, error) {
 	if r.attemptsBefore == 0 {
-		r.attemptsBefore = 3
+		r.attemptsBefore = verifyAttempts
 	}
 	rs := &reviewServer{s: s}
 	sctx, cancel := context.WithTimeout(ctx, time.Minute)
@@ -461,6 +468,9 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 	rs.loadFacts()
 	owned := rs.ownerTouched()
 	tries := r.attempts()
+	if !r.dry {
+		r.fails = r.failures()
+	}
 	var open []reviewItem
 	for _, it := range rs.items() {
 		if it.Decision == nil && it.Ask == nil && !owned[it.ID] && !owned[it.A.Name] && !owned[it.B.Name] && tries[it.ID] < r.attemptsBefore {
@@ -551,6 +561,11 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 					tries[it.ID]--
 				}
 				r.saveAttempts(tries)
+			} else if !r.dry {
+				for _, it := range batch {
+					r.failed(it.ID, "the verifier call failed: "+shortErr(err))
+				}
+				r.saveAttempts(tries)
 			}
 			continue
 		}
@@ -571,6 +586,15 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 		for k := range ops {
 			ops[k].Model = model
 		}
+		marked := map[string]bool{}
+		for _, o := range ops {
+			marked[o.ID] = true
+		}
+		for _, it := range batch {
+			if !marked[it.ID] {
+				r.failed(it.ID, verdictGap(vs, it.ID, it.A.Name, it.B.Name))
+			}
+		}
 		if r.dry {
 			b, _ := json.MarshalIndent(ops, "", "  ")
 			fmt.Println(string(b))
@@ -579,6 +603,7 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 			continue
 		}
 		if len(ops) == 0 {
+			r.saveAttempts(tries)
 			continue
 		}
 		actx, acancel := context.WithTimeout(ctx, 3*time.Minute)
@@ -586,6 +611,10 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 		acancel()
 		if err != nil {
 			var rej *store.Rejected
+			for _, o := range ops {
+				r.failed(o.ID, "the marks were not written: "+shortErr(err))
+			}
+			r.saveAttempts(tries)
 			if errors.As(err, &rej) {
 				fmt.Fprintf(os.Stderr, "verify: batch %d refused by the server: %s\n", batchNumber, rej.Reason)
 				lastErr = err
@@ -596,6 +625,7 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 		for k, e := range errs {
 			if e != nil {
 				fmt.Fprintf(os.Stderr, "verify: %s: %v\n", ops[k].ID, e)
+				r.failed(ops[k].ID, markLabel(ops[k])+": "+e.Error())
 				continue
 			}
 			delete(tries, ops[k].ID)
@@ -610,15 +640,7 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 	if serr != nil {
 		lastErr = serr
 	}
-	exhausted := 0
-	for _, n := range tries {
-		if n >= r.attemptsBefore {
-			exhausted++
-		}
-	}
-	if exhausted > 0 {
-		fmt.Fprintf(os.Stderr, "verify: %d finding(s) reached %d failed attempts and are no longer sent\n", exhausted, r.attemptsBefore)
-	}
+	r.reportStranded(rs, tries)
 	return total, cost, lastErr
 }
 
