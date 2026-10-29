@@ -244,7 +244,7 @@ func (s *Snapshot) lastChange(ctx context.Context, path string) string {
 // secretRe is the secret scan of server/priv/hooks/pre-receive (secret_re),
 // copied; a test holds the two equal. A path matching it would get the whole
 // push refused.
-var secretRe = regexp.MustCompile(`(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|(^|[^A-Za-z0-9])sk-(proj-|ant-)?[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|tskey-[A-Za-z0-9-]{10,}|(^|[^A-Za-z0-9])hf_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----`)
+var secretRe = regexp.MustCompile(`(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]*([A-Za-z0-9]{20}|[A-Z_][A-Za-z0-9_-]{15}|[A-Za-z0-9_-]{7}[A-Z_][A-Za-z0-9_-]{8}|[A-Za-z0-9_-]{15}[A-Z_]|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|tskey-[A-Za-z0-9-]{10,}|(^|[^A-Za-z0-9])hf_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----`)
 
 // pathRe is the only shape of path that is written into a fact. File and
 // directory names in a repository are text chosen by whoever committed them,

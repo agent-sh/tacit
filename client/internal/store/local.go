@@ -19,11 +19,13 @@ import (
 
 const localKey = "tacit.local"
 
-// Same token shapes as the server's pre-receive check. Agent writes still
-// use scrump first; this is the second check when there is no server.
+// Same token shapes as the server's pre-receive check (secret_re in
+// server/priv/hooks/pre-receive; TestLocalSecretsAreTheServers holds the two
+// equal). Agent writes still use scrump first; this is the second check when
+// there is no server.
 var errLocalPolicy = errors.New("local policy refused the write")
 
-var localSecrets = regexp.MustCompile(`(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|(^|[^A-Za-z0-9])sk-(proj-|ant-)?[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|tskey-[A-Za-z0-9-]{10,}|(^|[^A-Za-z0-9])hf_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----`)
+var localSecrets = regexp.MustCompile(`(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]*([A-Za-z0-9]{20}|[A-Z_][A-Za-z0-9_-]{15}|[A-Za-z0-9_-]{7}[A-Z_][A-Za-z0-9_-]{8}|[A-Za-z0-9_-]{15}[A-Z_]|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|tskey-[A-Za-z0-9-]{10,}|(^|[^A-Za-z0-9])hf_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----`)
 
 func (s *Store) checkLocalFiles(rels []string) error {
 	for _, rel := range rels {

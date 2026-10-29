@@ -23,7 +23,16 @@ fail() { echo "tacit: $*" >&2; exit 1; }
 difffile=$(mktemp "${TMPDIR:-/tmp}/tacit-diff.XXXXXX")
 blobfile=$(mktemp "${TMPDIR:-/tmp}/tacit-blob.XXXXXX")
 trap 'rm -f "$difffile" "$blobfile"' EXIT
-secret_re='(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|(^|[^A-Za-z0-9])sk-(proj-|ant-)?[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|tskey-[A-Za-z0-9-]{10,}|(^|[^A-Za-z0-9])hf_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+# An sk- key (Anthropic sk-ant-..., OpenAI sk-proj-... and the legacy 48
+# characters, OpenRouter, Langfuse, LiteLLM) is sk- and key characters
+# [A-Za-z0-9_-] that hold a 20-character alphanumeric run, an uppercase letter
+# or underscore with 15 key characters after it, 7 before and 8 after, or 15
+# before it, or a UUID. A fact name is lowercase letters, digits and hyphens,
+# so lint-cc-sk-017-only-plain-commands is no key. Measured:
+# eval/secrets/sk_rule.py.
+# client/internal/derive/collect.go and client/internal/store/local.go hold
+# copies; their tests keep them equal to this line.
+secret_re='(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]*([A-Za-z0-9]{20}|[A-Z_][A-Za-z0-9_-]{15}|[A-Za-z0-9_-]{7}[A-Z_][A-Za-z0-9_-]{8}|[A-Za-z0-9_-]{15}[A-Z_]|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|tskey-[A-Za-z0-9-]{10,}|(^|[^A-Za-z0-9])hf_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
 
 while read -r old new ref; do
   [ "$ref" = "refs/heads/main" ] || fail "only refs/heads/main may be pushed (got $ref)"
