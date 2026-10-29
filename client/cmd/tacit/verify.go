@@ -332,7 +332,9 @@ func runVerify(args []string) int {
 	ids := fsf.String("ids", "", "replay: JSON array of {id} findings to verify, in that order, instead of every open finding")
 	requeue := fsf.String("requeue", "", "send findings that reached the attempt limit again: all, or finding ids separated by commas; calls no model")
 	fsf.Parse(args)
-	if *requeue != "" {
+	requeueSet := false
+	fsf.Visit(func(f *flag.Flag) { requeueSet = requeueSet || f.Name == "requeue" })
+	if requeueSet {
 		home, _ := os.UserHomeDir()
 		// A run holds the counters in memory and writes them back after
 		// each batch, which would undo a requeue made meanwhile.
@@ -346,7 +348,7 @@ func runVerify(args []string) int {
 			return 2
 		}
 		defer release()
-		return requeueVerify(filepath.Join(platform.StateDir(home), "verify"), *requeue)
+		return requeueVerify(filepath.Join(platform.StateDir(home), "verify"), *requeue, *dry)
 	}
 	if *batch < 1 || *max < 0 || *budget <= 0 {
 		fmt.Fprintln(os.Stderr, "verify: --batch must be at least 1, --max at least 0, --budget above 0")
@@ -530,13 +532,19 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 	}
 	home, _ := os.UserHomeDir()
 	memDir := memoryDir(home)
-	// Prune stale attempt counters: findings that left the review files.
+	// Prune attempt counters of findings the verifier will never send again:
+	// gone from the review files, or settled since (a mark, a question, the
+	// owner's touch). A count on them would only list them as stranded.
 	live := map[string]bool{}
 	for _, it := range rs.items() {
-		live[it.ID] = true
+		if it.Decision == nil && it.Ask == nil && !owned[it.ID] && !owned[it.A.Name] && !owned[it.B.Name] {
+			live[it.ID] = true
+		}
 	}
 	for _, it := range rs.staleItems() {
-		live[it.ID] = true
+		if f := rs.facts[it.A.Name]; it.NeedsOwner && it.Decision == nil && it.Ask == nil && !owned[it.ID] && f != nil && !isRuling(f) {
+			live[it.ID] = true
+		}
 	}
 	for id := range tries {
 		if !live[id] {
@@ -777,7 +785,7 @@ func (r *verifyRun) opsFrom(vs []verifyVerdict, inBatch map[string]reviewItem) (
 		v.Evidence, v.Fix, v.Question = red[3*i], red[3*i+1], red[3*i+2]
 		it, ok := inBatch[v.ID]
 		if !ok || seen[v.ID] {
-			fmt.Fprintf(os.Stderr, "verify: verdict for %q is not in this batch, skipped\n", v.ID)
+			fmt.Fprintln(os.Stderr, "verify: a verdict names a finding that is not in this batch, skipped")
 			continue
 		}
 		seen[v.ID] = true
@@ -795,7 +803,7 @@ func (r *verifyRun) opsFrom(vs []verifyVerdict, inBatch map[string]reviewItem) (
 			case it.B.Name:
 				o.Mark = "right"
 			default:
-				fmt.Fprintf(os.Stderr, "verify: %s: keep names %q, which is neither fact, skipped\n", v.ID, v.Keep)
+				fmt.Fprintf(os.Stderr, "verify: %s: the verdict keeps a fact that is neither of the two, skipped\n", v.ID)
 				continue
 			}
 		case "owner":

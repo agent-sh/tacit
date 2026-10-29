@@ -218,7 +218,7 @@ func (r *verifyRun) runStale(ctx context.Context, s *store.Store, rs *reviewServ
 		for k, e := range errs {
 			if e != nil {
 				fmt.Fprintf(os.Stderr, "verify: %s: %v\n", ops[k].ID, e)
-				r.failed(ops[k].ID, ops[k].Mark+": "+e.Error())
+				r.failed(ops[k].ID, staleLabel(ops[k].Mark)+": "+e.Error())
 				continue
 			}
 			delete(tries, ops[k].ID)
@@ -248,7 +248,7 @@ func (r *verifyRun) opsFromStale(vs []verifyVerdict, inBatch map[string]staleIte
 		v.Evidence, v.Fix, v.Question, v.Was = red[4*i], red[4*i+1], red[4*i+2], red[4*i+3]
 		it, ok := inBatch[v.ID]
 		if !ok || seen[v.ID] {
-			fmt.Fprintf(os.Stderr, "verify: verdict for %q is not in this batch, skipped\n", v.ID)
+			fmt.Fprintln(os.Stderr, "verify: a verdict names a finding that is not in this batch, skipped")
 			continue
 		}
 		seen[v.ID] = true

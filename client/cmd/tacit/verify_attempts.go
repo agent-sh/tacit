@@ -100,7 +100,7 @@ func verdictGap(vs []verifyVerdict, id string, names ...string) string {
 			return "the verdict keeps a fact that is neither of the two"
 		case v.Mark == "owner" && strings.TrimSpace(v.Question) == "":
 			return "the verdict asks the owner without a question"
-		case v.Mark == "fix" && strings.TrimSpace(v.Fix) == "":
+		case v.Mark == "fix" && len(names) == 0 && strings.TrimSpace(v.Fix) == "":
 			return "the verdict is a fix without the fix"
 		case verdictMarks[v.Mark]:
 			return fmt.Sprintf("the verdict's mark %q is not one this finding takes", v.Mark)
@@ -111,6 +111,17 @@ func verdictGap(vs []verifyVerdict, id string, names ...string) string {
 	return "no verdict came back for it"
 }
 
+// staleLabel is a stale finding's mark in the verifier's words.
+func staleLabel(mark string) string {
+	switch mark {
+	case "current":
+		return "keep"
+	case "ask":
+		return "owner"
+	}
+	return mark
+}
+
 // markLabel is a mark as the verifier gave it, for a failure line.
 func markLabel(o op) string {
 	switch o.Mark {
@@ -118,6 +129,8 @@ func markLabel(o op) string {
 		return "keep " + o.A
 	case "right":
 		return "keep " + o.B
+	case "ask":
+		return "owner"
 	}
 	return o.Mark
 }
@@ -159,8 +172,9 @@ func (r *verifyRun) reportStranded(rs *reviewServer, tries map[string]int) {
 // requeueVerify implements `tacit verify --requeue all|ID,...`: the named
 // findings (all: every one at the attempt limit) lose their attempt count
 // and their recorded failure, so the next run sends them again. It calls no
-// model and changes nothing else.
-func requeueVerify(stateDir, which string) int {
+// model and changes nothing else; a dry run only says what it would do. An
+// id with no count here is an error (exit 1), as a typo would be.
+func requeueVerify(stateDir, which string, dry bool) int {
 	r := &verifyRun{stateDir: stateDir}
 	tries := r.attempts()
 	r.fails = r.failures()
@@ -184,21 +198,26 @@ func requeueVerify(stateDir, which string) int {
 	}
 	sort.Strings(ids)
 	var done []string
+	code := 0
 	for _, id := range ids {
 		if _, ok := tries[id]; !ok {
 			fmt.Fprintf(os.Stderr, "verify: %s has no failed attempts here, nothing to requeue\n", id)
+			code = 1
 			continue
 		}
 		delete(tries, id)
 		done = append(done, id)
 	}
-	if len(done) > 0 {
+	if len(done) > 0 && !dry {
 		r.saveAttempts(tries)
 	}
-	list := ""
+	list, verb := "", "requeued"
 	if len(done) > 0 {
 		list = ": " + strings.Join(done, ", ")
 	}
-	fmt.Printf("verify: %d finding(s) requeued%s\n", len(done), list)
-	return 0
+	if dry {
+		verb = "would be requeued (dry run, nothing written)"
+	}
+	fmt.Printf("verify: %d finding(s) %s%s\n", len(done), verb, list)
+	return code
 }
