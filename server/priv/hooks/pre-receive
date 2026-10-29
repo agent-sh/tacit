@@ -22,17 +22,37 @@ esac
 fail() { echo "tacit: $*" >&2; exit 1; }
 difffile=$(mktemp "${TMPDIR:-/tmp}/tacit-diff.XXXXXX")
 blobfile=$(mktemp "${TMPDIR:-/tmp}/tacit-blob.XXXXXX")
-trap 'rm -f "$difffile" "$blobfile"' EXIT
-# An sk- key (Anthropic sk-ant-..., OpenAI sk-proj-... and the legacy 48
-# characters, OpenRouter, Langfuse, LiteLLM) is sk- and key characters
-# [A-Za-z0-9_-] that hold a 20-character alphanumeric run, an uppercase letter
-# or underscore with 15 key characters after it, 7 before and 8 after, or 15
-# before it, or a UUID. A fact name is lowercase letters, digits and hyphens,
-# so lint-cc-sk-017-only-plain-commands is no key. Measured:
-# eval/secrets/sk_rule.py.
-# client/internal/derive/collect.go and client/internal/store/local.go hold
-# copies; their tests keep them equal to this line.
-secret_re='(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]*([A-Za-z0-9]{20}|[A-Z_][A-Za-z0-9_-]{15}|[A-Za-z0-9_-]{7}[A-Z_][A-Za-z0-9_-]{8}|[A-Za-z0-9_-]{15}[A-Z_]|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|tskey-[A-Za-z0-9-]{10,}|(^|[^A-Za-z0-9])hf_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+tokenfile=$(mktemp "${TMPDIR:-/tmp}/tacit-tokens.XXXXXX")
+trap 'rm -f "$difffile" "$blobfile" "$tokenfile"' EXIT
+# Token shapes and private-key headers. sk- keys take two steps: a token is
+# sk- and at least 16 key characters ([A-Za-z0-9_-]), and a token is a key
+# when that run holds an uppercase letter or underscore, a run of 20 letters
+# and digits, or a lowercase UUID. Random keys (Anthropic sk-ant-..., OpenAI
+# sk-proj-... and the legacy 48 characters, OpenRouter, Langfuse, LiteLLM)
+# do; a fact name is lowercase letters, digits and hyphens, so
+# lint-cc-sk-017-only-plain-commands is no key. No step counts positions
+# around a match, so each runs at grep's speed whatever a line holds.
+# Measured: eval/secrets/sk_rule.py. client/internal/secretscan holds the
+# same three expressions; its test keeps them equal to these lines.
+secret_re='(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|tskey-[A-Za-z0-9-]{10,}|(^|[^A-Za-z0-9])hf_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+sk_token_re='(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}'
+sk_key_re='sk-[A-Za-z0-9_-]*([A-Z_]|[A-Za-z0-9]{20}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'
+
+# scan RE FILE [-o]: 0 when FILE holds RE (with -o, the matches go to
+# $tokenfile), 1 when it does not. Bytes, not characters (LC_ALL=C, -a): the
+# shapes are ASCII, and a byte that is not valid UTF-8, or a NUL, must not hide
+# a key. Any other grep status (a bad expression, a read error) refuses the
+# push: `if grep` would read it as no match.
+scan() {
+  local rc=0
+  if [ "${3:-}" = -o ]; then
+    LC_ALL=C grep -aEo -- "$1" "$2" > "$tokenfile" || rc=$?
+  else
+    LC_ALL=C grep -aEq -- "$1" "$2" || rc=$?
+  fi
+  [ "$rc" -le 1 ] || fail "the secret scan of $path failed (grep exit $rc)"
+  return "$rc"
+}
 
 while read -r old new ref; do
   [ "$ref" = "refs/heads/main" ] || fail "only refs/heads/main may be pushed (got $ref)"
@@ -71,7 +91,10 @@ while read -r old new ref; do
       # match", and a secret near the top of a blob over the pipe buffer got in.
       # A failing cat-file stops the hook here (set -e): fail closed.
       git cat-file -p "$new_sha" > "$blobfile"
-      if grep -Eq "$secret_re" "$blobfile"; then
+      if scan "$secret_re" "$blobfile"; then
+        fail "$path looks like it contains a secret"
+      fi
+      if scan "$sk_token_re" "$blobfile" -o && scan "$sk_key_re" "$tokenfile"; then
         fail "$path looks like it contains a secret"
       fi
     fi

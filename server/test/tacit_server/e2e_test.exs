@@ -136,6 +136,26 @@ defmodule TacitServer.E2ETest do
     assert status == 0, out
   end
 
+  # The push lease is one for every writer, so the scan of one blob must cost
+  # what its size does: a long line of sk- runs that holds no key took
+  # minutes with a rule that counts positions around a match.
+  test "a long line of sk- runs is scanned in linear time and taken", %{keyid: keyid, priv: priv} do
+    dir = clone!()
+
+    write_commit!(
+      dir,
+      "inbox/#{keyid}/long-line.md",
+      String.duplicate("sk-", 90_000) <> "\n",
+      "long line"
+    )
+
+    {elapsed, {out, status}} =
+      :timer.tc(fn -> git(dir, ["push", "origin", "HEAD:main"], git_env(keyid, priv)) end)
+
+    assert status == 0, out
+    assert elapsed < 20_000_000, "the push took #{div(elapsed, 1000)} ms"
+  end
+
   test "sk- keys of every shape are still refused", %{keyid: keyid, priv: priv} do
     dir = clone!()
 
@@ -151,7 +171,8 @@ defmodule TacitServer.E2ETest do
   # OpenAI (gitleaks' current rules), the legacy 48 characters, 32 hex,
   # OpenRouter, Langfuse, LiteLLM, and an Anthropic body with no 20-character
   # alphanumeric run. The fixed ones can each be caught by one arm of the
-  # rule only.
+  # rule only: an uppercase letter or underscore anywhere in the run, a
+  # 16-character token among them, and a lowercase UUID.
   defp synthetic_sk_keys(seed) do
     :rand.seed(:exsss, {seed, 7, 11})
     b64url = ~c"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
@@ -176,6 +197,7 @@ defmodule TacitServer.E2ETest do
       {"mark at start", "sk-Qabcd-efghi-jklmn-opqrs"},
       {"mark in middle", "sk-abcd-efghi_jklm-nopqrs"},
       {"mark at end", "sk-abcd-efghi-jklmn-opqrsQ"},
+      {"short token", "sk-abcd-efgh-ijkLmn"},
       {"uuid only", "sk-lf-00000000-0000-4000-8000-000000000000"}
     ]
   end

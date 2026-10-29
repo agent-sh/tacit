@@ -6,34 +6,17 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 )
-
-// The local check is the server's: a file the hook refuses must be refused
-// here too, and a file it takes must be taken.
-func TestLocalSecretsAreTheServers(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("..", "..", "..", "server", "priv", "hooks", "pre-receive"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := regexp.MustCompile(`(?m)^secret_re='([^']*)'`).FindSubmatch(b)
-	if m == nil {
-		t.Fatal("secret_re not found in the pre-receive hook")
-	}
-	if string(m[1]) != localSecrets.String() {
-		t.Fatalf("localSecrets differs from the hook's secret_re:\ngo:   %s\nhook: %s", localSecrets, m[1])
-	}
-}
 
 // syntheticKeys builds random keys of the shapes providers issue, never a
 // real one: Anthropic and OpenAI (gitleaks' current rules), the legacy 48
 // characters, 32 hex, OpenRouter, Langfuse and LiteLLM, and an Anthropic body
 // with no 20-character alphanumeric run. The fixed keys at the end can each
 // be caught by one arm of the rule only: an uppercase letter or underscore
-// with 15 key characters after it, in the middle, with 15 before it, and a
-// UUID.
+// anywhere in the run (at its start, its middle, its end, in a 16-character
+// token), and a UUID.
 func syntheticKeys(seed uint64) map[string]string {
 	r := rand.New(rand.NewPCG(seed, 7))
 	pick := func(alphabet string, n int) string {
@@ -67,6 +50,7 @@ func syntheticKeys(seed uint64) map[string]string {
 		"mark at start":     "sk-Qabcd-efghi-jklmn-opqrs",
 		"mark in middle":    "sk-abcd-efghi_jklm-nopqrs",
 		"mark at end":       "sk-abcd-efghi-jklmn-opqrsQ",
+		"short token":       "sk-abcd-efgh-ijkLmn",
 		"uuid only":         "sk-lf-00000000-0000-4000-8000-000000000000",
 	}
 }

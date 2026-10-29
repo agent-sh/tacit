@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """How often the pre-receive secret scan refuses sk- keys, and fact names.
 
-Reads secret_re from server/priv/hooks/pre-receive and runs it with grep -E,
-the hook's own engine, over random keys of each shape providers issue and over
-fact names with an sk- segment. Every key is random; none is real. The key
+Reads the hook's three expressions from server/priv/hooks/pre-receive
+(secret_re, sk_token_re, sk_key_re) and runs them with grep the way the hook
+does (LC_ALL=C; a line is refused when it matches secret_re, or holds an sk-
+token that matches sk_key_re), over random keys of each shape providers issue
+and over fact names with an sk- segment. Every key is random; none is real. The key
 shapes follow gitleaks' rules (anthropic.go, openai.go), TruffleHog's
 detectors (deepseek, openrouter, langfuse) and LiteLLM's key generator. --compare adds another regex as a
 column, for example the rule before v0.9.15.
 
     python3 -I eval/secrets/sk_rule.py [--n 100000] [--seed 1] [--compare REGEX]
 
-No model, no network. Needs GNU grep. The client's copies of the rule are the
-same string (their tests hold them equal), so one engine measures all three.
+No model, no network. Needs GNU grep. client/internal/secretscan holds the
+same expressions (its test keeps them equal), so one engine measures both.
 """
 import argparse
 import os
@@ -63,6 +65,9 @@ def shapes(rnd):
         "openrouter": lambda: "sk-or-v1-" + pick(rnd, HEX, 64),
         "langfuse": lambda: "sk-lf-" + str(uuid.UUID(int=rnd.getrandbits(128), version=4)),
         "litellm (22 base64url)": lambda: "sk-" + pick(rnd, B64URL, 22),
+        "unknown, 16 base64url": lambda: "sk-" + pick(rnd, B64URL, 16),
+        "unknown, 18 base64url": lambda: "sk-" + pick(rnd, B64URL, 18),
+        "unknown, 20 base64url": lambda: "sk-" + pick(rnd, B64URL, 20),
         "unknown, 32 base64url": lambda: "sk-" + pick(rnd, B64URL, 32),
         "unknown, 48 base64url": lambda: "sk-" + pick(rnd, B64URL, 48),
     }
@@ -87,12 +92,28 @@ def name_line(rnd, name):
     return rnd.choice(["- [[%s]]: a fact", "- [%s](%s.md) - a fact", "%s", "name: %s"]).replace("%s", name)
 
 
-def hits(regex, lines):
-    out = subprocess.run(["grep", "-E", "-c", "--", regex], input="\n".join(lines) + "\n",
-                         capture_output=True, text=True, env=dict(os.environ, LC_ALL="C"))
+def grep(args, text):
+    out = subprocess.run(["grep", "-a"] + args, input=text, capture_output=True, text=True,
+                         env=dict(os.environ, LC_ALL="C"))
     if out.returncode not in (0, 1):
         sys.exit("grep failed: " + out.stderr)
-    return int(out.stdout.strip() or 0)
+    return out.stdout
+
+
+def hits(regex, lines):
+    """Lines one regex matches (a --compare column)."""
+    return int(grep(["-E", "-c", "--", regex], "\n".join(lines) + "\n").strip() or 0)
+
+
+def hook_hits(rules, lines):
+    """Lines the hook refuses: secret_re, or an sk- token that is a key."""
+    text = "\n".join(lines) + "\n"
+    numbers = lambda out: {l.split(":", 1)[0] for l in out.splitlines() if l}
+    refused = numbers(grep(["-E", "-n", "--", rules["secret_re"]], text))
+    tokens = grep(["-E", "-o", "-n", "--", rules["sk_token_re"]], text)
+    if tokens:
+        refused |= numbers(grep(["-E", "--", rules["sk_key_re"]], tokens))
+    return len(refused)
 
 
 def main():
@@ -101,17 +122,22 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--compare", action="append", default=[], metavar="REGEX", help="another regex to measure beside the hook's")
     a = ap.parse_args()
-    m = re.search(r"^secret_re='([^']*)'$", open(HOOK).read(), re.M)
-    if not m:
-        sys.exit("secret_re not found in " + HOOK)
-    rules = [("hook", m.group(1))] + [("compare %d" % (i + 1), r) for i, r in enumerate(a.compare)]
+    hook = open(HOOK).read()
+    rules = {}
+    for name in ("secret_re", "sk_token_re", "sk_key_re"):
+        m = re.search(r"^" + name + r"='([^']*)'$", hook, re.M)
+        if not m:
+            sys.exit(name + " not found in " + HOOK)
+        rules[name] = m.group(1)
+    compare = [("compare %d" % (i + 1), r) for i, r in enumerate(a.compare)]
     rnd = random.Random(a.seed)
     rows = [(name, [in_line(rnd, gen()) for _ in range(a.n)]) for name, gen in shapes(rnd).items()]
     rows.append(("fact names with sk-", [name_line(rnd, fact_name(rnd)) for _ in range(a.n)]))
-    print("| sample | n | " + " | ".join(n for n, _ in rules) + " |")
-    print("|---|---|" + "---|" * len(rules))
+    print("| " + " | ".join(["sample", "n", "hook"] + [n for n, _ in compare]) + " |")
+    print("|" + "---|" * (3 + len(compare)))
     for name, lines in rows:
-        cells = ["%.3f%%" % (100.0 * hits(r, lines) / len(lines)) for _, r in rules]
+        cells = ["%.3f%%" % (100.0 * hook_hits(rules, lines) / len(lines))]
+        cells += ["%.3f%%" % (100.0 * hits(r, lines) / len(lines)) for _, r in compare]
         print("| %s | %d | %s |" % (name, len(lines), " | ".join(cells)))
 
 
