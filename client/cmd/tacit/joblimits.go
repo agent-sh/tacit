@@ -26,12 +26,12 @@ const (
 	// (curateLockWait), the 150-minute --budget and the 75-minute tail of the
 	// steps after the batches: 4 hours 45 minutes.
 	curateJobLimit = 5 * time.Hour
-	// tacit maintain: curate (4 hours 45 minutes), the rotation (its 6-hour
-	// deadline) and verify (60 findings in 12-finding batches, each call 20
-	// minutes and a fallback call 20 more, 90 seconds per stale timeline):
-	// about 16 hours 40 minutes, under the daily timer.
-	maintainJobLimit = 18 * time.Hour
 )
+
+// tacit maintain has no bound: verify has no overall budget. A batch also
+// splits at verifyBatchBytes, so 60 findings can take 60 calls of up to 20
+// minutes and a fallback call 20 more, and no bound under the daily timer
+// is above that.
 
 // timeoutLine is a unit's TimeoutStartSec= line for limit.
 func timeoutLine(limit time.Duration) string {

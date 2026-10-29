@@ -85,7 +85,7 @@ func installWindowsJob(home, exe, target, envFile string) (string, error) {
 	case "curate":
 		trigger = "<CalendarTrigger><StartBoundary>" + boundary + "</StartBoundary><Enabled>true</Enabled><ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay></CalendarTrigger>"
 		args = "maintain --env-file " + psQuote(envFile)
-		limit = maintainJobLimit
+		// no limit: verify has no overall budget (joblimits.go)
 	case localCurateJob:
 		// The local layer's daily curate: no verifier (local_install.go).
 		trigger = "<CalendarTrigger><StartBoundary>" + boundary + "</StartBoundary><Enabled>true</Enabled><ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay></CalendarTrigger>"

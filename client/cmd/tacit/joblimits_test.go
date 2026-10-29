@@ -20,9 +20,6 @@ func TestScheduledJobsHaveARunLimitAboveTheirOwn(t *testing.T) {
 	if _, err := installDreamSystemd(home, "/opt/tacit", "/home/u/.config/tacit/env"); err != nil {
 		t.Fatal(err)
 	}
-	if code := installCurator("linux", home, "/opt/tacit", nil); code != 0 {
-		t.Fatalf("install curate: %d", code)
-	}
 	units := filepath.Join(home, ".config", "systemd", "user")
 	unit := func(name string) string {
 		b, err := os.ReadFile(filepath.Join(units, name))
@@ -35,7 +32,6 @@ func TestScheduledJobsHaveARunLimitAboveTheirOwn(t *testing.T) {
 	for name, limit := range map[string]time.Duration{
 		"tacit-dream.service":      dreamJobLimit,
 		"tacit-dream-idle.service": dreamIdleJobLimit,
-		"tacit-curate.service":     maintainJobLimit,
 	} {
 		m := timeout.FindStringSubmatch(unit(name))
 		if m == nil || m[1] != span(limit, "h", "min") {
@@ -57,11 +53,9 @@ func TestScheduledJobsHaveARunLimitAboveTheirOwn(t *testing.T) {
 	if own := curateLockWait + 150*time.Minute + 75*time.Minute; curateJobLimit < own {
 		t.Fatalf("curate limit %s is under its own %s", curateJobLimit, own)
 	}
-	if own := curateLockWait + 225*time.Minute + 6*time.Hour + 6*(40+3)*time.Minute + 59*90*time.Second; maintainJobLimit <= own || maintainJobLimit >= 24*time.Hour {
-		t.Fatalf("maintain limit %s: own %s, daily timer 24h", maintainJobLimit, own)
-	}
-	// The Windows tasks carry the same bounds; the follower runs for good.
-	for target, want := range map[string]string{"dream": "PT2H30M", "dream-idle": "PT2H30M", "curate": "PT18H", localCurateJob: "PT5H", "follow": "PT0S"} {
+	// The Windows tasks carry the same bounds. The follower runs for good,
+	// and maintain has none: verify has no overall budget.
+	for target, want := range map[string]string{"dream": "PT2H30M", "dream-idle": "PT2H30M", "curate": "PT0S", localCurateJob: "PT5H", "follow": "PT0S"} {
 		p, err := installWindowsJob(home, `C:\tacit.exe`, target, `C:\env`)
 		if err != nil {
 			t.Fatal(err)

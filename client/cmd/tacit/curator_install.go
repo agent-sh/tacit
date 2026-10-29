@@ -56,7 +56,7 @@ func installCurator(goos, home, exe string, args []string) int {
 		fmt.Fprintln(os.Stderr, "install:", err)
 		return 1
 	}
-	unit := "[Unit]\nDescription=tacit daily curation and verification\n[Service]\nType=oneshot\n" + timeoutLine(maintainJobLimit) + "Environment=PATH=" + unitQuote(servicePATH(home, exe, lookPath), true) + "\nExecStart=" + unitQuote(exe, false) + " maintain --env-file " + unitQuote(envFile, false) + "\n"
+	unit := "[Unit]\nDescription=tacit daily curation and verification\n[Service]\nType=oneshot\nEnvironment=PATH=" + unitQuote(servicePATH(home, exe, lookPath), true) + "\nExecStart=" + unitQuote(exe, false) + " maintain --env-file " + unitQuote(envFile, false) + "\n"
 	for _, key := range []string{"TACIT_STORE", "TACIT_SETTINGS"} {
 		if value := os.Getenv(key); value != "" {
 			unit += "Environment=" + unitQuote(key+"="+value, true) + "\n"
