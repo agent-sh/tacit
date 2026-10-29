@@ -4,8 +4,8 @@
 Reads secret_re from server/priv/hooks/pre-receive and runs it with grep -E,
 the hook's own engine, over random keys of each shape providers issue and over
 fact names with an sk- segment. Every key is random; none is real. The key
-shapes follow gitleaks' rules (anthropic.go, openai.go) and the documented
-formats of OpenRouter, Langfuse and LiteLLM. --compare adds another regex as a
+shapes follow gitleaks' rules (anthropic.go, openai.go), TruffleHog's
+detectors (deepseek, openrouter, langfuse) and LiteLLM's key generator. --compare adds another regex as a
 column, for example the rule before v0.9.15.
 
     python3 -I eval/secrets/sk_rule.py [--n 100000] [--seed 1] [--compare REGEX]
@@ -28,6 +28,7 @@ HOOK = os.path.join(ROOT, "server", "priv", "hooks", "pre-receive")
 B64URL = string.ascii_letters + string.digits + "-_"
 ALNUM = string.ascii_letters + string.digits
 HEX = "0123456789abcdef"
+LOWER = string.ascii_lowercase + string.digits
 
 # Words for fact names: lowercase letters, digits and hyphens is the whole
 # alphabet of a fact name ([a-z0-9][a-z0-9-]*).
@@ -58,7 +59,7 @@ def shapes(rnd):
         "openai admin": lambda: "sk-admin-" + pick(rnd, B64URL, 58) + "T3BlbkFJ" + pick(rnd, B64URL, 58),
         "openai legacy": lambda: "sk-" + pick(rnd, ALNUM, 20) + "T3BlbkFJ" + pick(rnd, ALNUM, 20),
         "legacy 48 alnum": lambda: "sk-" + pick(rnd, ALNUM, 48),
-        "32 hex (DeepSeek)": lambda: "sk-" + pick(rnd, HEX, 32),
+        "DeepSeek (32 lowercase alnum)": lambda: "sk-" + pick(rnd, LOWER, 32),
         "openrouter": lambda: "sk-or-v1-" + pick(rnd, HEX, 64),
         "langfuse": lambda: "sk-lf-" + str(uuid.UUID(int=rnd.getrandbits(128), version=4)),
         "litellm (22 base64url)": lambda: "sk-" + pick(rnd, B64URL, 22),
