@@ -34,6 +34,8 @@ Use your own values. `~` is the current user's home. Relative paths resolve agai
 
 Precedence is file defaults, then `TACIT_*` environment overrides, then command flags. `tacit --config FILE init` or `TACIT_SETTINGS` selects another file. Unknown fields and a missing explicitly selected file are errors. A hook with bad configuration fails open without output. Keep provider credentials in the provider's own configuration or the job env file, not this settings file.
 
+`tacit verify --requeue all` (or finding ids, separated by commas) sends findings that reached the verifier's attempt limit again; it calls no model, and `--dry-run` only prints what it would clear.
+
 `init --store DIR` overrides that invocation only. Put a custom path in the file or environment for subsequent commands. The file loads before model defaults are selected. A job's explicitly selected env file loads at runtime as well. Installers carry an explicit config selection into their generated jobs and hooks.
 
 ### Model runners

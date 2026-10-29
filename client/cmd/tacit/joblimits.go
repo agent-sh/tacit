@@ -5,14 +5,17 @@ import (
 	"time"
 )
 
-// Each scheduled job's unit stops a run that outlives the run's own limits:
+// Each scheduled job's unit but maintain's stops a run that outlives the
+// run's own limits:
 // systemd's TimeoutStartSec= and the Windows task's ExecutionTimeLimit
 // (launchd has no such key). Every git call of a run has a deadline of its
 // own, so a dead or stalled server fails the run in minutes; this bound is
 // for a run that hangs outside all of them, which would otherwise hold its
 // job for good (a plain git fetch with no limit once ran 13 hours). Each
 // value is above the sum of the run's own limits at their defaults, so the
-// unit never stops a run the binary allows.
+// unit never stops a run the binary allows; a limit raised by configuration
+// (TACIT_DREAM_TIMEOUT, dream_max_runtime, --budget) needs the bound raised
+// with it.
 const (
 	// tacit dream: up to 45 minutes waiting for an idle dream (dreamLockWait),
 	// 20 to push notes an earlier run left (TACIT_DREAM_TIMEOUT), 45 of
@@ -22,9 +25,9 @@ const (
 	// lock) and the quick curate (its 20-minute budget and 10-minute tail):
 	// 95 minutes, plus the transcript scan.
 	dreamIdleJobLimit = 150 * time.Minute
-	// tacit curate: up to an hour waiting for a quick curate
-	// (curateLockWait), the 150-minute --budget and the 75-minute tail of the
-	// steps after the batches: 4 hours 45 minutes.
+	// the local layer's tacit curate: up to an hour waiting for a quick
+	// curate (curateLockWait), the 150-minute --budget and the 30-minute tail
+	// of the last batch's judge (runCurateLocal): 4 hours.
 	curateJobLimit = 5 * time.Hour
 )
 

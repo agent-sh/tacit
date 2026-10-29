@@ -50,7 +50,7 @@ func TestScheduledJobsHaveARunLimitAboveTheirOwn(t *testing.T) {
 	if own := 20*time.Minute + 45*time.Minute + quickBudget + 10*time.Minute; dreamIdleJobLimit <= own {
 		t.Fatalf("idle limit %s is not above its own %s", dreamIdleJobLimit, own)
 	}
-	if own := curateLockWait + 150*time.Minute + 75*time.Minute; curateJobLimit < own {
+	if own := curateLockWait + 150*time.Minute + 30*time.Minute; curateJobLimit <= own {
 		t.Fatalf("curate limit %s is under its own %s", curateJobLimit, own)
 	}
 	// The Windows tasks carry the same bounds. The follower runs for good,
