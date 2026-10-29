@@ -76,7 +76,7 @@ Description=tacit local curator: this machine's dreamer notes to its local facts
 [Service]
 EnvironmentFile=` + envFile + `
 Type=oneshot
-Nice=19
+` + timeoutLine(curateJobLimit) + `Nice=19
 IOSchedulingClass=idle
 ` + extra + `ExecStart=` + exec + ` curate
 `

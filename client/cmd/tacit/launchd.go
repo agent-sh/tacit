@@ -312,7 +312,7 @@ Description=tacit dreamer: transcript deltas to inbox facts
 [Service]
 EnvironmentFile=` + envFile + `
 Type=oneshot
-` + extra + `ExecStart=` + exec + ` dream
+` + timeoutLine(dreamJobLimit) + extra + `ExecStart=` + exec + ` dream
 `
 }
 
@@ -348,7 +348,7 @@ Description=tacit idle dreamer: quiet or compacted sessions to inbox facts, then
 [Service]
 EnvironmentFile=` + envFile + `
 Type=oneshot
-Nice=19
+` + timeoutLine(dreamIdleJobLimit) + `Nice=19
 IOSchedulingClass=idle
 ` + extra + `ExecStart=-` + exec + ` ` + strings.Join(idleArgs[0], " ") + `
 ExecStart=` + exec + ` ` + strings.Join(idleArgs[1], " ") + `
