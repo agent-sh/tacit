@@ -166,8 +166,8 @@ func (r reviewReport) String() string {
 	for _, n := range r.Silent {
 		silent += n
 	}
-	return fmt.Sprintf("reviewer: %d note(s) to judge, %d judged by the model, %d from the rulebook, %d failed, %d waiting; verdicts: %s; trims: %d note(s), %d statement(s), %d refused; $%.3f; questions: %d queued, %d silent, %d answered, %d applied, %d settled, %d expired",
-		r.Candidates, r.Reviewed, r.Rulebook, r.Failed, r.Waiting, v, r.Trimmed, r.TrimStatement, r.TrimRefused, r.CostUSD, r.Queued, silent, r.Answered, r.Applied, r.Settled, r.Expired)
+	return fmt.Sprintf("reviewer: %d note(s) to judge, %d judged by the model, %d from the rulebook, %d failed, %d waiting, %d older than the reviewer (--backfill reads them); verdicts: %s; trims: %d note(s), %d statement(s), %d refused; $%.3f; questions: %d queued, %d silent, %d answered, %d applied, %d settled, %d expired",
+		r.Candidates, r.Reviewed, r.Rulebook, r.Failed, r.Waiting, r.Before, v, r.Trimmed, r.TrimStatement, r.TrimRefused, r.CostUSD, r.Queued, silent, r.Answered, r.Applied, r.Settled, r.Expired)
 }
 
 // reviewWork is what the step decided, for one writer to write: the
@@ -697,7 +697,9 @@ func reviewCommitMessage(w *reviewWork) string {
 // writeReviewLocal writes the step's work into this machine's overlay: the
 // local ledger, the local quote ledger, the statements as the local
 // curator's facts. An agent's note is never edited: its verdict holds it
-// back or ranks it.
+// back or ranks it; a trimmed note is written next to it, in its agent's
+// folder. A file that cannot be written does not cost the verdicts: the
+// ledger is written after the others, and the errors are returned together.
 func writeReviewLocal(dir, storeDir string, w *reviewWork) error {
 	if w.empty() {
 		return nil
@@ -707,6 +709,11 @@ func writeReviewLocal(dir, storeDir string, w *reviewWork) error {
 	if w.started != "" && ledger.ParseReviews(cur).Started == "" {
 		add = append(add, ledger.Review{Started: w.started}.Line()...)
 	}
+	var errs []error
+	trimmed := map[*fact.Fact]bool{}
+	for _, t := range w.trimmed {
+		trimmed[t] = true
+	}
 	for _, st := range append(append([]*fact.Fact(nil), w.statements...), w.trimmed...) {
 		rel := strings.TrimPrefix(st.Path, overlay.Prefix)
 		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel))); err == nil {
@@ -714,15 +721,21 @@ func writeReviewLocal(dir, storeDir string, w *reviewWork) error {
 		}
 		red, err := digest.RedactAll([]string{st.Meta.Description, st.Body})
 		if err != nil {
-			return err
+			errs = append(errs, err)
+			continue
 		}
 		st.Meta.Description, st.Body = red[0], red[1]
 		b, err := st.Encode()
 		if err != nil {
-			return err
+			errs = append(errs, err)
+			continue
 		}
-		if err := overlay.Write(dir, storeDir, rel, b); err != nil {
-			return err
+		write := overlay.Write
+		if trimmed[st] && !overlay.IsInbox(st.Path) && !overlay.IsCurated(st.Path) {
+			write = overlay.WriteNote
+		}
+		if err := write(dir, storeDir, rel, b); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	if len(w.quotes) > 0 {
@@ -731,16 +744,18 @@ func writeReviewLocal(dir, storeDir string, w *reviewWork) error {
 			q = append(q, x.Line()...)
 		}
 		if err := overlay.Append(dir, storeDir, overlay.QuotesRel, q); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
 	for _, l := range w.lines {
 		add = append(add, l.Line()...)
 	}
-	if len(add) == 0 {
-		return nil
+	if len(add) > 0 {
+		if err := overlay.Append(dir, storeDir, overlay.ReviewsRel, append(withNewline(nil), add...)); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return overlay.Append(dir, storeDir, overlay.ReviewsRel, append(withNewline(nil), add...))
+	return errors.Join(errs...)
 }
 
 // logReview appends the step's report line to reviewer.log in the state

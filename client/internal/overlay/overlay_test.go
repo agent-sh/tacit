@@ -377,3 +377,32 @@ func TestLoadSkipsStoreFiles(t *testing.T) {
 		t.Fatalf("facts %v errs %v", facts, errs)
 	}
 }
+
+// WriteNote writes only into an agent's own folder (a trimmed note next to
+// the note it trims), never the layer's folders, a bare name or out of the
+// overlay; a writer folder linked into the clone is refused.
+func TestWriteNoteTakesOnlyAnAgentsFolder(t *testing.T) {
+	root := t.TempDir()
+	store := filepath.Join(root, "store")
+	dir := filepath.Join(root, "local")
+	os.MkdirAll(filepath.Join(store, "user"), 0o755)
+	os.MkdirAll(dir, 0o755)
+	if err := WriteNote(dir, store, "claude@h/memory/users-x/a-trimmed.md", []byte("x")); err != nil {
+		t.Fatalf("WriteNote into an agent's folder: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "claude@h", "memory", "users-x", "a-trimmed.md")); err != nil || string(b) != "x" {
+		t.Fatalf("written: %q %v", b, err)
+	}
+	for _, rel := range []string{"inbox/dreamer@h/a.md", "curated/user/a.md", "claude@h", "a.md", "claude@h/../curated/user/a.md", "../claude@h/a.md", "/claude@h/a.md"} {
+		if err := WriteNote(dir, store, rel, []byte("x")); !errors.Is(err, errEscape) {
+			t.Fatalf("WriteNote(%q): %v, want errEscape", rel, err)
+		}
+	}
+	os.Symlink(filepath.Join(store, "user"), filepath.Join(dir, "codex@h"))
+	if err := WriteNote(dir, store, "codex@h/a-trimmed.md", []byte("x")); !errors.Is(err, ErrInside) {
+		t.Fatalf("WriteNote through a linked writer dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(store, "user", "a-trimmed.md")); err == nil {
+		t.Fatal("written into the clone")
+	}
+}

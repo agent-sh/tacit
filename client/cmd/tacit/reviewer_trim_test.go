@@ -13,6 +13,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/lint"
+	"github.com/agent-sh/tacit/client/internal/overlay"
 	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/record"
 	"github.com/agent-sh/tacit/client/internal/search"
@@ -344,5 +345,61 @@ func TestOwnerSettlesNeedsTheirWords(t *testing.T) {
 	elsewhere := &fact.Fact{Path: "inbox/claude@h/e.md", Meta: fact.Meta{Name: "e", Description: "always use the latest stable python release", Scope: "projects/y"}}
 	if got := settles(elsewhere); got != "" {
 		t.Fatalf("another folder's words settled it: %q", got)
+	}
+}
+
+// On this machine's layer an imported memory sits in its agent's folder
+// (local/claude@h/memory/...): the trimmed note is written beside it, and the
+// statement and the ledger's verdicts are written too (a refused trim once
+// cost the whole step's verdicts).
+func TestWriteReviewLocalWritesATrimInTheAgentsFolder(t *testing.T) {
+	stubScrump(t)
+	root := t.TempDir()
+	dir, storeDir := filepath.Join(root, "local"), filepath.Join(root, "store")
+	os.MkdirAll(dir, 0o700)
+	os.MkdirAll(storeDir, 0o700)
+	note := &fact.Fact{Path: "local/claude@h/memory/users-x/wrx-cap.md", Meta: fact.Meta{Name: "wrx-cap", Description: "wrx GPUs always run at 250 W; measured 2% slower than 300 W", Type: "design_decision", Scope: "machines/wrx",
+		Source: fact.Source{Harness: "claude", Host: "h", Kind: "observed", Session: "s1"}, Created: "2026-10-20"}, Body: "wrx GPUs always run at 250 W. Measured 2% slower than 300 W."}
+	msgs := []agentreview.Msg{
+		{Role: "user", Owner: true, Text: "cap the gpus at 250 w for now, the fans are too loud", At: "2026-10-19T08:00:00Z"},
+		{Role: "assistant", Text: "Measured: 250 W is about 2% slower than 300 W."},
+	}
+	tr := &agentreview.Trim{
+		Claims:  []ledger.Claim{{Text: "wrx GPUs run at 250 W", Cites: []int{1}}, {Text: "Measured 2% slower than 300 W", Cites: []int{2}}},
+		Removed: []ledger.Removed{{Text: "always", Reason: "he said for now"}},
+		OneOff:  &agentreview.OneOff{Words: "cap the gpus at 250 w for now", Line: 1, Context: "the fans were too loud"},
+	}
+	res := agentreview.Result{Line: ledger.Review{Note: note.Path, Name: note.Meta.Name, Verdict: ledger.VerdictUncertain, By: ledger.ByTacit, Session: "claude:s1", At: "2026-10-25T00:00:00Z"},
+		Conv: agentreview.Conversation{Harness: "claude", Session: "s1"}, Called: true, Trim: tr, Msgs: msgs}
+	w := &reviewWork{supersede: map[string]string{}}
+	if _, _, ok := applyTrim(w, note, res, nil, true, true); !ok || len(w.trimmed) != 1 || len(w.statements) != 1 {
+		t.Fatalf("applyTrim: %+v", w)
+	}
+	if err := writeReviewLocal(dir, storeDir, w); err != nil {
+		t.Fatalf("writeReviewLocal: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "claude@h", "memory", "users-x", "wrx-cap-trimmed.md")); err != nil {
+		t.Fatalf("the trimmed note: %v", err)
+	}
+	rel := strings.TrimPrefix(w.statements[0].Path, overlay.Prefix)
+	if !strings.HasPrefix(rel, overlay.CuratedDir+"/") {
+		t.Fatalf("statement path %s", rel)
+	}
+	if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel))); err != nil {
+		t.Fatalf("the statement: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(overlay.ReviewsRel)))
+	if err != nil || !strings.Contains(string(b), `"verdict":"trimmed"`) || !strings.Contains(string(b), `"verdict":"replaced"`) {
+		t.Fatalf("the ledger: %v %s", err, b)
+	}
+	// A trim that cannot be written (here a path out of the agents' folders)
+	// is an error, and the verdicts are written all the same.
+	w2 := &reviewWork{lines: []ledger.Review{{Note: "local/claude@h/x.md", Name: "x", Verdict: ledger.VerdictCorrect, By: ledger.ByTacit, At: "2026-10-25T00:00:00Z"}},
+		trimmed: []*fact.Fact{{Path: "local/x-trimmed.md", Meta: fact.Meta{Name: "x-trimmed", Description: "d", Type: "design_decision", Scope: "user"}, Body: "b"}}}
+	if err := writeReviewLocal(dir, storeDir, w2); err == nil {
+		t.Fatal("a trim out of the agents' folders was written")
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, filepath.FromSlash(overlay.ReviewsRel))); !strings.Contains(string(b), `"name":"x","verdict":"correct"`) {
+		t.Fatalf("the verdict was lost with the trim: %s", b)
 	}
 }

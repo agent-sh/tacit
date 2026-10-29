@@ -345,7 +345,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 	valid := 0
 	var failedAlone []string
 	retry := func(batch []*fact.Fact, err error, counts bool) bool {
-		if !errors.Is(err, modelrun.ErrInvalidResult) {
+		if !splittable(err) {
 			return false
 		}
 		if len(batch) == 1 {
@@ -365,7 +365,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 	}
 	var out runOutcome
 	fail := func(batch []*fact.Fact, pass, role, model string, err error) {
-		if errors.Is(err, modelrun.ErrInvalidResult) && len(batch) == 1 {
+		if splittable(err) && len(batch) == 1 {
 			return
 		}
 		out.Reason, out.Role, out.Model = pass+": "+modelrun.FailureKind(err), role, model
@@ -412,7 +412,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 			var err error
 			entries, err = splitChecked(ctx, &rep, "split", curate.RunCLI, o.model, splitPrompt(env, host, batch), check)
 			if err != nil {
-				if errors.Is(err, modelrun.ErrInvalidResult) {
+				if splittable(err) {
 					logInvalid(&rep, "split", err)
 					if retry(batch, err, true) {
 						continue
@@ -455,7 +455,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 			} else {
 				var rerr error
 				recoveredEntries, rerr = splitChecked(ctx, &rep, "rulings", curate.JudgeCLI, curate.JudgeModel, fmt.Sprintf(curate.RulingsPrompt, strings.Join(rulings, "\n"), curate.Render(batch)), rcheck)
-				if rerr != nil && errors.Is(rerr, modelrun.ErrInvalidResult) {
+				if rerr != nil && splittable(rerr) {
 					// Only a malformed or refused answer is split: a runner error
 					// says nothing about the notes.
 					logInvalid(&rep, "rulings", rerr)
