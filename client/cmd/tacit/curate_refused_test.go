@@ -60,7 +60,7 @@ func TestCurateRefusedBatchSaysWhatTheServerSaid(t *testing.T) {
 	if code == 0 || strings.Contains(strings.Join(r.serverFiles(), ","), "socket-fact") {
 		t.Fatalf("the refused batch landed or the run passed: exit %d\n%s", code, errs)
 	}
-	if !strings.Contains(errs, "curate: server refused the batch: tacit: system/socket-fact.md looks like it contains a secret") {
+	if !strings.Contains(errs, "curate: the batch was refused: tacit: system/socket-fact.md looks like it contains a secret") {
 		t.Fatalf("the run does not say what the server said:\n%s", errs)
 	}
 }
