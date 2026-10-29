@@ -336,3 +336,54 @@ func TestRotationRewordsClaimsOfTheOwnersAuthorityFirst(t *testing.T) {
 		t.Fatalf("lint: %v", fs)
 	}
 }
+
+// A compress on this machine's layer patches only the layer's own curated
+// facts: a member the model names that is an agent's note is left alone
+// (it once made the write go to curated/local/claude@...), and a member
+// gone since it was read is nothing to change, not an error.
+func TestRotationPlanCompressStaysInItsLayer(t *testing.T) {
+	root := t.TempDir()
+	curated := filepath.Join(root, "curated")
+	os.MkdirAll(filepath.Join(curated, "user"), 0o700)
+	const prefix = "local/curated/"
+	mk := func(path, name string) *fact.Fact {
+		f := &fact.Fact{Path: path, Meta: fact.Meta{Name: name, Description: name + " says one thing", Type: "user_preference", Scope: "user",
+			Source: fact.Source{Harness: "curator", Host: "h", Kind: "observed"}, Created: "2026-10-01"}, Body: name + " body\n"}
+		if rel, ok := strings.CutPrefix(path, prefix); ok {
+			b, err := f.Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			os.WriteFile(filepath.Join(curated, filepath.FromSlash(rel)), b, 0o600)
+		}
+		return f
+	}
+	a, b := mk(prefix+"user/a.md", "a"), mk(prefix+"user/b.md", "b")
+	note := mk("local/claude@h/memory/users-x/n.md", "n")
+	r := &rotator{local: true, host: "h", today: "2026-10-29", byName: map[string]*fact.Fact{"a": a, "b": b, "n": note}, taken: map[string]bool{}}
+	items := []rotation.Item{{Name: "a", Scope: "user"}}
+	vs := map[string]rotation.Verdict{"a": {Name: "a", Outcome: rotation.Compress, Compress: []string{"b", "n"}, Evidence: "one thing",
+		New: &rotation.NewFact{Name: "ab", Description: "a and b say one thing", Type: "user_preference", Body: "one thing"}}}
+	files, _, _, _, err := r.plan(curated, prefix, []*fact.Fact{a}, items, vs, map[string]bool{"a": true})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	for rel := range files {
+		if strings.Contains(rel, "@") || strings.HasPrefix(rel, "local/") {
+			t.Fatalf("plan writes %s: %v", rel, sortedFileKeys(files))
+		}
+	}
+	if _, ok := files["user/b.md"]; !ok {
+		t.Fatalf("the layer's member was not superseded: %v", sortedFileKeys(files))
+	}
+	// b gone since it was read (deduped): the compress still plans, without it.
+	os.Remove(filepath.Join(curated, "user", "b.md"))
+	r.taken = map[string]bool{}
+	files, _, _, _, err = r.plan(curated, prefix, []*fact.Fact{a}, items, vs, map[string]bool{"a": true})
+	if err != nil {
+		t.Fatalf("plan with a member gone: %v", err)
+	}
+	if _, ok := files["user/b.md"]; ok {
+		t.Fatalf("a gone member was written back: %v", sortedFileKeys(files))
+	}
+}

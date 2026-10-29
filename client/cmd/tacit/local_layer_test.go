@@ -836,3 +836,45 @@ func TestLocalDreamDoesNotSync(t *testing.T) {
 		t.Fatal("the local dream fetched")
 	}
 }
+
+// The model's safety filter refusing a batch is the notes', not the route's:
+// the batch is split down to the note it refuses, the other notes are
+// curated, and the route does not back off (a refused batch once held its
+// notes back run after run).
+func TestLocalCurateSplitsARefusedBatch(t *testing.T) {
+	r := newLocalRig(t)
+	host := store.ShortHost()
+	notes := []*fact.Fact{
+		dream.ToFact(dream.Extracted{Description: "The walrus fixture driver listens on port 7790 on this machine", Type: "machine_fact", Kind: "observed"}, "", host, "s9"),
+		dream.ToFact(dream.Extracted{Description: "PLANTED-REFUSE the incident notes for the walrus host", Type: "machine_fact", Kind: "observed"}, "", host, "s9"),
+	}
+	if _, err := persistLocalDreamWindow(r.s, notes, nil); err != nil {
+		t.Fatal(err)
+	}
+	fake := filepath.Join(r.root, "fake-refusing-cli")
+	os.WriteFile(fake, []byte(`#!/bin/sh
+in=$(cat)
+printf '%s\n\036\n' "$in" >> "$FIXTURE_PROMPTS"
+case "$in" in
+*PLANTED-REFUSE*) printf '%s\n' '{"is_error":true,"result":"API Error: Opus 5.5'"'"'s safeguards flagged this session (https://www.anthropic.com/legal/aup). Try rephrasing the request in a new session or change your model."}'; exit 1 ;;
+*"OWNER RULINGS already extracted"*) printf '%s\n' '{"result":"[]","total_cost_usd":0.01}' ;;
+*) printf '%s\n' "$FIXTURE_SPLIT" ;;
+esac
+`), 0o700)
+	t.Setenv("TACIT_CLAUDE_COMMAND", fake)
+	r.split(map[string]any{"origin": notes[0].Meta.Name, "name": "walrus-driver-port", "description": "The walrus fixture driver listens on port 7790 on this machine", "type": "machine_fact", "scope": "user", "kind": "observed", "body": "Port 7790.", "applies_to": map[string]any{}})
+	r.judge()
+	runCurate(nil)
+	r.untouched()
+	if _, err := os.Stat(filepath.Join(r.local, "curated", "user", "walrus-driver-port.md")); err != nil {
+		t.Fatalf("the note the model did not refuse was not curated: %v\nprompts: %d", err, r.promptCount())
+	}
+	var cst curatorState
+	b, _ := os.ReadFile(filepath.Join(platform.StateDir(r.home), localCuratorState))
+	if json.Unmarshal(b, &cst) != nil || cst.Failed[notes[1].Meta.Name] != 1 {
+		t.Fatalf("the refused note was not counted as failing alone: %s", b)
+	}
+	if b, err := os.ReadFile(filepath.Join(platform.StateDir(r.home), "curate-local-backoff.json")); err == nil && strings.Contains(string(b), "refusal") {
+		t.Fatalf("a content refusal backed the route off: %s", b)
+	}
+}

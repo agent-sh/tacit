@@ -858,6 +858,9 @@ func (r *rotator) plan(dir, prefix string, batch []*fact.Fact, items []rotation.
 	}
 	patch := func(f *fact.Fact, set func(m *fact.Meta)) error {
 		cur, data, err := read(f)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil // gone since (deduped or superseded): nothing to change
+		}
 		if err != nil {
 			return err
 		}
@@ -942,7 +945,9 @@ func (r *rotator) plan(dir, prefix string, batch []*fact.Fact, items []rotation.
 			nf := v.New
 			members := []*fact.Fact{f}
 			for _, n := range v.Compress {
-				if m := r.byName[n]; m != nil && m != f {
+				// Only facts of the layer being written: on this machine's layer
+				// an agent's note or a store fact is never patched.
+				if m := r.byName[n]; m != nil && m != f && strings.HasPrefix(m.Path, prefix) {
 					members = append(members, m)
 				}
 			}

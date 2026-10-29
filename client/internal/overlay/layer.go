@@ -111,6 +111,32 @@ func landsInside(dir, storeDir, full string) error {
 	return nil
 }
 
+// WriteNote puts data at rel in an agent's own folder of the overlay
+// (<harness>@<host>/..., where Add writes): a trimmed note sits next to the
+// note it trims. Any other path is refused, as are the layer's own folders.
+func WriteNote(dir, storeDir, rel string, data []byte) error {
+	if dir == "" {
+		return errors.New("no home directory for the local overlay")
+	}
+	if !Outside(dir, storeDir) {
+		return ErrInside
+	}
+	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(rel)))
+	first, _, _ := strings.Cut(clean, "/")
+	if clean != rel || filepath.IsAbs(rel) || strings.HasPrefix(clean, "../") || clean == ".." ||
+		!strings.Contains(first, "@") || !strings.Contains(clean, "/") {
+		return fmt.Errorf("%w: %s", errEscape, rel)
+	}
+	full := filepath.Join(dir, filepath.FromSlash(clean))
+	if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+		return err
+	}
+	if err := landsInside(dir, storeDir, full); err != nil {
+		return err
+	}
+	return writeAtomic(full, data)
+}
+
 // Write puts data at rel in the overlay (inbox/... or curated/...),
 // atomically: a temporary file in the same directory, synced, renamed into
 // place, so a killed run leaves the old file or the new one. It refuses an
@@ -126,6 +152,12 @@ func Write(dir, storeDir, rel string, data []byte) error {
 	if err := landsInside(dir, storeDir, full); err != nil {
 		return err
 	}
+	return writeAtomic(full, data)
+}
+
+// writeAtomic writes data to full through a synced temporary file in the
+// same directory, renamed into place.
+func writeAtomic(full string, data []byte) error {
 	f, err := os.CreateTemp(filepath.Dir(full), ".tacit-*")
 	if err != nil {
 		return err

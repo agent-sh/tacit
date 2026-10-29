@@ -183,7 +183,16 @@ func (g *runGuard) admit(ctx context.Context, scheduled bool) bool {
 // an invalid answer is the batch's (bisection, the one retry), and a run
 // that ran out of its own time stopped, it did not fail.
 func routeFailure(ctx context.Context, err error) bool {
-	return err != nil && !errors.Is(err, modelrun.ErrInvalidResult) && ctx.Err() == nil
+	return err != nil && !splittable(err) && ctx.Err() == nil
+}
+
+// splittable is a failure that belongs to the notes sent, not the route: a
+// malformed or refused answer, or the model's safety filter refusing the
+// prompt (the same notes are refused every time, so the run splits the batch
+// down to the note it refuses, which is then set aside like a note that fails
+// alone, while the route keeps working for the other notes).
+func splittable(err error) bool {
+	return errors.Is(err, modelrun.ErrInvalidResult) || modelrun.FailureKind(err) == "refusal"
 }
 
 // failed records that a model call of this run failed on its route.
