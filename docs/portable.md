@@ -269,7 +269,7 @@ Changes to the release workflow, archive builder or installer scripts run native
 
 `stale_workers` in YAML or `TACIT_STALE_WORKERS` sets how many facts the curator's stale step checks at once (default 4). Each runs its own git commands against the checkouts, tens of thousands per run on a large store, so a machine that does other work sets 1.
 
-`dream_max_runtime` in YAML or `TACIT_DREAM_MAX_RUNTIME` controls the extraction/persistence phase of a batch. Its existing default is `45m`. `tacit dream --max-runtime 1h` overrides it for a run; `0` disables the batch limit while per-attempt deadlines still apply. Preparation and pending-note recovery retain their separate bounds.
+`dream_max_runtime` in YAML or `TACIT_DREAM_MAX_RUNTIME` controls the extraction/persistence phase of a batch. Its existing default is `45m`. `tacit dream --max-runtime 1h` overrides it for a run; `0` disables the batch limit while per-attempt deadlines still apply. Preparation and pending-note recovery retain their separate bounds. The installed units stop a run after 2h30min (`TimeoutStartSec=`; on Windows the task's `ExecutionTimeLimit`), above these limits at their defaults; raise it with them.
 
 `dream_agent_windows` in YAML or `TACIT_DREAM_AGENT_WINDOWS` decides what the dreamer does with a window that holds no turn of the owner's: `all` (the default) dreams it, `recent:<days>` only when it is that recent, `none` never. `tacit dream --agent-windows none` overrides it for a run. A passed-over window moves its transcript's cursor like a window with nothing to extract, and the run's summary counts it. Rules: SPEC.md "Owner windows and agent windows".
 
