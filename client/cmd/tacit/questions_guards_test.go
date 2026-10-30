@@ -13,6 +13,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
 	"github.com/agent-sh/tacit/client/internal/platform"
+	"github.com/agent-sh/tacit/client/internal/store"
 )
 
 // The guards of Closing questions (SPEC.md): what no closure and no moot
@@ -715,6 +716,52 @@ func TestAClosureTheStoreNeverGotWaitsAgain(t *testing.T) {
 	}
 	if closed, _ := questionClosures(t.TempDir()); closed != nil {
 		t.Fatalf("a missing log read as %v", closed)
+	}
+	// An empty log, as one read while a write rewrites it, too.
+	os.WriteFile(filepath.Join(dir, "review", "decisions.jsonl"), nil, 0o644)
+	if closed, reopened := questionClosures(dir); closed != nil || reopened != nil {
+		t.Fatalf("an empty log read as %v %v", closed, reopened)
+	}
+}
+
+// The reviewer step reads the closures in its queue section, after its model
+// calls, not when it sets its options: a closure that lands meanwhile is in
+// what it reads.
+func TestTheReviewerStepReadsClosuresInItsQueueSection(t *testing.T) {
+	stubScrump(t)
+	rs := questionStore(t, map[string]string{"a": ""}, "")
+	var o reviewOpts
+	gateOpts(context.Background(), &o, rs.s.Dir, nil, false)
+	if o.closuresFrom != rs.s.Dir || o.closed != nil || o.reopened != nil {
+		t.Fatalf("the options carry closures read before the model calls: from %q, %v %v", o.closuresFrom, o.closed, o.reopened)
+	}
+}
+
+// A closure whose deadline runs out before its commit made none: nothing it
+// wrote stays in the clone, and the question waits in the queue again. Here
+// the deadline runs out in the store's mask, before anything is staged.
+func TestAClosureWhoseDeadlineRunsOutKeepsNothing(t *testing.T) {
+	stubScrump(t)
+	rs := questionStore(t, map[string]string{"made-from-note": "origin: the-note\n"}, "")
+	home := questionsHome(t, rs)
+	item := queueNoteQuestion(t, home, "made-from-note", time.Now())
+	prev := store.Redact
+	store.Redact = func(ctx context.Context, _ []string) ([]string, error) { <-ctx.Done(); return nil, ctx.Err() }
+	t.Cleanup(func() { store.Redact = prev })
+	head := gitIn(t, rs.s.Dir, "rev-parse", "HEAD")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := closeReviewerQuestion(ctx, rs, wrongOp(item.ID), item); err == nil || strings.Contains(err.Error(), "next push") {
+		t.Fatalf("a closure past its deadline: %v", err)
+	}
+	if gitIn(t, rs.s.Dir, "rev-parse", "HEAD") != head {
+		t.Fatal("a commit was made")
+	}
+	if st := strings.TrimSpace(gitIn(t, rs.s.Dir, "status", "--porcelain")); st != "" {
+		t.Fatalf("the closure's files stayed in the clone: %q", st)
+	}
+	if got, _ := agentreview.Load(agentreview.Path(platform.StateDir(home))); got.ByID(item.ID).State != agentreview.StateOpen {
+		t.Fatalf("the question did not wait again: %+v", got.ByID(item.ID))
 	}
 }
 
