@@ -163,7 +163,7 @@ func (g *goneProbe) find(f *fact.Fact) []string {
 		if start > 0 && text[start-1] == ':' {
 			continue // host:/path, or one of a list of paths
 		}
-		if len(p) < 4 || goneTemplate.MatchString(p) || strings.Contains(p, ".bak") || strings.Contains(strings.ToLower(p), "backup") || strings.HasSuffix(p, "-") || strings.HasSuffix(p, "_") {
+		if len(p) < 4 || strings.Contains(p, ".bak") || strings.Contains(strings.ToLower(p), "backup") || strings.HasSuffix(p, "-") || strings.HasSuffix(p, "_") {
 			continue
 		}
 		// A glob or a placeholder right after the path, after its dots
@@ -186,12 +186,18 @@ func (g *goneProbe) find(f *fact.Fact) []string {
 		if goneExampleEnd.MatchString(strings.TrimRight(text[:lo], " ,")) {
 			continue // "eg, ~/x": the example marker ends the clause before
 		}
-		if !g.gone(p) {
-			continue
-		}
 		// A quoted path the regex cut short (at a space): the whole quote
-		// is the path when it is there.
-		if q, ok := quoted(text, start, end); ok && !g.gone(q) {
+		// is the path, looked up and named as such. In a code span the
+		// whole span is a path only when it is there (it is most often a
+		// command line, its first word the path).
+		if q, code, ok := quoted(text, start, end); ok {
+			if !code {
+				p = q
+			} else if !g.gone(q) {
+				continue
+			}
+		}
+		if !g.gone(p) || goneTemplate.MatchString(p) {
 			continue
 		}
 		out = append(out, p)
@@ -214,18 +220,19 @@ func (g *goneProbe) gone(p string) bool {
 }
 
 // quoted is the text from the path at text[start:end] to the quote that
-// closes the one right before it, when the quote does not close at end.
-func quoted(text string, start, end int) (string, bool) {
+// closes the one right before it, when the quote does not close at end;
+// code says the quote is a code span's backtick.
+func quoted(text string, start, end int) (q string, code, ok bool) {
 	open, _ := utf8.DecodeLastRuneInString(text[:start])
 	closer := map[rune]string{'\'': "'", '"': `"`, '`': "`", '“': "”", '‘': "’"}[open]
 	if closer == "" || strings.HasPrefix(text[end:], closer) {
-		return "", false
+		return "", false, false
 	}
 	i := strings.Index(text[end:], closer)
 	if i < 0 {
-		return "", false
+		return "", false, false
 	}
-	return text[start : end+i], true
+	return text[start : end+i], open == '`', true
 }
 
 // clauseStart is where the clause that ends text begins: after its last

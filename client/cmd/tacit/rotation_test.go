@@ -452,7 +452,7 @@ func TestRotationTakesFactsWhosePathIsGoneFirst(t *testing.T) {
 // are gone"). Each case fails when its rule is taken out.
 func TestGonePathsRules(t *testing.T) {
 	home := t.TempDir()
-	for _, d := range []string{"here", "here/my docs", "here/café/notes"} {
+	for _, d := range []string{"here", "here/my docs", "here/café/notes", "here/our"} {
 		os.MkdirAll(filepath.Join(home, filepath.FromSlash(d)), 0o755)
 	}
 	os.WriteFile(filepath.Join(home, "here", "main.go"), nil, 0o644)
@@ -511,6 +511,8 @@ func TestGonePathsRules(t *testing.T) {
 		{"Keep it in ~/a", "machines/rig", "", ""},
 		// a whole path the regex once cut
 		{"Notes are in '~/here/my docs'", "machines/rig", "", ""},
+		{"Notes are in '~/here/our notes'", "machines/rig", "", "~/here/our notes"},
+		{"Notes are in `~/here/my docs`", "machines/rig", "", ""},
 		{"Notes are in “~/here/my docs”", "machines/rig", "", ""},
 		{"Run `~/gone/tool --flag`", "machines/rig", "", "~/gone/tool"},
 		{"Notes are in ~/here/café/notes", "machines/rig", "", ""},
