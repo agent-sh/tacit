@@ -88,3 +88,18 @@ Rule: when code can decide, code decides, and a scorer (the opt-in Jev selector 
 | R4: a repo-anchored prompt keeps only that repo's facts plus user/system standards | 11 wrong or unlabelled, 0 useful | 14 wrong or unlabelled, **2 useful** | no |
 
 Sealed test, primary labels, frozen calibration thresholds (useful / wrong / unlabelled picks, of 6 findable useful): today's selection 5 / 2 / 12; Jev 5 / 0 / 1; Jev behind R1-R4 3 / 0 / 3; Amazon Nova Micro on Bedrock 4 / 0 / 1, behind R1-R4 3 / 0 / 5. R3 and R4 removed useful facts on unseen prompts, so they are not shipped. R1 ships as part of the harness-turn check: a prompt with the word "literal" and an operation (upper/lowercase form, reverse, spell, length, count characters/letters/words) gets no facts and no scorer call. Either word alone does not trigger it (`TestPromptHookSkipsSelfContainedTextOperations`).
+
+## Real traffic, graded (2026-10-30)
+
+The precision checks above use authored prompts. This one grades what the hooks printed in the author's own sessions and replays it with `delivery/labelled_replay.py` (method and fidelity: [LABELLED-REPLAY.md](delivery/LABELLED-REPLAY.md)). A line is useful (R) when it bears on the request, weak (W) when it is on the topic but not needed, noise (N) otherwise; one rater, with a blind second rater on 227 lines (kappa 0.54 to 0.63). Release 0.9.14 replayed at each call's own store commit:
+
+| set | calls | lines | useful | weak | noise |
+|---|---:|---:|---:|---:|---:|
+| owner prompts, 3 days (10-27 to 10-30) | 93 | 238 | 55 (23%) | 62 | 117 (50%, 44-56) |
+| tool-call pushes, 3 days | 122 | 124 | 30 (24%) | 39 | 55 (44%, 36-53) |
+| owner prompts, 14 days | 68 | 171 | 39 | 36 | 85 (53% of 160 graded) |
+| tool-call pushes, 14 days | 65 | 65 | 13 | 18 | 34 (52%) |
+
+Recall: of 22 owner prompts of the 3 days that a fact in the store answered, 10 got one.
+
+Where the prompt block's noise comes from, on the 3 days (an analysis build that logs why each line got in, not shipped): the ranked lines are 201 of the 238 and 45% noise; the action line 28 lines, 2 useful and 20 noise; the metadata line 5, all noise; the rule slot 4, 1 useful. Ranked lines whose only coherence was the anchor (no two name matches, no phrase) are 58 lines, 10 useful and 37 noise: the anchor is the request's least frequent known word, and in a request of common words that is a word like "out" (in 1,392 facts).
