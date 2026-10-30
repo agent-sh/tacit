@@ -32,6 +32,7 @@ import (
 func runLinks(args []string) int {
 	fs := flag.NewFlagSet("links", flag.ExitOnError)
 	dry := fs.Bool("dry-run", false, "print what would be repaired, write nothing (no sync)")
+	restore := fs.Bool("restore", false, "put back the links to what a fact replaced that runs of this step before v0.9.17 unwrapped (read from the step's commits); repairs nothing else")
 	fs.Parse(args)
 	s, err := store.Default()
 	if err != nil || !s.Exists() {
@@ -44,7 +45,7 @@ func runLinks(args []string) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	rep, err := linksStep(ctx, s, *dry, time.Now)
+	rep, err := linksStepFor(ctx, s, *dry, time.Now, *restore)
 	printLinks(rep, *dry)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "links:", err)
@@ -120,6 +121,13 @@ type linksTree struct {
 // held when a review file already has the line), and what in the clone is not
 // the step's to touch.
 func readLinksTree(ctx context.Context, s *store.Store) (*linksTree, error) {
+	return readLinksTreeFor(ctx, s, false)
+}
+
+// readLinksTreeFor is readLinksTree; with restore its plan is the links to put
+// back (restoreFixes) and nothing else: no repair, no owner line, nothing
+// adopted.
+func readLinksTreeFor(ctx context.Context, s *store.Store, restore bool) (*linksTree, error) {
 	facts, perrs, err := fact.Walk(s.Dir)
 	if err != nil {
 		return nil, err
@@ -146,6 +154,13 @@ func readLinksTree(ctx context.Context, s *store.Store) (*linksTree, error) {
 		}
 	}
 	t.readDirt(ctx, s, planner, untracked)
+	if restore {
+		fixes, err := restoreFixes(ctx, s, planner, facts)
+		if err != nil {
+			return nil, err
+		}
+		t.plan, t.rulings, t.adopt = &links.Plan{Fixes: fixes}, nil, nil
+	}
 	return t, nil
 }
 
@@ -186,8 +201,14 @@ func (t *linksTree) readDirt(ctx context.Context, s *store.Store, planner *links
 // fresh clone (the repair is a function of the files, so it is recomputed, not
 // replayed), and on any failure the clone is put back as it was.
 func linksStep(ctx context.Context, s *store.Store, dry bool, now func() time.Time) (*linksReport, error) {
+	return linksStepFor(ctx, s, dry, now, false)
+}
+
+// linksStepFor is linksStep; with restore it puts back the links older runs
+// unwrapped (readLinksTreeFor) through the same locked write.
+func linksStepFor(ctx context.Context, s *store.Store, dry bool, now func() time.Time, restore bool) (*linksReport, error) {
 	if dry {
-		t, err := readLinksTree(ctx, s)
+		t, err := readLinksTreeFor(ctx, s, restore)
 		if err != nil {
 			return nil, err
 		}
@@ -198,7 +219,7 @@ func linksStep(ctx context.Context, s *store.Store, dry bool, now func() time.Ti
 	var rep *linksReport
 	var err error
 	for attempt := 0; ; attempt++ {
-		rep, err = linksLocked(ctx, s, now)
+		rep, err = linksLocked(ctx, s, now, restore)
 		if errors.Is(err, store.ErrBehind) && attempt < 3 {
 			continue
 		}
@@ -224,7 +245,7 @@ func (r *linksReport) fill(t *linksTree) {
 	sort.Slice(r.NotDone, func(i, j int) bool { return r.NotDone[i].Path < r.NotDone[j].Path })
 }
 
-func linksLocked(ctx context.Context, s *store.Store, now func() time.Time) (*linksReport, error) {
+func linksLocked(ctx context.Context, s *store.Store, now func() time.Time, restore bool) (*linksReport, error) {
 	rep := &linksReport{}
 	err := s.WithLock(ctx, func() error {
 		if err := s.SyncLocked(ctx); err != nil {
@@ -233,7 +254,7 @@ func linksLocked(ctx context.Context, s *store.Store, now func() time.Time) (*li
 				return fmt.Errorf("sync: %w", err)
 			}
 		}
-		t, err := readLinksTree(ctx, s)
+		t, err := readLinksTreeFor(ctx, s, restore)
 		if err != nil {
 			return err
 		}
@@ -386,12 +407,15 @@ func linksLocked(ctx context.Context, s *store.Store, now func() time.Time) (*li
 }
 
 func linksMessage(fixes []*links.Fix, raised int) string {
-	var re, un int
+	var re, un, back int
 	for _, fx := range fixes {
 		for _, e := range fx.Edits {
-			if e.To != "" {
+			switch {
+			case e.Why == links.Restored:
+				back += e.Count
+			case e.To != "":
 				re += e.Count
-			} else {
+			default:
 				un += e.Count
 			}
 		}
@@ -399,6 +423,9 @@ func linksMessage(fixes []*links.Fix, raised int) string {
 	var parts []string
 	if re+un > 0 {
 		parts = append(parts, fmt.Sprintf("%d link(s) in %d fact(s) repaired (%d rewritten, %d unwrapped)", re+un, len(fixes), re, un))
+	}
+	if back > 0 {
+		parts = append(parts, fmt.Sprintf("%d link(s) to what the fact replaced put back in %d fact(s), unwrapped by older runs", back, len(fixes)))
 	}
 	if raised > 0 {
 		parts = append(parts, fmt.Sprintf("%d ruling link(s) put to the owner", raised))
@@ -652,7 +679,9 @@ func writeLinks(out, errw io.Writer, rep *linksReport, dry bool) {
 	}
 	for _, fx := range fixes {
 		for _, e := range fx.Edits {
-			if e.To != "" {
+			if e.Why == links.Restored {
+				fmt.Fprintf(out, "links: %s [[%s]] in %s (%s)\n", say("put back", "would put back"), e.Target, fx.Path, e.Detail)
+			} else if e.To != "" {
 				fmt.Fprintf(out, "links: %s [[%s]] to [[%s]] in %s (%s)\n", say("rewrote", "would rewrite"), e.Target, e.To, fx.Path, e.Detail)
 			} else {
 				fmt.Fprintf(out, "links: %s [[%s]] to plain text in %s (%s)\n", say("unwrapped", "would unwrap"), e.Target, fx.Path, e.Detail)
@@ -695,15 +724,31 @@ func writeLinks(out, errw io.Writer, rep *linksReport, dry bool) {
 		}
 	}
 	// The totals count what was committed (what would be, in a dry run).
-	var re, un int
+	var re, un, back int
 	for _, fx := range fixes {
 		for _, e := range fx.Edits {
-			if e.To != "" {
+			switch {
+			case e.Why == links.Restored:
+				back += e.Count
+			case e.To != "":
 				re += e.Count
-			} else {
+			default:
 				un += e.Count
 			}
 		}
+	}
+	if back > 0 {
+		fmt.Fprintf(out, "links: %d link(s) to what the fact replaced %s in %d fact(s)\n", back, say("put back", "would put back"), len(fixes))
+		planned := 0
+		for _, fx := range rep.Plan.Fixes {
+			for _, e := range fx.Edits {
+				planned += e.Count
+			}
+		}
+		if n := planned - back; n > 0 {
+			fmt.Fprintf(out, "links: %d link(s) to put back %s\n", n, say("not done", "would not be done"))
+		}
+		return
 	}
 	held := 0
 	for _, r := range rep.Rulings {
@@ -723,4 +768,86 @@ func writeLinks(out, errw io.Writer, rep *linksReport, dry bool) {
 	}
 	fmt.Fprintf(out, "links: %d link(s) in %d fact(s) %s (%d rewritten, %d unwrapped); %d ruling link(s) %s, %d already raised%s; %d generated fact(s) left to their generator\n",
 		re+un, len(fixes), say("repaired", "would repair"), re, un, len(raised), say("put to the owner", "to put to the owner"), held, notDone, len(rep.Plan.Generated))
+}
+
+// restoreFixes plans `tacit links --restore`: for every commit of this step
+// (links.CommitPrefix), oldest first, each curated fact file it changed that
+// is not a ruling or a generated fact: the links it unwrapped to plain text
+// whose target the fact replaced (planner.Replaced, read on the store as it
+// is now), put back where the line the run wrote is still there word for
+// word (links.Restore). Runs before v0.9.17 unwrapped such links as dead.
+func restoreFixes(ctx context.Context, s *store.Store, planner *links.Planner, facts []*fact.Fact) ([]*links.Fix, error) {
+	byPath := map[string]*fact.Fact{}
+	for _, f := range facts {
+		if !f.InInbox() && !isRuling(f) && !isGenerated(f) {
+			byPath[f.Path] = f
+		}
+	}
+	log, err := store.Git(ctx, s.Dir, "log", "--reverse", "--format=%H %ad", "--date=short", "--grep=^"+links.CommitPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("the step's commits: %w", err)
+	}
+	cur := map[string][]byte{}
+	edits := map[string]map[string]*links.Edit{}
+	var order []string
+	for _, line := range strings.Split(strings.TrimSpace(log), "\n") {
+		sha, day, ok := strings.Cut(line, " ")
+		if !ok {
+			continue
+		}
+		changed, err := store.Git(ctx, s.Dir, "diff-tree", "--no-commit-id", "--name-only", "-r", sha)
+		if err != nil {
+			return nil, fmt.Errorf("commit %s: %w", sha[:9], err)
+		}
+		for _, rel := range strings.Split(strings.TrimSpace(changed), "\n") {
+			f := byPath[rel]
+			if f == nil {
+				continue
+			}
+			before, err1 := store.Git(ctx, s.Dir, "show", sha+"^:"+rel)
+			after, err2 := store.Git(ctx, s.Dir, "show", sha+":"+rel)
+			if err1 != nil || err2 != nil {
+				continue // the commit added or removed it: no repair
+			}
+			data, seen := cur[rel]
+			if !seen {
+				if data, err = os.ReadFile(filepath.Join(s.Dir, filepath.FromSlash(rel))); err != nil {
+					continue
+				}
+			}
+			out, got := links.Restore([]byte(before), []byte(after), data, func(target string) bool { return planner.Replaced(f, target) })
+			if len(got) == 0 {
+				continue
+			}
+			cur[rel] = out
+			if edits[rel] == nil {
+				edits[rel] = map[string]*links.Edit{}
+				order = append(order, rel)
+			}
+			for target, n := range got {
+				e := edits[rel][target]
+				if e == nil {
+					e = &links.Edit{Target: target, To: target, Why: links.Restored, Detail: "a link to what the fact replaced, unwrapped by the run of " + day + " (" + sha[:9] + ")"}
+					edits[rel][target] = e
+				}
+				e.Count += n
+			}
+		}
+	}
+	sort.Strings(order)
+	var fixes []*links.Fix
+	for _, rel := range order {
+		f := byPath[rel]
+		fx := &links.Fix{Path: rel, Name: f.Meta.Name, Scope: f.Meta.Scope, Data: cur[rel]}
+		var targets []string
+		for t := range edits[rel] {
+			targets = append(targets, t)
+		}
+		sort.Strings(targets)
+		for _, t := range targets {
+			fx.Edits = append(fx.Edits, *edits[rel][t])
+		}
+		fixes = append(fixes, fx)
+	}
+	return fixes, nil
 }

@@ -279,6 +279,13 @@ func (p *Planner) History(f *fact.Fact, target string) bool {
 	return false
 }
 
+// Replaced reports a target f replaced, directly or through another fact:
+// its superseded_by chain reaches f. A link from f to it says where f came
+// from, whether or not f still holds it (History is the one it holds).
+func (p *Planner) Replaced(f *fact.Fact, target string) bool {
+	return p.ix.replacedBy(target, f.Meta.Name)
+}
+
 // Compute plans the repair of every curated fact in facts (fact.Walk of root).
 func Compute(root string, facts []*fact.Fact, isRuling func(*fact.Fact) bool) (*Plan, error) {
 	return NewPlanner(root, facts, isRuling, nil).Plan()

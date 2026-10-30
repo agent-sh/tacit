@@ -84,3 +84,17 @@ func TestARelabelledLinkIsNotARepair(t *testing.T) {
 		t.Errorf("a relabelled link: %+v, want that day", e)
 	}
 }
+
+// Putting back a link the step unwrapped (`tacit links --restore`) is the
+// repair the other way round: not an edit either.
+func TestAPutBackLinkDoesNotMoveTheEffectiveDate(t *testing.T) {
+	ctx := context.Background()
+	dir, f := storeWithFact(t)
+	b := &Builder{G: New(t.TempDir()), StoreDir: dir, Redact: func(in []string) ([]string, error) { return in, nil }}
+	commitFact(t, dir, "2026-09-10", "curator: fact", factText("Made from [[old-statement]]."))
+	commitFact(t, dir, "2026-09-25", repairSubject, factText("Made from old-statement."))
+	commitFact(t, dir, "2026-10-30", links.CommitPrefix+" 1 link(s) to what the fact replaced put back in 1 fact(s), unwrapped by older runs", factText("Made from [[old-statement]]."))
+	if e := b.Effective(ctx, FactRef{Fact: f}); !e.At.Equal(day(t, "2026-09-01")) || e.Why != "created" {
+		t.Errorf("after the link was put back: %+v, want the day it was created", e)
+	}
+}
