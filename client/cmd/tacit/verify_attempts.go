@@ -161,7 +161,7 @@ func (r *verifyRun) reportStranded(rs *reviewServer, tries map[string]int) {
 		fails = r.failures()
 	}
 	for _, id := range ids {
-		why := "no failure recorded (it reached the limit before v0.9.15 kept them)"
+		why := "no failure recorded (the limit was reached before v0.9.15 kept reasons, or a run was stopped during the attempt)"
 		if f, ok := fails[id]; ok {
 			why = f.Why + " (" + strings.SplitN(f.At, "T", 2)[0] + ")"
 		}
@@ -186,8 +186,10 @@ func requeueVerify(stateDir, which string, dry bool) int {
 			}
 		}
 	} else {
+		seen := map[string]bool{}
 		for _, id := range strings.Split(which, ",") {
-			if id = strings.TrimSpace(id); id != "" {
+			if id = strings.TrimSpace(id); id != "" && !seen[id] {
+				seen[id] = true
 				ids = append(ids, id)
 			}
 		}

@@ -337,17 +337,20 @@ func runVerify(args []string) int {
 	if requeueSet {
 		home, _ := os.UserHomeDir()
 		// A run holds the counters in memory and writes them back after
-		// each batch, which would undo a requeue made meanwhile.
-		release, err := tryJobLock(platform.StateDir(home), "verifier")
-		if errors.Is(err, platform.ErrBusy) {
-			fmt.Fprintln(os.Stderr, "verify: a verify run holds "+filepath.Join(platform.StateDir(home), "verifier.lock")+"; requeue once it ends")
-			return 1
+		// each batch, which would undo a requeue made meanwhile. A dry run
+		// writes nothing and needs no lock.
+		if !*dry {
+			release, err := tryJobLock(platform.StateDir(home), "verifier")
+			if errors.Is(err, platform.ErrBusy) {
+				fmt.Fprintln(os.Stderr, "verify: a verify run holds "+filepath.Join(platform.StateDir(home), "verifier.lock")+"; requeue once it ends")
+				return 1
+			}
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "verify: lock:", err)
+				return 2
+			}
+			defer release()
 		}
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "verify: lock:", err)
-			return 2
-		}
-		defer release()
 		return requeueVerify(filepath.Join(platform.StateDir(home), "verify"), *requeue, *dry)
 	}
 	if *batch < 1 || *max < 0 || *budget <= 0 {
@@ -542,14 +545,19 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 		}
 	}
 	for _, it := range rs.staleItems() {
-		if f := rs.facts[it.A.Name]; it.NeedsOwner && it.Decision == nil && it.Ask == nil && !owned[it.ID] && f != nil && !isRuling(f) {
+		if f := rs.facts[it.A.Name]; it.NeedsOwner && it.Decision == nil && it.Ask == nil && !owned[it.ID] && !owned[it.A.Name] && f != nil && !isRuling(f) {
 			live[it.ID] = true
 		}
 	}
+	dropped := false
 	for id := range tries {
 		if !live[id] {
 			delete(tries, id)
+			dropped = true
 		}
+	}
+	if dropped && !r.dry {
+		r.saveAttempts(tries) // also when no batch follows: every open finding may be at the limit
 	}
 	total, cost := 0, 0.0
 	var lastErr error
@@ -785,7 +793,7 @@ func (r *verifyRun) opsFrom(vs []verifyVerdict, inBatch map[string]reviewItem) (
 		v.Evidence, v.Fix, v.Question = red[3*i], red[3*i+1], red[3*i+2]
 		it, ok := inBatch[v.ID]
 		if !ok || seen[v.ID] {
-			fmt.Fprintln(os.Stderr, "verify: a verdict names a finding that is not in this batch, skipped")
+			fmt.Fprintln(os.Stderr, "verify: a verdict names a finding that is not in this batch, or one already answered, skipped")
 			continue
 		}
 		seen[v.ID] = true

@@ -61,7 +61,9 @@ func (r *verifyRun) staleOpen(rs *reviewServer, owned map[string]bool, tries map
 	}
 	var open []staleItem
 	for _, it := range rs.staleItems() {
-		if !it.NeedsOwner || it.Decision != nil || it.Ask != nil || owned[it.ID] || tries[it.ID] >= r.attemptsBefore {
+		// owned[name]: the owner kept or marked this fact in a pair; the page
+		// refuses an agent's mark on it (stale_review.go), so it is not sent.
+		if !it.NeedsOwner || it.Decision != nil || it.Ask != nil || owned[it.ID] || owned[it.A.Name] || tries[it.ID] >= r.attemptsBefore {
 			continue
 		}
 		if len(only) > 0 && !only[it.ID] {
@@ -248,7 +250,7 @@ func (r *verifyRun) opsFromStale(vs []verifyVerdict, inBatch map[string]staleIte
 		v.Evidence, v.Fix, v.Question, v.Was = red[4*i], red[4*i+1], red[4*i+2], red[4*i+3]
 		it, ok := inBatch[v.ID]
 		if !ok || seen[v.ID] {
-			fmt.Fprintln(os.Stderr, "verify: a verdict names a finding that is not in this batch, skipped")
+			fmt.Fprintln(os.Stderr, "verify: a verdict names a finding that is not in this batch, or one already answered, skipped")
 			continue
 		}
 		seen[v.ID] = true

@@ -9,6 +9,28 @@ import (
 	"time"
 )
 
+// sandboxVerify points everything runVerify reads at the test: a home, the
+// fixture's store, a projects directory that exists (so a real run would get
+// as far as a model call) and stand-in model CLIs that record each call and
+// fail. It returns the state directory and a check for model calls.
+func sandboxVerify(t *testing.T, store string) (state string, called func() bool) {
+	t.Helper()
+	root := t.TempDir()
+	state = filepath.Join(root, "state")
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	t.Setenv("TACIT_STATE_DIR", state)
+	t.Setenv("TACIT_STORE", store)
+	projects := filepath.Join(root, "projects")
+	os.MkdirAll(projects, 0o755)
+	t.Setenv("TACIT_PROJECTS", projects)
+	calls := filepath.Join(root, "calls")
+	fake := filepath.Join(root, "fake-cli")
+	os.WriteFile(fake, []byte("#!/bin/sh\necho called >> '"+calls+"'\nexit 1\n"), 0o700)
+	t.Setenv("TACIT_CLAUDE_COMMAND", fake)
+	t.Setenv("TACIT_CODEX_COMMAND", fake)
+	return state, func() bool { _, err := os.Stat(calls); return err == nil }
+}
+
 // A finding that keeps failing stops being sent after three attempts. The
 // run that stops it names it, says what it is about and why its last attempt
 // failed, and `tacit verify --requeue` sends it again. v0.9.14 said only how
@@ -19,6 +41,7 @@ func TestVerifyNamesStrandedFindingsAndRequeuesThem(t *testing.T) {
 	rs := clone("one")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	state, called := sandboxVerify(t, rs.s.Dir)
 	// a is already retired in favour of c, so "keep b" on "b may replace a"
 	// cannot land: a has another successor.
 	p := filepath.Join(rs.s.Dir, "system", "a.md")
@@ -27,10 +50,12 @@ func TestVerifyNamesStrandedFindingsAndRequeuesThem(t *testing.T) {
 	git(t, rs.s.Dir, "commit", "-q", "-am", "a retired by c")
 	git(t, rs.s.Dir, "push", "-q", "origin", "HEAD:main")
 	ab, dc, bc := itemFor(t, rs, "a", "b"), itemFor(t, rs, "d", "c"), itemFor(t, rs, "b", "c")
-	// A verdict that keeps a name that is neither fact; the name is shaped
-	// like a token, built here, and must reach neither the failure record
-	// nor anything the run prints.
+	// A verdict that keeps a name that is neither fact. It carries a plain
+	// marker and a token-shaped part, both built here; neither may reach the
+	// failure record or anything the run prints (the real redactor would
+	// mask the token, not the marker).
 	token := "ghp_" + strings.Repeat("Q", 36)
+	marker := "PLAINMARKER7"
 	sent := map[string]int{}
 	call := func(_ context.Context, _, prompt, _ string, _ float64) ([]verifyVerdict, string, float64, error) {
 		var vs []verifyVerdict
@@ -44,20 +69,21 @@ func TestVerifyNamesStrandedFindingsAndRequeuesThem(t *testing.T) {
 			case ab.ID:
 				vs = append(vs, verifyVerdict{ID: it.ID, Mark: "keep", Keep: "b", Evidence: "b is current"})
 			case bc.ID:
-				vs = append(vs, verifyVerdict{ID: it.ID, Mark: "keep", Keep: token, Evidence: "x"})
+				vs = append(vs, verifyVerdict{ID: it.ID, Mark: "keep", Keep: marker + token, Evidence: "x"})
 			}
 		}
-		// and one for a finding the batch does not hold, with a token id
-		vs = append(vs, verifyVerdict{ID: token, Mark: "both", Evidence: "x"})
+		// and one for a finding the batch does not hold, with a marker id
+		vs = append(vs, verifyVerdict{ID: marker + token, Mark: "both", Evidence: "x"})
 		return vs, "raw", 0.1, nil
 	}
-	state := t.TempDir()
-	t.Setenv("TACIT_STATE_DIR", state)
 	r := verifyRun{model: "m", max: 50, per: 50, budget: 1, cwd: t.TempDir(), stateDir: filepath.Join(state, "verify")}
 	var all, last string
-	for i := 0; i < 4; i++ {
+	run := func() {
 		last = captureStderr(t, func() { r.run(ctx, rs.s, call) })
 		all += last
+	}
+	for i := 0; i < 4; i++ {
+		run()
 	}
 	if sent[ab.ID] != 3 || sent[dc.ID] != 3 {
 		t.Fatalf("sent %v, want a/b and d/c 3 times each", sent)
@@ -72,15 +98,12 @@ func TestVerifyNamesStrandedFindingsAndRequeuesThem(t *testing.T) {
 			t.Fatalf("the run does not say %q:\n%s", want, last)
 		}
 	}
-	rec, err := os.ReadFile(filepath.Join(state, "verify", "failures.json"))
-	if err != nil || strings.Contains(string(rec), token) || strings.Contains(all, token) {
-		t.Fatalf("a verdict's text reached the failure record or the output: %v\n%s\n%s", err, rec, all)
-	}
-	if st, err := os.Stat(filepath.Join(state, "verify", "failures.json")); err != nil || st.Mode().Perm() != 0o600 {
-		t.Fatalf("failures.json mode: %v %v", st.Mode(), err)
+	failures := filepath.Join(state, "verify", "failures.json")
+	if st, err := os.Stat(failures); err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("failures.json mode: %v %v", st, err)
 	}
 	// A run holds the counters in memory: a requeue while one runs is
-	// refused, not undone by the run's next save.
+	// refused, not undone by the run's next save; a dry run needs no lock.
 	held, err := tryJobLock(state, "verifier")
 	if err != nil {
 		t.Fatal(err)
@@ -88,76 +111,124 @@ func TestVerifyNamesStrandedFindingsAndRequeuesThem(t *testing.T) {
 	if code := runVerify([]string{"--requeue", ab.ID}); code != 1 || r.attempts()[ab.ID] != 3 {
 		t.Fatalf("requeue during a run: exit %d, attempts %v", code, r.attempts())
 	}
+	if code := runVerify([]string{"--dry-run", "--requeue", "all"}); code != 0 || r.attempts()[ab.ID] != 3 {
+		t.Fatalf("dry requeue during a run: exit %d, attempts %v", code, r.attempts())
+	}
 	held()
-	// An empty list is a usage error, never a paid run; an id with no count
-	// is an error; a dry run writes nothing.
-	if code := runVerify([]string{"--requeue", ""}); code != 2 {
-		t.Fatalf("empty requeue: exit %d", code)
+	// An empty list is a usage error, never a run; an id with no count is
+	// an error; a repeated id is requeued once.
+	var code int
+	if errs := captureStderr(t, func() { code = runVerify([]string{"--requeue", ""}) }); code != 2 || !strings.Contains(errs, "--requeue needs all or finding ids") || called() {
+		t.Fatalf("empty requeue: exit %d, model called %v, %q", code, called(), errs)
 	}
 	if code := runVerify([]string{"--requeue", "000000000000"}); code != 1 {
 		t.Fatalf("unknown id: exit %d", code)
 	}
-	if code := runVerify([]string{"--dry-run", "--requeue", "all"}); code != 0 || r.attempts()[ab.ID] != 3 {
-		t.Fatalf("dry requeue: exit %d, attempts %v", code, r.attempts())
-	}
-	// Requeue one by id: it is sent again, the others are not.
-	if code := runVerify([]string{"--requeue", ab.ID}); code != 0 {
-		t.Fatalf("requeue exit %d", code)
-	}
-	if n := r.attempts(); n[ab.ID] != 0 || n[dc.ID] != 3 {
-		t.Fatalf("attempts after requeueing a/b: %v", n)
-	}
-	if f := r.failures(); f[ab.ID].Why != "" || f[dc.ID].Why == "" {
-		t.Fatalf("failures after requeueing a/b: %v", f)
-	}
-	r.run(ctx, rs.s, call)
-	if sent[ab.ID] != 4 || sent[dc.ID] != 3 {
-		t.Fatalf("after requeueing a/b: sent %v", sent)
-	}
-	// The owner settles d/c by hand: it is no longer counted or listed.
+	// Every finding is at the limit, so the next run sends nothing; a finding
+	// the owner settles meanwhile still loses its count on disk.
 	if err := mark(ctx, rs, dc.ID, "both"); err != nil {
 		t.Fatal(err)
 	}
-	last = captureStderr(t, func() { r.run(ctx, rs.s, call) })
-	if strings.Contains(last, dc.ID) || r.attempts()[dc.ID] != 0 {
-		t.Fatalf("a finding the owner settled is still counted: %v\n%s", r.attempts(), last)
+	before := len(sent)
+	run()
+	if r.attempts()[dc.ID] != 0 || strings.Contains(last, dc.ID) || len(sent) != before {
+		t.Fatalf("a settled finding is still counted: %v\n%s", r.attempts(), last)
+	}
+	// Requeue one by id (twice in the list): it is sent again, the others not.
+	if code := runVerify([]string{"--requeue", ab.ID + "," + ab.ID}); code != 0 {
+		t.Fatalf("requeue exit %d", code)
+	}
+	if n := r.attempts(); n[ab.ID] != 0 || n[bc.ID] != 3 {
+		t.Fatalf("attempts after requeueing a/b: %v", n)
+	}
+	if f := r.failures(); f[ab.ID].Why != "" || f[bc.ID].Why == "" {
+		t.Fatalf("failures after requeueing a/b: %v", f)
+	}
+	run()
+	if sent[ab.ID] != 4 || sent[bc.ID] != 3 {
+		t.Fatalf("after requeueing a/b: sent %v", sent)
 	}
 	// Requeue all: the rest are sent again.
 	if code := runVerify([]string{"--requeue", "all"}); code != 0 {
 		t.Fatalf("requeue all exit %d", code)
 	}
-	r.run(ctx, rs.s, call)
+	run()
 	if sent[bc.ID] != 4 {
 		t.Fatalf("after requeue all: sent %v", sent)
+	}
+	rec, _ := os.ReadFile(failures)
+	for _, s := range []string{marker, token} {
+		if strings.Contains(string(rec), s) || strings.Contains(all, s) {
+			t.Fatalf("a verdict's text %q reached the failure record or the output:\n%s\n%s", s, rec, all)
+		}
+	}
+	if called() {
+		t.Fatal("a model CLI was called")
+	}
+}
+
+// A stale finding on a fact the owner kept in a pair is theirs: the page
+// refuses an agent's mark on it, so the verifier never sends it.
+func TestVerifyLeavesAStaleFindingOnAFactTheOwnerKept(t *testing.T) {
+	stubScrump(t)
+	_, clone := reviewFixture(t)
+	rs := clone("one")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	state, _ := sandboxVerify(t, rs.s.Dir)
+	if err := mark(ctx, rs, itemFor(t, rs, "d", "c").ID, "right"); err != nil { // the owner keeps c
+		t.Fatal(err)
+	}
+	git(t, rs.s.Dir, "pull", "-q", "--rebase")
+	os.WriteFile(filepath.Join(rs.s.Dir, "review", "2026-10-02.md"), []byte("- stale? [[c]] (system) @abc1234 n=1 since=2026-10-01\n  2026-10-09 abc1234 x: subject - FOO (gone at HEAD)\n"), 0o644)
+	git(t, rs.s.Dir, "add", "-A")
+	git(t, rs.s.Dir, "commit", "-q", "-m", "stale c")
+	git(t, rs.s.Dir, "push", "-q", "origin", "HEAD:main")
+	rs.loadFacts()
+	var sid string
+	for _, it := range rs.staleItems() {
+		sid = it.ID
+	}
+	if sid == "" {
+		t.Fatal("no stale finding")
+	}
+	sent := 0
+	call := func(_ context.Context, _, prompt, _ string, _ float64) ([]verifyVerdict, string, float64, error) {
+		if strings.Contains(prompt, sid) {
+			sent++
+			return []verifyVerdict{{ID: sid, Mark: "keep", Evidence: "still true at HEAD"}}, "raw", 0.1, nil
+		}
+		return nil, "raw", 0.1, nil
+	}
+	r := verifyRun{model: "m", max: 50, per: 50, budget: 1, cwd: t.TempDir(), stateDir: filepath.Join(state, "verify")}
+	for i := 0; i < 2; i++ {
+		r.run(ctx, rs.s, call)
+	}
+	if sent != 0 || r.attempts()[sid] != 0 {
+		t.Fatalf("a stale finding on a fact the owner kept was sent %d time(s), count %d", sent, r.attempts()[sid])
 	}
 }
 
 // One verify runs at a time: a second run while one holds verifier.lock
-// does nothing and says so, and calls no model.
+// does nothing and says so, and calls no model; the same run without the
+// lock held does call one.
 func TestVerifyRunIsBusyWhileAnotherHoldsTheLock(t *testing.T) {
 	stubScrump(t)
 	_, clone := reviewFixture(t)
 	rs := clone("one")
-	state := t.TempDir()
-	t.Setenv("TACIT_STATE_DIR", state)
-	t.Setenv("TACIT_STORE", rs.s.Dir)
-	t.Setenv("HOME", t.TempDir())
-	calls := filepath.Join(t.TempDir(), "calls")
-	fake := filepath.Join(t.TempDir(), "fake-cli")
-	os.WriteFile(fake, []byte("#!/bin/sh\necho called >> '"+calls+"'\nexit 1\n"), 0o700)
-	t.Setenv("TACIT_CLAUDE_COMMAND", fake)
-	t.Setenv("TACIT_CODEX_COMMAND", fake)
+	state, called := sandboxVerify(t, rs.s.Dir)
 	held, err := tryJobLock(state, "verifier")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer held()
 	var code int
 	out := captureStdout(t, func() { code = runVerify(nil) })
-	if code != 0 || !strings.Contains(out, "verify: busy") {
-		t.Fatalf("exit %d, output %q", code, out)
+	if code != 0 || !strings.Contains(out, "verify: busy") || called() {
+		t.Fatalf("exit %d, model called %v, output %q", code, called(), out)
 	}
-	if _, err := os.Stat(calls); err == nil {
-		t.Fatal("a busy run called a model")
+	held()
+	captureStdout(t, func() { runVerify(nil) })
+	if !called() {
+		t.Fatal("without the lock held the run calls no model either, so this test cannot fail")
 	}
 }

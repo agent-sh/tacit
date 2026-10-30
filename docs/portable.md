@@ -34,8 +34,6 @@ Use your own values. `~` is the current user's home. Relative paths resolve agai
 
 Precedence is file defaults, then `TACIT_*` environment overrides, then command flags. `tacit --config FILE init` or `TACIT_SETTINGS` selects another file. Unknown fields and a missing explicitly selected file are errors. A hook with bad configuration fails open without output. Keep provider credentials in the provider's own configuration or the job env file, not this settings file.
 
-`tacit verify --requeue all` (or finding ids, separated by commas) sends findings that reached the verifier's attempt limit again; it calls no model, and `--dry-run` only prints what it would clear.
-
 `init --store DIR` overrides that invocation only. Put a custom path in the file or environment for subsequent commands. The file loads before model defaults are selected. A job's explicitly selected env file loads at runtime as well. Installers carry an explicit config selection into their generated jobs and hooks.
 
 ### Model runners
@@ -98,6 +96,10 @@ utility:
 `jev` is pinned to `jev-1.13.0` at the official TypeSafe origin and reads `TYPESAFE_API_KEY`. `systemone` posts the same request to `endpoint` (any System One-compatible server). `bedrock` calls Converse for `model` in `region` (default `us-east-1`) and reads `AWS_BEARER_TOKEN_BEDROCK` (a Bedrock API key). `openai` posts to `endpoint` + `/chat/completions` with `model`. `systemone` and `openai` read `TACIT_UTILITY_API_KEY`, which is optional for a local server. Only the provider's own variable is read from a regular `key_file`; the file is not executed, and an inherited variable wins. A key is sent only as a bearer token to its provider's endpoint, so a TypeSafe or AWS key never reaches a custom endpoint. Endpoints must use HTTPS unless they are on `localhost`, `127.0.0.1` or `::1`. The timeout covers key reading, redaction and the request, defaults to 2s, and cannot exceed 2s. Cancellation allows up to 250 ms of subprocess cleanup; optional audit adds at most 100 ms of wait. Missing credentials, invalid settings, unavailable redaction, timeout or invalid responses use the original local selector. Clear `provider` to return to local-only selection.
 
 The audit directory is optional. It contains private daily JSONL files with redacted task and summary text, scores, selected flags and fallback reasons. Keep it out of the store and source control. On Unix, the directory must be owned by the caller and private (0700); files use mode 0600, a best-effort 10 MiB daily cap, and eight-day retention. Symlinks, hard links and special files are refused. Private audit is currently disabled on non-Unix systems rather than claiming Unix permissions enforce Windows ACLs; scoring still works. Audit failure or a stalled filesystem does not block a prompt. See [the measured comparison](../eval/JEV.md) for limits and the threshold tradeoff.
+
+### Verifier
+
+`tacit verify --requeue all` (or finding ids, separated by commas) sends findings that reached the verifier's attempt limit again; it calls no model, and `--dry-run` only prints what it would clear.
 
 ### Environment variables
 
