@@ -171,7 +171,7 @@ defmodule TacitServer.E2ETest do
   # Random keys of the shapes Slack (gitleaks' slack.go) and Tailscale (its
   # key reference) issue, never a real one. The fixed ones can each be caught
   # by one arm of the rule only: an uppercase letter, a run of 20 letters and
-  # digits, a run of 10 digits.
+  # digits, a run of 10 digits, two runs of 6 digits, a version digit.
   defp synthetic_slack_tailscale_keys(seed) do
     :rand.seed(:exsss, {seed, 13, 17})
     alnum = ~c"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
@@ -190,12 +190,24 @@ defmodule TacitServer.E2ETest do
       {"slack configuration", "xoxe.xoxp-1-" <> pick.(alnum, 163)},
       {"slack refresh", "xoxe-1-" <> pick.(alnum, 146)},
       {"slack app", "xapp-1-A#{pick.(upper, 10)}-#{pick.(digits, 13)}-#{pick.(hex, 64)}"},
+      {"slack legacy, short ids",
+       "xoxs-#{pick.(digits, 9)}-#{pick.(digits, 9)}-#{pick.(digits, 9)}-#{pick.(hex, 10)}"},
+      {"slack legacy xoxo",
+       "xoxo-#{pick.(digits, 10)}-#{pick.(digits, 10)}-#{pick.(digits, 10)}-#{pick.(hex, 10)}"},
+      {"slack client session",
+       "xoxc-#{pick.(digits, 12)}-#{pick.(digits, 12)}-#{pick.(digits, 13)}-#{pick.(hex, 64)}"},
+      {"slack session cookie", "xoxd-" <> pick.(alnum, 30) <> "%2F" <> pick.(alnum, 40)},
+      {"slack legacy workspace, versioned", "xoxa-1-" <> pick.(alnum, 8)},
+      {"slack webhook",
+       "https://hooks.slack.com/services/T#{pick.(upper, 8)}/B#{pick.(upper, 8)}/#{pick.(alnum, 24)}"},
       {"tailscale auth", "tskey-auth-k#{pick.(alnum, 6)}CNTRL-#{pick.(alnum, 32)}"},
       {"tailscale api", "tskey-api-k#{pick.(alnum, 6)}CNTRL-#{pick.(alnum, 33)}"},
       {"tailscale untyped", "tskey-k#{pick.(alnum, 6)}CNTRL-#{pick.(alnum, 26)}"},
       {"slack mark only", "xoxb-abcd-efgh-ijkL"},
       {"slack run only", "xoxa-" <> String.duplicate("ab", 10)},
       {"slack digits only", "xoxs-0123456789-abc"},
+      {"slack two ids only", "xoxs-012345-678901-abc"},
+      {"slack version only", "xoxa-1-abcdefgh"},
       {"tailscale mark only", "tskey-auth-abcdeCNTRL-xyz"},
       {"tailscale run only", "tskey-" <> String.duplicate("a1", 10)}
     ]

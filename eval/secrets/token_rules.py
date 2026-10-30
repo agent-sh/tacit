@@ -9,7 +9,8 @@ that family's key_re) over random keys of each shape providers issue and over
 fact names with a segment that starts like a key. Every key is random; none
 is real. The key shapes follow gitleaks' rules (anthropic.go, openai.go,
 slack.go), TruffleHog's detectors (deepseek, openrouter, langfuse, tailscale),
-LiteLLM's key generator and Tailscale's key reference. --compare adds another
+LiteLLM's key generator and Tailscale's key reference; the Slack session
+cookie (xoxd-) is URL-encoded, so its run of key characters ends at a %. --compare adds another
 regex as a column. --hook reads another copy of the hook, for example the one
 a change replaces: `git show <base>:server/priv/hooks/pre-receive > old`.
 
@@ -103,8 +104,16 @@ def shapes(rnd):
         "slack user xoxp": lambda: "xoxp-%s-%s-%s-%s" % (digits(rnd, 10, 13), digits(rnd, 10, 13), digits(rnd, 10, 13), pick(rnd, HEX, 32)),
         "slack legacy bot xoxb": lambda: "xoxb-%s-%s" % (digits(rnd, 8, 14), pick(rnd, ALNUM, rnd.randint(18, 26))),
         "slack legacy workspace xoxa-2": lambda: "xoxa-2-%s-%s-%s-%s" % (digits(rnd, 9, 9), digits(rnd, 11, 11), digits(rnd, 13, 13), pick(rnd, HEX, 18)),
-        "slack legacy workspace, 12 alnum": lambda: rnd.choice(["xoxa-", "xoxr-"]) + rnd.choice(["", pick(rnd, DIGITS, 1) + "-"]) + pick(rnd, ALNUM, 12),
+        "slack legacy workspace, digit and 8 to 12 alnum": lambda: rnd.choice(["xoxa-", "xoxr-"]) + pick(rnd, DIGITS, 1) + "-" + pick(rnd, ALNUM, rnd.randint(8, 12)),
+        "slack legacy workspace, 10 alnum": lambda: rnd.choice(["xoxa-", "xoxr-"]) + pick(rnd, ALNUM, 10),
+        "slack legacy workspace, 12 alnum": lambda: rnd.choice(["xoxa-", "xoxr-"]) + pick(rnd, ALNUM, 12),
         "slack legacy xoxs": lambda: "xoxs-%s-%s-%s-%s" % (digits(rnd, 10, 12), digits(rnd, 9, 12), digits(rnd, 10, 12), pick(rnd, HEX, 10)),
+        "slack legacy xoxs, 6 to 9 digit ids": lambda: "xoxs-%s-%s-%s-%s" % (digits(rnd, 6, 9), digits(rnd, 6, 9), digits(rnd, 6, 9), pick(rnd, HEX, 10)),
+        "slack legacy xoxo": lambda: "xoxo-%s-%s-%s-%s" % (digits(rnd, 6, 12), digits(rnd, 6, 12), digits(rnd, 6, 12), pick(rnd, HEX, rnd.randint(10, 18))),
+        "slack client session xoxc": lambda: "xoxc-%s-%s-%s-%s" % (digits(rnd, 10, 13), digits(rnd, 10, 13), digits(rnd, 10, 13), pick(rnd, HEX, 64)),
+        "slack session cookie xoxd": lambda: "xoxd-" + pick(rnd, ALNUM, rnd.randint(20, 60)) + "%2F" + pick(rnd, ALNUM, 40) + "%3D",
+        "slack webhook services": lambda: "https://hooks.slack.com/services/T%s/B%s/%s" % (pick(rnd, UPPER_ALNUM, 8), pick(rnd, UPPER_ALNUM, 8), pick(rnd, ALNUM, 24)),
+        "slack webhook workflows": lambda: "https://hooks.slack.com/workflows/T%s/A%s/%s/%s" % (pick(rnd, UPPER_ALNUM, 10), pick(rnd, UPPER_ALNUM, 10), digits(rnd, 18, 18), pick(rnd, ALNUM, 24)),
         "slack config access xoxe.xoxp": lambda: "xoxe.xox" + rnd.choice("bp") + "-1-" + pick(rnd, ALNUM, rnd.randint(163, 166)),
         "slack config refresh xoxe": lambda: "xoxe-1-" + pick(rnd, ALNUM, 146),
         "slack app-level xapp": lambda: "xapp-1-A%s-%s-%s" % (pick(rnd, UPPER_ALNUM, 10), digits(rnd, 13, 13), pick(rnd, HEX, 64)),
@@ -203,7 +212,8 @@ def main():
     rows = [(name, [in_line(rnd, gen()) for _ in range(a.n)]) for name, gen in shapes(rnd).items()]
     rows.append(("fact names with sk-", [name_line(rnd, sk_name(rnd)) for _ in range(a.n)]))
     rows.append(("fact names with tskey-", [name_line(rnd, prefixed_name(rnd, rnd.choice(["tskey", "tskey-auth", "tskey-api", "tskey-client"]))) for _ in range(a.n)]))
-    rows.append(("fact names with xox?- or xapp-", [name_line(rnd, prefixed_name(rnd, rnd.choice(["xoxb", "xoxp", "xoxa", "xoxr", "xoxs", "xoxe", "xapp"]))) for _ in range(a.n)]))
+    for prefix in ["xoxa", "xoxb", "xoxc", "xoxd", "xoxe", "xoxo", "xoxp", "xoxr", "xoxs", "xapp"]:
+        rows.append(("fact names with %s-" % prefix, [name_line(rnd, prefixed_name(rnd, prefix)) for _ in range(a.n)]))
     print("| " + " | ".join(["sample", "n", "hook"] + [n for n, _ in compare]) + " |")
     print("|" + "---|" * (3 + len(compare)))
     for name, lines in rows:
