@@ -33,9 +33,10 @@ server="${TACIT_SERVER:-}"
 # the server-side command for the operator to run there.
 enroll_ssh="${TACIT_ENROLL_SSH:-}"
 repo_url="https://github.com/agent-sh/tacit.git"
-# scrump at the commit that added its text profile (avifenesh/scrump#40); no
-# release has it yet. Bump deliberately, after checking redaction still holds.
-scrump_rev="17cd5abc9ce19d4fdec51588a35ef73a644e36bb"
+# scrump 0.2.0 (the v0.2.0 tag): the text profile (avifenesh/scrump#40) and the
+# records mode that keeps batched texts apart (#45). Bump deliberately, after
+# checking redaction still holds.
+scrump_rev="b2b3178c412ee5d99aaf36233d3952c2d4e796ca"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 repo="${TACIT_REPO:-$here}"
 ref="main"

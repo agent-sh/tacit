@@ -40,7 +40,7 @@ mkdir -p ~/.local/bin
 (cd client && go build -o ~/.local/bin/tacit ./cmd/tacit)
 export PATH="$HOME/.local/bin:$PATH"
 cargo install --locked --root ~/.local --git https://github.com/avifenesh/scrump \
-  --rev 17cd5abc9ce19d4fdec51588a35ef73a644e36bb scrump-cli
+  --rev b2b3178c412ee5d99aaf36233d3952c2d4e796ca scrump-cli
 ```
 
 The pinned scrump commit is the first with the text profile tacit uses. Every write through `tacit add`, the MCP tool and the dreamer is redacted by it first, and fails closed without it.

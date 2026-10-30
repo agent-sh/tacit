@@ -218,7 +218,7 @@ func TestMacSetupDreamAndCodexDryRun(t *testing.T) {
 	}
 	bin := s.home + "/.local/bin"
 	mustContain(t, out,
-		"+ cargo install --locked --root "+s.home+"/.local --git https://github.com/avifenesh/scrump --rev 17cd5abc9ce19d4fdec51588a35ef73a644e36bb scrump-cli",
+		"+ cargo install --locked --root "+s.home+"/.local --git https://github.com/avifenesh/scrump --rev b2b3178c412ee5d99aaf36233d3952c2d4e796ca scrump-cli",
 		"+ "+bin+"/tacit keygen codex",
 		"+ "+bin+"/tacit keygen dreamer",
 		"enroll(\\\"dreamer@macbook\\\"",
