@@ -233,3 +233,79 @@ func TestTheIndexesOfAMaskedWriteHoldItsTreesRecords(t *testing.T) {
 		t.Errorf("the tracked record is not as HEAD holds it: %+v", r)
 	}
 }
+
+// A clean batch after a killed one commits no leftover into the indexes: the
+// curator builds MEMORY.md and the folder indexes from every fact in the
+// clone, a killed batch's untracked fact among them, and the store writes
+// them again from the facts the commit holds when the clone holds one it does
+// not carry. Nothing in this batch is masked.
+func TestACleanBatchCommitsNoLeftoverIntoTheIndexes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell CLI fixture")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("TACIT_STATE_DIR", "")
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	t.Setenv("TACIT_STORE", filepath.Join(home, "store"))
+	t.Setenv("TACIT_INDEX", filepath.Join(home, "index"))
+	t.Setenv("TACIT_LOCAL", filepath.Join(home, "overlay"))
+	t.Setenv("TACIT_PROJECTS", filepath.Join(home, "projects"))
+	t.Setenv("TACIT_CURATE_RUNNER", "claude")
+	t.Setenv("TACIT_JUDGE_RUNNER", "claude")
+	stubScrump(t)
+	if code := runInit(nil); code != 0 {
+		t.Fatalf("init %d", code)
+	}
+	s := &store.Store{Dir: filepath.Join(home, "store")}
+	host := store.ShortHost()
+	rel := "inbox/codex@" + host + "/memory/serve-port.md"
+	note := "---\nname: serve-port\ndescription: The serve wrapper listens on port 8080\ntype: machine_fact\nscope: machines/" + host + "\nsource:\n  harness: codex\n  host: " + host + "\n  kind: observed\ncreated: \"2026-10-29\"\n---\n\nThe wrapper listens on port 8080.\n"
+	p := filepath.Join(s.Dir, filepath.FromSlash(rel))
+	os.MkdirAll(filepath.Dir(p), 0o755)
+	if err := os.WriteFile(p, []byte(note), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "--", rel}, {"-c", "user.name=codex", "-c", "user.email=codex@example.test", "commit", "-q", "-m", "note", "--", rel}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = s.Dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	// A killed batch's fact, untracked, with text no mask ever read.
+	stray := "---\nname: stray-leftover\ndescription: a leftover whose description holds LEFTOVER-TEXT-NO-MASK-READ\ntype: machine_fact\nscope: machines/" + host + "\nsource:\n  harness: curator\n  host: " + host + "\n  kind: observed\ncreated: \"2026-10-29\"\n---\n\nleft by a killed run\n"
+	os.MkdirAll(filepath.Join(s.Dir, "machines", host), 0o755)
+	if err := os.WriteFile(filepath.Join(s.Dir, "machines", host, "stray-leftover.md"), []byte(stray), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	split, _ := json.Marshal([]map[string]any{{"origin": "serve-port", "name": "serve-wrapper-port", "description": "The serve wrapper listens on port 8080",
+		"type": "machine_fact", "scope": "machines/" + host, "kind": "observed", "body": "The wrapper listens on port 8080."}})
+	response, _ := json.Marshal(map[string]any{"result": string(split), "total_cost_usd": .01})
+	fake := filepath.Join(home, "fake-cli")
+	t.Setenv("FIXTURE_RESPONSE", string(response))
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' \"$FIXTURE_RESPONSE\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TACIT_CLAUDE_COMMAND", fake)
+	if code := runCurate([]string{"--quick"}); code != 0 {
+		t.Fatalf("curate exit %d", code)
+	}
+	if _, ok := findFact(s.Dir, "serve-wrapper-port"); !ok {
+		t.Fatal("the split's fact was not written")
+	}
+	for _, idx := range []string{"MEMORY.md", "machines/" + host + "/_index.md"} {
+		cmd := exec.Command("git", "show", "HEAD:"+idx)
+		cmd.Dir = s.Dir
+		b, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("%s is not committed: %v", idx, err)
+		}
+		if strings.Contains(string(b), "stray-leftover") || strings.Contains(string(b), "LEFTOVER-TEXT") {
+			t.Fatalf("%s names a fact the commit does not hold:\n%s", idx, b)
+		}
+		if idx == "MEMORY.md" && !strings.Contains(string(b), "serve-wrapper-port") {
+			t.Fatalf("MEMORY.md lacks the batch's fact:\n%s", b)
+		}
+	}
+}

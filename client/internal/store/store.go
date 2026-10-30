@@ -507,27 +507,34 @@ func (s *Store) commitPush(ctx context.Context, rels []string, message, writer s
 	}
 	// What the write adds is masked before anything is staged; a write whose
 	// mask cannot run stops here (SPEC.md, "Every write is masked").
+	var masked []string
 	if !ownerText(ctx) && !preMasked(ctx) {
-		masked, err := s.maskAdded(ctx, rels)
-		if err != nil {
+		var err error
+		if masked, err = s.maskAdded(ctx, rels); err != nil {
 			return err
 		}
 		if len(masked) > 0 {
 			fmt.Fprintf(os.Stderr, "tacit: masked secret-shaped text in %s before the commit\n", strings.Join(masked, ", "))
-			if touchesIndexes(masked) {
-				if Reindex == nil {
-					return fmt.Errorf("%w: a masked fact's indexes cannot be written again here", ErrRedaction)
-				}
-				extra, err := Reindex(ctx, s.Dir, rels)
-				if err != nil {
-					return fmt.Errorf("%w: the indexes could not be written again from the masked text: %v", ErrRedaction, err)
-				}
-				rels = withAll(rels, extra)
-			}
-			if s.unchanged(ctx, rels) {
-				return nil // the store holds it already, masked
-			}
 		}
+	}
+	// The indexes a commit holds are written from the facts and records it
+	// holds: after a masked fact (from its masked text), and whenever it names
+	// an index, which its writer may have built from every fact in the clone,
+	// a killed batch's untracked leftover among them.
+	if touchesIndexes(masked) || namesIndex(rels) {
+		switch {
+		case Reindex != nil:
+			extra, err := Reindex(ctx, s.Dir, rels, touchesIndexes(masked))
+			if err != nil {
+				return fmt.Errorf("%w: the indexes could not be written again from the commit's facts: %v", ErrRedaction, err)
+			}
+			rels = withAll(rels, extra)
+		case touchesIndexes(masked):
+			return fmt.Errorf("%w: a masked fact's indexes cannot be written again here", ErrRedaction)
+		}
+	}
+	if len(masked) > 0 && s.unchanged(ctx, rels) {
+		return nil // the store holds it already, masked
 	}
 	// What the mask did not read never rides a write: every commit names its
 	// files (git commit --only), so a change someone else staged in the clone

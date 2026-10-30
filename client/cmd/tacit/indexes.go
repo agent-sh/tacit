@@ -21,13 +21,66 @@ import (
 // the masked text, in the same commit, from the facts and records as that
 // commit holds them (store.Reindex; SPEC.md, "Every write is masked").
 func init() {
-	store.Reindex = func(ctx context.Context, dir string, rels []string) ([]string, error) {
-		facts, recs, err := commitTree(ctx, dir, rels)
+	store.Reindex = func(ctx context.Context, dir string, rels []string, always bool) ([]string, error) {
+		changed, untracked, err := cloneChanges(ctx, dir)
+		if err != nil {
+			return nil, err
+		}
+		if !always && !foreignTreeFiles(changed, untracked, rels) {
+			return nil, nil // the clone's facts are the commit's: its writer's indexes stand
+		}
+		facts, recs, err := commitTreeFrom(ctx, dir, rels, changed, untracked)
 		if err != nil {
 			return nil, err
 		}
 		return regenIndexesWith(ctx, dir, facts, recs, nil)
 	}
+}
+
+// cloneChanges is what the clone holds apart from HEAD: the tracked paths it
+// changed or deleted, and the paths it does not track.
+func cloneChanges(ctx context.Context, dir string) (changed, untracked map[string]bool, err error) {
+	set := func(args ...string) (map[string]bool, error) {
+		out, err := store.Git(ctx, dir, args...)
+		if err != nil {
+			return nil, err
+		}
+		m := map[string]bool{}
+		for _, p := range strings.Split(out, "\x00") {
+			if p != "" {
+				m[p] = true
+			}
+		}
+		return m, nil
+	}
+	if changed, err = set("diff", "--name-only", "-z", "HEAD"); err != nil {
+		return nil, nil, err
+	}
+	if untracked, err = set("ls-files", "--others", "--exclude-standard", "-z"); err != nil {
+		return nil, nil, err
+	}
+	return changed, untracked, nil
+}
+
+// foreignTreeFiles reports a fact or a record the clone holds apart from
+// HEAD that a commit of rels does not carry: an index built from every file
+// in the clone would name what the commit's tree does not hold.
+func foreignTreeFiles(changed, untracked map[string]bool, rels []string) bool {
+	named := map[string]bool{}
+	for _, r := range rels {
+		named[r] = true
+	}
+	for _, m := range []map[string]bool{changed, untracked} {
+		for rel := range m {
+			if named[rel] {
+				continue
+			}
+			if walksAsFact(rel) || (path.Base(rel) == record.FileName && record.IsFolder(path.Dir(rel))) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // commitFacts is the facts as a commit of rels will hold them (commitTree).
@@ -43,6 +96,15 @@ func commitFacts(ctx context.Context, dir string, rels []string) ([]*fact.Fact, 
 // not track that the commit does not name (a killed batch's leftover, a
 // record written by hand).
 func commitTree(ctx context.Context, dir string, rels []string) ([]*fact.Fact, map[string]*record.Record, error) {
+	changed, untracked, err := cloneChanges(ctx, dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	return commitTreeFrom(ctx, dir, rels, changed, untracked)
+}
+
+// commitTreeFrom is commitTree with the clone's changes read (cloneChanges).
+func commitTreeFrom(ctx context.Context, dir string, rels []string, changed, untracked map[string]bool) ([]*fact.Fact, map[string]*record.Record, error) {
 	all, _, err := fact.Walk(dir)
 	if err != nil {
 		return nil, nil, err
@@ -54,27 +116,6 @@ func commitTree(ctx context.Context, dir string, rels []string) ([]*fact.Fact, m
 	named := map[string]bool{}
 	for _, r := range rels {
 		named[r] = true
-	}
-	set := func(args ...string) (map[string]bool, error) {
-		out, err := store.Git(ctx, dir, args...)
-		if err != nil {
-			return nil, err
-		}
-		m := map[string]bool{}
-		for _, p := range strings.Split(out, "\x00") {
-			if p != "" {
-				m[p] = true
-			}
-		}
-		return m, nil
-	}
-	changed, err := set("diff", "--name-only", "-z", "HEAD")
-	if err != nil {
-		return nil, nil, err
-	}
-	untracked, err := set("ls-files", "--others", "--exclude-standard", "-z")
-	if err != nil {
-		return nil, nil, err
 	}
 	headBlob := func(rel string) []byte {
 		blob, err := store.Git(ctx, dir, "cat-file", "blob", "HEAD:"+rel)
