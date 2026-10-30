@@ -122,3 +122,23 @@ The rule now: a command of one word matches only when a word of the fact's name 
 Over all 536 logged pushes of the 14 days whose checkout still exists, the shipped rule prints 458 lines where release 0.9.14 prints 523 (12% fewer). The prompt block is unchanged (its metadata line names commands by the prompt's words). The target set before measuring, noise at or below 25% with 12 of the 14 useful kept, is not met: the stricter rules reach 24% only by dropping a quarter of the useful pushes, whose second word is a common one. What is left of the noise is mostly two-word commands that are still generic (`git diff`, `gh pr`) and second words that are incidental.
 
 After the review (same cases, every changed line graded by hand, 13 of them new): the session's repository names, folders and home are left out word by word however many there are (`search.Terms` stopped near 24 terms, so in a workspace of many repositories the folder words were not left out), and a one-word command that is a script's path or file name (`scripts/release.sh`, `deploy.sh`) needs no second word. Against the rule above, over the 3-day, 14-day and all-pushes cases: 9 lines added (2 useful, 2 weak, 5 noise), 7 removed (3 weak, 4 noise); in the table, 3 days stays 102 lines, 29 useful, 36 noise, and 14 days becomes 56 lines (one weak line fewer), 13 useful, 23 noise. The fact's own name and description are read whole too (no line changes on these cases). Counting every word of the command line as well (a heredoc's prose, a script's text) added 19 lines (3 useful, 2 weak, 14 noise) and removed 13: the command's words stay its first terms.
+
+## Echoes of the request (2026-10-30)
+
+A scheduled job's prompt (the tool-failure review, the wiki's daily maintenance) got its own instructions back: the dreamer had filed them as facts from earlier runs, and every run's prompt matched them word for word. Of the 34 lines the 7 graded scheduled-review blocks of the 14 days got, 32 were graded weak because they restated the prompt, 1 useful and 1 noise.
+
+The rule: after the selection, a line whose name and description words the prompt holds for at least 7 in 10 of them is left out, and nothing takes its place. Measured with `delivery/labelled_replay.py` at each prompt's commit:
+
+| share of the line's words in the prompt | scheduled review: lines (useful) | headless prompts: lines | other program prompts | owner prompts, 3 days and 14 days |
+|---|---:|---:|---|---|
+| off (release 0.9.14) | 34 (1) | 24 | | 238 and 171 lines |
+| 0.8 | 34 (1) | 22 | unchanged | unchanged |
+| **0.7 (shipped)** | **5 (1)** | **21** | **unchanged** | **unchanged** |
+| 0.6 | 2 (0) | 19 | a harness heartbeat lost its 1 useful line | unchanged |
+| 0.5 | 1 (0) | 16 | the heartbeat's and a side note's useful lines lost | unchanged |
+
+At 0.6 the two useful lines lost were facts that share the request's words and add to them: the failure log's row schema the review needed, a heartbeat script's location. The lines 0.7 removes that had no grade (2, both on the wiki maintainer's prompt) say back its first sentence. No owner prompt line changes at any share from 0.5 to 0.8, and the 22-prompt recall probe stays at 10. Filtering the candidates before the selection instead let others take the echoes' places (28 new lines in the 7 scheduled blocks), so the filter runs after it.
+
+After the review, three guards: a line needs 5 distinct words or more (a short rule answers a request in the request's own words: "never force push to main" for "can I force push to main?"), a line that says no (`never`, `not`, `don't`, ...) where the request does not is kept, and the request is read whole (`search.Terms` stopped near 24 terms, so a long scheduled prompt's later words were not seen). On the same cases this leaves out 6 more lines, all restatements: 4 weak, 1 noise, 1 ungraded; no useful line is lost, owner prompts lose 1 noise line, and the probe stays at 10 of 22. The filter also covers every line the hook prints (the rule slot, the derived fact, the metadata and action lines), as it did; tests now pin its place after the selection and the share.
+
+Not done here: the dreamer side, a fact made only from a program-written prompt. It needs dreamer runs to measure; the delivery rule removes the echo where it shows.
