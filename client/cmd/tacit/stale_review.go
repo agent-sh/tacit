@@ -328,6 +328,21 @@ func (rs *reviewServer) applyStaleOp(o *op, it *staleItem) (string, []string, er
 		}
 	} else {
 		o.A, o.B = name, it.Flag.Sha
+		if o.By == "curator" && o.Mark == "reopen" {
+			// On the store as it is under the lock: only the curator's own
+			// moot closure of an agent's ask, on a fact live again, that the
+			// owner never touched. An answer that landed since stays.
+			d := it.Decision
+			if d == nil || d.Action != mootMark || d.By != "curator" || d.Closes == "" {
+				return "", nil, errors.New("only the curator's moot closure of a question is reopened by the curator")
+			}
+			if it.State != "live" {
+				return "", nil, errors.New("the fact is not live: the closure stands")
+			}
+			if owned := rs.ownerTouched(); owned[o.ID] || owned[name] || len(it.Notes) > 0 {
+				return "", nil, errors.New("the owner has marked, reopened or noted this finding or its fact; it is theirs")
+			}
+		}
 		if !contains(it.Allowed, o.Mark) {
 			if it.Decision != nil {
 				return "", nil, errors.New("this finding is already marked; reopen it first")

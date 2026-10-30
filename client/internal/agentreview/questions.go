@@ -318,6 +318,11 @@ func (it Item) Relevant(s Situation) bool {
 	return sharesWords(it.Desc, s.Prompt)
 }
 
+// SharesWords reports that b is on a's subject by the rule Questions and the
+// gate use: three content words of four letters or more in common, by their
+// stems, or two when one is a specific identifier.
+func SharesWords(a, b string) bool { return sharesWords(a, b) }
+
 func sharesWords(a, b string) bool {
 	if a == "" || b == "" {
 		return false
