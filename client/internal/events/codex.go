@@ -235,12 +235,12 @@ func (r *codexReader) user(raw []byte, texts []string, at time.Time) []Event {
 		}
 		return r.untyped(digest.Codex, texts, who, r.verdict.Why, at, "")
 	}
-	own, _ := r.turns.Parts(digest.Codex, raw)
+	own, _, cut := r.turns.PartsCut(digest.Codex, raw)
 	in := InputTyped
 	if r.open && r.active {
 		in = InputQueued // steered into the running turn
 	}
-	return r.typed(texts, own, r.asked, at, in)
+	return r.typed(texts, own, cut, r.asked, at, in)
 }
 
 func (r *codexReader) call(raw []byte, p codexPayload, at time.Time) Event {

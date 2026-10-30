@@ -162,18 +162,13 @@ func (r *hermesReader) user(m hermes.Message, at time.Time) []Event {
 	if m.DisplayKind == "steer" {
 		in = InputQueued
 	}
-	// Their words as the corpus reads the row; the gateway's frames around
-	// them (a quoted reply, the origin data, attached context, a paste's
-	// reference) are the harness's, before them.
+	// Their words as the corpus reads the row, out of the gateway's frames (a
+	// quoted reply, the origin data, attached context, a paste's reference),
+	// which are in no event: the row holds them.
 	var own []string
-	if t, ok := r.turns.Hermes(m.Content, m.DisplayKind, m.Summary); ok {
+	t, cut, ok := r.turns.HermesCut(m.Content, m.DisplayKind, m.Summary)
+	if ok {
 		own = []string{t}
 	}
-	var out []Event
-	if frames := leftOut([]string{m.Content}, []string{text}); frames != "" {
-		e := r.text(KindHarnessText, "user", digest.Harness, "hermes frame", frames, at)
-		e.InputKind, e.Prior = in, r.prior
-		out = append(out, e)
-	}
-	return append(out, r.typed([]string{text}, own, nil, at, in)...)
+	return r.typed([]string{text}, own, cut, nil, at, in)
 }

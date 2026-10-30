@@ -75,6 +75,7 @@ func codexOwnerSession() []string {
 		/* 25 */ cxUser(16, "Wake nonce=5c1d: report the queue depth"),
 		/* 26 */ cx(17, "response_item", `{"type":"agent_message","author":"/root/ada","recipient":"/root","content":[{"type":"input_text","text":"subagent report: key.go updated"},{"type":"encrypted_content","encrypted_content":"x"}]}`),
 		/* 27 */ cx(18, "response_item", `{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"zstd frame format"}}`),
+		/* 28 */ cxUser(19, "| host | disk |\n| a | 91% |\n| b | 40% |\n| c | 12% |\n| d | 77% |\n| e | 63% |"),
 	}
 }
 
@@ -124,6 +125,8 @@ func TestCodexSessionEvents(t *testing.T) {
 	check(t, 25, got[25], want{Kind: KindHarnessText, Who: digest.Harness, Text: "Wake nonce=5c1d: report the queue depth", InputKind: InputTyped})
 	check(t, 26, got[26], want{Kind: KindAgentText, Who: digest.Agent, Why: "message from another agent", Text: "subagent report: key.go updated"})
 	check(t, 27, got[27], want{Kind: KindToolCall, Who: digest.Agent, ToolID: "ws_1", ToolName: "web_search"})
+	// A pasted table is no words of theirs (ownerwords.PastedBlob): an agent's.
+	check(t, 28, got[28], want{Kind: KindAgentText, Who: digest.Agent, Why: whyLeftOut, Text: "| host | disk |\n| a | 91% |\n| b | 40% |\n| c | 12% |\n| d | 77% |\n| e | 63% |", InputKind: InputTyped})
 
 	if in := got[5][0].ToolInput; in != `{"cmd":"go test ./cache"}` {
 		t.Errorf("arguments: %q", in)

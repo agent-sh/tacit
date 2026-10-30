@@ -362,11 +362,11 @@ const whyOffered = "an option the question offered"
 // as digest.TurnPieces splits it (an answer to a Codex question that is one
 // of the options it offered is the harness's, its text as recorded:
 // digest.CodexAsked.Offered), and the owner's words as the owner corpus
-// reads the turn (own: ownerwords.TurnReader) in the place of the first
-// piece of theirs. What the corpus left out of their pieces (a paste, agent
-// text they relayed) is an agent's, after it. A piece that answers a Codex
-// question makes the turn an answer.
-func (b *base) typed(texts, own []string, asked digest.CodexAsked, at time.Time, in InputKind) []Event {
+// reads the turn (own, ownerwords.TurnReader) in the place of the first piece
+// of theirs, with what the corpus cut from their pieces (cut: a paste, agent
+// text they relayed, each as it was) as an agent's after it. A piece that
+// answers a Codex question makes the turn an answer.
+func (b *base) typed(texts, own, cut []string, asked digest.CodexAsked, at time.Time, in InputKind) []Event {
 	var out []Event
 	var mine []string
 	slot := -1
@@ -394,42 +394,25 @@ func (b *base) typed(texts, own []string, asked digest.CodexAsked, at time.Time,
 			}
 		}
 	}
-	words := strings.Join(own, "\n")
+	var place []Event
+	if len(own) > 0 {
+		place = append(place, b.text(KindOwnerText, "user", digest.Owner, b.verdict.Why, strings.Join(own, "\n"), at))
+	}
+	if left := strings.TrimSpace(strings.Join(cut, "\n")); left != "" {
+		place = append(place, b.text(KindAgentText, "user", digest.Agent, whyLeftOut, strings.Join(cut, "\n"), at))
+	}
 	switch {
-	case slot < 0 && len(own) > 0:
+	case slot < 0:
 		// A paste the corpus cut out first made the turn open with their words.
-		out = append(out, b.text(KindOwnerText, "user", digest.Owner, b.verdict.Why, words, at))
-	case slot >= 0 && len(own) == 0:
+		out = append(out, place...)
+	case len(place) == 0:
+		// Pieces the corpus finds nothing of theirs in.
 		out[slot] = b.text(KindAgentText, "user", digest.Agent, whyLeftOut, strings.Join(mine, "\n"), at)
-	case slot >= 0:
-		out[slot] = b.text(KindOwnerText, "user", digest.Owner, b.verdict.Why, words, at)
-		if rest := leftOut(mine, own); rest != "" {
-			out = append(out[:slot+1], append([]Event{b.text(KindAgentText, "user", digest.Agent, whyLeftOut, rest, at)}, out[slot+1:]...)...)
-		}
+	default:
+		out = append(out[:slot], append(place, out[slot+1:]...)...)
 	}
 	for i := range out {
 		out[i].InputKind, out[i].Prior = in, b.prior
 	}
 	return out
-}
-
-// leftOut is the lines of the owner's pieces of a turn that are in none of
-// their words as the corpus kept them (own): what it cut as a paste or as
-// agent text they relayed.
-func leftOut(pieces, own []string) string {
-	kept := map[string]bool{}
-	for _, o := range own {
-		for _, l := range strings.Split(o, "\n") {
-			kept[strings.TrimSpace(l)] = true
-		}
-	}
-	var out []string
-	for _, p := range pieces {
-		for _, l := range strings.Split(p, "\n") {
-			if t := strings.TrimSpace(l); t != "" && !kept[t] {
-				out = append(out, l)
-			}
-		}
-	}
-	return strings.Join(out, "\n")
 }

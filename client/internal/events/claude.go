@@ -197,9 +197,9 @@ func (r *claudeReader) turn(raw []byte, l claudeLine, texts []string, at time.Ti
 	// Both follow every user line in order: a local command's caveat comes
 	// on the line before its echo.
 	local := r.cmds.LocalLine(raw)
-	var own []string
+	var own, cut []string
 	if r.verdict.Owner() {
-		own, _ = r.turns.Parts(digest.Claude, raw)
+		own, _, cut = r.turns.PartsCut(digest.Claude, raw)
 	}
 	switch {
 	case l.IsCompact:
@@ -221,7 +221,7 @@ func (r *claudeReader) turn(raw []byte, l claudeLine, texts []string, at time.Ti
 		}
 		return r.untyped(digest.Claude, texts, digest.Agent, why, at, in)
 	}
-	return r.typed(texts, own, nil, at, claudeInput(l.PromptSource, texts))
+	return r.typed(texts, own, cut, nil, at, claudeInput(l.PromptSource, texts))
 }
 
 // claudeInput is how a turn a person typed was put in: queued while the agent
@@ -246,9 +246,9 @@ func (r *claudeReader) attachment(raw []byte, l claudeLine, at time.Time) []Even
 	if texts, typed, why, ok := digest.ClaudeQueuedLine(raw); ok {
 		// A message delivered while the agent worked, in its place in the
 		// turn (digest.ClaudeQueued).
-		var own []string
+		var own, cut []string
 		if r.verdict.Owner() {
-			own, _ = r.turns.Parts(digest.Claude, raw)
+			own, _, cut = r.turns.PartsCut(digest.Claude, raw)
 		}
 		var out []Event
 		switch {
@@ -261,7 +261,7 @@ func (r *claudeReader) attachment(raw []byte, l claudeLine, at time.Time) []Even
 		case !typed:
 			out = r.untyped(digest.Claude, texts, digest.Agent, why, at, "")
 		default:
-			out = r.typed(texts, own, nil, at, InputQueued)
+			out = r.typed(texts, own, cut, nil, at, InputQueued)
 		}
 		r.prior = ""
 		return out

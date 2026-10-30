@@ -111,12 +111,12 @@ func (b *Builder) Add(source, ref, text string) { b.AddAt(source, ref, text, tim
 // day a statement of theirs was said is that turn's (SaidAt), never the day
 // a step read it.
 func (b *Builder) AddAt(source, ref, text string, at time.Time) {
-	text, dropped, ok := cutWords(text, b.pastes)
+	text, _, dropped, ok := cutWords(text, b.pastes)
 	if !ok {
 		b.c.Stats.AgentTurns++
 		return
 	}
-	b.c.Stats.RelayedLines += dropped
+	b.c.Stats.RelayedLines += len(dropped)
 	n := Normalize(text)
 	if n == "" {
 		return
@@ -145,19 +145,24 @@ func (b *Builder) AddAt(source, ref, text string, at time.Time) {
 // the corpus (AddAt) and TurnReader keep it by: what a harness or another
 // agent wrote in it left out (OwnerPart), the texts they pasted cut (pastes,
 // from their prompt history), then the lines of agent text they relayed
-// (dropRelayed), which it counts. ok is false when none of it is theirs.
-func cutWords(text string, pastes []string) (string, int, bool) {
+// (dropRelayed). It returns the pastes and the relayed lines it cut; ok is
+// false when none of it is theirs.
+func cutWords(text string, pastes []string) (string, []string, []string, bool) {
 	text, ok := OwnerPart(text)
 	if !ok {
-		return "", 0, false
+		return "", nil, nil, false
 	}
+	var pasted []string
 	for _, p := range pastes {
-		if strings.Contains(text, p) {
+		if n := strings.Count(text, p); n > 0 {
 			text = strings.ReplaceAll(text, p, " ")
+			for range n {
+				pasted = append(pasted, p)
+			}
 		}
 	}
-	text, dropped := dropRelayed(text)
-	return text, dropped, true
+	text, dropped := relayed(text)
+	return text, pasted, dropped, true
 }
 
 // Agent text the owner relayed inside their own turn, with no paste record (a lane's
@@ -179,8 +184,14 @@ var (
 // dropRelayed removes the lines of text that are agent text the owner relayed, and
 // says how many it removed.
 func dropRelayed(text string) (string, int) {
+	kept, dropped := relayed(text)
+	return kept, len(dropped)
+}
+
+// relayed is dropRelayed with the lines it removed.
+func relayed(text string) (string, []string) {
 	if !strings.ContainsAny(text, "\n#`*-•0123456789") {
-		return text, 0
+		return text, nil
 	}
 	ls := strings.Split(text, "\n")
 	drop := make([]bool, len(ls))
@@ -199,19 +210,19 @@ func dropRelayed(text string) (string, int) {
 		}
 		i = j
 	}
-	n := 0
+	var dropped []string
 	kept := ls[:0]
 	for i, l := range ls {
 		if drop[i] || mdHeader.MatchString(l) || markdownCode.MatchString(l) || mdBullet.MatchString(l) {
-			n++
+			dropped = append(dropped, l)
 			continue
 		}
 		kept = append(kept, l)
 	}
-	if n == 0 {
-		return text, 0
+	if len(dropped) == 0 {
+		return text, nil
 	}
-	return strings.Join(kept, "\n"), n
+	return strings.Join(kept, "\n"), dropped
 }
 
 // Build indexes the turns.
@@ -895,8 +906,15 @@ var pastedBlock = digest.PastedContent
 
 // piUserTurns is what the owner typed in one pi user message: its text
 // blocks, less harness frames (an attached file, a skill expansion) and
-// pasted tables or logs (pi keeps no record of pastes either).
+// pasted tables or logs (pi keeps no record of pastes either; piTurns
+// returns them).
 func piUserTurns(line []byte) []string {
+	own, _ := piTurns(line)
+	return own
+}
+
+// piTurns is piUserTurns with the pasted tables or logs it left out.
+func piTurns(line []byte) (own, blobs []string) {
 	var o struct {
 		Type    string `json:"type"`
 		Message struct {
@@ -905,7 +923,7 @@ func piUserTurns(line []byte) []string {
 		} `json:"message"`
 	}
 	if json.Unmarshal(line, &o) != nil || o.Type != "message" || o.Message.Role != "user" {
-		return nil
+		return nil, nil
 	}
 	var texts []string
 	var s string
@@ -923,15 +941,16 @@ func piUserTurns(line []byte) []string {
 			}
 		}
 	}
-	var out []string
 	for _, t := range texts {
-		for _, own := range digest.OwnerPieces(digest.TurnPieces(t)) {
-			if !PastedBlob(own) {
-				out = append(out, own)
+		for _, p := range digest.OwnerPieces(digest.TurnPieces(t)) {
+			if PastedBlob(p) {
+				blobs = append(blobs, p)
+			} else {
+				own = append(own, p)
 			}
 		}
 	}
-	return out
+	return own, blobs
 }
 
 // codexUserTurns is what the owner typed in one Codex user message: its
@@ -940,6 +959,12 @@ func piUserTurns(line []byte) []string {
 // their answers), an answer that is an option its question offered (asked)
 // and pasted tables or logs left out.
 func codexUserTurns(line []byte, asked digest.CodexAsked) []string {
+	own, _ := codexTurns(line, asked)
+	return own
+}
+
+// codexTurns is codexUserTurns with the pasted tables or logs it left out.
+func codexTurns(line []byte, asked digest.CodexAsked) (own, blobs []string) {
 	var o struct {
 		Type    string `json:"type"`
 		Payload struct {
@@ -951,17 +976,18 @@ func codexUserTurns(line []byte, asked digest.CodexAsked) []string {
 		} `json:"payload"`
 	}
 	if json.Unmarshal(line, &o) != nil || o.Type != "response_item" || o.Payload.Type != "message" || o.Payload.Role != "user" {
-		return nil
+		return nil, nil
 	}
-	var out []string
 	for _, c := range o.Payload.Content {
-		for _, own := range digest.OwnerPieces(asked.Chosen(digest.TurnPieces(c.Text))) {
-			if !PastedBlob(own) {
-				out = append(out, own)
+		for _, p := range digest.OwnerPieces(asked.Chosen(digest.TurnPieces(c.Text))) {
+			if PastedBlob(p) {
+				blobs = append(blobs, p)
+			} else {
+				own = append(own, p)
 			}
 		}
 	}
-	return out
+	return own, blobs
 }
 
 var logLine = regexp.MustCompile(`^\s*(\d{4}-\d{2}-\d{2}|\d{1,2}:\d{2}|\[|\$ |>>> |[A-Z][A-Z_]{2,}[:=]|[-*] \S+: |\S+\.(go|rs|py|ts|js|md):\d+)`)

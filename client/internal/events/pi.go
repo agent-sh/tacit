@@ -156,12 +156,12 @@ func (r *piReader) message(raw []byte, entry string, m piMessage, at time.Time) 
 	case "user":
 		texts := piTexts(m.Content)
 		if r.verdict.Owner() {
-			own, _ := r.turns.Parts(digest.Pi, raw)
+			own, _, cut := r.turns.PartsCut(digest.Pi, raw)
 			in := InputTyped
 			if r.working {
 				in = InputQueued // steered into the agent's turn
 			}
-			out = r.typed(texts, own, nil, at, in)
+			out = r.typed(texts, own, cut, nil, at, in)
 		} else {
 			out = r.untyped(digest.Pi, texts, digest.Agent, r.verdict.Why, at, "")
 		}

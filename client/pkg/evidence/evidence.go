@@ -162,8 +162,9 @@ type Piece = digest.Piece
 // ClaudeMarks are what a Claude Code line records about who wrote a user
 // turn; ClaudeCommands follows a transcript for the slash commands Claude
 // Code ran itself; CodexAsked is what a Codex agent's questions offered;
-// TurnReader reads a transcript's lines (Parts) and Hermes rows (Hermes) for
-// what the owner typed, as tacit's corpus does with its Pastes set.
+// TurnReader reads a transcript's lines (Parts, PartsCut) and Hermes rows
+// (Hermes, HermesCut) for what the owner typed, and what was cut from it as
+// not their words, as tacit's corpus does with its Pastes set.
 type (
 	ClaudeMarks    = digest.ClaudeMarks
 	ClaudeCommands = digest.ClaudeCommands

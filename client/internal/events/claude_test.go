@@ -183,4 +183,13 @@ func TestClaudePasteFromThePromptHistory(t *testing.T) {
 	check(t, 0, evs,
 		want{Kind: KindOwnerText, Who: digest.Owner, Text: "why does this fail\n ", InputKind: InputTyped},
 		want{Kind: KindAgentText, Who: digest.Agent, Why: whyLeftOut, Text: paste, InputKind: InputTyped})
+
+	// Inline in their sentence: the cut is the paste alone, never their words
+	// around it.
+	inline := []string{cl(1, `"type":"user","uuid":"u1",`+typedMarks+`,"message":{"role":"user","content":"look `+paste+` and fix it"}`)}
+	path = write(t, filepath.Join(home, ".claude", "projects", "-home-u-projects-shop", "inline.jsonl"), inline...)
+	evs, _ = readAll(t, path, digest.Claude, 0)
+	check(t, 0, evs,
+		want{Kind: KindOwnerText, Who: digest.Owner, Text: "look   and fix it", InputKind: InputTyped},
+		want{Kind: KindAgentText, Who: digest.Agent, Why: whyLeftOut, Text: paste, InputKind: InputTyped})
 }
