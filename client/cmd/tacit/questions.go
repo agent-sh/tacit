@@ -14,6 +14,7 @@ package main
 // owner reopens it, which makes the question theirs again for good.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -474,11 +475,13 @@ var questionAnswers = map[string]bool{"holds": true, "wrong": true, "moot": true
 // decision log (an agent's closure; a reopen clears it) and whether the owner
 // ever reopened it.
 func (rs *reviewServer) questionRecords() (standing map[string]*decision, reopened map[string]bool) {
+	b, _ := os.ReadFile(filepath.Join(rs.s.Dir, "review", "decisions.jsonl"))
+	return questionRecordsOf(b)
+}
+
+// questionRecordsOf is questionRecords of a decision log's bytes.
+func questionRecordsOf(b []byte) (standing map[string]*decision, reopened map[string]bool) {
 	standing, reopened = map[string]*decision{}, map[string]bool{}
-	b, err := os.ReadFile(filepath.Join(rs.s.Dir, "review", "decisions.jsonl"))
-	if err != nil {
-		return
-	}
 	for _, l := range strings.Split(string(b), "\n") {
 		var d decision
 		if json.Unmarshal([]byte(l), &d) != nil || !strings.HasPrefix(d.ID, "q-") {
@@ -502,10 +505,11 @@ func (rs *reviewServer) questionRecords() (standing map[string]*decision, reopen
 // closure of a reviewer question said (its answer, proof and reason) and the
 // questions the owner reopened, for the reviewer step's queue.
 func questionClosures(dir string) (closed map[string]string, reopened map[string]bool) {
-	// A log that does not read whole (missing, or a line cut short) says
-	// nothing: the queue is left as it is.
+	// A log that does not read whole (missing, empty, or a line cut short:
+	// read while a write rewrites it) says nothing: the queue is left as it
+	// is. The bytes checked are the bytes read.
 	b, err := os.ReadFile(filepath.Join(dir, "review", "decisions.jsonl"))
-	if err != nil {
+	if err != nil || len(bytes.TrimSpace(b)) == 0 {
 		return nil, nil
 	}
 	for _, l := range strings.Split(string(b), "\n") {
@@ -513,8 +517,7 @@ func questionClosures(dir string) (closed map[string]string, reopened map[string
 			return nil, nil
 		}
 	}
-	rs := &reviewServer{s: &store.Store{Dir: dir}}
-	standing, reopened := rs.questionRecords()
+	standing, reopened := questionRecordsOf(b)
 	closed = map[string]string{}
 	for id, d := range standing {
 		closed[id] = d.Action + " (" + d.Proof + "): " + oneLineNote(d.Reason)
@@ -796,10 +799,15 @@ func closeReviewerQuestion(ctx context.Context, rs *reviewServer, o *op, q agent
 				continue
 			}
 			if err != nil {
-				if now, _ := rs.s.Head(ctx); now == head {
-					rs.s.Restore(rels) // no commit was made: nothing stays written
-				} else {
+				// HEAD read on its own deadline: a closure whose own ran out
+				// before its commit made none, and keeps nothing.
+				hctx, hcancel := context.WithTimeout(context.Background(), 15*time.Second)
+				now, herr := rs.s.Head(hctx)
+				hcancel()
+				if herr == nil && now != head {
 					kept = true
+				} else {
+					rs.s.Restore(rels) // no commit was made: nothing stays written
 				}
 			}
 			return err
