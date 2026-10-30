@@ -84,16 +84,12 @@ func ReadHermesState(ctx context.Context, db *hermes.DB, s hermes.Session, from 
 	key := hermes.Key(db.Path, s.ID)
 	var read int64
 	used := false
-	if k := from.kept; k != nil && k.Format == digest.Hermes && k.Head == key {
-		same := after == 0
-		if !same {
-			rows, err := db.Messages(ctx, s.ID, after-1, 1)
-			if err != nil {
-				return from, err
-			}
-			same = len(rows) > 0 && rows[0].ID == after && rowID(rows[0]) == k.Last
+	if k := from.kept; k != nil && after > 0 && k.Format == digest.Hermes && k.Head == key {
+		rows, err := db.Messages(ctx, s.ID, after-1, 1)
+		if err != nil {
+			return from, err
 		}
-		if same {
+		if len(rows) > 0 && rows[0].ID == after && rowID(rows[0]) == k.Last {
 			// Only what a row leaves for the rows after it is kept: the
 			// session's own fields are its row's, read now as a read from the
 			// start reads them.

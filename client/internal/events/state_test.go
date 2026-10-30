@@ -306,6 +306,44 @@ func TestSavedStateFollowsAGrowingTranscript(t *testing.T) {
 	}
 }
 
+// A State kept while a Codex rollout's or a pi session's first line was still
+// being written is the start: what the readers take from that line (the
+// session's id, cwd and parent) comes from it once it is whole.
+func TestStateBeforeTheFirstLineIsTheStart(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
+	for _, c := range growingSessions(home) {
+		if c.f == digest.Claude {
+			continue // its lines carry the session's fields
+		}
+		path := strings.Replace(c.path, ".jsonl", "-first.jsonl", 1)
+		first := c.first[0]
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(first[:len(first)/2]), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		evs, st := readState(t, path, c.f, State{}, 0)
+		if len(evs) != 0 || st.Offset != 0 || st.Kept() {
+			t.Fatalf("%s: half a first line: %d events, %+v", c.name, len(evs), st)
+		}
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.WriteString(first[len(first)/2:] + "\n" + strings.Join(append(c.first[1:], c.call), "\n") + "\n")
+		f.Close()
+		got, _ := readState(t, path, c.f, st, 0)
+		want, _ := readAll(t, path, c.f, 0)
+		if !reflect.DeepEqual(got, want) || len(got) == 0 || got[0].Session == strings.TrimSuffix(filepath.Base(path), ".jsonl") {
+			t.Fatalf("%s: after the first line was whole:\n%s\nwant\n%s", c.name, dump(got), dump(want))
+		}
+	}
+}
+
 // What a State does at its edges: one at the end reads nothing and comes
 // back as it was; a read stopped by emit at the first event from a State
 // returns that State, and later a bare cursor at the line it stopped in; a
@@ -519,6 +557,16 @@ func TestReadHermesFromItsSavedStateReadsOnlyNewRows(t *testing.T) {
 	}
 	exec(`delete from messages where tool_call_id = 'call_h9'`)
 
+	// The row at the cursor keeps its text and gets another finish reason:
+	// the next turn's prior is the new one, as from the start.
+	st.Add(hermestest.Message{Session: "phone", Role: "assistant", Content: "Done for now.", Finish: "stop", Timestamp: 116})
+	_, upTo := read("phone", State{})
+	exec(`update messages set finish_reason = 'incomplete' where content = 'Done for now.'`)
+	st.Add(hermestest.Message{Session: "phone", Role: "user", Content: "and the volumes", Timestamp: 117})
+	if evs, _ := read("phone", upTo); len(evs) != 1 || evs[0].Prior != "incomplete" || hermesResumes("phone", upTo) {
+		t.Fatalf("after the finish reason of the row at the cursor changed: %s", dump(evs))
+	}
+
 	// The row at the cursor changes: read as a bare cursor.
 	exec(`update messages set content = 'Waiting for it!' where content = 'Waiting for it.'`)
 	if hermesResumes("phone", at) {
@@ -545,6 +593,12 @@ func TestReadHermesFromItsSavedStateReadsOnlyNewRows(t *testing.T) {
 	// the next turn: from the start or after a row, they are read as a bare
 	// cursor.
 	st.Add(hermestest.Message{Session: "desk", Role: "assistant", Content: "Two now.", Finish: "stop", Timestamp: 203})
+	// The session's own State moved to its start is the start.
+	moved := afterStop
+	moved.Offset = 0
+	if got, _ := read("phone", moved); !reflect.DeepEqual(got, followedTo(t, read, "phone")) {
+		t.Fatalf("a State moved to the start:\n%s", dump(got))
+	}
 	for name, foreign := range map[string]State{"another session's": afterStop, "a transcript's": transcriptState(t)} {
 		if foreign.kept.Prior == "" {
 			t.Fatalf("%s State has no record before a turn to carry", name)
@@ -558,6 +612,13 @@ func TestReadHermesFromItsSavedStateReadsOnlyNewRows(t *testing.T) {
 			}
 		}
 	}
+}
+
+// followedTo is a Hermes session read from its start.
+func followedTo(t *testing.T, read func(string, State) ([]Event, State), id string) []Event {
+	t.Helper()
+	evs, _ := read(id, State{})
+	return evs
 }
 
 // transcriptState is a Claude Code transcript's State after a turn's end

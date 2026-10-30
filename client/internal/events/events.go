@@ -258,7 +258,10 @@ func ReadFileState(path string, f digest.Format, from State, limit int64, emit f
 	var fh io.ReadCloser
 	var br *bufio.Reader
 	used := false
-	if k := from.kept; k != nil && k.Format == f && k.HeadLen <= int64(len(head)) && hash(head[:k.HeadLen]) == k.Head {
+	// A read from the start has nothing before it to keep; what the readers
+	// take from the first line (Codex's session_meta, pi's header) comes from
+	// the head, so a State kept there before that line was whole is not used.
+	if k := from.kept; k != nil && from.Offset > 0 && k.Format == f && k.HeadLen <= int64(len(head)) && hash(head[:k.HeadLen]) == k.Head {
 		if fh, br, err = openAfter(path, k, from.Offset); err != nil {
 			return from, err
 		}
@@ -287,6 +290,9 @@ func ReadFileState(path string, f digest.Format, from State, limit int64, emit f
 	at := func(off int64) State {
 		if off < from.Offset {
 			return State{Offset: from.Offset}
+		}
+		if off == 0 {
+			return State{} // the start: nothing to keep
 		}
 		k := rd.keep()
 		k.Format = f
@@ -339,7 +345,7 @@ func ReadFileState(path string, f digest.Format, from State, limit int64, emit f
 // line and checks it is the one the State was kept after. It returns the
 // reader at the cursor, or a nil reader when the line is another.
 func openAfter(path string, k *kept, cursor int64) (io.ReadCloser, *bufio.Reader, error) {
-	if cursor > 0 && (k.Last == "" || k.LastAt < 0 || k.LastAt >= cursor) {
+	if k.Last == "" || k.LastAt < 0 || k.LastAt >= cursor {
 		return nil, nil, nil
 	}
 	fh, err := transcript.OpenAt(path, k.LastAt)
@@ -347,9 +353,6 @@ func openAfter(path string, k *kept, cursor int64) (io.ReadCloser, *bufio.Reader
 		return nil, nil, err
 	}
 	br := bufio.NewReaderSize(fh, 1<<20)
-	if cursor == 0 {
-		return fh, br, nil
-	}
 	line := make([]byte, cursor-k.LastAt)
 	if _, err := io.ReadFull(br, line); err != nil || hash(line) != k.Last {
 		fh.Close()

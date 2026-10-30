@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strconv"
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/hermes"
@@ -30,9 +29,11 @@ import (
 // the Hermes row at the cursor, and reads as from a bare cursor when they
 // changed. A change further inside the transcript is not seen.
 //
-// The zero State is the start. State{Offset: n} is a bare cursor: a read from
-// it passes over the items before n to rebuild what they leave, as ReadFile
-// does. MarshalBinary and UnmarshalBinary save a State and load it back, as
+// The zero State is the start, and a read that ends there (a first line
+// still being written) returns it: what the readers take from a transcript's
+// first line comes from its head. State{Offset: n} is a bare cursor: a read
+// from it passes over the items before n to rebuild what they leave, as
+// ReadFile does. MarshalBinary and UnmarshalBinary save a State and load it back, as
 // do MarshalJSON and UnmarshalJSON inside a caller's JSON.
 //
 // A State is as private as its transcript: it holds whole lines of it
@@ -151,9 +152,12 @@ func hash(b []byte) string {
 	return hex.EncodeToString(h[:16])
 }
 
-// rowID names a Hermes row by what it holds (kept.Last).
+// rowID names a Hermes row by every field the reader reads of it (kept.Last):
+// what it holds, and what it leaves for the rows after it (the finish reason
+// a turn's prior is, a summary's mark).
 func rowID(m hermes.Message) string {
-	return hash([]byte(m.Role + "\x00" + strconv.FormatFloat(m.Timestamp, 'g', -1, 64) + "\x00" + m.Content + "\x00" + m.ToolCalls))
+	b, _ := json.Marshal(m)
+	return hash(b)
 }
 
 // keep is what every reader keeps. The calls are the reader's own map: a
