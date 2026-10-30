@@ -155,6 +155,8 @@ def prompt_of(rec):
         return None
     if rec.get("type") != "user" or is_tool_result(rec):
         return None
+    if rec.get("isCompactSummary") or rec.get("isVisibleInTranscriptOnly"):
+        return None  # a compaction's summary: history, not a prompt anyone sent
     if rec.get("entrypoint") in ("sdk-cli", "sdk-ts"):
         origin = "headless"
     elif rec.get("isMeta"):
@@ -249,7 +251,7 @@ def main():
     for b in blocks:
         prior = seen.setdefault(b["session"], [])
         if b["event"] != "SessionStart" and b.get("case", True):
-            cid = hashlib.sha1(f'{b["file"]}\0{b["event"]}\0{b["ts"]}\0{b["key"]}'.encode()).hexdigest()[:12]
+            cid = hashlib.sha256(f'{b["file"]}\0{b["event"]}\0{b["ts"]}\0{b["key"]}'.encode()).hexdigest()[:12]
             cut = os.path.join(a.out, "transcripts", cid + ".jsonl")
             with open(b["file"], "rb") as fh, open(cut, "wb") as dst:
                 fh.seek(max(0, b["cut"] - TAIL))

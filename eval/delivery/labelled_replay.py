@@ -449,10 +449,13 @@ def compare(a):
     grades = load_grades(a.grades)
     res = load_results(a.out)
     base, cand = a.arms.split(",")
-    rows = []
+    rows, broken = [], 0
     for c in cases:
         rb, rc = res[base].get(c["id"]), res[cand].get(c["id"])
         if rb is None or rc is None:
+            continue
+        if failed(c, rb) or failed(c, rc):
+            broken += 1  # an error printing nothing is no line removed
             continue
         count = lambda r, g: sum(1 for n in r["names"] if grade_of(c, n, grades) == g)
         rows.append((count(rc, "R") - count(rb, "R"), count(rc, "N") - count(rb, "N"),
@@ -467,7 +470,7 @@ def compare(a):
         return sums[50], sums[1949]
 
     changed = sum(1 for r in rows if r[0] or r[1] or r[2])
-    print(f"{cand} against {base}: {len(rows)} cases, {changed} changed")
+    print(f"{cand} against {base}: {len(rows)} cases, {changed} changed, {broken} left out (a call of either arm failed)")
     for i, what in ((0, "useful lines"), (1, "noise lines"), (2, "lines")):
         lo, hi = interval(i)
         print(f"  {what:13} {sum(r[i] for r in rows):+d} (95% bootstrap over cases {lo:+d} to {hi:+d})")

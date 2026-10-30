@@ -113,6 +113,8 @@ class LabelledReplay(unittest.TestCase):
             {"type": "attachment", "uuid": "a2", "parentUuid": "m1", "sessionId": "s1", "cwd": repo, "timestamp": "2026-10-21T09:00:05.100Z",
              "attachment": {"type": "hook_additional_context", "hookEvent": "PreToolUse", "toolUseID": "toolu_1", "content": [push_ctx]}},
             {"type": "user", "uuid": "u2", "parentUuid": "a2", "sessionId": "s1", "cwd": repo, "timestamp": "2026-10-21T09:05:00.000Z", "message": {"role": "user", "content": prompt}},
+            {"type": "user", "uuid": "c1", "parentUuid": "u2", "sessionId": "s1", "cwd": repo, "timestamp": "2026-10-21T09:04:00.000Z", "isCompactSummary": True,
+             "isVisibleInTranscriptOnly": True, "message": {"role": "user", "content": "This session is being continued from a previous conversation"}},
             {"type": "attachment", "uuid": "a3", "parentUuid": "u2", "sessionId": "s1", "cwd": repo, "timestamp": "2026-10-21T09:05:00.100Z",
              "attachment": {"type": "hook_success", "hookEvent": "UserPromptSubmit", "content": "", "stdout": ""}},
         ]
@@ -158,7 +160,7 @@ class LabelledReplay(unittest.TestCase):
         self.assertIn("useful_kept=2/2", score)
         cmp = subprocess.run(replay + ["compare", "--cases", os.path.join(out, "cases.jsonl"), "--out", runs, "--arms", "base,base"],
                              check=True, capture_output=True, text=True).stdout
-        self.assertIn("3 cases, 0 changed", cmp)
+        self.assertIn("3 cases, 0 changed, 0 left out", cmp)
         again = subprocess.run(replay + ["run", "--store", clone, "--cases", os.path.join(out, "cases.jsonl"), "--out", runs, "--arm", "base=" + shutil.which("true")],
                                capture_output=True, text=True, env=env)
         self.assertNotEqual(again.returncode, 0, "an arm name keeps its binary within one --out")
