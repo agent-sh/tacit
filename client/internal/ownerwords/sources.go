@@ -69,7 +69,7 @@ func (b *Builder) AddClaudeHistory(path string) error {
 		if h.SessionID != "" {
 			ref = "claude:" + h.SessionID
 		}
-		b.AddAt("claude-history", ref, pasted.ReplaceAllString(h.Display, " "), jsonTime(h.Timestamp))
+		b.AddAt("claude-history", ref, pasted.ReplaceAllString(h.Display, " "), JSONTime(h.Timestamp))
 	})
 }
 
@@ -94,7 +94,7 @@ func (b *Builder) AddCodexHistory(path string) error {
 		if h.SessionID != "" {
 			ref = "codex:" + h.SessionID
 		}
-		b.AddAt("codex-history", ref, h.Text, jsonTime(h.TS))
+		b.AddAt("codex-history", ref, h.Text, JSONTime(h.TS))
 	})
 }
 
@@ -170,12 +170,12 @@ func (b *Builder) AddHermes(path string) error {
 			if m.Copy {
 				continue
 			}
-			t, injected := digest.HermesOwnerText(m.Content, m.DisplayKind, m.Summary)
+			t, injected, pasted := hermesRow(m.Content, m.DisplayKind, m.Summary)
 			if injected {
 				b.c.Stats.AgentTurns++
 				continue
 			}
-			if PastedBlob(t) {
+			if pasted {
 				continue // a pasted table or log, as for pi (Add drops a tag-framed turn)
 			}
 			var at time.Time
@@ -186,6 +186,22 @@ func (b *Builder) AddHermes(path string) error {
 		}
 	}
 	return nil
+}
+
+// hermesRow is the text of a Hermes user row that can be the owner's, before
+// what in it a harness or another agent wrote is cut (Add, HermesTurn): the
+// gateway's frames, notices and attached context cut (digest.HermesOwnerText).
+// injected reports a row with nothing of theirs, pasted a pasted table or log
+// (PastedBlob).
+func hermesRow(content, displayKind string, summary bool) (t string, injected, pasted bool) {
+	t, injected = digest.HermesOwnerText(content, displayKind, summary)
+	if injected {
+		return "", true, false
+	}
+	if PastedBlob(t) {
+		return "", false, true
+	}
+	return t, false, false
 }
 
 // LoadAll builds the corpus from every source on this machine: owner sessions

@@ -10,8 +10,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schema = `create table sessions (id text primary key, source text not null, created_source text, model_config text, parent_session_id text, started_at real not null, ended_at real, end_reason text, cwd text, git_repo_root text, title text);
-create table messages (id integer primary key autoincrement, session_id text not null references sessions(id), role text not null, content text, tool_call_id text, tool_calls text, tool_name text, timestamp real not null, _compressed_summary integer default 0, display_kind text);
+const schema = `create table sessions (id text primary key, source text not null, created_source text, model text, model_config text, parent_session_id text, started_at real not null, ended_at real, end_reason text, cwd text, git_repo_root text, title text);
+create table messages (id integer primary key autoincrement, session_id text not null references sessions(id), role text not null, content text, tool_call_id text, tool_calls text, tool_name text, timestamp real not null, finish_reason text, _compressed_summary integer default 0, display_kind text);
 create index idx_messages_session on messages(session_id, timestamp);`
 
 // Session is a sessions row. DelegateFrom, when set, is the session a
@@ -19,14 +19,16 @@ create index idx_messages_session on messages(session_id, timestamp);`
 // one); ModelConfig, when set, is model_config as written.
 type Session struct {
 	ID, Source, CreatedSource, Parent, EndReason, Cwd string
-	DelegateFrom, ModelConfig                         string
+	DelegateFrom, ModelConfig, Model                  string
 	StartedAt                                         float64
 }
 
-// Message is a messages row; ID 0 lets SQLite number it.
+// Message is a messages row; ID 0 lets SQLite number it. ToolCallID is the
+// call a tool row answers, Finish an assistant row's finish reason.
 type Message struct {
 	ID                                                int64
 	Session, Role, Content, ToolCalls, ToolName, Kind string
+	ToolCallID, Finish                                string
 	Timestamp                                         float64
 	Summary                                           bool
 }
@@ -69,8 +71,8 @@ func (s *Store) AddSession(se Session) {
 		b, _ := json.Marshal(map[string]string{"model": "m", "_delegate_from": se.DelegateFrom})
 		config = string(b)
 	}
-	if _, err := s.db.Exec(`insert into sessions (id, source, created_source, model_config, parent_session_id, end_reason, cwd, started_at) values (?, ?, ?, ?, ?, ?, ?, ?)`,
-		se.ID, se.Source, null(se.CreatedSource), null(config), null(se.Parent), null(se.EndReason), null(se.Cwd), se.StartedAt); err != nil {
+	if _, err := s.db.Exec(`insert into sessions (id, source, created_source, model, model_config, parent_session_id, end_reason, cwd, started_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		se.ID, se.Source, null(se.CreatedSource), null(se.Model), null(config), null(se.Parent), null(se.EndReason), null(se.Cwd), se.StartedAt); err != nil {
 		s.t.Fatal(err)
 	}
 }
@@ -83,22 +85,18 @@ func (s *Store) Add(ms ...Message) {
 		if m.ID != 0 {
 			id = m.ID
 		}
-		var calls, name, kind any
-		if m.ToolCalls != "" {
-			calls = m.ToolCalls
-		}
-		if m.ToolName != "" {
-			name = m.ToolName
-		}
-		if m.Kind != "" {
-			kind = m.Kind
+		null := func(v string) any {
+			if v == "" {
+				return nil
+			}
+			return v
 		}
 		summary := 0
 		if m.Summary {
 			summary = 1
 		}
-		if _, err := s.db.Exec(`insert into messages (id, session_id, role, content, tool_calls, tool_name, display_kind, _compressed_summary, timestamp) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, m.Session, m.Role, m.Content, calls, name, kind, summary, m.Timestamp); err != nil {
+		if _, err := s.db.Exec(`insert into messages (id, session_id, role, content, tool_calls, tool_name, tool_call_id, finish_reason, display_kind, _compressed_summary, timestamp) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, m.Session, m.Role, m.Content, null(m.ToolCalls), null(m.ToolName), null(m.ToolCallID), null(m.Finish), null(m.Kind), summary, m.Timestamp); err != nil {
 			s.t.Fatal(err)
 		}
 	}

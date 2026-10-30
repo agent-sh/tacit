@@ -59,7 +59,14 @@ func DefaultDB(home string) string {
 type DB struct {
 	Path string
 	db   *sql.DB
+	// has are the columns read only when the store has them: an older Hermes
+	// writes no model, tool call id or finish reason.
+	has map[string]bool
 }
+
+// optional are the columns DB reads when its store has them, as
+// "<table>.<column>".
+var optional = []string{"sessions.model", "messages.tool_call_id", "messages.finish_reason"}
 
 // Open opens the store read-only (SQLite's mode=ro, query_only) with a busy
 // timeout of 2 s: a gateway writing it never waits on tacit, and tacit gives
@@ -85,7 +92,27 @@ func Open(path string) (*DB, error) {
 		db.Close()
 		return nil, err
 	}
-	return &DB{Path: abs, db: db}, nil
+	d := &DB{Path: abs, db: db, has: map[string]bool{}}
+	for _, tc := range optional {
+		table, col, _ := strings.Cut(tc, ".")
+		var n int
+		if err := db.QueryRow(`select count(*) from pragma_table_info(?) where name = ?`, table, col).Scan(&n); err != nil {
+			db.Close()
+			return nil, err
+		}
+		d.has[tc] = n > 0
+	}
+	return d, nil
+}
+
+// column is the expression that reads an optional column of table (named
+// as in the query, as): the column as text, or an empty string when the
+// store has none.
+func (d *DB) column(table, as, col string) string {
+	if d.has[table+"."+col] {
+		return "coalesce(" + as + "." + col + ", '')"
+	}
+	return "''"
 }
 
 // Close closes the connection.
@@ -94,7 +121,9 @@ func (d *DB) Close() error { return d.db.Close() }
 // Session is one row of the sessions table.
 type Session struct {
 	ID, Source, CreatedSource, Parent, EndReason, Cwd, RepoRoot string
-	StartedAt                                                   float64
+	// Model is the model the session runs ("" when the store records none).
+	Model     string
+	StartedAt float64
 	// Delegated is a session Hermes started for a delegation: its
 	// model_config names the session it came from ("_delegate_from"). Hermes
 	// marks every delegation so, from Telegram, the desktop app or a phone
@@ -124,7 +153,7 @@ type Session struct {
 
 // Sessions lists every session, oldest first, with Owner decided.
 func (d *DB) Sessions(ctx context.Context) ([]Session, error) {
-	rows, err := d.db.QueryContext(ctx, `select id, source, coalesce(created_source, ''), coalesce(parent_session_id, ''), coalesce(end_reason, ''), coalesce(cwd, ''), coalesce(git_repo_root, ''), started_at,
+	rows, err := d.db.QueryContext(ctx, `select id, source, coalesce(created_source, ''), coalesce(parent_session_id, ''), coalesce(end_reason, ''), coalesce(cwd, ''), coalesce(git_repo_root, ''), `+d.column("sessions", "sessions", "model")+`, started_at,
 		json_extract(case when json_valid(model_config) then model_config else '{}' end, '$._delegate_from') is not null
 		from sessions order by started_at, id`)
 	if err != nil {
@@ -134,7 +163,7 @@ func (d *DB) Sessions(ctx context.Context) ([]Session, error) {
 	var out []Session
 	for rows.Next() {
 		var s Session
-		if err := rows.Scan(&s.ID, &s.Source, &s.CreatedSource, &s.Parent, &s.EndReason, &s.Cwd, &s.RepoRoot, &s.StartedAt, &s.Delegated); err != nil {
+		if err := rows.Scan(&s.ID, &s.Source, &s.CreatedSource, &s.Parent, &s.EndReason, &s.Cwd, &s.RepoRoot, &s.Model, &s.StartedAt, &s.Delegated); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -189,6 +218,12 @@ type Message struct {
 	ID        int64
 	Timestamp float64
 	digest.HermesMessage
+	// ToolCallID is the call a tool row answers: the id of one of the
+	// tool_calls of an assistant row before it.
+	ToolCallID string
+	// Finish is an assistant row's finish reason (stop, tool_calls, length,
+	// incomplete, ...).
+	Finish string
 	// Copy is a row that repeats an earlier row of the session (same role,
 	// time and content): Hermes writes the kept messages again when it
 	// compacts a conversation, under new ids.
@@ -256,6 +291,7 @@ func (d *DB) UserMessages(ctx context.Context, sid string) ([]Message, error) {
 // earlier row of the session has its role, time and content (and tool calls).
 func (d *DB) messages(ctx context.Context, cond string, maxBytes int64, args ...any) ([]Message, error) {
 	rows, err := d.db.QueryContext(ctx, `select id, role, coalesce(content, ''), coalesce(tool_calls, ''), coalesce(tool_name, ''), coalesce(display_kind, ''), coalesce(_compressed_summary, 0), timestamp,
+		`+d.column("messages", "m", "tool_call_id")+`, `+d.column("messages", "m", "finish_reason")+`,
 		exists(select 1 from messages p where p.session_id = m.session_id and p.timestamp = m.timestamp and p.id < m.id and p.role = m.role and coalesce(p.content, '') = coalesce(m.content, '') and coalesce(p.tool_calls, '') = coalesce(m.tool_calls, ''))
 		from messages m where `+cond+` order by id`, args...)
 	if err != nil {
@@ -267,7 +303,7 @@ func (d *DB) messages(ctx context.Context, cond string, maxBytes int64, args ...
 	for rows.Next() {
 		var m Message
 		var summary, copied int
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.ToolCalls, &m.ToolName, &m.DisplayKind, &summary, &m.Timestamp, &copied); err != nil {
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.ToolCalls, &m.ToolName, &m.DisplayKind, &summary, &m.Timestamp, &m.ToolCallID, &m.Finish, &copied); err != nil {
 			return nil, err
 		}
 		m.Summary, m.Copy = summary != 0, copied != 0

@@ -52,12 +52,7 @@ func (r *TurnReader) Parts(f digest.Format, line []byte) (own, other []string) {
 		raw = piUserTurns(line)
 	}
 	for _, t := range raw {
-		t, ok := OwnerPart(t)
-		if !ok {
-			continue
-		}
-		t, _ = dropRelayed(t)
-		if strings.TrimSpace(t) != "" {
+		if t, ok := ownText(t); ok {
 			own = append(own, t)
 		}
 	}
@@ -65,6 +60,32 @@ func (r *TurnReader) Parts(f digest.Format, line []byte) (own, other []string) {
 		other = claudeAgentText(line)
 	}
 	return own, other
+}
+
+// ownText is what of a text of a turn of theirs is their words: what a
+// harness or another agent wrote in it left out (OwnerPart), and the lines of
+// agent text they relayed (dropRelayed); ok is false when nothing is left.
+func ownText(t string) (string, bool) {
+	t, ok := OwnerPart(t)
+	if !ok {
+		return "", false
+	}
+	t, _ = dropRelayed(t)
+	return t, strings.TrimSpace(t) != ""
+}
+
+// HermesTurn is what the owner wrote in a Hermes user row of a session of
+// theirs (hermes.Session.Owner), by the rules the corpus reads their rows
+// with (AddHermes): the gateway's frames, notices and attached context cut
+// (digest.HermesOwnerText), a pasted table or log left out (PastedBlob), then
+// what a harness or another agent wrote and the agent text they relayed, as
+// for a transcript's turn (ownText). ok is false when none of it is theirs.
+func HermesTurn(content, displayKind string, summary bool) (string, bool) {
+	t, injected, pasted := hermesRow(content, displayKind, summary)
+	if injected || pasted {
+		return "", false
+	}
+	return ownText(t)
 }
 
 // claudeAgentText is the text another agent wrote into a Claude Code user

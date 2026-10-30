@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/digest"
+	"github.com/agent-sh/tacit/client/internal/harnesses"
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/transcript"
 )
@@ -32,21 +33,21 @@ type Source struct {
 	Format digest.Format
 }
 
-// DefaultSources are the transcripts of this machine: Claude Code projects
-// (top-level sessions only; subagent transcripts are agents talking to
-// agents), Codex sessions (and the archived ones) and pi sessions (top-level
-// only: the glob, digest.PiSessionGlob, does not reach a subagent's
+// DefaultSources are the transcripts of this machine, the top-level globs of
+// harnesses.Sources: Claude Code projects (top-level sessions only; subagent
+// transcripts are agents talking to agents), Codex sessions (and the
+// archived ones) and pi sessions (top-level only, not a subagent's
 // <session>/tasks/). Each glob takes the compressed copies of its
 // transcripts too (transcript.Glob: Codex's .jsonl.zst). Hermes keeps its
 // sessions in a database (AddHermes).
 func DefaultSources(home string) []Source {
-	return []Source{
-		{Glob: filepath.Join(home, ".claude", "projects", "*", "*.jsonl"), Format: digest.Claude},
-		{Glob: filepath.Join(home, ".codex", "sessions", "*", "*", "*", "*.jsonl"), Format: digest.Codex},
-		{Glob: filepath.Join(home, ".codex", "sessions", "*", "*.jsonl"), Format: digest.Codex},
-		{Glob: filepath.Join(home, ".codex", "archived_sessions", "*.jsonl"), Format: digest.Codex},
-		{Glob: digest.PiSessionGlob(home), Format: digest.Pi},
+	var out []Source
+	for _, s := range harnesses.TopLevel(harnesses.Sources(home)) {
+		if s.Format != digest.Hermes {
+			out = append(out, Source{Glob: s.Glob, Format: s.Format})
+		}
 	}
+	return out
 }
 
 // DefaultDigests is where eval/mine/digest.py writes session digests.
@@ -435,12 +436,12 @@ func LineTime(line []byte) time.Time {
 	if json.Unmarshal(line, &o) != nil || len(o.Timestamp) == 0 {
 		return time.Time{}
 	}
-	return jsonTime(o.Timestamp)
+	return JSONTime(o.Timestamp)
 }
 
-// jsonTime reads a JSON time: an RFC 3339 string, or Unix seconds or
-// milliseconds.
-func jsonTime(raw json.RawMessage) time.Time {
+// JSONTime reads a JSON time: an RFC 3339 string, or Unix seconds or
+// milliseconds; zero when it is neither. LineTime reads a line's with it.
+func JSONTime(raw json.RawMessage) time.Time {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
 		if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
@@ -876,7 +877,8 @@ func hasText(content json.RawMessage) bool {
 	return false
 }
 
-var pastedBlock = regexp.MustCompile(`(?s)<pasted_content\b[^>]*>.*?</pasted_content>`)
+// pastedBlock is a paste the desktop app framed (digest.PastedContent).
+var pastedBlock = digest.PastedContent
 
 // piUserTurns is what the owner typed in one pi user message: its text
 // blocks, less harness frames (an attached file, a skill expansion) and

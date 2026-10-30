@@ -2,9 +2,12 @@ package ownerwords
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/agent-sh/tacit/client/internal/digest"
+	"github.com/agent-sh/tacit/client/internal/harnesses"
 	"github.com/agent-sh/tacit/client/internal/hermes/hermestest"
 )
 
@@ -96,5 +99,49 @@ func TestCorpusReadsPiAndHermesOwnerTurns(t *testing.T) {
 	t.Setenv("TACIT_HERMES_DB", "off")
 	if c, err := LoadAll(home, ""); err != nil || c.Stats.Turns["hermes"] != 0 {
 		t.Errorf("hermes off: %v %v", err, c.Stats.Turns)
+	}
+}
+
+// HermesTurn reads a row as the corpus does: their words out of the
+// gateway's frames, nothing of a notice, a pasted table or a tag-framed row.
+func TestHermesTurnReadsARowAsTheCorpusDoes(t *testing.T) {
+	for _, c := range []struct {
+		content, kind, want string
+	}{
+		{"[Replying to: \"Agent report: rotate the keys monthly\"]\n\nonly rotate the keys after a release", "", "only rotate the keys after a release"},
+		{"[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position]\nand keep the build cache\n[/OUT-OF-BAND USER MESSAGE]", "steer", "and keep the build cache"},
+		{"Background job finished.", "internal_notification", ""},
+		{"| host | disk |\n| a | 91% |\n| b | 40% |\n| c | 12% |\n| d | 77% |\n| e | 63% |", "", ""},
+		{"<file name=\"plan.md\">the agent works in the payments repo</file>", "", ""},
+		{"check the queue\n## Findings\n- **The queue is full.**", "", "check the queue"},
+	} {
+		got, ok := HermesTurn(c.content, c.kind, false)
+		if got != c.want || ok != (c.want != "") {
+			t.Errorf("HermesTurn(%.40q) = %q, %v; want %q", c.content, got, ok, c.want)
+		}
+	}
+}
+
+// The corpus reads the top-level sources of the one list (harnesses.Sources),
+// the same globs as before it.
+func TestDefaultSourcesAreTheTopLevelSources(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
+	home := "/home/u"
+	want := []Source{
+		{Glob: filepath.Join(home, ".claude", "projects", "*", "*.jsonl"), Format: digest.Claude},
+		{Glob: filepath.Join(home, ".codex", "sessions", "*", "*", "*", "*.jsonl"), Format: digest.Codex},
+		{Glob: filepath.Join(home, ".codex", "sessions", "*", "*.jsonl"), Format: digest.Codex},
+		{Glob: filepath.Join(home, ".codex", "archived_sessions", "*.jsonl"), Format: digest.Codex},
+		{Glob: filepath.Join(home, ".pi", "agent", "sessions", "*", "*.jsonl"), Format: digest.Pi},
+	}
+	var top []Source
+	for _, s := range harnesses.TopLevel(harnesses.Sources(home)) {
+		if s.Format != digest.Hermes {
+			top = append(top, Source{Glob: s.Glob, Format: s.Format})
+		}
+	}
+	if got := DefaultSources(home); !reflect.DeepEqual(got, want) || !reflect.DeepEqual(got, top) {
+		t.Fatalf("DefaultSources:\n%v\nwant\n%v", got, want)
 	}
 }
