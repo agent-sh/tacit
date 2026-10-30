@@ -526,15 +526,32 @@ func clip(s string, n int) string {
 // ~, or under one of these system roots. Rotation stats them and the
 // ancestor index reads folder names from them, so a route of an API
 // (/v1/messages) or of a forge (/repos/<owner>/<name>/pulls) must not count.
-// Where a path only names a repository, repoPathRx reads every one.
+// Where a path only names a repository, repoPaths reads every one.
 var machinePathRx = regexp.MustCompile(`(?:^|[\s(\x60"'])((?:~|/(?:Users|home|opt|etc|var|usr|srv|mnt|Library))/[A-Za-z0-9._\-/]+)`)
 
-// repoPathRx finds every ~ and absolute path a fact names, for the
-// repository repoid makes of it (SPEC.md, "Suppression", "Orgs"): only a
-// real git root on this machine makes one, so a route names nothing, and a
-// checkout outside those roots (/tmp, /root, /workspace) counts as one
-// under ~ does.
+// repoPathRx finds every ~ and absolute path in a text (repoPaths).
 var repoPathRx = regexp.MustCompile(`(?:^|[\s(\x60"'])((?:~/|/)[A-Za-z0-9._\-][A-Za-z0-9._\-/]*)`)
+
+// pseudoPathRx is a path in a kernel's view (/proc, /sys, /dev), whose
+// links resolve to what the reading process has open (/proc/self/cwd,
+// /dev/fd/3), or under /net, where a lookup mounts another host's export.
+var pseudoPathRx = regexp.MustCompile(`^/(?:proc|sys|dev|net)(?:/|$)`)
+
+// repoPaths are the ~ and absolute paths text names (of the first n read),
+// each for the repository repoid makes of it (SPEC.md, "Suppression",
+// "Orgs"). Only a real git root on this machine makes one, so a route names
+// nothing and a checkout outside machinePathRx's roots (/tmp, /data, /root,
+// /workspace) counts as one under ~ does. Paths in pseudoPathRx are left
+// out: they hold no checkout.
+func repoPaths(text string, n int) []string {
+	var out []string
+	for _, m := range repoPathRx.FindAllStringSubmatch(text, n) {
+		if p := strings.TrimRight(m[1], ".,;:)"); !pseudoPathRx.MatchString(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
 
 // owners reports a fact that is the owner's: their ruling, or one holding
 // words of theirs. The rotation never changes either; it asks them.

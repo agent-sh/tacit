@@ -508,10 +508,12 @@ var projectsPathRx = regexp.MustCompile(`(?:^|/)projects/([A-Za-z0-9._-]+)(?:/([
 
 // pointedRepos are the repositories f's own words point at (SPEC.md,
 // "Suppression", "Orgs"): the absolute and ~ paths it names (its text,
-// applies_to.paths and commands), each the repository repoid makes of it on
-// this machine, or, for a path of another machine (no git root here), the
-// checkout a projects directory path names that some machine's catalog
-// lists (by name or another name of it), or a project folder whose record
+// applies_to.paths and commands, repoPaths), each the repository repoid
+// makes of it on this machine, or, for a path of another machine (no git
+// root here, a place under ~ or a system root as machinePathRx reads it, so
+// never a route such as /api/projects/<name>), the checkout a projects
+// directory path names that some machine's catalog lists (by name or
+// another name of it), or a project folder whose record
 // the path's name is (an old name the forge renamed, its folder suppressed
 // into the current one: a checked pointer code may follow); and the
 // repositories of the forge URLs it names (github.com/<owner>/<name>) that
@@ -541,10 +543,12 @@ func pointedRepos(cache *repoid.Cache, catalog *repoid.Catalog, recs map[string]
 		}
 		return path.Base(w)
 	}
-	for _, m := range repoPathRx.FindAllStringSubmatch(text, 40) {
-		p := strings.TrimRight(m[1], ".,;:)")
+	for _, p := range repoPaths(text, 40) {
 		if rp, ok := cache.Of(p); ok && rp.Slug() != "" {
 			set[rp.Slug()] = true
+			continue
+		}
+		if !machinePathRx.MatchString(p) {
 			continue
 		}
 		if pm := projectsPathRx.FindStringSubmatch(p); pm != nil {
