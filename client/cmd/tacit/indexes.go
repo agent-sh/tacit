@@ -16,6 +16,19 @@ import (
 	"github.com/agent-sh/tacit/client/internal/tree"
 )
 
+// A write whose mask changed a fact or a record writes the indexes again from
+// the masked text, in the same commit (store.Reindex; SPEC.md, "Every write
+// is masked").
+func init() {
+	store.Reindex = func(ctx context.Context, dir string) ([]string, error) {
+		all, _, err := fact.Walk(dir)
+		if err != nil {
+			return nil, err
+		}
+		return regenIndexes(ctx, dir, all, nil)
+	}
+}
+
 // regenIndexes writes the store's generated indexes for facts into the clone:
 // MEMORY.md and every folder's _index.md (internal/tree), removing index
 // files of folders that hold no facts any more. It returns the paths a commit

@@ -505,6 +505,24 @@ func (s *Store) commitPush(ctx context.Context, rels []string, message, writer s
 		}
 		only = true // unrelated staged changes never ride a local write
 	}
+	// What the write adds is masked before anything is staged; a write whose
+	// mask cannot run stops here (SPEC.md, "Every write is masked").
+	if !ownerText(ctx) && !preMasked(ctx) {
+		masked, err := s.maskAdded(ctx, rels)
+		if err != nil {
+			return err
+		}
+		if len(masked) > 0 {
+			fmt.Fprintf(os.Stderr, "tacit: masked secret-shaped text in %s before the commit\n", strings.Join(masked, ", "))
+			if Reindex != nil && touchesIndexes(masked) {
+				extra, err := Reindex(ctx, s.Dir)
+				if err != nil {
+					return fmt.Errorf("%w: the indexes could not be written again from the masked text: %v", ErrRedaction, err)
+				}
+				rels = withAll(rels, extra)
+			}
+		}
+	}
 	// Store-wide merge rules belong to the curator, never an inbox writer.
 	curator := writer == "curator" || strings.HasPrefix(writer, "curator@")
 	if local || curator {

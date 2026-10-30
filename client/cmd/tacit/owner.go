@@ -733,7 +733,9 @@ func (rs *reviewServer) ownerWrite(ctx context.Context, plan func() (*ownerChang
 			// The commit names its files: whatever else is staged in the clone
 			// (a killed run, a hand `git add`) stays out of an owner commit.
 			// .gitattributes is named because the push path may create it.
-			err = rs.s.CommitPushNamedOnceLocked(ctx, append(rels, ".gitattributes"), ch.msg, "curator")
+			// The owner's own text is theirs: the mask every other write goes
+			// through leaves it as they wrote it (SPEC.md, "App").
+			err = rs.s.CommitPushNamedOnceLocked(store.WithOwnerText(ctx), append(rels, ".gitattributes"), ch.msg, "curator")
 			var rej *store.Rejected
 			switch {
 			case err == nil:
