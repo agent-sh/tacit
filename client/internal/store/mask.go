@@ -21,6 +21,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/index"
+	"github.com/agent-sh/tacit/client/internal/secretscan"
 	"github.com/agent-sh/tacit/client/internal/tree"
 )
 
@@ -248,18 +249,25 @@ func (s *Store) unchanged(ctx context.Context, rels []string) bool {
 }
 
 // frontmatter is what the mask reads of a file's frontmatter: its
-// description and the owner's recorded words.
+// description, its commands (a fact's applies_to.commands, a record's
+// commands: an argv can carry a key, and the curator copies a split's
+// commands as the model gave them) and the owner's recorded words.
 type frontmatter struct {
 	Description string `yaml:"description"`
-	Source      struct {
+	AppliesTo   struct {
+		Commands []string `yaml:"commands"`
+	} `yaml:"applies_to"`
+	Commands []string `yaml:"commands"`
+	Source   struct {
 		OwnerQuote string `yaml:"owner_quote"`
 		OwnerWords string `yaml:"owner_words"`
 	} `yaml:"source"`
 }
 
 // planMarkdown plans the mask of one Markdown file: with frontmatter that
-// reads, its description when the write changed it and the runs of body lines
-// HEAD does not hold; otherwise the runs of added lines of the whole text. A
+// reads, its description when the write changed it, the commands the write
+// adds (each alone) and the runs of body lines HEAD does not hold; otherwise
+// the runs of added lines of the whole text. A
 // link's target that is a fact's name and the owner's recorded words are left
 // as they are.
 func planMarkdown(old, now string) maskPlan {
@@ -270,9 +278,9 @@ func planMarkdown(old, now string) maskPlan {
 		return planProse(old, now, protected(now, nil))
 	}
 	oldBody, oldDesc := old, ""
+	var om frontmatter
 	if ofm, ob, ok := fact.Split([]byte(old)); ok {
 		oldBody = string(ob)
-		var om frontmatter
 		if yaml.Unmarshal(ofm, &om) == nil {
 			oldDesc = om.Description
 		}
@@ -281,9 +289,22 @@ func planMarkdown(old, now string) maskPlan {
 	head := now[:len(now)-len(body)]
 	bp := planProse(oldBody, string(body), protected(string(body), words))
 	desc := meta.Description != "" && meta.Description != oldDesc
-	p := maskPlan{texts: bp.texts}
+	p := maskPlan{texts: append([]string(nil), bp.texts...)}
 	if desc {
-		p.texts = append(append([]string(nil), bp.texts...), meta.Description)
+		p.texts = append(p.texts, meta.Description)
+	}
+	// The commands the write adds, each alone: a fact's under applies_to, a
+	// record's at the top.
+	lists := []*cmdList{
+		{key: "applies_to", now: meta.AppliesTo.Commands, old: om.AppliesTo.Commands},
+		{key: "commands", now: meta.Commands, old: om.Commands},
+	}
+	for _, l := range lists {
+		l.first = len(p.texts)
+		l.added = addedEntries(l.old, l.now)
+		for _, i := range l.added {
+			p.texts = append(p.texts, l.now[i])
+		}
 	}
 	p.apply = func(red []string) (string, error) {
 		b, err := bp.apply(red[:len(bp.texts)])
@@ -301,9 +322,68 @@ func planMarkdown(old, now string) maskPlan {
 				out = string(patched)
 			}
 		}
+		for _, l := range lists {
+			masked, changed := append([]string(nil), l.now...), false
+			for j, i := range l.added {
+				if red[l.first+j] != masked[i] {
+					masked[i], changed = red[l.first+j], true
+				}
+			}
+			if !changed {
+				continue
+			}
+			var value any = masked
+			if l.key == "applies_to" {
+				// The whole block is written again, its other lists as they were.
+				fmb, _, _ := fact.Split([]byte(out))
+				var all struct {
+					AppliesTo fact.AppliesTo `yaml:"applies_to"`
+				}
+				if err := yaml.Unmarshal(fmb, &all); err != nil {
+					return "", err
+				}
+				all.AppliesTo.Commands = masked
+				value = all.AppliesTo
+			}
+			patched, err := fact.PatchField([]byte(out), l.key, value)
+			if err != nil {
+				return "", err
+			}
+			out = string(patched)
+		}
 		return out, nil
 	}
 	return p
+}
+
+// cmdList is one list of commands in a file's frontmatter, as the mask plans
+// it: the entries the write adds (by index in now) and where their texts
+// start in the plan.
+type cmdList struct {
+	key      string
+	now, old []string
+	added    []int
+	first    int
+}
+
+// addedEntries is the indexes of the entries of now that old does not hold
+// (as many times), empty ones aside.
+func addedEntries(old, now []string) []int {
+	held := map[string]int{}
+	for _, e := range old {
+		held[e]++
+	}
+	var out []int
+	for i, e := range now {
+		if held[e] > 0 {
+			held[e]--
+			continue
+		}
+		if e != "" {
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 // planProse plans the mask of the runs of lines of now that old does not
@@ -479,9 +559,32 @@ var ledgerIDKeys = map[string]bool{
 	"quote": true, "words": true, "relevance": true, "category": true,
 }
 
+// idLike reports a string value of a ledger line that is an id by its shape
+// (idValue, or a session of a known harness, sessionValue) and holds no
+// family's key (secretscan): `password:<token>` and `sk-or-v1-<hex>` have an
+// id's shape and are prose the mask reads.
+func idLike(v string) bool {
+	if secretscan.MatchString(v) {
+		return false
+	}
+	if m := sessionValue.FindStringSubmatch(v); m != nil {
+		return sessionHarness[m[1]]
+	}
+	return idValue.MatchString(v)
+}
+
+// sessionValue is a session or a cite, <harness>:<id>; sessionHarness the
+// harnesses and sources a ledger names one by (the author's ledgers hold
+// claude, codex, hermes, pi, relay and git).
+var (
+	sessionValue   = regexp.MustCompile(`^([a-z]+):[\w.-]+$`)
+	sessionHarness = map[string]bool{"claude": true, "codex": true, "pi": true, "hermes": true, "grok": true, "muse": true, "agy": true,
+		"dreamer": true, "import": true, "curator": true, "human": true, "relay": true, "git": true, "commit": true, "note": true, "rulebook": true}
+)
+
 // idValue is a string value of a shape no prose has: a fact's name, a store
-// path, a session (<harness>:<id>), a day or a time, a hash.
-var idValue = regexp.MustCompile(`^(?:[a-z0-9][a-z0-9-]*|[\w.@-]+(?:/[\w.@-]+)+\.(?:md|jsonl|json)|[a-z]+:[\w.-]+|\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]+)?|[0-9a-f]{7,64})$`)
+// path, a day or a time, a hash (a session is sessionValue's).
+var idValue = regexp.MustCompile(`^(?:[a-z0-9][a-z0-9-]*|[\w.@-]+(?:/[\w.@-]+)+\.(?:md|jsonl|json)|\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]+)?|[0-9a-f]{7,64})$`)
 
 // planJSONL plans the mask of the lines of a ledger HEAD does not hold: in
 // each, the string values that are prose, by their key and their shape, each
@@ -508,7 +611,7 @@ func planJSONL(old, now string) maskPlan {
 				continue
 			}
 			for _, v := range vs {
-				if !ledgerIDKeys[v.key] && !idValue.MatchString(v.text) {
+				if !ledgerIDKeys[v.key] && !idLike(v.text) {
 					vals = append(vals, value{i, v.start, v.end, v.text})
 				}
 			}

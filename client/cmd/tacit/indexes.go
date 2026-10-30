@@ -18,43 +18,38 @@ import (
 )
 
 // A write whose mask changed a fact or a record writes the indexes again from
-// the masked text, in the same commit, from the facts as that commit holds
-// them (store.Reindex; SPEC.md, "Every write is masked").
+// the masked text, in the same commit, from the facts and records as that
+// commit holds them (store.Reindex; SPEC.md, "Every write is masked").
 func init() {
 	store.Reindex = func(ctx context.Context, dir string, rels []string) ([]string, error) {
-		facts, err := commitFacts(ctx, dir, rels)
+		facts, recs, err := commitTree(ctx, dir, rels)
 		if err != nil {
 			return nil, err
 		}
-		return regenIndexes(ctx, dir, facts, nil)
+		return regenIndexesWith(ctx, dir, facts, recs, nil)
 	}
 }
 
-// commitFacts is the facts as a commit of rels will hold them: a file the
-// commit names as it is in the clone, any other tracked fact as HEAD holds it
-// (a change the commit does not carry is not its: an edit, a file that no
-// longer parses, a deletion), and no fact the clone does not track that the
-// commit does not name (a killed batch's leftover).
+// commitFacts is the facts as a commit of rels will hold them (commitTree).
 func commitFacts(ctx context.Context, dir string, rels []string) ([]*fact.Fact, error) {
+	facts, _, err := commitTree(ctx, dir, rels)
+	return facts, err
+}
+
+// commitTree is the facts and the folder records as a commit of rels will
+// hold them: a file the commit names as it is in the clone, any other tracked
+// one as HEAD holds it (a change the commit does not carry is not its: an
+// edit, a file that no longer parses, a deletion), and none the clone does
+// not track that the commit does not name (a killed batch's leftover, a
+// record written by hand).
+func commitTree(ctx context.Context, dir string, rels []string) ([]*fact.Fact, map[string]*record.Record, error) {
 	all, _, err := fact.Walk(dir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	st, err := fact.LoadState(dir)
 	if err != nil {
-		return nil, err
-	}
-	atHead := func(rel string) *fact.Fact {
-		blob, err := store.Git(ctx, dir, "cat-file", "blob", "HEAD:"+rel)
-		if err != nil {
-			return nil
-		}
-		h, err := fact.Parse(rel, []byte(blob))
-		if err != nil {
-			return nil
-		}
-		st.Apply(h)
-		return h
+		return nil, nil, err
 	}
 	named := map[string]bool{}
 	for _, r := range rels {
@@ -75,26 +70,45 @@ func commitFacts(ctx context.Context, dir string, rels []string) ([]*fact.Fact, 
 	}
 	changed, err := set("diff", "--name-only", "-z", "HEAD")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	untracked, err := set("ls-files", "--others", "--exclude-standard", "-z")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var out []*fact.Fact
+	headBlob := func(rel string) []byte {
+		blob, err := store.Git(ctx, dir, "cat-file", "blob", "HEAD:"+rel)
+		if err != nil {
+			return nil
+		}
+		return []byte(blob)
+	}
+	factAtHead := func(rel string) *fact.Fact {
+		b := headBlob(rel)
+		if b == nil {
+			return nil
+		}
+		h, err := fact.Parse(rel, b)
+		if err != nil {
+			return nil
+		}
+		st.Apply(h)
+		return h
+	}
+	var facts []*fact.Fact
 	walked := map[string]bool{}
 	for _, f := range all {
 		walked[f.Path] = true
 		switch {
 		case named[f.Path]:
-			out = append(out, f)
+			facts = append(facts, f)
 		case untracked[f.Path]:
 		case changed[f.Path]:
-			if h := atHead(f.Path); h != nil {
-				out = append(out, h)
+			if h := factAtHead(f.Path); h != nil {
+				facts = append(facts, h)
 			}
 		default:
-			out = append(out, f)
+			facts = append(facts, f)
 		}
 	}
 	// A tracked fact the walk did not read (deleted in the clone, or no
@@ -108,12 +122,49 @@ func commitFacts(ctx context.Context, dir string, rels []string) ([]*fact.Fact, 
 	}
 	sort.Strings(gone)
 	for _, rel := range gone {
-		if h := atHead(rel); h != nil {
-			out = append(out, h)
+		if h := factAtHead(rel); h != nil {
+			facts = append(facts, h)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
-	return out, nil
+	sort.Slice(facts, func(i, j int) bool { return facts[i].Path < facts[j].Path })
+
+	walkedRecs, _ := record.Walk(dir)
+	recs := map[string]*record.Record{}
+	recordAtHead := func(rel string) *record.Record {
+		b := headBlob(rel)
+		if b == nil {
+			return nil
+		}
+		r, err := record.Parse(path.Dir(rel), b)
+		if err != nil {
+			return nil
+		}
+		return r
+	}
+	for folder, r := range walkedRecs {
+		rel := folder + "/" + record.FileName
+		switch {
+		case named[rel]:
+			recs[folder] = r
+		case untracked[rel]:
+		case changed[rel]:
+			if h := recordAtHead(rel); h != nil {
+				recs[folder] = h
+			}
+		default:
+			recs[folder] = r
+		}
+	}
+	for rel := range changed {
+		folder := path.Dir(rel)
+		if path.Base(rel) != record.FileName || named[rel] || walkedRecs[folder] != nil || !record.IsFolder(folder) {
+			continue
+		}
+		if h := recordAtHead(rel); h != nil {
+			recs[folder] = h
+		}
+	}
+	return facts, recs, nil
 }
 
 // walksAsFact reports a store path fact.Walk reads as a fact: a .md file
@@ -147,6 +198,12 @@ func walksAsFact(rel string) bool {
 // git tracks it, so the commit records its removal once.
 func regenIndexes(ctx context.Context, dir string, facts []*fact.Fact, snap snapshot) ([]string, error) {
 	recs, _ := record.Walk(dir)
+	return regenIndexesWith(ctx, dir, facts, recs, snap)
+}
+
+// regenIndexesWith is regenIndexes with the folder records given (a masked
+// write's commitTree), not read from the clone.
+func regenIndexesWith(ctx context.Context, dir string, facts []*fact.Fact, recs map[string]*record.Record, snap snapshot) ([]string, error) {
 	gen := tree.GenerateWith(facts, recs, "")
 	write, remove, err := tree.Plan(dir, gen)
 	if err != nil {

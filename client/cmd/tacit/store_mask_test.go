@@ -198,3 +198,38 @@ func TestTheIndexesOfAMaskedWriteAreItsTreesFacts(t *testing.T) {
 		}
 	}
 }
+
+// The folder records of a masked write's indexes are the commit's too: a
+// record the clone does not track is in none of them, and a tracked one
+// another writer changed is there as HEAD holds it.
+func TestTheIndexesOfAMaskedWriteHoldItsTreesRecords(t *testing.T) {
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q", "-b", "main")
+	rec := func(name, desc string) string {
+		return "---\nkind: project\nname: " + name + "\ndescription: " + desc + "\nstatus: live\nwas: []\ncreated: \"2026-10-30\"\ncreated_by: curator\n---\n\nThe " + name + ".\n"
+	}
+	write := func(rel, data string) {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("projects/kept/_record.md", rec("kept", "the kept service"))
+	write("system/a.md", factFile("a"))
+	markAudited(t, dir)
+	gitIn(t, dir, "add", "-A")
+	gitIn(t, dir, "commit", "-qm", "seed")
+	write("projects/kept/_record.md", rec("kept", "the kept service, edited by another writer"))
+	write("projects/stray/_record.md", rec("stray", "a stray record"))
+	_, recs, err := commitTree(context.Background(), dir, []string{"system/a.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recs["projects/stray"] != nil {
+		t.Errorf("a record the clone does not track is in the commit's: %+v", recs["projects/stray"])
+	}
+	if r := recs["projects/kept"]; r == nil || r.Description != "the kept service" {
+		t.Errorf("the tracked record is not as HEAD holds it: %+v", r)
+	}
+}
