@@ -61,10 +61,13 @@ func TestReadSessionsThroughTheFacade(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, f := range files {
-			st, err := evidence.ReadFileState(f, src.Format, evidence.State{}, 0, func(e evidence.Event) error {
+			if _, err := evidence.ReadFile(f, src.Format, 0, func(e evidence.Event) error {
 				got = append(got, e)
 				return nil
-			})
+			}); err != nil {
+				t.Fatal(err)
+			}
+			st, err := evidence.ReadFileState(f, src.Format, evidence.State{}, 0, func(evidence.Event) error { return nil })
 			if err != nil {
 				t.Fatal(err)
 			}

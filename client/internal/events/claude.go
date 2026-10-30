@@ -104,7 +104,8 @@ func (r *claudeReader) note(l claudeLine) {
 }
 
 // line is a line's events, and false when the line does not parse: it is not
-// JSON, or not a JSON object whose fields have the types Claude Code writes.
+// JSON, or its JSON is not a Claude Code line (a list or a string where the
+// object goes, a field the reader reads of another type).
 func (r *claudeReader) line(raw []byte) ([]Event, bool) {
 	var l claudeLine
 	if json.Unmarshal(raw, &l) != nil {

@@ -63,8 +63,10 @@ type codexLine struct {
 	Payload   json.RawMessage `json:"payload"`
 }
 
-// codexPayload is the fields read of a payload; ones whose type varies are
-// kept raw.
+// codexPayload is the fields read of a response_item's payload; ones whose
+// type varies are kept raw. Each record has its own (codexEvent, context,
+// compacted), so a field the reader does not read of a record never makes it
+// fail to decode.
 type codexPayload struct {
 	Type      string          `json:"type"`
 	Role      string          `json:"role"`
@@ -78,31 +80,41 @@ type codexPayload struct {
 	Action    json.RawMessage `json:"action"`
 	Tools     json.RawMessage `json:"tools"`
 	Content   json.RawMessage `json:"content"`
-	Message   json.RawMessage `json:"message"`
-	Success   json.RawMessage `json:"success"`
-	ExitCode  json.RawMessage `json:"exit_code"`
-	Result    json.RawMessage `json:"result"`
-	Item      json.RawMessage `json:"item"`
 }
 
-func (r *codexReader) context(raw json.RawMessage) {
+// codexEvent is the fields read of an event_msg's payload.
+type codexEvent struct {
+	Type     string          `json:"type"`
+	CallID   string          `json:"call_id"`
+	Success  json.RawMessage `json:"success"`
+	ExitCode json.RawMessage `json:"exit_code"`
+	Result   json.RawMessage `json:"result"`
+	Item     json.RawMessage `json:"item"`
+}
+
+// context takes a turn_context's cwd and model, and reports whether its
+// payload decoded.
+func (r *codexReader) context(raw json.RawMessage) bool {
 	var c struct {
 		Cwd   string `json:"cwd"`
 		Model string `json:"model"`
 	}
-	if json.Unmarshal(raw, &c) == nil {
-		if c.Cwd != "" {
-			r.cwd = c.Cwd
-		}
-		if c.Model != "" {
-			r.model = c.Model
-		}
+	if json.Unmarshal(raw, &c) != nil {
+		return false
 	}
+	if c.Cwd != "" {
+		r.cwd = c.Cwd
+	}
+	if c.Model != "" {
+		r.model = c.Model
+	}
+	return true
 }
 
 // line is a line's events, and false when the line does not parse: it is not
-// JSON, not a JSON object of a rollout line's fields, or a response_item
-// whose payload does not decode.
+// JSON, its JSON is not a rollout line (a list or a string where the object
+// goes, a field of another type), or the payload of a record the reader reads
+// (response_item, event_msg, turn_context, compacted) does not decode.
 func (r *codexReader) line(raw []byte) ([]Event, bool) {
 	var l codexLine
 	if json.Unmarshal(raw, &l) != nil {
@@ -119,16 +131,23 @@ func (r *codexReader) line(raw []byte) ([]Event, bool) {
 	at := ownerwords.JSONTime(l.Timestamp)
 	switch l.Type {
 	case "turn_context":
-		r.context(l.Payload)
+		return nil, r.context(l.Payload)
 	case "compacted":
-		var p codexPayload
-		_ = json.Unmarshal(l.Payload, &p)
+		// The entry marks its compaction even when its payload does not
+		// decode.
+		var p struct {
+			Message json.RawMessage `json:"message"`
+		}
+		ok := json.Unmarshal(l.Payload, &p) == nil
 		r.prior = "compacted"
-		return []Event{r.text(KindCompaction, "system", digest.Harness, "compacted", rawText(p.Message), at)}, true
+		return []Event{r.text(KindCompaction, "system", digest.Harness, "compacted", rawText(p.Message), at)}, ok
 	case "event_msg":
-		var p codexPayload
-		_ = json.Unmarshal(l.Payload, &p)
+		// What decoded of a payload with a field of another type is taken,
+		// as before; the line is counted.
+		var p codexEvent
+		err := json.Unmarshal(l.Payload, &p)
 		r.eventMsg(p)
+		return nil, err == nil
 	case "response_item":
 		var p codexPayload
 		if json.Unmarshal(l.Payload, &p) != nil {
@@ -139,7 +158,7 @@ func (r *codexReader) line(raw []byte) ([]Event, bool) {
 	return nil, true
 }
 
-func (r *codexReader) eventMsg(p codexPayload) {
+func (r *codexReader) eventMsg(p codexEvent) {
 	switch p.Type {
 	case "task_started":
 		r.open, r.active = true, false

@@ -200,9 +200,9 @@ type lineReader interface {
 // emit returns an error ReadFile stops and returns it, with the offset of
 // the line it stopped in, from which a read gives that line's events again.
 // ReadFileState with a saved State starts at its cursor instead, without the
-// pass over the lines before it.
+// pass over the lines before it. A read at the end reads nothing.
 func ReadFile(path string, f digest.Format, from int64, emit func(Event) error) (int64, error) {
-	st, err := ReadFileState(path, f, State{Offset: from}, 0, emit)
+	st, err := readFile(path, f, State{Offset: from}, 0, emit, false)
 	return st.Offset, err
 }
 
@@ -213,10 +213,12 @@ func ReadFile(path string, f digest.Format, from int64, emit func(Event) error) 
 // it costs only the lines after it, and gives the events ReadFile gives from
 // there. A bare cursor, or a transcript whose bytes changed (a file replaced
 // or rewritten), is read as ReadFile reads it, with a pass over the lines
-// before the cursor. A State at the transcript's end is returned as it is,
-// with no read. The State returned counts the lines before its cursor that
-// did not parse (State.Unparsed): from's count and the lines read after its
-// cursor when the read started there, else every line the read passed over.
+// before the cursor. The State returned counts the lines before its cursor
+// that did not parse (State.Unparsed): from's count and the lines read after
+// its cursor when the read started there, else every line the read passed
+// over. At the transcript's end a State a read returned (State.Kept) is
+// returned as it is, with no read; a bare cursor there is read with the pass,
+// so the State returned holds the count.
 //
 // limit > 0 stops the read at the end of the first line that ends at least
 // limit bytes past from's cursor, with what the reader kept, so a long
@@ -227,6 +229,12 @@ func ReadFile(path string, f digest.Format, from int64, emit func(Event) error) 
 // cursor and the error came at the first event, else a bare cursor at the
 // line.
 func ReadFileState(path string, f digest.Format, from State, limit int64, emit func(Event) error) (State, error) {
+	return readFile(path, f, from, limit, emit, true)
+}
+
+// readFile is ReadFileState. count is false for ReadFile, which returns no
+// count, so a cursor at the end is returned with no read.
+func readFile(path string, f digest.Format, from State, limit int64, emit func(Event) error, count bool) (State, error) {
 	plain := transcript.Plain(path)
 	if from.Offset < 0 {
 		return from, fmt.Errorf("%s: negative offset %d", plain, from.Offset)
@@ -241,7 +249,9 @@ func ReadFileState(path string, f digest.Format, from State, limit int64, emit f
 	if from.Offset > size {
 		return from, fmt.Errorf("%s: %w (%d > %d)", plain, ErrPastEnd, from.Offset, size)
 	}
-	if from.Offset == size {
+	if from.Offset == size && (!count || size == 0 || from.kept != nil && from.kept.Format == f) {
+		// Nothing to read, and a State a read returned holds its count. A
+		// bare cursor's count is the pass's.
 		return from, nil
 	}
 	head := transcript.Head(path, headBytes)
@@ -271,7 +281,7 @@ func ReadFileState(path string, f digest.Format, from State, limit int64, emit f
 	// A read from the start has nothing before it to keep; what the readers
 	// take from the first line (Codex's session_meta, pi's header) comes from
 	// the head, so a State kept there before that line was whole is not used.
-	if k := from.kept; k != nil && from.Offset > 0 && from.unparsed >= 0 && k.Format == f && k.HeadLen >= 0 && k.HeadLen <= int64(len(head)) && hash(head[:k.HeadLen]) == k.Head {
+	if k := from.kept; k != nil && from.Offset > 0 && k.Format == f && k.HeadLen >= 0 && k.HeadLen <= int64(len(head)) && hash(head[:k.HeadLen]) == k.Head {
 		if fh, br, err = openAfter(path, k, from.Offset); err != nil {
 			return from, err
 		}
