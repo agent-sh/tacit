@@ -154,3 +154,36 @@ A request of fewer than 3 distinct words of 3 letters or more ("deploy now?", "f
 | all prompt blocks, 14 days | 282 to 280 | 65 of 74, unchanged | 109 to 107 |
 
 Over the 215 prompt cases of every origin (gone checkouts left out), 6 change, all of them short requests: noise lines -5 (95% bootstrap over cases -10 to -1), useful lines +0, and 1 weak line fewer. The 22-prompt recall probe stays at 10.
+
+## Tried and not shipped (2026-10-30)
+
+These changes were measured against release 0.9.14 and not shipped; their code is not in the repository. Prompt anchors and recall were measured with `delivery/labelled_replay.py` on the graded prompt cases (owner prompts only; for the 14 days, cases whose checkout is gone left out). The RULE line gate and the "used" detector were measured with scripts of their own, on the labelled lines. Noise is the share of graded lines graded noise; a change can print lines that were never graded, and their counts are given where they matter.
+
+**Prompt anchors.** Target, set before measuring: noise at or below 25%, at least 90% of the useful lines the release prints kept. Three changes, alone and together:
+
+| arm | 3 days: lines | useful (of 57) | noise | 14 days: lines | useful (of 40) | noise | probe (of 22) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| release 0.9.14 | 238 | 55 | 50% | 171 | 39 | 53% | 10 |
+| a word in more than 1% of the owner's own turns is no anchor, no name match, no phrase | 210 | 44 | 48% | 148 | 30 | 52% | 9 |
+| the same at 0.5% | 193 | 31 | 51% | 124 | 22 | 53% | 7 |
+| a machine's fact needs a host, tool or path word matched | 203 | 45 | 48% | 133 | 30 | 50% | 9 |
+| a request of fewer than 3 distinct words gets no rule slot and no action line | 234 | 55 | 50% | 169 | 39 | 52% | 10 |
+
+The last one shipped as its own change ("Short requests", above): it removes noise and no useful line. The owner's-words arms lose useful lines because a common word of the owner's also stopped counting as a name match: of the useful lines they lost on the 3 days, 11 of 11 (1%) and 19 of 24 (0.5%) had come in on two name matches. From the 58 lines whose only coherence was the anchor, they removed almost only noise.
+
+So a fourth arm keeps the owner's common words as name matches and phrases and only stops them anchoring. Every line it adds was graded by hand:
+
+| arm | 3 days: lines | useful (of 57) | noise | 14 days: lines | useful (of 40) | noise |
+|---|---:|---:|---:|---:|---:|---:|
+| release 0.9.14 | 238 | 55 | 50% | 171 | 39 | 53% |
+| no anchor on a word in more than 0.2% of the owner's turns | 233 | 54 | 48% | 155 | 39 | 50% |
+
+It removes 16 noise lines and one useful one over the two windows. It is not shipped: the gain is small next to one rater's noise, and the hook would need a table of the owner's word counts, built on each machine from their turns and kept current. The machine-match arm loses a fifth of the useful lines.
+
+**Recall.** No target was set. The question was whether more of the 22 owner prompts that a stored fact answers get it. Adding the end of the agent's previous message to the query: always (its last 1,200 characters), 5 of 22, with 23 of 57 useful lines kept; always, its last 400 characters, 6; only after a request that points back ("it", "that", "this") or a short one, 9, with 50 of 57 kept; only for a short request, 8. Matching repository names fuzzily against the catalog changed no line. The previous message brings its own subject into the query.
+
+**RULE lines.** Target, set before measuring: of the 130 graded RULE lines, at least 25 of the 37 one-off instructions demoted (a question, a hedge, a time-bound order, status narration, a dated approval), at most 3 of the 80 standing rules lost. The gate tried is a set of word and phrase patterns for those shapes. It demoted 22 with 1 standing rule lost, or 23 with 2. The patterns were written from these same lines, so the numbers are in-sample; on the script's two halves the 22 split as 15 of 20 and 7 of 17. Most one-offs left are plain imperatives that read like standing rules.
+
+**Relevance learned from use.** The plan was to stop unless a no-model detector of use agreed with the graded labels. The detector: a delivered fact was used when the agent opened it, or when one of its distinctive tokens (a path, a command, a flag, an identifier) shows up in the agent's next tool calls and was not in the context before. The sessions were read through tacit's own event reader (`client/pkg/evidence`). Over 364 graded lines (240 prompt, 124 tool-call), at the default settings it calls 18 lines used, 6 of the 87 useful ones: recall 7%, precision 33%, Cohen's kappa 0.04. Over 54 settings (how many calls after the delivery, owner turns crossed, the agent's own text, words rare in the store's descriptions), kappa stays between 0.02 and 0.07. For 54 of the 87 useful lines the token test has nothing to find: the fact changed what the agent decided, not a token it typed. So no learner was replayed and no idle step was built.
+
+**Owner loop: closing old questions.** Not built. SPEC gives closing an agent's question to the owner. Of the 31 questions agents asked in the review files, 24 were still open on 2026-10-30, 7 of them older than 7 days.
