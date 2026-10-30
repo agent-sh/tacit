@@ -72,7 +72,14 @@ func TestTheCuratorWritesNoKeyItsNoteBroughtIn(t *testing.T) {
 		}
 	}
 	// The curator's model copies the note's flags into the fact, key and all.
-	split, _ := json.Marshal([]map[string]any{{"origin": "exact-serve-wrapper", "name": "serve-wrapper-flags", "description": "The exact local serve wrapper is the source of truth for argv",
+	// A fact a killed batch left in the clone, untracked: no commit names it,
+	// so no index the commit holds may name it either.
+	stray := "---\nname: stray-leftover\ndescription: a stray leftover the server never got\ntype: machine_fact\nscope: machines/" + store.ShortHost() + "\nsource:\n  harness: curator\n  host: " + store.ShortHost() + "\n  kind: observed\ncreated: \"2026-10-29\"\n---\n\nleft by a killed run\n"
+	os.MkdirAll(filepath.Join(s.Dir, "machines", store.ShortHost()), 0o755)
+	if err := os.WriteFile(filepath.Join(s.Dir, "machines", store.ShortHost(), "stray-leftover.md"), []byte(stray), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	split, _ := json.Marshal([]map[string]any{{"origin": "exact-serve-wrapper", "name": "serve-wrapper-flags", "description": "The serve wrapper's `--api-key " + key + "` and flags are the source of truth for argv",
 		"type": "machine_fact", "scope": "machines/" + store.ShortHost(), "kind": "observed",
 		"body": "Production flags include -fa on, --parallel 1, --jinja, `--api-key " + key + "`, --metrics, plus the model paths in the wrapper."}})
 	response, _ := json.Marshal(map[string]any{"result": string(split), "total_cost_usd": .01})
@@ -103,10 +110,19 @@ func TestTheCuratorWritesNoKeyItsNoteBroughtIn(t *testing.T) {
 	if !strings.Contains(string(committed), "--metrics, plus the model paths in the wrapper") {
 		t.Fatalf("the mask took more than the key:\n%s", committed)
 	}
+	// The description is masked too, and the indexes written again from the
+	// masked text hold the facts the commit holds and no other.
 	cmd = exec.Command("git", "show", "HEAD:MEMORY.md")
 	cmd.Dir = s.Dir
-	if mem, err := cmd.Output(); err == nil && strings.Contains(string(mem), "Zq7Vx9") {
-		t.Fatal("MEMORY.md holds the key")
+	mem, err := cmd.Output()
+	if err != nil || !strings.Contains(string(mem), "serve-wrapper-flags") {
+		t.Fatalf("MEMORY.md is not committed with the fact: %v\n%s", err, mem)
+	}
+	if strings.Contains(string(mem), "Zq7Vx9") {
+		t.Fatalf("MEMORY.md holds the key:\n%s", mem)
+	}
+	if strings.Contains(string(mem), "stray-leftover") {
+		t.Fatalf("MEMORY.md names a fact the commit does not hold:\n%s", mem)
 	}
 }
 
