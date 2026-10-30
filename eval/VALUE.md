@@ -1331,3 +1331,21 @@ Under the shipped rules the four fresh samples drawn from the last versions keep
 | **gone paths first (shipped)** | 30 delivered facts of this machine naming a path that is gone | **24** | 0 | 2 | 2 | 2 |
 
 The facts the old order takes first are held back from every hook until they are reworded, so checking them later costs nothing in the meantime; a stale fact of this machine is delivered until it is checked. At 60 facts a run the 524 flagged facts take about nine runs before the claims come up again.
+
+## Links to what a fact replaced (2026-10-30)
+
+The link step called a link dead when its target had been replaced and the replacement chain had a clear live end. When that end was the linking fact itself, it unwrapped the link to plain text, or, in a ruling, put a `LINK?` line to the owner. Those links are where the fact came from: a ruling the rebuild made from the owner's statements says "Made by code from [[x-said-once]] (date, session)", and each statement's `superseded_by` names the ruling. They are now left as they are (SPEC, Link repair).
+
+Measured on the store at 2026-10-30 (`tacit links --dry-run` on a clone, the v0.9.14 binary and this one):
+
+| | v0.9.14 | now |
+|---|---|---|
+| dead targets in rulings | 293: 284 open in Needs you (91 rulings), 9 in 4 replaced rulings | 0 |
+| of them, links to a fact the ruling replaced | 293 | left as they are |
+| other facts' links the step would change | 0 | 0 |
+
+The review files hold 305 `LINK?` lines. 299 say the link "is superseded by [[the ruling]], which is this fact". 5 propose rewriting a replaced ruling's link to the statement it was made of into a link to the ruling that later replaced it; that rule was not made of that statement, so the rewrite is wrong. 1 named no fact and is settled.
+
+Before this, the step had also unwrapped such links in agents' facts: `eval/curate/link_history.py` over the store's 12 link commits finds 22 links changed in fact files, 13 of them links to a fact the fact replaced (4 facts, 2026-10-27 and 10-28) and 9 names no fact had.
+
+The proposal to rewrite a ruling's link outside the owner's quoted words to the one live fact that replaced its target was built and measured too. On this store it rewrites 9 links and all 9 are wrong, the replaced rulings' provenance links above; once those are left as they are it has no link to rewrite. It is not shipped.

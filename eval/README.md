@@ -27,6 +27,7 @@ Your own inputs (`truth.jsonl`, `ab/tasks.json`, `ab/results/`, a corpus manifes
 | `curate/split.py` | Rewrites bundled memory notes as one-fact entries into a scratch store. | one per batch |
 | `curate/recheck.py` | Offline contradiction pass over a curated store, report only. | one per 25 pairs |
 | `../client/tools/envelope` (Go) | The curator's rulings pass for single inbox notes through the judge route: how many answers are no JSON array (the curator refuses them whole), whether a sent-back answer comes back clean, and how many hold an entry; `-template` measures another prompt. | one per call, two with a retry |
+| `curate/link_history.py` | Every link the curator's link step changed in a fact file, from git: whether the fact had replaced the target (provenance), another fact had, or no fact had the name. | none |
 | `derived/backtest.py` | The thresholds behind derived hot spots and co-change, from plain git history. | none |
 | `secrets/token_rules.py` | The pre-receive secret scan, run the hook's way, on random keys of each provider's shape (`sk-`, Slack, Tailscale) and on fact names with a segment that starts like one: the share it refuses, beside any `--compare` regex, for this hook or another (`--hook`). Needs GNU grep. | none |
 
