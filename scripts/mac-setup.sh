@@ -159,7 +159,7 @@ scrump_ok() {
   [[ ${#out} -eq ${#in} && "$out" == *"****"* && "$out" != *Zq7Vx9* ]] || return 1
   # Records mode keeps batched texts apart (tacit#84): the issue's repro, the
   # second record's password masked, the first record left as it is.
-  first="deploy token_url: 'https://auth.example.invalid/oauth/pppppppppppppppppppp"
+  first="deploy token_url: 'https://auth.example.invalid/oauth/$(printf 'p%.0s' {1..80})"
   second="pass""word: '""Zq7Vx9""Lm2Kp4""' and the rest"
   out=$(printf '%s\036%s' "$first" "$second" | PATH="$bin_dir:$PATH" scrump --profile text --records scrub - -o - 2>/dev/null) || return 1
   [[ "${out%%$'\036'*}" == "$first" && "${out#*$'\036'}" != *Zq7Vx9* && "${out#*$'\036'}" == *"****"* ]]
@@ -167,9 +167,11 @@ scrump_ok() {
 if scrump_ok; then
   say "scrump with the text profile and records mode works"
 else
-  command -v cargo >/dev/null 2>&1 || die "scrump (text profile, records mode) is missing and cargo is not installed: brew install rustup && rustup-init -y, open a new shell, then rerun (it builds scrump at the pinned commit)"
+  command -v cargo >/dev/null 2>&1 || die "scrump is missing, or lacks the text profile or records mode, and cargo is not installed: brew install rustup && rustup-init -y, open a new shell, then rerun (it builds scrump at the pinned commit)"
   say "building scrump (pinned commit) into $bin_dir"
-  run cargo install --locked --root "$HOME/.local" --git https://github.com/avifenesh/scrump --rev "$scrump_rev" scrump-cli
+  # --force: a scrump the release installer copied in is no cargo install, and
+  # cargo would refuse to replace it.
+  run cargo install --force --locked --root "$HOME/.local" --git https://github.com/avifenesh/scrump --rev "$scrump_rev" scrump-cli
   if [[ $dry_run -eq 0 ]] && ! scrump_ok; then
     die "scrump installed but its text profile or records mode did not mask the canary"
   fi

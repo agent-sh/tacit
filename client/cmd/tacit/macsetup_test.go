@@ -123,13 +123,27 @@ sed 's/=.*/=************/'`)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	mustContain(t, out, "+ cargo install --locked --root "+s.home+"/.local --git https://github.com/avifenesh/scrump --rev b2b3178c412ee5d99aaf36233d3952c2d4e796ca scrump-cli")
+	mustContain(t, out, "+ cargo install --force --locked --root "+s.home+"/.local --git https://github.com/avifenesh/scrump --rev b2b3178c412ee5d99aaf36233d3952c2d4e796ca scrump-cli")
+	mustNotContain(t, out, "records mode works")
+}
+
+// A scrump that takes --records but scans one stream keeps the repro's
+// password, so it is rebuilt at the pin too.
+func TestMacSetupRebuildsAScrumpThatKeepsRecordsTogether(t *testing.T) {
+	s := newStubMac(t)
+	s.stub(t, "scrump", `sed 's/=.*/=************/'`)
+	s.stub(t, "cargo", `[ "$1" = --version ] && echo cargo; exit 0`)
+	out, err := s.run(t, "--server", "http://mac-reachable.example:7447/", "--enroll-ssh", "root@203.0.113.10")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	mustContain(t, out, "+ cargo install --force --locked --root "+s.home+"/.local --git https://github.com/avifenesh/scrump --rev b2b3178c412ee5d99aaf36233d3952c2d4e796ca scrump-cli")
 	mustNotContain(t, out, "records mode works")
 }
 
 func TestMacSetupWriterDryRun(t *testing.T) {
 	s := newStubMac(t)
-	// scrump with the text profile: masks the value at the same length.
+	// scrump 0.2.0: the text profile and records mode (recordsScrump).
 	s.stub(t, "scrump", recordsScrump)
 	out, err := s.run(t, "--server", "http://mac-reachable.example:7447/", "--enroll-ssh", "root@203.0.113.10")
 	if err != nil {
@@ -229,7 +243,7 @@ func TestMacSetupDreamAndCodexDryRun(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(s.home, ".codex"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// No scrump: it is built from main with cargo.
+	// No scrump: it is built at the pin with cargo.
 	s.stub(t, "cargo", `[ "$1" = --version ] && echo cargo; exit 0`)
 	s.env = []string{"TACIT_ENROLL_SSH=root@203.0.113.10"}
 	out, err := s.run(t, "--server", "http://100.64.0.10:7447", "--with-dream", "--no-app", "--env-file", "/Users/someone/bedrock.env")
@@ -238,7 +252,7 @@ func TestMacSetupDreamAndCodexDryRun(t *testing.T) {
 	}
 	bin := s.home + "/.local/bin"
 	mustContain(t, out,
-		"+ cargo install --locked --root "+s.home+"/.local --git https://github.com/avifenesh/scrump --rev b2b3178c412ee5d99aaf36233d3952c2d4e796ca scrump-cli",
+		"+ cargo install --force --locked --root "+s.home+"/.local --git https://github.com/avifenesh/scrump --rev b2b3178c412ee5d99aaf36233d3952c2d4e796ca scrump-cli",
 		"+ "+bin+"/tacit keygen codex",
 		"+ "+bin+"/tacit keygen dreamer",
 		"enroll(\\\"dreamer@macbook\\\"",
