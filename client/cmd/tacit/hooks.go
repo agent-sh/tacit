@@ -393,7 +393,43 @@ func promptHits(ctx context.Context, ix *search.Index, sit search.Situation, p s
 	// The repo-first lines: the fact whose metadata names a path or command
 	// of the request, and the best rule or decision for it (hooks_delivery.go).
 	out = append(out, promptMetaHits(ctx, ix, sit, p, withSeen(seen, out))...)
-	return append(out, promptActionHits(ctx, ix, sit, p, withSeen(seen, out), out)...), nil
+	out = append(out, promptActionHits(ctx, ix, sit, p, withSeen(seen, out), out)...)
+	return withoutEchoes(out, p), nil
+}
+
+// echoShare: a line whose name and description words the request holds for
+// at least this share of them says back what the request says. Measured on
+// the graded prompt blocks (eval/DELIVERY.md, "Echoes of the request"): at
+// 0.7 it drops 32 lines of program-written prompts (a scheduled review's own
+// instructions said back to it) and no useful line; at 0.6 it dropped two
+// useful ones; owner prompts lost nothing at 0.5 to 0.8.
+const echoShare = 0.7
+
+// withoutEchoes is hits less the lines that echo the request p. No
+// backfill: the line is dropped, not replaced by the next candidate.
+func withoutEchoes(hits []search.Hit, p string) []search.Hit {
+	words := map[string]bool{}
+	for _, t := range search.Terms(p) {
+		words[search.TermKey(t)] = true
+	}
+	out := hits[:0:0]
+	for _, h := range hits {
+		keys := map[string]bool{}
+		for _, t := range search.Terms(h.Name + " " + h.Description) {
+			keys[search.TermKey(t)] = true
+		}
+		in := 0
+		for k := range keys {
+			if words[k] {
+				in++
+			}
+		}
+		if len(keys) > 0 && float64(in) >= echoShare*float64(len(keys)) {
+			continue
+		}
+		out = append(out, h)
+	}
+	return out
 }
 
 // promptSelection takes curated matches above the BM25 floor or with supported

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
@@ -167,5 +168,22 @@ func TestPromptRelevanceBeforeLimit(t *testing.T) {
 	}
 	if names(got) != "valid" {
 		t.Fatalf("valid candidate starved: %s", names(got))
+	}
+}
+
+// A line whose words the request already holds (a scheduled job's own
+// instructions, said back to it) is not printed, and nothing takes its place;
+// a fact that matches the request and adds to it is printed.
+func TestPromptBlockLeavesOutEchoesOfTheRequest(t *testing.T) {
+	ix := relevanceIndex(t, []fact.Meta{
+		{Name: "review-tool-failures-weekly", Description: "Review the tool failures weekly and fix their root cause"},
+		{Name: "tool-failures-fix-at-source", Description: "Review tool failures weekly: fix the root cause in the mods, rules or scripts that let them happen, and log what changed"},
+	})
+	got, err := promptHits(context.Background(), ix, search.Situation{}, "Review the tool failures weekly and fix their root cause, then report", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Split(names(got), ","); slices.Contains(n, "review-tool-failures-weekly") || !slices.Contains(n, "tool-failures-fix-at-source") {
+		t.Fatalf("got %v: want where to fix, not the instructions said back", n)
 	}
 }
