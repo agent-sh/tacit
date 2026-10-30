@@ -243,7 +243,14 @@ func TestPromptShortRequestHasNoRuleSlot(t *testing.T) {
 			t.Errorf("%q: %s, want %s", p, got, want)
 		}
 	}
-	if !shortRequest("deploy it") || shortRequest("deploy the widget now") {
-		t.Fatal("shortRequest")
+	for p, want := range map[string]bool{
+		"deploy now":            true,
+		"deploy the widget now": false,
+		"déploie ça maintenant": true,  // a word of 2 letters counts for no script
+		"fix src/main.go":       false, // a path's parts are words
+	} {
+		if shortRequest(p) != want {
+			t.Errorf("shortRequest(%q) = %v", p, !want)
+		}
 	}
 }

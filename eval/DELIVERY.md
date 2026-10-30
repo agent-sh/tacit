@@ -145,7 +145,7 @@ Not done here: the dreamer side, a fact made only from a program-written prompt.
 
 ## Short requests (2026-10-30)
 
-A request of fewer than 3 distinct words ("go on", "deploy now?") names too little to pick a rule or an action for. It now gets neither the rule slot nor the action line; its ranked and metadata lines stay. Measured with `delivery/labelled_replay.py` on the graded prompt cases (cases whose checkout is gone left out), against #72's head:
+A request of fewer than 3 distinct words of 3 letters or more ("deploy now?", "fix the cache") names too little to pick a rule or an action for. It now gets neither the rule slot nor the action line; its ranked and metadata lines stay. Measured with `delivery/labelled_replay.py` on the graded prompt cases (cases whose checkout is gone left out), against #72's head:
 
 | set | lines | useful kept | noise |
 |---|---:|---:|---:|
@@ -153,4 +153,4 @@ A request of fewer than 3 distinct words ("go on", "deploy now?") names too litt
 | owner prompts, 14 days | 171 to 169 | 39 of 40, unchanged | 85 to 83 |
 | all prompt blocks, 14 days | 282 to 280 | 65 of 74, unchanged | 109 to 107 |
 
-Over the 228 cases, 6 change: noise lines -5 (95% bootstrap over cases -10 to -1), useful lines +0, and 1 weak line fewer. The 22-prompt recall probe stays at 10.
+Over the 215 prompt cases of every origin (gone checkouts left out), 6 change, all of them short requests: noise lines -5 (95% bootstrap over cases -10 to -1), useful lines +0, and 1 weak line fewer. The 22-prompt recall probe stays at 10.
