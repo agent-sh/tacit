@@ -556,8 +556,7 @@ func (a *assessor) realRepos(folder, name string, rc check.RepoCheck) ([]assess.
 	for _, f := range live {
 		text := f.Meta.Description + "\n" + f.Body + "\n" + strings.Join(f.Meta.AppliesTo.Paths, "\n") + "\n" + strings.Join(f.Meta.AppliesTo.Commands, "\n")
 		inPaths, inRemotes := map[string]bool{}, map[string]bool{}
-		for _, m := range repoPathRx.FindAllStringSubmatch(text, 20) {
-			p := strings.TrimRight(m[1], ".,;:)")
+		for _, p := range repoPaths(text, 20) {
 			if r, ok := cache.Of(p); ok && r.Slug() != "" {
 				inPaths[r.Slug()] = true
 			}

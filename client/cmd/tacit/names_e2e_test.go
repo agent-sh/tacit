@@ -337,6 +337,9 @@ func testLocalOrg(t *testing.T, underHome bool) {
 	for name, desc := range map[string]string{
 		"workco-reviews": "Every workco change needs two reviewers",
 		"billing-config": "The billing service reads " + named,
+		// A route names no checkout, though it holds projects/<a known
+		// name>: the fact stays in the org.
+		"workco-dashboard-route": "The workco dashboard calls /api/projects/billing/settings",
 	} {
 		b := rotFile(name, "projects/workco", "design_decision", desc, desc+".", "2026-10-10", "")
 		if err := overlay.Write(r.local, r.s.Dir, overlay.CuratedDir+"/projects/workco/"+name+".md", []byte(b)); err != nil {
@@ -381,7 +384,7 @@ func testLocalOrg(t *testing.T, underHome bool) {
 			where[f.Meta.Origin] = f.Meta.Scope
 		}
 	}
-	if where["workco-reviews"] != "orgs/workco" || where["billing-config"] != "projects/billing" {
+	if where["workco-reviews"] != "orgs/workco" || where["billing-config"] != "projects/billing" || where["workco-dashboard-route"] != "orgs/workco" {
 		t.Fatalf("where the org folder's facts went: %v", where)
 	}
 }

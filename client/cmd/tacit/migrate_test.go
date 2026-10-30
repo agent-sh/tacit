@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -260,21 +259,20 @@ func TestMigrateKeepsTryingHeldFacts(t *testing.T) {
 }
 
 // Routing reads every ~ and absolute path a fact names, since only a git
-// root here makes a repository of one; rotation and the ancestor index read
-// places on a machine only, never a route.
+// root here makes a repository of one, but none in a kernel's view or
+// under /net; rotation and the ancestor index read places on a machine
+// only, never a route.
 func TestPathReaders(t *testing.T) {
-	text := "Checkouts: /tmp/wt/tacit, /root/projects/tacit/main.go, (/workspace/app) and `~/projects/memra`; the API is /v1/messages, the forge /repos/agent-sh/tacit/pulls; logs in /var/log/x.log."
-	read := func(rx *regexp.Regexp) string {
-		var out []string
-		for _, m := range rx.FindAllStringSubmatch(text, -1) {
-			out = append(out, strings.TrimRight(m[1], ".,;:)"))
-		}
-		return strings.Join(out, " ")
+	text := "Checkouts: /tmp/wt/tacit, /root/projects/tacit/main.go, (/workspace/app) and `~/projects/memra`; the API is /v1/messages, the forge /repos/agent-sh/tacit/pulls; logs in /var/log/x.log; " +
+		"its cwd /proc/501543/cwd, /dev/fd/3, /sys/class/net, /dev and /net/buildbox/src/tacit."
+	if got, want := strings.Join(repoPaths(text, -1), " "), "/tmp/wt/tacit /root/projects/tacit/main.go /workspace/app ~/projects/memra /v1/messages /repos/agent-sh/tacit/pulls /var/log/x.log"; got != want {
+		t.Errorf("repoPaths read %q, want %q", got, want)
 	}
-	if got, want := read(repoPathRx), "/tmp/wt/tacit /root/projects/tacit/main.go /workspace/app ~/projects/memra /v1/messages /repos/agent-sh/tacit/pulls /var/log/x.log"; got != want {
-		t.Errorf("repoPathRx read %q, want %q", got, want)
+	var places []string
+	for _, m := range machinePathRx.FindAllStringSubmatch(text, -1) {
+		places = append(places, strings.TrimRight(m[1], ".,;:)"))
 	}
-	if got, want := read(machinePathRx), "~/projects/memra /var/log/x.log"; got != want {
+	if got, want := strings.Join(places, " "), "~/projects/memra /var/log/x.log"; got != want {
 		t.Errorf("machinePathRx read %q, want %q", got, want)
 	}
 }
