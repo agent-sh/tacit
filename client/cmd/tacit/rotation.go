@@ -537,18 +537,31 @@ var repoPathRx = regexp.MustCompile(`(?:^|[\s(\x60"'])((?:~/|/)[A-Za-z0-9._\-][A
 // /dev/fd/3), or under /net, where a lookup mounts another host's export.
 var pseudoPathRx = regexp.MustCompile(`^/(?:proc|sys|dev|net)(?:/|$)`)
 
-// repoPaths are the ~ and absolute paths text names (of the first n read),
-// each for the repository repoid makes of it (SPEC.md, "Suppression",
-// "Orgs"). Only a real git root on this machine makes one, so a route names
-// nothing and a checkout outside machinePathRx's roots (/tmp, /data, /root,
-// /workspace) counts as one under ~ does. Paths in pseudoPathRx are left
-// out: they hold no checkout.
+// repoPaths are the ~ and absolute paths text names, at most n (n < 0: all),
+// each for the repository repoid makes of it (SPEC.md, "Orgs"). Only a real
+// git root on this machine makes one, so a route names nothing, and a
+// checkout outside machinePathRx's roots (/tmp, /data, /root, /workspace)
+// is found. The places machinePathRx reads come first and each path counts
+// once, so routes never crowd out a path the place reader takes. Paths in
+// pseudoPathRx are left out: they hold no checkout.
 func repoPaths(text string, n int) []string {
-	var out []string
-	for _, m := range repoPathRx.FindAllStringSubmatch(text, n) {
-		if p := strings.TrimRight(m[1], ".,;:)"); !pseudoPathRx.MatchString(p) {
-			out = append(out, p)
+	var places, others []string
+	seen := map[string]bool{}
+	for _, m := range repoPathRx.FindAllStringSubmatch(text, -1) {
+		p := strings.TrimRight(m[1], ".,;:)")
+		if seen[p] || pseudoPathRx.MatchString(p) {
+			continue
 		}
+		seen[p] = true
+		if machinePathRx.MatchString(p) {
+			places = append(places, p)
+		} else {
+			others = append(others, p)
+		}
+	}
+	out := append(places, others...)
+	if n >= 0 && len(out) > n {
+		out = out[:n]
 	}
 	return out
 }
