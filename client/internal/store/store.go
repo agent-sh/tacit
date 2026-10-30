@@ -80,9 +80,12 @@ func (s *Store) Exists() bool {
 	return err == nil
 }
 
-// httpArgs bound every network call: connect in 5 s, give up when the
-// transfer drops under 1 KB/s for 5 s.
-var httpArgs = []string{"-c", "http.connectTimeout=5", "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=5"}
+// httpArgs bound every network call: a transfer under 1 KB/s for 5 s stops,
+// also when the server took the connection and sends nothing. Git has no
+// connect timeout setting; a connect to a dead host ends with the kernel's
+// SYN retries (134 s measured on Linux) or the call's deadline (gitRun: 60 s
+// unless the caller set one), whichever comes first.
+var httpArgs = []string{"-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=5"}
 
 // Clone fetches the store from url and configures the credential helper so
 // pushes authenticate as <harness>@<host> through `tacit credential`.

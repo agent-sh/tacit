@@ -4,6 +4,7 @@ Description=tacit idle dreamer: quiet or compacted sessions to inbox facts, then
 [Service]
 EnvironmentFile=%h/.config/tacit/env
 Type=oneshot
+TimeoutStartSec=2h30min
 Nice=19
 IOSchedulingClass=idle
 ExecStart=-%h/.local/bin/tacit dream --idle 20m
