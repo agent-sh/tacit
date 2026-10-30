@@ -236,3 +236,23 @@ func TestPromptEchoFilterRunsAfterTheSelection(t *testing.T) {
 		t.Fatalf("got %s", names(got))
 	}
 }
+
+// A request of fewer than 3 distinct words gets no action line: the repo's
+// decision a longer request about the same thing gets is not printed for it.
+func TestPromptShortRequestHasNoActionLine(t *testing.T) {
+	root := relevanceStore(t, nil)
+	writeFact(t, root, fact.Meta{Name: "widget-deploy-checks", Description: "Every deploy runs the smoke checks first", Type: "design_decision", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Repos: []string{"widget"}}}, "detail")
+	ix := openRelevance(t, root)
+	sit := search.Situation{Repo: "widget"}
+	long, err := promptHits(context.Background(), ix, sit, "deploy the release tonight", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	short, err := promptHits(context.Background(), ix, sit, "deploy tonight?", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names(long) != "widget-deploy-checks" || names(short) != "" {
+		t.Fatalf("long request: %q, short request: %q", names(long), names(short))
+	}
+}

@@ -142,3 +142,15 @@ At 0.6 the two useful lines lost were facts that share the request's words and a
 After the review, three guards: a line needs 5 distinct words or more (a short rule answers a request in the request's own words: "never force push to main" for "can I force push to main?"), a line that says no (`never`, `not`, `don't`, ...) where the request does not is kept, and the request is read whole (`search.Terms` stopped near 24 terms, so a long scheduled prompt's later words were not seen). On the same cases this leaves out 6 more lines, all restatements: 4 weak, 1 noise, 1 ungraded; no useful line is lost, owner prompts lose 1 noise line, and the probe stays at 10 of 22. The filter also covers every line the hook prints (the rule slot, the derived fact, the metadata and action lines), as it did; tests now pin its place after the selection and the share.
 
 Not done here: the dreamer side, a fact made only from a program-written prompt. It needs dreamer runs to measure; the delivery rule removes the echo where it shows.
+
+## Short requests (2026-10-30)
+
+A request of fewer than 3 distinct words ("go on", "deploy now?") names too little to pick a rule or an action for. It now gets neither the rule slot nor the action line; its ranked and metadata lines stay. Measured with `delivery/labelled_replay.py` on the graded prompt cases (cases whose checkout is gone left out), against #72's head:
+
+| set | lines | useful kept | noise |
+|---|---:|---:|---:|
+| owner prompts, 3 days | 237 to 233 | 55 of 57, unchanged | 116 to 113 |
+| owner prompts, 14 days | 171 to 169 | 39 of 40, unchanged | 85 to 83 |
+| all prompt blocks, 14 days | 282 to 280 | 65 of 74, unchanged | 109 to 107 |
+
+Over the 228 cases, 6 change: noise lines -5 (95% bootstrap over cases -10 to -1), useful lines +0, and 1 weak line fewer. The 22-prompt recall probe stays at 10.
