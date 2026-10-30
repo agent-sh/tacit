@@ -68,18 +68,38 @@ func Problems(err error) []Problem {
 	return nil
 }
 
+// ErrNotArray and ErrMalformedArray are ParseChecked's refusals of an answer
+// whole: one that is no JSON array (a sentence before it), and one that does
+// not parse. They wrap modelrun.ErrInvalidResult; their text is fixed, never
+// the answer's, so a refusal can be logged.
+var (
+	ErrNotArray       = errors.New("curator must return a JSON array")
+	ErrMalformedArray = errors.New("malformed curator array")
+)
+
+// WholeRefusal is the fixed reason ParseChecked refused an answer whole, ""
+// for any other error (an entry's problems, a runner's error).
+func WholeRefusal(err error) string {
+	for _, e := range []error{ErrNotArray, ErrMalformedArray} {
+		if errors.Is(err, e) {
+			return e.Error()
+		}
+	}
+	return ""
+}
+
 // ParseChecked rejects an entire answer if any row is invalid. Empty [] is a
 // successful extraction; malformed output must leave its notes pending. An
 // answer rejected for its entries is an *InvalidEntries naming every
-// problem.
+// problem; one rejected whole wraps ErrNotArray or ErrMalformedArray.
 func ParseChecked(text string) ([]Entry, error) {
 	text = jsonAnswer(text)
 	if !strings.HasPrefix(text, "[") {
-		return nil, fmt.Errorf("%w: curator must return a JSON array", modelrun.ErrInvalidResult)
+		return nil, fmt.Errorf("%w: %w", modelrun.ErrInvalidResult, ErrNotArray)
 	}
 	var rows []json.RawMessage
 	if err := json.Unmarshal([]byte(text), &rows); err != nil {
-		return nil, fmt.Errorf("%w: malformed curator array", modelrun.ErrInvalidResult)
+		return nil, fmt.Errorf("%w: %w", modelrun.ErrInvalidResult, ErrMalformedArray)
 	}
 	entries := make([]Entry, 0, len(rows))
 	var problems []Problem
