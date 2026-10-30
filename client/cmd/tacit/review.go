@@ -265,10 +265,11 @@ type reviewServer struct {
 	snapMu sync.Mutex
 	snap   *factSnap
 
-	// walkErr is the last loadFacts' error reading the store, and unread the
-	// names of the fact files it could not parse.
-	walkErr error
-	unread  map[string]bool
+	// walkErr is the last loadFacts' error reading the store, unread the
+	// names of the fact files it could not parse and unreadPaths their paths.
+	walkErr     error
+	unread      map[string]bool
+	unreadPaths []string
 
 	// beforePush, in tests only, runs once before an owner write's first push.
 	beforePush func()
@@ -294,10 +295,13 @@ func (rs *reviewServer) loadFacts() {
 	// What could not be read is kept: a fact missing from rs.facts because
 	// its file did not parse, or the store not read at all, is no fact gone
 	// (closeMootQuestions).
-	rs.walkErr, rs.unread = err, map[string]bool{}
+	rs.walkErr, rs.unread, rs.unreadPaths = err, map[string]bool{}, nil
 	for _, pe := range perrs {
 		if name := unreadName(pe); name != "" {
 			rs.unread[name] = true
+		}
+		if rel, _, ok := strings.Cut(pe.Error(), ": "); ok && strings.HasSuffix(rel, ".md") {
+			rs.unreadPaths = append(rs.unreadPaths, rel)
 		}
 	}
 	m, in := map[string]*fact.Fact{}, map[string]*fact.Fact{}

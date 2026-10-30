@@ -442,6 +442,38 @@ func (c *Corpus) SaidAt(quote, ref, turnHash string) time.Time {
 	return time.Unix(sec, 0)
 }
 
+// LastSaidAt is the latest time the owner said quote as a statement of
+// theirs (as SaidIn counts it), in any session; zero when no turn holding it
+// records its time. A closure on their later words compares with it: words
+// they said again after the ones it rests on still stand.
+func (c *Corpus) LastSaidAt(quote string) time.Time {
+	segs := Segments(quote)
+	if segs == nil || c == nil || c.sa == nil {
+		return time.Time{}
+	}
+	var near []int
+	if len(segs) == 1 && len(strings.Fields(segs[0])) >= 4 {
+		near = c.nearCandidates(strings.Fields(segs[0]))
+	}
+	var best int64
+	seen := map[int]bool{}
+	for k, set := range [][]int{c.candidates(segs[0]), near} {
+		for _, i := range set {
+			if seen[i] {
+				continue
+			}
+			seen[i] = true
+			if m, ok := c.matchTurn(i, segs, k == 1); ok && m.Clean() && c.at[i] > best {
+				best = c.at[i]
+			}
+		}
+	}
+	if best == 0 {
+		return time.Time{}
+	}
+	return time.Unix(best, 0)
+}
+
 // SaidOn is SaidAt's day (YYYY-MM-DD, this machine's time zone), "" when
 // no turn holding the quote records its time.
 func (c *Corpus) SaidOn(quote, ref, turnHash string) string {
