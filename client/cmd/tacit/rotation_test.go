@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/lint"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
+	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/rotation"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
@@ -390,22 +392,30 @@ func TestRotationPlanCompressStaysInItsLayer(t *testing.T) {
 }
 
 // A fact of this machine whose description names a path that is gone is
-// checked first, before older facts; one whose path is here, or that says
-// its path was moved, waits its turn by age.
+// checked first, before facts that sort earlier by every other key, and its
+// prompt says which path is gone; one whose path is here, one that says its
+// path was moved, and one checked since it last changed wait their turn.
+// A fact that applies to this machine from another folder gets the same
+// path proof.
 func TestRotationTakesFactsWhosePathIsGoneFirst(t *testing.T) {
 	stubScrump(t)
 	r := rotationRig(t)
 	home := filepath.Join(r.root, "home")
 	os.MkdirAll(filepath.Join(home, "tools"), 0o755)
-	scope := "machines/" + store.ShortHost()
+	host := store.ShortHost()
+	scope := "machines/" + host
 	os.MkdirAll(filepath.Join(r.clone, filepath.FromSlash(scope)), 0o755)
-	for name, desc := range map[string]string{
-		"build-cache-dir": "The build cache lives in ~/caches/build-cache",
-		"tools-dir":       "The helper tools live in ~/tools",
-		"cache-moved":     "~/old-cache was moved to ~/caches; read the new place",
+	for _, c := range []struct{ name, desc, created, extra string }{
+		// checked, then changed: due first again
+		{"zz-build-cache-dir", "The build cache lives in ~/caches/build-cache", "2026-01-01", "updated: 2026-10-25\nlast_checked: 2026-03-01\n"},
+		{"aa-tools-dir", "The helper tools live in ~/tools", "2026-01-01", ""},
+		{"aa-cache-moved", "~/old-cache was moved to ~/caches; read the new place", "2026-01-01", ""},
+		// checked since it last changed: its turn by age
+		{"aa-checked-since", "The model cache lives in ~/caches/models", "2026-01-01", "last_checked: 2026-01-02\n"},
 	} {
-		os.WriteFile(filepath.Join(r.clone, filepath.FromSlash(scope), name+".md"), []byte(rotFile(name, scope, "machine_fact", desc, desc+".", "2026-10-25", "")), 0o644)
+		os.WriteFile(filepath.Join(r.clone, filepath.FromSlash(scope), c.name+".md"), []byte(rotFile(c.name, scope, "machine_fact", c.desc, c.desc+".", c.created, c.extra)), 0o644)
 	}
+	os.WriteFile(filepath.Join(r.clone, "user", "yy-applies-here.md"), []byte(rotFile("yy-applies-here", "user", "user_preference", "Keep notes in ~/notes-gone", "Keep notes in ~/notes-gone.", "2026-10-26", "applies_to:\n  hosts:\n    - "+strings.ToUpper(host)+"\n")), 0o644)
 	r.commitIndex(r.clone, "machine facts")
 	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
 	fr := &fakeRotator{answer: func(it rotation.Item) (rotation.Verdict, bool) {
@@ -414,49 +424,130 @@ func TestRotationTakesFactsWhosePathIsGoneFirst(t *testing.T) {
 	prev := rotationRun
 	rotationRun = fr.run
 	t.Cleanup(func() { rotationRun = prev })
-	st := runRotationStep(t, r, rotationOpts{model: "m", age: 30, batch: 50, max: 1})
-	if st.Gone != 1 || len(fr.prompts) != 1 || !strings.Contains(fr.prompts[0], `"name":"build-cache-dir"`) {
-		t.Fatalf("the fact whose path is gone is not first: %+v\n%s", st, fr.prompts)
+	st := runRotationStep(t, r, rotationOpts{model: "m", age: 30, batch: 1, max: 3})
+	if st.Gone != 2 || len(fr.prompts) != 3 {
+		t.Fatalf("gone %d, %d prompt(s); want 2 and 3: %+v", st.Gone, len(fr.prompts), st)
 	}
-	for _, n := range []string{"tools-dir", "cache-moved"} {
-		if strings.Contains(fr.prompts[0], `"name":"`+n+`"`) {
-			t.Fatalf("%s came first", n)
+	first := fr.prompts[0] + fr.prompts[1]
+	for _, want := range []string{`"name":"zz-build-cache-dir"`, `"name":"yy-applies-here"`, "~/caches/build-cache does not exist on " + host, "~/notes-gone does not exist on " + host} {
+		if !strings.Contains(first, want) {
+			t.Fatalf("the first two prompts lack %s:\n%s", want, first)
 		}
+	}
+	// The run's log says how many of each batch's facts went first for it.
+	b, _ := os.ReadFile(filepath.Join(platform.StateDir(home), rotationLog))
+	var gone []int
+	for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var rec struct{ Gone int }
+		json.Unmarshal([]byte(l), &rec)
+		gone = append(gone, rec.Gone)
+	}
+	if !slices.Equal(gone, []int{1, 1, 0}) {
+		t.Fatalf("gone per batch in %s: %v", rotationLog, gone)
 	}
 }
 
 // The probe's rules, each from a kind of false flag the hand-checked
-// samples showed (eval/VALUE.md, "Machine facts whose paths are gone").
+// samples or the review showed (eval/VALUE.md, "Machine facts whose paths
+// are gone"). Each case fails when its rule is taken out.
 func TestGonePathsRules(t *testing.T) {
 	home := t.TempDir()
-	os.MkdirAll(filepath.Join(home, "here"), 0o755)
-	host := "rig"
+	for _, d := range []string{"here", "here/my docs", "here/café/notes"} {
+		os.MkdirAll(filepath.Join(home, filepath.FromSlash(d)), 0o755)
+	}
+	os.WriteFile(filepath.Join(home, "here", "main.go"), nil, 0o644)
+	g := newGoneProbe("rig", home+"/", []string{"rig", "wrx", "spark-b23d", "b23d"})
 	for _, c := range []struct {
-		desc  string
-		scope string
-		want  string
+		desc, scope, hosts, want string
 	}{
-		{"The build cache lives in ~/gone/cache", "machines/rig", "~/gone/cache"},
-		{"The tools live in ~/here", "machines/rig", ""},
-		{"The build cache lives in ~/gone/cache", "machines/other", ""},
-		{"The build cache lives in ~/gone/cache", "user", ""},
-		{"Logs are kept in a dated dir, eg ~/gone/logs", "machines/rig", ""},
-		{"On wrx the weights are in ~/gone/models", "machines/rig", ""},
-		{"Build it with `go build -o ~/gone/bin/tool .`", "machines/rig", ""},
-		{"Each run writes ~/gone/run-<id>/log.txt", "machines/rig", ""},
-		{"Push it with ~/gone/boxN-ssh", "machines/rig", ""},
-		{"Run mkdir -p ~/gone/scratch first", "machines/rig", ""},
-		{"The old ~/gone/tool was removed; use the new one", "machines/rig", ""},
-		{"Copies live in ~/gone/a,b,c", "machines/rig", ""},
-		{"The plugin docs are under ~/gone/plugins/cache/openai...", "machines/rig", ""},
-		{"Screenshots are written to ~/gone/shots", "machines/rig", ""},
-		{"It is rsynced to spark:~/gone/models", "machines/rig", ""},
-		{"System units are in /etc/gone-units", "machines/rig", ""},
+		{"The build cache lives in ~/gone/cache", "machines/rig", "", "~/gone/cache"},
+		{"The tools live in ~/here", "machines/rig", "", ""},
+		{"The build cache lives in ~/gone/cache", "machines/other", "", ""},
+		{"The build cache lives in ~/gone/cache", "user", "", ""},
+		{"The build cache lives in ~/gone/cache", "user", "RIG", "~/gone/cache"},
+		{"The build cache lives in ~/gone/cache", "machines/Rig", "", "~/gone/cache"},
+		// another machine: generic words, or one of the store's machines
+		{"On the box the weights are in ~/gone/models", "machines/rig", "", ""},
+		{"Copied via ssh to ~/gone/models", "machines/rig", "", ""},
+		{"Run ssh me@far.example and read ~/gone/models", "machines/rig", "", ""},
+		{"It is rsynced to far:~/gone/models", "machines/rig", "", ""},
+		{"On wrx the weights are in ~/gone/models", "machines/rig", "", ""},
+		{"Run ssh spark-b23d and read ~/gone/models", "machines/rig", "", ""},
+		{"b23d: the weights are in ~/gone/models", "machines/rig", "", ""},
+		{"On rig the weights are in ~/gone/models", "machines/rig", "", "~/gone/models"},
+		// made on use
+		{"Run mkdir -p ~/gone/scratch first", "machines/rig", "", ""},
+		{"Set CACHE_DIR=~/gone/cache", "machines/rig", "", ""},
+		{"Point dir=~/gone/cache at it", "machines/rig", "", "~/gone/cache"},
+		// the fact says it is not there
+		{"~/gone/a was deleted; read ~/gone/b", "machines/rig", "", ""},
+		{"The cache at ~/gone/x is no longer used", "machines/rig", "", ""},
+		{"The cache is ~/gone/cache. The old one sat elsewhere", "machines/rig", "", "~/gone/cache"},
+		{"Not an old note. The cache is ~/gone/cache", "machines/rig", "", "~/gone/cache"},
+		{"The cache is ~/gone/cache, and the old one sat elsewhere", "machines/rig", "", "~/gone/cache"},
+		// an example
+		{"Use a dated dir like ~/gone/logs", "machines/rig", "", ""},
+		{"Dated dirs, e.g., ~/gone/logs", "machines/rig", "", ""},
+		{"Dated dirs, for example, ~/gone/logs", "machines/rig", "", ""},
+		{"E.g. ~/gone/logs holds them", "machines/rig", "", ""},
+		// an output
+		{"Screenshots are written to ~/gone/shots", "machines/rig", "", ""},
+		{"Build it with `go build -o ~/gone/bin/tool .`", "machines/rig", "", ""},
+		// not a whole path, or not a path
+		{"The plugin docs are under ~/gone/plugins/cache/openai...", "machines/rig", "", ""},
+		{"The plugin docs are under ~/gone/plugins/cache/openai… too", "machines/rig", "", ""},
+		{"Copies live in ~/gone/a,b,c", "machines/rig", "", ""},
+		{"Each run writes ~/gone/run-NN/log.txt", "machines/rig", "", ""},
+		{"Logs roll to ~/gone/logs/%Y-%m", "machines/rig", "", ""},
+		{"Push it with ~/gone/boxN-ssh", "machines/rig", "", ""},
+		{"Backups are in ~/gone/x.bak and ~/gone/backup", "machines/rig", "", ""},
+		{"Each run is ~/gone/run-", "machines/rig", "", ""},
+		{"Read ~/gone/run.* and ~/gone/cfg.{json,yaml}", "machines/rig", "", ""},
+		{"Read ~/gone/out.<ext> and ~/gone/run[0-9] and ~/gone/run?.log", "machines/rig", "", ""},
+		{"Is it in ~/gone/runs?", "machines/rig", "", "~/gone/runs"},
+		{"Support files are in ~/gone/Application Support/x", "machines/rig", "", ""},
+		{"Put ~/here:~/gone/bin on the path", "machines/rig", "", ""},
+		{"System units are in /etc/gone-units", "machines/rig", "", ""},
+		{"Keep it in ~/a", "machines/rig", "", ""},
+		// a whole path the regex once cut
+		{"Notes are in '~/here/my docs'", "machines/rig", "", ""},
+		{"Notes are in “~/here/my docs”", "machines/rig", "", ""},
+		{"Run `~/gone/tool --flag`", "machines/rig", "", "~/gone/tool"},
+		{"Notes are in ~/here/café/notes", "machines/rig", "", ""},
+		{"See ~/here/main.go:42", "machines/rig", "", ""},
 	} {
 		f := &fact.Fact{Meta: fact.Meta{Name: "x", Scope: c.scope, Description: c.desc}}
-		got := strings.Join(gonePaths(f, host, home), ",")
-		if got != c.want {
+		if c.hosts != "" {
+			f.Meta.AppliesTo.Hosts = []string{c.hosts}
+		}
+		if got := strings.Join(g.paths(f), ","); got != c.want {
 			t.Errorf("%q in %s: got %q, want %q", c.desc, c.scope, got, c.want)
+		}
+	}
+	// The machines are the store's machine folders, never applies_to.hosts.
+	var fs []*fact.Fact
+	for _, m := range []fact.Meta{{Scope: "machines/spark-b23d"}, {Scope: "machines/wrx"}, {Scope: "machines/rig"}, {Scope: "user", AppliesTo: fact.AppliesTo{Hosts: []string{"5090"}}}} {
+		fs = append(fs, &fact.Fact{Meta: m})
+	}
+	if got := strings.Join(machineNames(fs), ","); got != "spark-b23d,b23d,wrx,rig" {
+		t.Errorf("machine names %q", got)
+	}
+	if newGoneProbe("rig-a1", home, []string{"rig-a1", "a1"}).elsewhere != nil {
+		t.Error("this machine's own name, or a part of it, is taken for another machine")
+	}
+	if newGoneProbe("rig", "/", nil).paths(&fact.Fact{Meta: fact.Meta{Scope: "machines/rig", Description: "In ~/gone/x"}}) != nil {
+		t.Error("a home of / looked paths up")
+	}
+	// An absolute path after a colon is another host's (host:/path) or one
+	// of a list; a home that does not exist makes every other path gone.
+	abs := newGoneProbe("rig", "/home/tacit-test-no-such-home", nil)
+	for desc, want := range map[string]string{
+		"Models are in /home/tacit-test-no-such-home/models":         "/home/tacit-test-no-such-home/models",
+		"Copy them to far:/home/tacit-test-no-such-home/models":      "",
+		"Logs are in /home/tacit-test-no-such-home/x.log:/srv/y.log": "/home/tacit-test-no-such-home/x.log",
+	} {
+		if got := strings.Join(abs.paths(&fact.Fact{Meta: fact.Meta{Scope: "machines/rig", Description: desc}}), ","); got != want {
+			t.Errorf("%q: got %q, want %q", desc, got, want)
 		}
 	}
 }
