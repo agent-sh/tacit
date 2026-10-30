@@ -3,10 +3,12 @@ package dream
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/agent-sh/tacit/client/internal/digest"
+	"github.com/agent-sh/tacit/client/internal/harnesses"
 	"github.com/agent-sh/tacit/client/internal/hermes"
 	"github.com/agent-sh/tacit/client/internal/hermes/hermestest"
 )
@@ -137,4 +139,28 @@ func piSession(id, header, first string) string {
 		`{"type":"message","id":"b1","parentId":"a1","timestamp":"` + first + `","message":{"role":"user","content":[{"type":"text","text":"keep the cache warm before a release"}]}}`,
 		`{"type":"message","id":"b2","parentId":"b1","timestamp":"2026-10-02T10:00:09.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Warming it. ` + strings.Repeat("y", minNewBytes) + `"}]}}`,
 	}, "\n") + "\n"
+}
+
+// The dreamer reads the top-level sources of the one list (harnesses.Sources),
+// the same globs as before it, and the Hermes store by its absolute path.
+func TestDefaultSourcesAreTheTopLevelSources(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
+	t.Setenv("TACIT_HERMES_DB", "state.db")
+	home := "/home/u"
+	abs, _ := filepath.Abs("state.db")
+	want := []Source{
+		{Glob: filepath.Join(home, ".claude", "projects", "*", "*.jsonl"), Format: digest.Claude},
+		{Glob: filepath.Join(home, ".codex", "sessions", "*", "*", "*", "*.jsonl"), Format: digest.Codex},
+		{Glob: filepath.Join(home, ".codex", "sessions", "*", "*.jsonl"), Format: digest.Codex},
+		{Glob: filepath.Join(home, ".codex", "archived_sessions", "*.jsonl"), Format: digest.Codex},
+		{Glob: filepath.Join(home, ".pi", "agent", "sessions", "*", "*.jsonl"), Format: digest.Pi},
+		{DB: abs, Format: digest.Hermes},
+	}
+	if got := DefaultSources(home); !reflect.DeepEqual(got, want) {
+		t.Fatalf("DefaultSources:\n%v\nwant\n%v", got, want)
+	}
+	if n := len(harnesses.TopLevel(harnesses.Sources(home))); n != len(want) {
+		t.Fatalf("%d top-level sources, the dreamer reads %d", n, len(want))
+	}
 }

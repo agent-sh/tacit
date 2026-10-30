@@ -9,7 +9,6 @@ package dream
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +25,7 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/harnesses"
 	"github.com/agent-sh/tacit/client/internal/hermes"
 	"github.com/agent-sh/tacit/client/internal/importer"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
@@ -284,20 +284,19 @@ func (st *State) started(src Source) bool {
 	return false
 }
 
-// DefaultSources on this machine: Claude Code projects, Codex sessions (and
-// the ones archived in archived_sessions), pi sessions
-// (digest.PiSessionGlob) and, when there is one, the Hermes store
-// (hermes.DefaultDB). Each glob takes the compressed copies of its
-// transcripts too (transcript.Glob).
+// DefaultSources on this machine, the top-level ones of harnesses.Sources:
+// Claude Code projects, Codex sessions (and the ones archived in
+// archived_sessions), pi sessions (digest.PiSessionGlob) and, when there is
+// one, the Hermes store (hermes.DefaultDB). Each glob takes the compressed
+// copies of its transcripts too (transcript.Glob).
 func DefaultSources(home string) []Source {
-	srcs := []Source{
-		{Glob: filepath.Join(home, ".claude", "projects", "*", "*.jsonl"), Format: digest.Claude},
-		{Glob: filepath.Join(home, ".codex", "sessions", "*", "*", "*", "*.jsonl"), Format: digest.Codex},
-		{Glob: filepath.Join(home, ".codex", "sessions", "*", "*.jsonl"), Format: digest.Codex},
-		{Glob: filepath.Join(home, ".codex", "archived_sessions", "*.jsonl"), Format: digest.Codex},
-		{Glob: digest.PiSessionGlob(home), Format: digest.Pi},
-	}
-	if db := hermes.DefaultDB(home); db != "" {
+	var srcs []Source
+	for _, s := range harnesses.TopLevel(harnesses.Sources(home)) {
+		if s.Format != digest.Hermes {
+			srcs = append(srcs, Source{Glob: s.Glob, Format: s.Format})
+			continue
+		}
+		db := s.DB
 		if abs, err := filepath.Abs(db); err == nil {
 			db = abs
 		}
@@ -515,7 +514,7 @@ type Runner func(ctx context.Context, model, prompt string) (result string, cost
 
 // RunCLI uses the configured dream runner, retaining Claude as the default.
 func RunCLI(ctx context.Context, model, prompt string) (string, float64, int, error) {
-	sid := newUUID()
+	sid := modelrun.NewSessionID()
 	_ = Exclude(sid)
 	res, err := modelrun.RunWithFallback(modelrun.WithJSONSchema(ctx, outputSchema), "dream", model, prompt, sid)
 	if res.SessionID != "" {
@@ -529,16 +528,9 @@ func ClaudeCLI(ctx context.Context, model, prompt string) (string, float64, int,
 	return RunCLI(ctx, model, prompt)
 }
 
-// NewSessionID returns a fresh UUID for a `claude -p --session-id` call.
-func NewSessionID() string { return newUUID() }
-
-func newUUID() string {
-	var b [16]byte
-	_, _ = rand.Read(b[:])
-	b[6] = b[6]&0x0f | 0x40
-	b[8] = b[8]&0x3f | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
-}
+// NewSessionID returns a fresh UUID for a `claude -p --session-id` call
+// (modelrun.NewSessionID).
+func NewSessionID() string { return modelrun.NewSessionID() }
 
 // LoadState reads the cursor file (missing file = fresh state).
 func LoadState(path string) (*State, error) {
@@ -610,7 +602,7 @@ func ScanWindows(sources []Source, st *State, fresh bool, sel Select) (Scan, err
 	if now.IsZero() {
 		now = time.Now()
 	}
-	exclude := loadExclude()
+	exclude := modelrun.Excluded()
 	// A separate clone of a checkout in the projects directory is that
 	// repository (repoid.Mains); scanned once per run.
 	mains := repoid.LoadMains(home, repoid.ProjectsDir(home))
@@ -972,38 +964,12 @@ func nextLineStart(path string, from int64) (int64, bool) {
 	}
 }
 
-// loadExclude reads session ids the dreamer must never read: eval harness
-// runs and tacit's own model calls (~/.local/state/tacit/dream-exclude,
-// one id per line). Without it the dreamer mined the A/B battery's
+// Exclude appends session ids to the list of sessions the dreamer never
+// reads: eval harness runs and tacit's own model calls
+// (modelrun.ExcludeFile, ~/.local/state/tacit/dream-exclude, one id per
+// line; modelrun.Exclude). Without it the dreamer mined the A/B battery's
 // synthetic prompts as if they were the owner's work.
-func loadExclude() map[string]bool {
-	out := map[string]bool{}
-	home, _ := os.UserHomeDir()
-	b, err := os.ReadFile(filepath.Join(platform.StateDir(home), "dream-exclude"))
-	if err != nil {
-		return out
-	}
-	for _, l := range strings.Fields(string(b)) {
-		out[l] = true
-	}
-	return out
-}
-
-// Exclude appends session ids to the exclude list.
-func Exclude(ids ...string) error {
-	home, _ := os.UserHomeDir()
-	p := filepath.Join(platform.StateDir(home), "dream-exclude")
-	os.MkdirAll(filepath.Dir(p), 0o700)
-	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	for _, id := range ids {
-		fmt.Fprintln(f, id)
-	}
-	return nil
-}
+func Exclude(ids ...string) error { return modelrun.Exclude(ids...) }
 
 var cwdRx = regexp.MustCompile(`"cwd":"([^"]+)"`)
 

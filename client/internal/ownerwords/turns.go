@@ -27,8 +27,11 @@ func TurnTexts(f digest.Format, line []byte) []string {
 // questions offered (digest.CodexAsked), and the commands Claude Code ran
 // itself, whose arguments are not theirs (digest.ClaudeCommands).
 type TurnReader struct {
-	asked digest.CodexAsked
-	cmds  digest.ClaudeCommands
+	// Pastes are texts the owner pasted into their prompts (ClaudePastes),
+	// cut from their words as the corpus cuts them; none when nil.
+	Pastes []string
+	asked  digest.CodexAsked
+	cmds   digest.ClaudeCommands
 }
 
 // Parts is what a person typed on line (as TurnTexts), and the other text
@@ -36,6 +39,15 @@ type TurnReader struct {
 // is not their words but what they answered; other is nil when the line
 // holds no turn of theirs.
 func (r *TurnReader) Parts(f digest.Format, line []byte) (own, other []string) {
+	own, other, _ = r.PartsCut(f, line)
+	return own, other
+}
+
+// PartsCut is Parts with what the corpus cut from the pieces of theirs as not
+// their words, each part as it was: a pasted table or log (PastedBlob), a
+// paste their prompt history records (Pastes), a line of agent text they
+// relayed, and a part the pieces' own split finds not theirs.
+func (r *TurnReader) PartsCut(f digest.Format, line []byte) (own, other, cut []string) {
 	if r.asked == nil {
 		r.asked = digest.CodexAsked{}
 	}
@@ -47,24 +59,54 @@ func (r *TurnReader) Parts(f digest.Format, line []byte) (own, other []string) {
 		}
 	case digest.Codex:
 		r.asked.NoteLine(line)
-		raw = codexUserTurns(line, r.asked)
+		raw, cut = codexTurns(line, r.asked)
 	case digest.Pi:
-		raw = piUserTurns(line)
+		raw, cut = piTurns(line)
 	}
 	for _, t := range raw {
-		t, ok := OwnerPart(t)
-		if !ok {
-			continue
-		}
-		t, _ = dropRelayed(t)
-		if strings.TrimSpace(t) != "" {
+		t, c, _, ok := cutWords(t, r.Pastes)
+		cut = append(cut, c...)
+		if ok && strings.TrimSpace(t) != "" {
 			own = append(own, t)
 		}
 	}
 	if len(own) > 0 && f == digest.Claude {
 		other = claudeAgentText(line)
 	}
-	return own, other
+	return own, other, cut
+}
+
+// Hermes is what the owner wrote in a Hermes user row of a session of theirs
+// (hermes.Session.Owner), by the rules the corpus reads their rows with
+// (AddHermes): the gateway's frames, notices and attached context cut
+// (digest.HermesOwnerText), a pasted table or log left out (PastedBlob), then
+// their words as for a transcript's turn (cutWords). ok is false when none of
+// it is theirs.
+func (r *TurnReader) Hermes(content, displayKind string, summary bool) (string, bool) {
+	own, _, ok := r.HermesCut(content, displayKind, summary)
+	return own, ok
+}
+
+// HermesCut is Hermes with what it cut from the row's words of theirs as not
+// theirs (as PartsCut): a pasted table or log, a paste their prompt history
+// records, a line of agent text they relayed. The gateway's frames are not
+// in it.
+func (r *TurnReader) HermesCut(content, displayKind string, summary bool) (string, []string, bool) {
+	t, injected, pasted := hermesRow(content, displayKind, summary)
+	switch {
+	case injected:
+		return "", nil, false
+	case pasted:
+		// The row's own pieces are the cut; what a harness or another agent
+		// wrote in it is a piece of its own (digest.TurnPieces).
+		blob, _ := digest.HermesOwnerText(content, displayKind, summary)
+		return "", digest.OwnerPieces(digest.TurnPieces(blob)), false
+	}
+	t, cut, _, ok := cutWords(t, r.Pastes)
+	if !ok || strings.TrimSpace(t) == "" {
+		return "", cut, false
+	}
+	return t, cut, true
 }
 
 // claudeAgentText is the text another agent wrote into a Claude Code user

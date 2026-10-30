@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/digest"
@@ -30,11 +32,25 @@ func AgentInjected(text string) bool {
 // a harness's reminders and frames, a side agent's note and agents' prompts
 // left out), one piece per line; ok is false when nothing is.
 func OwnerPart(text string) (string, bool) {
-	own := digest.OwnerPieces(digest.TurnPieces(text))
-	if len(own) == 0 {
-		return "", false
+	own, _, ok := ownerSplit(text)
+	return own, ok
+}
+
+// ownerSplit is OwnerPart with the texts of the pieces it left out.
+func ownerSplit(text string) (own string, other []string, ok bool) {
+	var mine []string
+	for _, p := range digest.TurnPieces(text) {
+		switch {
+		case p.Who == digest.Owner:
+			mine = append(mine, p.Text)
+		case strings.TrimSpace(p.Text) != "":
+			other = append(other, p.Text)
+		}
 	}
-	return strings.Join(own, "\n"), true
+	if len(mine) == 0 {
+		return "", other, false
+	}
+	return strings.Join(mine, "\n"), other, true
 }
 
 // pasted is Claude Code's placeholder for a paste in the prompt history; the
@@ -69,7 +85,7 @@ func (b *Builder) AddClaudeHistory(path string) error {
 		if h.SessionID != "" {
 			ref = "claude:" + h.SessionID
 		}
-		b.AddAt("claude-history", ref, pasted.ReplaceAllString(h.Display, " "), jsonTime(h.Timestamp))
+		b.AddAt("claude-history", ref, pasted.ReplaceAllString(h.Display, " "), JSONTime(h.Timestamp))
 	})
 }
 
@@ -94,7 +110,7 @@ func (b *Builder) AddCodexHistory(path string) error {
 		if h.SessionID != "" {
 			ref = "codex:" + h.SessionID
 		}
-		b.AddAt("codex-history", ref, h.Text, jsonTime(h.TS))
+		b.AddAt("codex-history", ref, h.Text, JSONTime(h.TS))
 	})
 }
 
@@ -103,8 +119,17 @@ func (b *Builder) AddCodexHistory(path string) error {
 // their turns (Add). Pastes under 40 characters are kept: a short paste is
 // usually their own words.
 func (b *Builder) LoadPastes(path string) error {
+	ps, err := readPastes(path)
+	b.pastes = append(b.pastes, ps...)
+	return err
+}
+
+// readPastes reads the pastes of a Claude Code prompt history (LoadPastes),
+// each once, in order.
+func readPastes(path string) ([]string, error) {
 	seen := map[string]bool{}
-	return b.jsonLines(path, func(line []byte) {
+	var out []string
+	err := (&Builder{}).jsonLines(path, func(line []byte) {
 		var h struct {
 			Pasted map[string]struct {
 				Content string `json:"content"`
@@ -116,10 +141,52 @@ func (b *Builder) LoadPastes(path string) error {
 		for _, p := range h.Pasted {
 			if c := strings.TrimSpace(p.Content); len(c) >= 40 && !seen[c] {
 				seen[c] = true
-				b.pastes = append(b.pastes, c)
+				out = append(out, c)
 			}
 		}
 	})
+	return out, err
+}
+
+// ClaudePastes are the texts the owner pasted into Claude Code prompts, as the
+// corpus reads them (LoadPastes): those of home's ~/.claude/history.jsonl,
+// read again only when the file changes; none when there is no history. A
+// reader of the owner's turns (TurnReader.Pastes) cuts them from their words
+// as the corpus does. They are the history's text, unredacted.
+func ClaudePastes(home string) ([]string, error) {
+	path := filepath.Join(home, ".claude", "history.jsonl")
+	fi, err := os.Stat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	pasteCache.Lock()
+	defer pasteCache.Unlock()
+	if e, ok := pasteCache.byPath[path]; ok && e.size == fi.Size() && e.mod.Equal(fi.ModTime()) {
+		return slices.Clone(e.pastes), nil
+	}
+	ps, err := readPastes(path)
+	if err != nil {
+		return nil, err
+	}
+	if pasteCache.byPath == nil {
+		pasteCache.byPath = map[string]pasteEntry{}
+	}
+	pasteCache.byPath[path] = pasteEntry{size: fi.Size(), mod: fi.ModTime(), pastes: ps}
+	return slices.Clone(ps), nil
+}
+
+type pasteEntry struct {
+	size   int64
+	mod    time.Time
+	pastes []string
+}
+
+var pasteCache struct {
+	sync.Mutex
+	byPath map[string]pasteEntry
 }
 
 func (b *Builder) jsonLines(path string, fn func([]byte)) error {
@@ -170,12 +237,12 @@ func (b *Builder) AddHermes(path string) error {
 			if m.Copy {
 				continue
 			}
-			t, injected := digest.HermesOwnerText(m.Content, m.DisplayKind, m.Summary)
+			t, injected, pasted := hermesRow(m.Content, m.DisplayKind, m.Summary)
 			if injected {
 				b.c.Stats.AgentTurns++
 				continue
 			}
-			if PastedBlob(t) {
+			if pasted {
 				continue // a pasted table or log, as for pi (Add drops a tag-framed turn)
 			}
 			var at time.Time
@@ -186,6 +253,22 @@ func (b *Builder) AddHermes(path string) error {
 		}
 	}
 	return nil
+}
+
+// hermesRow is the text of a Hermes user row that can be the owner's, before
+// what in it a harness or another agent wrote is cut (AddAt, TurnReader.Hermes): the
+// gateway's frames, notices and attached context cut (digest.HermesOwnerText).
+// injected reports a row with nothing of theirs, pasted a pasted table or log
+// (PastedBlob).
+func hermesRow(content, displayKind string, summary bool) (t string, injected, pasted bool) {
+	t, injected = digest.HermesOwnerText(content, displayKind, summary)
+	if injected {
+		return "", true, false
+	}
+	if PastedBlob(t) {
+		return "", false, true
+	}
+	return t, false, false
 }
 
 // LoadAll builds the corpus from every source on this machine: owner sessions
