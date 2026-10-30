@@ -297,8 +297,15 @@ func TestDeletedRepositoryFoldsByItsFacts(t *testing.T) {
 // with the local layer, the overlay's project folder named for a forge org
 // becomes orgs/<org> in the overlay, its facts go to the repository their
 // paths name or stay in the org, all in the overlay; the clone and the
-// server are untouched.
+// server are untouched. The fact names the checkout under ~, or by its
+// absolute path wherever the projects directory is: here the test's temp
+// directory, under /tmp on Linux and /var/folders on macOS.
 func TestLocalOrgLivesInTheOverlay(t *testing.T) {
+	t.Run("tilde", func(t *testing.T) { testLocalOrg(t, true) })
+	t.Run("absolute", func(t *testing.T) { testLocalOrg(t, false) })
+}
+
+func testLocalOrg(t *testing.T, underHome bool) {
 	r := newLocalRig(t)
 	seed := filepath.Join(r.root, "seed2")
 	gitIn(t, r.root, "clone", "-q", r.bare, seed)
@@ -314,12 +321,13 @@ func TestLocalOrgLivesInTheOverlay(t *testing.T) {
 	r.cloneHead = gitIn(t, r.s.Dir, "rev-parse", "HEAD")
 	r.cloneFiles = treeBytes(t, r.s.Dir)
 	fakeGHAccounts(t, "owner", map[string]string{"workco/billing": "workco/billing"}, map[string]string{"workco": "Organization", "owner": "User"})
-	// The checkout is under the home's projects directory and the fact names
-	// it as a fact does, under ~. A path under the test's temp directory is
-	// a machine path only where that directory is under /var (macOS), never
-	// under Linux's /tmp (machinePathRx), so the fact stayed in the org there.
-	t.Setenv("TACIT_PROJECTS", filepath.Join(r.home, "projects"))
-	billing := filepath.Join(r.home, "projects", "billing")
+	billing := filepath.Join(r.root, "projects", "billing") // the rig's projects directory
+	named := filepath.ToSlash(filepath.Join(billing, "config.yaml"))
+	if underHome {
+		t.Setenv("TACIT_PROJECTS", filepath.Join(r.home, "projects"))
+		billing = filepath.Join(r.home, "projects", "billing")
+		named = "~/projects/billing/config.yaml"
+	}
 	os.MkdirAll(billing, 0o755)
 	gitIn(t, billing, "init", "-q", "-b", "main")
 	os.WriteFile(filepath.Join(billing, "main.go"), []byte("x"), 0o644)
@@ -328,7 +336,7 @@ func TestLocalOrgLivesInTheOverlay(t *testing.T) {
 	gitIn(t, billing, "remote", "add", "origin", "https://github.com/workco/billing.git")
 	for name, desc := range map[string]string{
 		"workco-reviews": "Every workco change needs two reviewers",
-		"billing-config": "The billing service reads ~/projects/billing/config.yaml",
+		"billing-config": "The billing service reads " + named,
 	} {
 		b := rotFile(name, "projects/workco", "design_decision", desc, desc+".", "2026-10-10", "")
 		if err := overlay.Write(r.local, r.s.Dir, overlay.CuratedDir+"/projects/workco/"+name+".md", []byte(b)); err != nil {

@@ -522,8 +522,19 @@ func clip(s string, n int) string {
 	return s
 }
 
-// machinePathRx finds paths a fact names on a machine: absolute, or under ~.
+// machinePathRx finds the paths a fact names as places on a machine: under
+// ~, or under one of these system roots. Rotation stats them and the
+// ancestor index reads folder names from them, so a route of an API
+// (/v1/messages) or of a forge (/repos/<owner>/<name>/pulls) must not count.
+// Where a path only names a repository, repoPathRx reads every one.
 var machinePathRx = regexp.MustCompile(`(?:^|[\s(\x60"'])((?:~|/(?:Users|home|opt|etc|var|usr|srv|mnt|Library))/[A-Za-z0-9._\-/]+)`)
+
+// repoPathRx finds every ~ and absolute path a fact names, for the
+// repository repoid makes of it (SPEC.md, "Suppression", "Orgs"): only a
+// real git root on this machine makes one, so a route names nothing, and a
+// checkout outside those roots (/tmp, /root, /workspace) counts as one
+// under ~ does.
+var repoPathRx = regexp.MustCompile(`(?:^|[\s(\x60"'])((?:~/|/)[A-Za-z0-9._\-][A-Za-z0-9._\-/]*)`)
 
 // owners reports a fact that is the owner's: their ruling, or one holding
 // words of theirs. The rotation never changes either; it asks them.

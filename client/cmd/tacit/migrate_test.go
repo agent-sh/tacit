@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -255,5 +256,25 @@ func TestMigrateKeepsTryingHeldFacts(t *testing.T) {
 		if !strings.Contains(fmt.Sprint(f), "projects/widget-old/old-cache-rule.md") {
 			t.Errorf("lint: %v", f)
 		}
+	}
+}
+
+// Routing reads every ~ and absolute path a fact names, since only a git
+// root here makes a repository of one; rotation and the ancestor index read
+// places on a machine only, never a route.
+func TestPathReaders(t *testing.T) {
+	text := "Checkouts: /tmp/wt/tacit, /root/projects/tacit/main.go, (/workspace/app) and `~/projects/memra`; the API is /v1/messages, the forge /repos/agent-sh/tacit/pulls; logs in /var/log/x.log."
+	read := func(rx *regexp.Regexp) string {
+		var out []string
+		for _, m := range rx.FindAllStringSubmatch(text, -1) {
+			out = append(out, strings.TrimRight(m[1], ".,;:)"))
+		}
+		return strings.Join(out, " ")
+	}
+	if got, want := read(repoPathRx), "/tmp/wt/tacit /root/projects/tacit/main.go /workspace/app ~/projects/memra /v1/messages /repos/agent-sh/tacit/pulls /var/log/x.log"; got != want {
+		t.Errorf("repoPathRx read %q, want %q", got, want)
+	}
+	if got, want := read(machinePathRx), "~/projects/memra /var/log/x.log"; got != want {
+		t.Errorf("machinePathRx read %q, want %q", got, want)
 	}
 }

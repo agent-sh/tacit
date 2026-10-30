@@ -541,7 +541,7 @@ func pointedRepos(cache *repoid.Cache, catalog *repoid.Catalog, recs map[string]
 		}
 		return path.Base(w)
 	}
-	for _, m := range machinePathRx.FindAllStringSubmatch(text, 40) {
+	for _, m := range repoPathRx.FindAllStringSubmatch(text, 40) {
 		p := strings.TrimRight(m[1], ".,;:)")
 		if rp, ok := cache.Of(p); ok && rp.Slug() != "" {
 			set[rp.Slug()] = true
