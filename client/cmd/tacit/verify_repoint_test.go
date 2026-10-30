@@ -347,26 +347,26 @@ func TestVerifyRepointKeepsToItsBounds(t *testing.T) {
 }
 
 // A replay (--ids) of a finding that moves verifies the finding in its place
-// in the same run; a pair whose replacement is itself under review (a supersede
-// with an open finding of its own) waits, neither moved nor sent, until that
-// review is answered; and a moot closure whose supersede was undone since is
-// reopened by the curator and sent.
-func TestVerifyRepointFollowsReplaysWaitsAndReopens(t *testing.T) {
+// in the same run, once. A pair moves along a supersede another finding still
+// asks about; when that finding's answer undoes the step, the store no longer
+// agrees with the closure and the curator reopens it and sends it, as it does
+// when the chain the closure followed changes. A closure on a retired fact
+// stands whatever happens to the other fact.
+func TestVerifyRepointFollowsReplaysAndReopens(t *testing.T) {
 	stubScrump(t)
-	rs, _ := repointStore(t, []string{"k", "m", "n"}, map[string]string{"k": "superseded_by: m\n"},
-		"- supersedes? [[b]] may replace [[a]]\n- CONTRADICTION?: [[n]] (system) vs [[k]] (system)\n- supersedes: [[m]] replaces [[k]]\n")
+	rs, _ := repointStore(t, []string{"e", "k", "m", "n", "p", "q", "r"}, map[string]string{"k": "superseded_by: m\n", "p": "superseded_by: r\n", "q": "retired: 2026-10-27\n"},
+		"- supersedes? [[b]] may replace [[a]]\n- supersedes? [[b]] may replace [[c]]\n- CONTRADICTION?: [[n]] (system) vs [[k]] (system)\n- supersedes: [[m]] replaces [[k]]\n- CONTRADICTION?: [[q]] (system) vs [[p]] (system)\n")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	state, called := sandboxVerify(t, rs.s.Dir)
-	ab, kn, km := itemFor(t, rs, "a", "b"), itemFor(t, rs, "k", "n"), itemFor(t, rs, "k", "m")
-	cb := pairID(kindSupersedeAsk, "c", "b")
+	ab, cb, kn, km, pq := itemFor(t, rs, "a", "b"), itemFor(t, rs, "c", "b"), itemFor(t, rs, "k", "n"), itemFor(t, rs, "k", "m"), itemFor(t, rs, "p", "q")
 	sent := map[string]int{}
-	verdicts := map[string]verifyVerdict{}
+	verdicts := map[string]verifyVerdict{km.ID: {ID: km.ID, Mark: "both", Evidence: "k still holds"}}
 	call := func(_ context.Context, _, prompt, _ string, _ float64) ([]verifyVerdict, string, float64, error) {
 		var vs []verifyVerdict
 		for _, it := range rs.items() {
-			if strings.Contains(prompt, `"ID":"`+it.ID+`"`) {
-				sent[it.ID]++
+			if n := strings.Count(prompt, `"ID":"`+it.ID+`"`); n > 0 {
+				sent[it.ID] += n
 				if v, ok := verdicts[it.ID]; ok {
 					vs = append(vs, v)
 				}
@@ -377,49 +377,85 @@ func TestVerifyRepointFollowsReplaysWaitsAndReopens(t *testing.T) {
 	newRun := func() verifyRun {
 		return verifyRun{model: "m", max: 50, per: 50, budget: 1, cwd: t.TempDir(), stateDir: filepath.Join(state, "verify")}
 	}
+	run := func(only ...string) string {
+		r := newRun()
+		r.only = only
+		return captureStderr(t, func() { r.run(ctx, rs.s, call) })
+	}
 
-	// A replay of a / b moves it to c / b and verifies c / b.
-	verdicts[cb] = verifyVerdict{ID: cb, Mark: "both", Evidence: "different subjects"}
+	// A replay of a / b and c / b: a / b moves to c / b, sent once.
+	run(ab.ID, cb.ID)
+	if d := decisionsOf(t, rs); d[ab.ID].Repointed != cb.ID || sent[cb.ID] != 1 || sent[ab.ID] != 0 {
+		t.Fatalf("replay: record %+v, sent %v", d[ab.ID], sent)
+	}
+
+	// k / n moves to m / n though "m replaces k" is still open; that finding
+	// is answered "both" in the same run, which undoes k -> m. p / q is moot.
+	run()
+	d := decisionsOf(t, rs)
+	if d[kn.ID].Action != mootMark || d[kn.ID].Repointed == "" || d[km.ID].Action != "both" || strings.Contains(read(t, rs, "k"), "superseded_by") || d[pq.ID].Action != mootMark {
+		t.Fatalf("k / n %+v, m / k %+v, p / q %+v\n%s", d[kn.ID], d[km.ID], d[pq.ID], read(t, rs, "k"))
+	}
+	// The store no longer agrees with k / n's closure: a dry run says it
+	// would reopen it, the run reopens it and sends it.
 	r := newRun()
-	r.only = []string{ab.ID}
-	captureStderr(t, func() { r.run(ctx, rs.s, call) })
-	if d := decisionsOf(t, rs); d[ab.ID].Repointed != cb || sent[cb] != 1 || d[cb].Action != "both" {
-		t.Fatalf("replay of a / b: records %+v %+v, sent %v", d[ab.ID], d[cb], sent)
+	r.dry = true
+	if out := captureStdout(t, func() { r.run(ctx, rs.s, call) }); !strings.Contains(out, "verify: would reopen "+kn.ID+" (k / n)") {
+		t.Fatalf("the dry run does not say it would reopen k / n:\n%s", out)
+	}
+	before := sent[kn.ID]
+	errs := run()
+	if it := itemFor(t, rs, "k", "n"); it.Decision != nil || sent[kn.ID] != before+1 || !strings.Contains(errs, "verify: reopened "+kn.ID) || rs.ownerTouched()[kn.ID] {
+		t.Fatalf("k / n after k stands again: decision %+v, sent %v\n%s", it.Decision, sent, errs)
 	}
 
-	// k / n rests on k -> m, which "m replaces k" still asks about: it waits.
-	verdicts[km.ID] = verifyVerdict{ID: km.ID, Mark: "both", Evidence: "k still holds"}
-	r = newRun()
-	captureStderr(t, func() { r.run(ctx, rs.s, call) })
-	if d := decisionsOf(t, rs); d[kn.ID].Action != "" || sent[kn.ID] != 0 || sent[km.ID] != 1 {
-		t.Fatalf("k / n under review: record %+v, sent %v", d[kn.ID], sent)
-	}
-	// The verifier undid k -> m ("both"): k / n is a plain pair now, sent.
-	if strings.Contains(read(t, rs, "k"), "superseded_by") {
-		t.Fatalf("the verdict on m / k did not undo the supersede:\n%s", read(t, rs, "k"))
-	}
-	r = newRun()
-	captureStderr(t, func() { r.run(ctx, rs.s, call) })
-	if sent[kn.ID] != 1 {
-		t.Fatalf("k / n after its supersede was undone: sent %v", sent)
-	}
-
-	// Undo the supersede a / b moved along: the curator reopens a / b and it
-	// is sent.
-	p := filepath.Join(rs.s.Dir, "system", "a.md")
-	b, _ := os.ReadFile(p)
-	os.WriteFile(p, []byte(strings.Replace(string(b), "superseded_by: c\n", "", 1)), 0o644)
-	git(t, rs.s.Dir, "commit", "-q", "-am", "a stands again")
+	// a / b was moved along a -> c; now a is replaced by e instead. The
+	// closure no longer says what the store does: reopened, then moved to e / b.
+	path := filepath.Join(rs.s.Dir, "system", "a.md")
+	b, _ := os.ReadFile(path)
+	os.WriteFile(path, []byte(strings.Replace(string(b), "superseded_by: c\n", "superseded_by: e\n", 1)), 0o644)
+	// and p stands again, while q stays retired
+	path = filepath.Join(rs.s.Dir, "system", "p.md")
+	b, _ = os.ReadFile(path)
+	os.WriteFile(path, []byte(strings.Replace(string(b), "superseded_by: r\n", "", 1)), 0o644)
+	git(t, rs.s.Dir, "commit", "-q", "-am", "a replaced by e; p stands again")
 	git(t, rs.s.Dir, "push", "-q", "origin", "HEAD:main")
-	r = newRun()
-	errs := captureStderr(t, func() { r.run(ctx, rs.s, call) })
-	if it := itemFor(t, rs, "a", "b"); it.Decision != nil || sent[ab.ID] != 1 || !strings.Contains(errs, "verify: reopened "+ab.ID) {
-		t.Fatalf("a / b after a stands again: decision %+v, sent %v\n%s", it.Decision, sent, errs)
+	run()
+	run()
+	d = decisionsOf(t, rs)
+	if d[ab.ID].Action != mootMark || d[ab.ID].Repointed != pairID(kindSupersedeAsk, "e", "b") {
+		t.Fatalf("a / b after a -> e: %+v", d[ab.ID])
 	}
-	if rs.ownerTouched()[ab.ID] {
-		t.Fatal("the curator's reopen counts as the owner's")
+	if d[pq.ID].Action != mootMark || sent[pq.ID] != 0 {
+		t.Fatalf("p / q (q retired) after p stands again: %+v, sent %d", d[pq.ID], sent[pq.ID])
 	}
 	if called() {
 		t.Fatal("a model CLI was called")
+	}
+}
+
+// The curator reopens only its own moot closure that the store no longer
+// agrees with, checked under the lock: never the owner's answer, nor a
+// closure that still holds.
+func TestCuratorReopenTakesOnlyItsOwnStaleClosure(t *testing.T) {
+	stubScrump(t)
+	rs := repointFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	sandboxVerify(t, rs.s.Dir)
+	ij, df := itemFor(t, rs, "i", "j"), itemFor(t, rs, "d", "f")
+	if err := mark(ctx, rs, ij.ID, "left"); err != nil { // the owner keeps i
+		t.Fatal(err)
+	}
+	git(t, rs.s.Dir, "pull", "-q", "--rebase")
+	r := verifyRun{model: "m", max: 0, per: 50, budget: 1, cwd: t.TempDir(), stateDir: filepath.Join(t.TempDir(), "verify")}
+	captureStderr(t, func() { r.repoint(ctx, rs, rs.ownerTouched()) }) // d / f closes as moot
+	before := read(t, rs, "j")
+	_, errs, _ := rs.applyOps(ctx, []op{{ID: ij.ID, Mark: "reopen", By: "curator", A: "i", B: "j"}, {ID: df.ID, Mark: "reopen", By: "curator", A: "d", B: "f"}})
+	if errs[0] == nil || !strings.Contains(errs[0].Error(), "it is theirs") || errs[1] == nil || !strings.Contains(errs[1].Error(), "no longer holds") {
+		t.Fatalf("curator reopens: %v", errs)
+	}
+	if d := decisionsOf(t, rs); d[ij.ID].Action != "left" || d[df.ID].Action != mootMark || read(t, rs, "j") != before {
+		t.Fatalf("records after refused reopens: %+v %+v", d[ij.ID], d[df.ID])
 	}
 }

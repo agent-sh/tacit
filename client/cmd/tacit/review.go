@@ -757,6 +757,11 @@ func (rs *reviewServer) applyOp(o *op) (string, []string, error) {
 	if o.Mark == mootMark {
 		return rs.applyMoot(o, it)
 	}
+	if o.Mark == "reopen" && o.By == "curator" {
+		if err := rs.curatorMayReopen(it); err != nil {
+			return "", nil, err
+		}
+	}
 	mark := o.Mark
 	if o.By == "agent" && (mark == "wrong" || mark == "note" || o.Comment != "") {
 		return "", nil, errors.New("only the owner may say neither is true or leave a note")
