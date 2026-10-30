@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -265,18 +268,69 @@ func TestMigrateKeepsTryingHeldFacts(t *testing.T) {
 // only, never a route.
 func TestPathReaders(t *testing.T) {
 	text := "Checkouts: /tmp/wt/tacit, /root/projects/tacit/main.go, (/workspace/app) and `~/projects/memra`; the API is /v1/messages, the forge /repos/agent-sh/tacit/pulls; logs in /var/log/x.log; " +
-		"its cwd /proc/501543/cwd, /dev/fd/3, /sys/class/net, /dev and /net/buildbox/src/tacit; again /v1/messages."
-	if got, want := strings.Join(repoPaths(text, -1), " "), "~/projects/memra /var/log/x.log /tmp/wt/tacit /root/projects/tacit/main.go /workspace/app /v1/messages /repos/agent-sh/tacit/pulls"; got != want {
+		"its cwd /proc/501543/cwd, /dev/fd/3, /sys/class/net, /dev and /net/buildbox/src/tacit; again /v1/messages; once ~//projects/old/a.md."
+	if got, want := strings.Join(repoPaths(text, -1), " "), "~/projects/memra /var/log/x.log ~//projects/old/a.md /tmp/wt/tacit /root/projects/tacit/main.go /workspace/app /v1/messages /repos/agent-sh/tacit/pulls"; got != want {
 		t.Errorf("repoPaths read %q, want %q", got, want)
 	}
-	if got, want := strings.Join(repoPaths(text, 3), " "), "~/projects/memra /var/log/x.log /tmp/wt/tacit"; got != want {
-		t.Errorf("repoPaths(3) read %q, want %q", got, want)
+	if got, want := strings.Join(repoPaths(text, 4), " "), "~/projects/memra /var/log/x.log ~//projects/old/a.md /tmp/wt/tacit"; got != want {
+		t.Errorf("repoPaths(4) read %q, want %q", got, want)
 	}
 	var places []string
 	for _, m := range machinePathRx.FindAllStringSubmatch(text, -1) {
 		places = append(places, strings.TrimRight(m[1], ".,;:)"))
 	}
-	if got, want := strings.Join(places, " "), "~/projects/memra /var/log/x.log"; got != want {
+	if got, want := strings.Join(places, " "), "~/projects/memra /var/log/x.log ~//projects/old/a.md"; got != want {
 		t.Errorf("machinePathRx read %q, want %q", got, want)
+	}
+}
+
+// A fact's paths name repositories as SPEC's Orgs says: a checkout here
+// names its repository when the catalog takes it and nothing otherwise, and
+// a path with no checkout here names one only under a home's projects
+// directory.
+func TestPointedReposReadsCheckoutsAsTheCatalogTakesThem(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX paths")
+	}
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	for k, v := range map[string]string{"HOME": home, "USERPROFILE": home, "TACIT_PROJECTS": filepath.Join(home, "projects"), "TACIT_STATE_DIR": "", "TMPDIR": filepath.Join(home, "tmp")} {
+		t.Setenv(k, v)
+	}
+	checkout := func(dir, origin string) string {
+		os.MkdirAll(dir, 0o755)
+		gitIn(t, dir, "init", "-q", "-b", "main")
+		gitIn(t, dir, "remote", "add", "origin", origin)
+		return filepath.ToSlash(dir)
+	}
+	const billingURL = "https://github.com/workco/billing.git"
+	checkout(filepath.Join(home, "projects", "billing"), billingURL)
+	// A second main checkout of that origin: repoid names a clone for
+	// neither (Mains.Canonical), so only the catalog's name and URLs say
+	// the checkout outside home is billing.
+	checkout(filepath.Join(home, "projects", "workco", "billing"), billingURL)
+	mounted := checkout(filepath.Join(root, "mnt", "billing"), billingURL)
+	other := checkout(filepath.Join(root, "scratch", "billing"), "https://github.com/vendor/billing.git")
+	checkout(filepath.Join(home, "tmp", "projects", "billing", "vendor_lib"), "https://github.com/vendor/lib.git")
+	storeDir := filepath.Join(root, "store")
+	os.MkdirAll(storeDir, 0o755)
+	recs := map[string]*record.Record{}
+	catalog := knownCatalog(home, storeDir, false)
+	rf := newRefiler(home, catalog, recs)
+	for _, c := range []struct{ text, want string }{
+		{"reads ~/projects/billing/config.yaml", "billing"},
+		{"the same repository at " + mounted + "/config.yaml", "billing"},
+		{"another repository under billing's name at " + other + "/main.go", ""},
+		{"a scratch clone with no slug name at ~/tmp/projects/billing/vendor_lib/lib.go", ""},
+		{"a scratch clone that is gone, ~/tmp/projects/billing/gone/lib.go", ""},
+		{"on the Mac, /Users/owner/projects/billing/config.yaml", "billing"},
+		{"the store's folder ~/.local/share/tacit/store/projects/billing/rule.md", ""},
+		{"Claude's memory, ~/.claude/projects/-home-owner-projects-billing/memory/a.md", ""},
+		{"the dashboard calls /api/projects/billing/settings", ""},
+	} {
+		got := pointedRepos(rf.cache, catalog, recs, &fact.Fact{Meta: fact.Meta{Description: c.text}})
+		if g := strings.Join(slices.Sorted(maps.Keys(got)), ","); g != c.want {
+			t.Errorf("%q points at %q, want %q", c.text, g, c.want)
+		}
 	}
 }

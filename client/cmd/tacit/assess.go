@@ -557,7 +557,7 @@ func (a *assessor) realRepos(folder, name string, rc check.RepoCheck) ([]assess.
 		text := f.Meta.Description + "\n" + f.Body + "\n" + strings.Join(f.Meta.AppliesTo.Paths, "\n") + "\n" + strings.Join(f.Meta.AppliesTo.Commands, "\n")
 		inPaths, inRemotes := map[string]bool{}, map[string]bool{}
 		for _, p := range repoPaths(text, 20) {
-			if r, ok := cache.Of(p); ok && r.Slug() != "" && (a.catalog.Accepted(r) || a.catalog.Has(r.Slug())) {
+			if r, ok := cache.Of(p); ok && r.Slug() != "" && catalogTakes(a.catalog, r) {
 				inPaths[r.Slug()] = true
 			}
 		}
