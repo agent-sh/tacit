@@ -260,13 +260,17 @@ func TestMigrateKeepsTryingHeldFacts(t *testing.T) {
 
 // Routing reads every ~ and absolute path a fact names, since only a git
 // root here makes a repository of one, but none in a kernel's view or
-// under /net; rotation and the ancestor index read places on a machine
+// under /net, each once, the places first, so routes never crowd a place
+// out of the cap; rotation and the ancestor index read places on a machine
 // only, never a route.
 func TestPathReaders(t *testing.T) {
 	text := "Checkouts: /tmp/wt/tacit, /root/projects/tacit/main.go, (/workspace/app) and `~/projects/memra`; the API is /v1/messages, the forge /repos/agent-sh/tacit/pulls; logs in /var/log/x.log; " +
-		"its cwd /proc/501543/cwd, /dev/fd/3, /sys/class/net, /dev and /net/buildbox/src/tacit."
-	if got, want := strings.Join(repoPaths(text, -1), " "), "/tmp/wt/tacit /root/projects/tacit/main.go /workspace/app ~/projects/memra /v1/messages /repos/agent-sh/tacit/pulls /var/log/x.log"; got != want {
+		"its cwd /proc/501543/cwd, /dev/fd/3, /sys/class/net, /dev and /net/buildbox/src/tacit; again /v1/messages."
+	if got, want := strings.Join(repoPaths(text, -1), " "), "~/projects/memra /var/log/x.log /tmp/wt/tacit /root/projects/tacit/main.go /workspace/app /v1/messages /repos/agent-sh/tacit/pulls"; got != want {
 		t.Errorf("repoPaths read %q, want %q", got, want)
+	}
+	if got, want := strings.Join(repoPaths(text, 3), " "), "~/projects/memra /var/log/x.log /tmp/wt/tacit"; got != want {
+		t.Errorf("repoPaths(3) read %q, want %q", got, want)
 	}
 	var places []string
 	for _, m := range machinePathRx.FindAllStringSubmatch(text, -1) {

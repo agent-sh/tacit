@@ -299,7 +299,10 @@ func TestDeletedRepositoryFoldsByItsFacts(t *testing.T) {
 // paths name or stay in the org, all in the overlay; the clone and the
 // server are untouched. The fact names the checkout under ~, or by its
 // absolute path wherever the projects directory is: here the test's temp
-// directory, under /tmp on Linux and /var/folders on macOS.
+// directory. That form tells routing that reads every absolute path from
+// one that reads only the system roots where the temp directory is outside
+// them (Linux's /tmp, unless TMPDIR or GOTMPDIR is elsewhere); the route
+// and the scratch clone below tell routing apart on any machine.
 func TestLocalOrgLivesInTheOverlay(t *testing.T) {
 	t.Run("tilde", func(t *testing.T) { testLocalOrg(t, true) })
 	t.Run("absolute", func(t *testing.T) { testLocalOrg(t, false) })
@@ -334,9 +337,16 @@ func testLocalOrg(t *testing.T, underHome bool) {
 	gitIn(t, billing, "add", "main.go")
 	gitIn(t, billing, "commit", "-q", "-m", "c")
 	gitIn(t, billing, "remote", "add", "origin", "https://github.com/workco/billing.git")
+	// A task's scratch clone outside home, of no checkout here and with no
+	// work in it, is no repository (repoid.Elsewhere): the fact still names
+	// billing alone.
+	scratch := filepath.Join(r.root, "scratch", "vendor-lib")
+	os.MkdirAll(scratch, 0o755)
+	gitIn(t, scratch, "init", "-q", "-b", "main")
+	gitIn(t, scratch, "remote", "add", "origin", "https://github.com/vendor/lib.git")
 	for name, desc := range map[string]string{
 		"workco-reviews": "Every workco change needs two reviewers",
-		"billing-config": "The billing service reads " + named,
+		"billing-config": "The billing service reads " + named + "; a one-off copy of the vendor lib was at " + filepath.ToSlash(filepath.Join(scratch, "lib.go")),
 		// A route names no checkout, though it holds projects/<a known
 		// name>: the fact stays in the org.
 		"workco-dashboard-route": "The workco dashboard calls /api/projects/billing/settings",

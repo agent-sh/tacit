@@ -601,7 +601,7 @@ const (
 )
 
 // factsPointAt counts, for each repository, the folder's live facts whose
-// own evidence points at it: the machine paths and forge URLs they name
+// own evidence points at it: the paths and forge URLs they name
 // (pointedRepos), and the repository-relative paths they name that exist in
 // exactly one of the repositories probed (the best of probe by weight, at
 // most maxProbe, each with a checkout here or a forge repository;
