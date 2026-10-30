@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -22,26 +21,20 @@ import (
 // read before TestMain puts a stand-in on PATH.
 var scrumpErr error
 
-// TestMain: every write masks what it adds with scrump (Redact), so a test
-// that writes needs it. Where scrump with its text profile is absent, a
-// stand-in that masks only the canary digest.RedactionReady checks goes
-// first on PATH; the tests of the mask itself use their own redactor, or the
-// real scrump and skip without it.
+// TestMain: every write masks what it adds (Redact). Here a stand-in masks
+// only the canary digest.RedactionReady checks, so the package's commits
+// neither need scrump nor pay its start; the tests of the mask use their own
+// redactor, or the real scrump and skip without it.
 func TestMain(m *testing.M) {
 	scrumpErr = digest.RedactionReady()
-	var stub string
-	if scrumpErr != nil && runtime.GOOS != "windows" {
-		if dir, err := os.MkdirTemp("", "tacit-store-scrump-"); err == nil {
-			stub = dir
-			_ = os.WriteFile(filepath.Join(dir, "scrump"), []byte("#!/bin/sh\nexec sed 's/Zq7Vx9/******/g'\n"), 0o755)
-			os.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	Redact = func(_ context.Context, texts []string) ([]string, error) {
+		out := make([]string, len(texts))
+		for i, s := range texts {
+			out[i] = strings.ReplaceAll(s, "Zq7Vx9", "******")
 		}
+		return out, nil
 	}
-	code := m.Run()
-	if stub != "" {
-		os.RemoveAll(stub)
-	}
-	os.Exit(code)
+	os.Exit(m.Run())
 }
 
 // fakeKey is the shape the test redactor masks; no real key looks like it.
@@ -306,6 +299,7 @@ func TestTheRealMaskTakesALoopbackServerKey(t *testing.T) {
 	if scrumpErr != nil {
 		t.Skip("needs scrump with the text profile: " + scrumpErr.Error())
 	}
+	withRedact(t, digest.RedactAllContext)
 	s, _ := seedPair(t)
 	run(t, s.Dir, "config", "user.email", "writer@example.test")
 	key := "qwen" + "local" + "7Hc3Pz9Rk2Lm5"

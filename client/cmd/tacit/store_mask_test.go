@@ -10,9 +10,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
+
+// realRedact gives the test the store's own redactor, scrump through
+// digest.RedactAllContext (the stand-in of stubScrump where scrump is
+// absent), in place of the suite's canaryRedact.
+func realRedact(t *testing.T) {
+	t.Helper()
+	prev := store.Redact
+	store.Redact = digest.RedactAllContext
+	t.Cleanup(func() { store.Redact = prev })
+}
 
 // The 2026-10-26 rebuild's curator wrote an imported memory's loopback
 // llama-server key into a curated fact: the memory came into the inbox
@@ -36,6 +47,7 @@ func TestTheCuratorWritesNoKeyItsNoteBroughtIn(t *testing.T) {
 	t.Setenv("TACIT_CURATE_RUNNER", "claude")
 	t.Setenv("TACIT_JUDGE_RUNNER", "claude")
 	stubScrump(t)
+	realRedact(t)
 	if code := runInit(nil); code != 0 {
 		t.Fatalf("init %d", code)
 	}
@@ -109,6 +121,7 @@ func TestAnAgentsAddIsNotMaskedTwice(t *testing.T) {
 	t.Setenv("TACIT_LOCAL", filepath.Join(home, "overlay"))
 	t.Setenv("TACIT_PROJECTS", filepath.Join(home, "projects"))
 	stubScrump(t)
+	realRedact(t)
 	if code := runInit(nil); code != 0 {
 		t.Fatalf("init %d", code)
 	}
