@@ -137,8 +137,8 @@ defmodule TacitServer.E2ETest do
   end
 
   # The push lease is one for every writer, so the scan of one blob must cost
-  # what its size does: a long line of sk- runs that holds no key took
-  # minutes with a rule that counts positions around a match.
+  # what its size does. Under the server's C.UTF-8, GNU grep took minutes on
+  # a long line of sk- runs; the hook scans in the C locale.
   test "a long line of sk- runs is scanned in linear time and taken", %{keyid: keyid, priv: priv} do
     dir = clone!()
 
@@ -150,10 +150,52 @@ defmodule TacitServer.E2ETest do
     )
 
     {elapsed, {out, status}} =
-      :timer.tc(fn -> git(dir, ["push", "origin", "HEAD:main"], git_env(keyid, priv)) end)
+      in_server_locale(fn ->
+        :timer.tc(fn -> git(dir, ["push", "origin", "HEAD:main"], git_env(keyid, priv)) end)
+      end)
 
     assert status == 0, out
     assert elapsed < 20_000_000, "the push took #{div(elapsed, 1000)} ms"
+  end
+
+  # The scan reads bytes: a NUL does not make the blob "binary" and hide what
+  # follows, and a byte that is not UTF-8 right before a key does not hide it.
+  test "a key after a NUL or a byte that is not UTF-8 is still refused", %{
+    keyid: keyid,
+    priv: priv
+  } do
+    dir = clone!()
+    [{_, key} | _] = synthetic_sk_keys(1)
+
+    for {name, body} <- [
+          {"after-nul", <<0>> <> "\nexport KEY=\"" <> key <> "\"\n"},
+          {"after-ff", <<0xFF>> <> "sk-abcdefgh-ijklmnopQ\n"}
+        ] do
+      write_commit!(dir, "inbox/#{keyid}/#{name}.md", body, name)
+
+      {out, status} =
+        in_server_locale(fn ->
+          git(dir, ["push", "origin", "HEAD:main"], git_env(keyid, priv))
+        end)
+
+      assert status != 0 and out =~ "contains a secret", "#{name} got in: #{out}"
+      git!(dir, ["reset", "--quiet", "--hard", "HEAD~1"])
+    end
+  end
+
+  # The hook runs with the server's environment; production sets LANG=C.UTF-8.
+  defp in_server_locale(fun) do
+    lang = System.get_env("LANG")
+    lc_all = System.get_env("LC_ALL")
+    System.put_env("LANG", "C.UTF-8")
+    System.delete_env("LC_ALL")
+
+    try do
+      fun.()
+    after
+      if lang, do: System.put_env("LANG", lang), else: System.delete_env("LANG")
+      if lc_all, do: System.put_env("LC_ALL", lc_all)
+    end
   end
 
   test "sk- keys of every shape are still refused", %{keyid: keyid, priv: priv} do
