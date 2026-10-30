@@ -26,8 +26,9 @@ import (
 // cursor again, as long as those items are the ones it was kept from: a read
 // checks the transcript's bytes the State names (its first 256 KiB, or all
 // of it up to the cursor when shorter) and the line before the cursor, or
-// the Hermes row at the cursor, and reads as from a bare cursor when they
-// changed. A change further inside the transcript is not seen.
+// every field of the Hermes row at the cursor, and reads as from a bare
+// cursor when they changed. A change further inside the transcript is not
+// seen.
 //
 // The zero State is the start, and a read that ends there (a first line
 // still being written) returns it: what the readers take from a transcript's
