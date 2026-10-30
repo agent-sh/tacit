@@ -216,7 +216,7 @@ func TestLinesThatDoNotParseAreCounted(t *testing.T) {
 
 			// A count below 0, or one that is no whole number, is damage: the
 			// State loads as a bare cursor.
-			for _, damage := range []string{`"unparsed":-5`, `"unparsed":"two"`, `"unparsed":2.5`} {
+			for _, damage := range []string{`"unparsed":-5`, `"unparsed":"two"`, `"unparsed":2.5`, `"unparsed":null`} {
 				if d := rewired(t, st, `"unparsed":2`, damage); d.Kept() || d.Unparsed() != 0 || d.Offset != st.Offset {
 					t.Fatalf("%s loads as %+v", damage, d)
 				}

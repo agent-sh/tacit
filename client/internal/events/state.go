@@ -176,8 +176,10 @@ func (s *State) UnmarshalBinary(b []byte) error {
 		return nil
 	}
 	if len(w.Unparsed) > 0 {
+		// MarshalBinary writes a whole number or nothing: null is damage too,
+		// though it decodes as 0.
 		var n int
-		if json.Unmarshal(w.Unparsed, &n) != nil || n < 0 {
+		if string(w.Unparsed) == "null" || json.Unmarshal(w.Unparsed, &n) != nil || n < 0 {
 			return nil
 		}
 		s.unparsed = n
