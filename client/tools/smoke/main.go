@@ -13,11 +13,24 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 )
 
+// openerNames are the commands the client runs to open its owner page in a
+// browser (cmd/tacit openURL): xdg-open, open (macOS), rundll32.exe (Windows).
+var openerNames = map[string]bool{"xdg-open": true, "open": true, "rundll32": true}
+
 func main() {
+	// Run as the browser opener: record the page's link (its last argument)
+	// for the smoke run that put this copy first on PATH, and open nothing.
+	if openerNames[strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe")] {
+		if f := os.Getenv("TACIT_SMOKE_LINK_FILE"); f != "" && len(os.Args) > 1 {
+			check(os.WriteFile(f, []byte(os.Args[len(os.Args)-1]), 0o600))
+		}
+		return
+	}
 	binary := flag.String("binary", "tacit", "client to exercise")
 	redactor := flag.Bool("with-redactor", false, "also exercise agent note redaction with installed scrump")
 	flag.Parse()
@@ -100,8 +113,23 @@ func main() {
 	run("lint")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	app := exec.CommandContext(ctx, abs, "app", "--browser", "--no-open", "--addr", "127.0.0.1:0")
-	app.Env = env
+	// The page's link carries its token and is printed only to a terminal;
+	// the app hands it to the browser opener. This smoke run is that opener:
+	// a copy of itself first on PATH under the opener's name records it.
+	self, err := os.Executable()
+	check(err)
+	openers := filepath.Join(root, "opener")
+	check(os.MkdirAll(openers, 0o700))
+	name := map[string]string{"windows": "rundll32.exe", "darwin": "open"}[runtime.GOOS]
+	if name == "" {
+		name = "xdg-open"
+	}
+	selfBin, err := os.ReadFile(self)
+	check(err)
+	check(os.WriteFile(filepath.Join(openers, name), selfBin, 0o700))
+	linkFile := filepath.Join(root, "link")
+	app := exec.CommandContext(ctx, abs, "app", "--browser", "--addr", "127.0.0.1:0")
+	app.Env = append(append([]string{}, env...), "PATH="+openers+string(os.PathListSeparator)+os.Getenv("PATH"), "TACIT_SMOKE_LINK_FILE="+linkFile)
 	out, err := app.StdoutPipe()
 	check(err)
 	app.Stderr = os.Stderr
@@ -128,8 +156,23 @@ func main() {
 	if url == "" {
 		check(fmt.Errorf("app exited before serving"))
 	}
+	// The line names the address only: a pipe never sees the token.
+	if strings.Contains(url, "?") {
+		check(fmt.Errorf("app printed its page's token to a pipe: %s", url))
+	}
+	var link string
+	for link == "" && ctx.Err() == nil {
+		if b, err := os.ReadFile(linkFile); err == nil && len(b) > 0 {
+			link = string(b)
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !strings.HasPrefix(link, url+"?") {
+		check(fmt.Errorf("the browser opener got %q, want the page's link at %s", link, url))
+	}
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := client.Get(link)
 	check(err)
 	b, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
