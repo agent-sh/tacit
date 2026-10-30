@@ -18,15 +18,15 @@ import (
 // of a refused run can be acted on. v0.9.14 printed only the files it set
 // aside, an empty list for a curated fact, run after run. Every write masks
 // what it adds first (store.Redact), so here the mask lets the token through,
-// as one whose scrump does not know the shape would: the server's scan is the
-// second check.
+// as a scrump that masks its canary but does not know the shape would: the
+// server's scan is the second check.
 func TestCurateRefusedBatchSaysWhatTheServerSaid(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell CLI fixture")
 	}
 	stubScrump(t)
 	prevRedact := store.Redact
-	store.Redact = func(_ context.Context, texts []string) ([]string, error) { return texts, nil }
+	store.Redact = canaryRedact
 	t.Cleanup(func() { store.Redact = prevRedact })
 	r := newRig(t, rigOpts{repos: []string{"demo"}})
 	hook, err := filepath.Abs("../../../server/priv/hooks/pre-receive")

@@ -57,14 +57,16 @@ func withRedact(t *testing.T, red func(context.Context, []string) ([]string, err
 	t.Cleanup(func() { Redact = prev })
 }
 
-// maskFake masks fakeKey, each text on its own, and records what it was
-// asked.
+// maskFake masks fakeKey, each text on its own, and the canary as scrump
+// does, and records what it was asked (the canary aside).
 func maskFake(asked *[]string) func(context.Context, []string) ([]string, error) {
 	return func(_ context.Context, texts []string) ([]string, error) {
 		out := make([]string, len(texts))
 		for i, s := range texts {
-			*asked = append(*asked, s)
-			out[i] = fakeKey.ReplaceAllStringFunc(s, func(k string) string { return strings.Repeat("*", len(k)) })
+			if s != canary {
+				*asked = append(*asked, s)
+			}
+			out[i] = strings.ReplaceAll(fakeKey.ReplaceAllStringFunc(s, func(k string) string { return strings.Repeat("*", len(k)) }), "Zq7Vx9", "******")
 		}
 		return out, nil
 	}
@@ -264,6 +266,33 @@ func TestAWriteIsRefusedWhenItsMaskCannotRun(t *testing.T) {
 	}
 	if server := strings.TrimSpace(run(t, s.Dir, "ls-remote", "origin", "main")); !strings.HasPrefix(server, before) {
 		t.Fatalf("the server moved: %s", server)
+	}
+}
+
+// A redactor that runs but masks nothing (a scrump older than 0.2.0: its
+// records probe fails and its joined fallback answers every text as it came)
+// fails the canary that rides with the batch, and the write is refused.
+func TestARedactorThatMasksNothingRefusesTheWrite(t *testing.T) {
+	s, _ := seedPair(t)
+	run(t, s.Dir, "config", "user.email", "writer@example.test")
+	calls := 0
+	withRedact(t, func(_ context.Context, texts []string) ([]string, error) { calls++; return texts, nil })
+	before := strings.TrimSpace(run(t, s.Dir, "rev-parse", "HEAD"))
+	writeFile(t, s.Dir, "inbox/x@h/note.md", "---\nname: note\n---\n\nthe wrapper passes FAKEKEY-334\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	err := s.CommitPush(ctx, []string{"inbox/x@h/note.md"}, "agent: note", "agent")
+	if !errors.Is(err, ErrRedaction) || !strings.Contains(err.Error(), "canary") {
+		t.Fatalf("a redactor that masks nothing: %v, want ErrRedaction", err)
+	}
+	if calls != 1 {
+		t.Fatalf("the canary cost %d redactor calls, want it in the one batch", calls)
+	}
+	if after := strings.TrimSpace(run(t, s.Dir, "rev-parse", "HEAD")); after != before {
+		t.Fatal("a write landed with no working mask")
+	}
+	if staged := strings.TrimSpace(run(t, s.Dir, "diff", "--cached", "--name-only")); staged != "" {
+		t.Fatalf("staged: %q", staged)
 	}
 }
 
@@ -559,6 +588,10 @@ func TestTheMaskReadsARunWithTheLineBeforeIt(t *testing.T) {
 	withRedact(t, func(_ context.Context, texts []string) ([]string, error) {
 		out := make([]string, len(texts))
 		for i, s := range texts {
+			if s == canary { // as scrump masks it
+				out[i] = strings.ReplaceAll(s, "Zq7Vx9", "******")
+				continue
+			}
 			asked = append(asked, s)
 			out[i] = bearer.ReplaceAllStringFunc(s, func(m string) string {
 				nl := strings.IndexByte(m, '\n') + 1

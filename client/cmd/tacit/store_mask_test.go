@@ -153,3 +153,48 @@ func TestAnAgentsAddIsNotMaskedTwice(t *testing.T) {
 		t.Fatalf("the store masked the add again (%d redactor calls)", calls)
 	}
 }
+
+// The indexes a masked write writes again hold the facts its commit's tree
+// holds: a tracked fact another session deleted or broke in the clone, and
+// the commit does not name, is there as HEAD holds it; a fact the clone does
+// not track is not; the commit's own fact is there as it writes it.
+func TestTheIndexesOfAMaskedWriteAreItsTreesFacts(t *testing.T) {
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q", "-b", "main")
+	write := func(rel, data string) {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, n := range []string{"kept", "named", "deleted", "broken"} {
+		write("system/"+n+".md", factFile(n))
+	}
+	markAudited(t, dir)
+	gitIn(t, dir, "add", "-A")
+	gitIn(t, dir, "commit", "-qm", "seed")
+	// Another session's changes in the clone, none of them this commit's.
+	os.Remove(filepath.Join(dir, "system", "deleted.md"))
+	write("system/broken.md", "---\nname: broken\ndescription: [half\n---\n\nbody\n")
+	write("system/stray.md", factFile("stray"))
+	// The commit's own fact, masked.
+	write("system/named.md", strings.Replace(factFile("named"), `"fact named"`, `"fact named, with ****"`, 1))
+	facts, err := commitFacts(context.Background(), dir, []string{"system/named.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, f := range facts {
+		got[f.Meta.Name] = f.Meta.Description
+	}
+	want := map[string]string{"kept": "fact kept", "named": "fact named, with ****", "deleted": "fact deleted", "broken": "fact broken"}
+	if len(got) != len(want) {
+		t.Fatalf("the commit's facts: %v, want %v", got, want)
+	}
+	for n, d := range want {
+		if got[n] != d {
+			t.Errorf("%s: %q, want %q (all: %v)", n, got[n], d, got)
+		}
+	}
+}
