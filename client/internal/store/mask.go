@@ -3,11 +3,14 @@ package store
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -20,34 +23,38 @@ import (
 )
 
 // Every write into the store is masked before it is staged (SPEC.md, "Every
-// write is masked"): the prose a commit adds to the Markdown files it names
-// (a fact's or a note's description and body, a record's and an overview's
-// text, a review file's lines) goes through scrump's text profile, each run
-// of added lines as it would be alone, whoever wrote it and whatever text it
-// copied. The 2026-10-26 rebuild's curator split an imported memory whose
-// body held a loopback llama-server key into a curated fact: the note had
-// come in through a path that did not mask it, and nothing between the note
-// and the push masked what the curator copied. A write whose redaction
-// cannot run is refused before anything is staged (fail closed).
+// write is masked"): the prose a commit adds to the files it names goes
+// through scrump's text profile, whoever wrote it and whatever text it copied.
+// In a Markdown file (a fact, a note, a record, an overview, a review file)
+// that is the description when the write changed it and the runs of lines
+// HEAD does not hold, each with the line before it as context; in a JSONL
+// ledger, the string values of the lines it adds that are not names, paths,
+// sessions, days or hashes. The 2026-10-26 rebuild's curator split an
+// imported memory whose body held a loopback llama-server key into a curated
+// fact: the note had come in through a path that did not mask it, and nothing
+// between the note and the push masked what the curator copied. A write whose
+// redaction cannot run is refused before anything is staged (fail closed).
 //
 // What the mask leaves: what HEAD already holds (a write masks what it adds;
 // it does not clean the store), the frontmatter but a description (names,
 // scopes, sessions and hashes: on the author's store the text profile took
-// 113 session ids, 14 origins and 5 names for secrets), a [[link]] (a fact's
-// name), the owner's recorded words (owner_quote, owner_words: theirs, as
-// their text in tacit app is), the files tacit generates from the facts, and
-// JSON files, whose free text their writers mask.
+// 113 session ids, 14 origins and 5 names for secrets), a [[link]]'s target
+// when it is a fact's name, the owner's recorded words (owner_quote,
+// owner_words, a ledger's quote and words: theirs, as their text in tacit app
+// is), and the files tacit generates from the facts (written again from the
+// masked text, Reindex).
 
 // Redact masks secret-shaped text in several texts at once, each as it would
 // be alone, returning each at its length (digest.RedactAllContext: scrump's
 // text profile, records mode). Tests replace it.
 var Redact = digest.RedactAllContext
 
-// Reindex writes again the indexes tacit generates from the facts' text
-// (MEMORY.md and the folder indexes) and returns the files it wrote, which
-// join the commit. A write that masked a fact or a record calls it, so the
-// indexes hold the text the commit holds. cmd/tacit sets it.
-var Reindex func(ctx context.Context, dir string) ([]string, error)
+// Reindex writes again the indexes tacit generates from the facts (MEMORY.md
+// and the folder indexes), from the facts as the commit of rels will hold them,
+// and returns the files it wrote, which join the commit. A write that masked a
+// fact or a record calls it, so the indexes hold the text the commit holds;
+// with none set such a write is refused. cmd/tacit sets it.
+var Reindex func(ctx context.Context, dir string, rels []string) ([]string, error)
 
 // ErrRedaction is a write refused because what it adds could not be
 // masked: nothing was staged or committed.
@@ -82,13 +89,19 @@ func preMasked(ctx context.Context) bool {
 	return v
 }
 
-// maskedKind is a file the mask reads: a Markdown file tacit does not
-// generate.
-func maskedKind(rel string) bool {
-	if !strings.HasSuffix(rel, ".md") || rel == index.File || path.Base(rel) == tree.FileName {
-		return false
+// maskedKind is how the mask reads a file: "md" a Markdown file tacit does
+// not generate, "jsonl" a ledger, "" a file it leaves (the indexes, the merge
+// rules, a JSON marker, which holds no prose).
+func maskedKind(rel string) string {
+	switch {
+	case rel == index.File || path.Base(rel) == tree.FileName || rel == ".gitattributes":
+		return ""
+	case strings.HasSuffix(rel, ".md"):
+		return "md"
+	case strings.HasSuffix(rel, ".jsonl"):
+		return "jsonl"
 	}
-	return true
+	return ""
 }
 
 // maskPlan is one file's texts for the redactor and how to put the masked
@@ -98,19 +111,20 @@ type maskPlan struct {
 	apply func(red []string) (string, error)
 }
 
-// maskAdded masks what a write adds to the Markdown files it names and
-// writes back each file whose text the mask changed, returning them.
+// maskAdded masks what a write adds to the files it names and writes back
+// each file whose text the mask changed, returning them.
 func (s *Store) maskAdded(ctx context.Context, rels []string) ([]string, error) {
 	type file struct {
-		rel, now string
-		perm     os.FileMode
-		plan     maskPlan
-		first    int
+		rel, kind, now string
+		perm           os.FileMode
+		plan           maskPlan
+		first          int
 	}
 	var files []*file
 	seen := map[string]bool{}
 	for _, rel := range rels {
-		if seen[rel] || !maskedKind(rel) {
+		kind := maskedKind(rel)
+		if seen[rel] || kind == "" {
 			continue
 		}
 		seen[rel] = true
@@ -133,9 +147,10 @@ func (s *Store) maskAdded(ctx context.Context, rels []string) ([]string, error) 
 			return nil, fmt.Errorf("%w: %v", ErrRedaction, err)
 		}
 		if bytes.IndexByte(b, 0) >= 0 {
-			continue // not text
+			// The redactor reads text; a file it cannot read is not written.
+			return nil, fmt.Errorf("%w: %s holds a NUL byte", ErrRedaction, rel)
 		}
-		files = append(files, &file{rel: rel, now: string(b), perm: st.Mode().Perm()})
+		files = append(files, &file{rel: rel, kind: kind, now: string(b), perm: st.Mode().Perm()})
 	}
 	if len(files) == 0 {
 		return nil, nil
@@ -150,7 +165,11 @@ func (s *Store) maskAdded(ctx context.Context, rels []string) ([]string, error) 
 	}
 	var texts []string
 	for _, f := range files {
-		f.plan = planMarkdown(old[f.rel], f.now)
+		if f.kind == "jsonl" {
+			f.plan = planJSONL(old[f.rel], f.now)
+		} else {
+			f.plan = planMarkdown(old[f.rel], f.now)
+		}
 		f.first = len(texts)
 		texts = append(texts, f.plan.texts...)
 	}
@@ -203,6 +222,13 @@ func (s *Store) linkedParent(rel string) bool {
 	return false
 }
 
+// unchanged reports that none of rels differs from HEAD: what the write
+// wanted is in the store already (the mask took back all it changed).
+func (s *Store) unchanged(ctx context.Context, rels []string) bool {
+	out, err := git(ctx, s.Dir, append([]string{"status", "--porcelain", "-z", "--untracked-files=all", "--"}, rels...)...)
+	return err == nil && strings.TrimSpace(out) == ""
+}
+
 // frontmatter is what the mask reads of a file's frontmatter: its
 // description and the owner's recorded words.
 type frontmatter struct {
@@ -213,18 +239,17 @@ type frontmatter struct {
 	} `yaml:"source"`
 }
 
-// planMarkdown plans the mask of one Markdown file: with frontmatter, its
-// description when the write changed it and the runs of body lines HEAD
-// does not hold; without, the runs of added lines of the whole text. A
-// [[link]] and the owner's recorded words are left as they are.
+// planMarkdown plans the mask of one Markdown file: with frontmatter that
+// reads, its description when the write changed it and the runs of body lines
+// HEAD does not hold; otherwise the runs of added lines of the whole text. A
+// link's target that is a fact's name and the owner's recorded words are left
+// as they are.
 func planMarkdown(old, now string) maskPlan {
 	fm, body, ok := fact.Split([]byte(now))
-	if !ok {
-		return planProse(old, now, protected(now, nil))
-	}
 	var meta frontmatter
-	if yaml.Unmarshal(fm, &meta) != nil {
-		meta = frontmatter{} // a frontmatter that does not read: only its body is prose
+	if !ok || yaml.Unmarshal(fm, &meta) != nil {
+		// No frontmatter, or one that does not read: the whole text is prose.
+		return planProse(old, now, protected(now, nil))
 	}
 	oldBody, oldDesc := old, ""
 	if ofm, ob, ok := fact.Split([]byte(old)); ok {
@@ -264,7 +289,9 @@ func planMarkdown(old, now string) maskPlan {
 }
 
 // planProse plans the mask of the runs of lines of now that old does not
-// hold; spans are byte ranges of now the mask leaves as they are.
+// hold, each sent with the line before it as context (a keyword there masks
+// the token that starts the run) and only the run written back; spans are
+// byte ranges of now the mask leaves as they are.
 func planProse(old, now string, spans [][2]int) maskPlan {
 	lines := splitLines(now)
 	runs := addedRuns(splitLines(old), lines)
@@ -272,9 +299,15 @@ func planProse(old, now string, spans [][2]int) maskPlan {
 	for i, l := range lines {
 		at[i+1] = at[i] + len(l)
 	}
+	ctxLen := make([]int, len(runs))
 	p := maskPlan{}
-	for _, r := range runs {
-		p.texts = append(p.texts, now[at[r[0]]:at[r[1]]])
+	for i, r := range runs {
+		from := at[r[0]]
+		if r[0] > 0 {
+			from = at[r[0]-1]
+		}
+		ctxLen[i] = at[r[0]] - from
+		p.texts = append(p.texts, now[from:at[r[1]]])
 	}
 	p.apply = func(red []string) (string, error) {
 		var b strings.Builder
@@ -288,7 +321,7 @@ func planProse(old, now string, spans [][2]int) maskPlan {
 					local = append(local, [2]int{max(sp[0], start) - start, min(sp[1], end) - start})
 				}
 			}
-			b.WriteString(keep(now[start:end], red[i], local))
+			b.WriteString(keep(now[start:end], red[i][ctxLen[i]:], local))
 			prev = end
 		}
 		b.WriteString(now[prev:])
@@ -309,12 +342,17 @@ func keep(orig, red string, spans [][2]int) string {
 	return string(b)
 }
 
-// protected is the byte ranges of text the mask leaves: its [[links]] and
-// every place it holds one of the owner's recorded phrases.
+// protected is the byte ranges of text the mask leaves: the target of each
+// [[link]] that is a fact's name (lower-case letters, digits and hyphens; a
+// label, a section or a target of another shape is prose), and every place
+// it holds one of the owner's recorded phrases.
 func protected(text string, words []string) [][2]int {
 	var out [][2]int
 	for _, sp := range fact.LinkSpans(text) {
-		out = append(out, [2]int{sp.Start, sp.End})
+		at := sp.Start + 2 // after "[["
+		if strings.HasPrefix(text[at:], sp.Target) && fact.IsSlug(strings.TrimSpace(sp.Target)) {
+			out = append(out, [2]int{at, at + len(sp.Target)})
+		}
 	}
 	return append(out, wordSpans(text, words)...)
 }
@@ -349,6 +387,157 @@ func phrases(quotes ...string) []string {
 	return out
 }
 
+// Keys of a ledger line whose string values are names, paths, sessions,
+// verdicts, days or the owner's own words, never prose the mask reads.
+var ledgerIDKeys = map[string]bool{
+	"id": true, "a": true, "b": true, "at": true, "by": true, "model": true, "session": true, "sessions": true,
+	"from": true, "words_from": true, "owner_quote_from": true, "owner_words_from": true, "turn_hash": true,
+	"hash": true, "name": true, "path": true, "origin": true, "into": true, "of": true, "also": true,
+	"as": true, "statement": true, "verdict": true, "action": true, "kind": true, "doubt": true,
+	"closes": true, "proof": true, "repointed": true, "said": true, "day": true, "on": true,
+	"created": true, "folder": true, "scope": true, "status": true, "target": true, "to": true,
+	"sha": true, "commit": true, "host": true, "harness": true, "started": true, "outcome": true,
+	"quote": true, "words": true, "relevance": true, "category": true,
+}
+
+// idValue is a string value of a shape no prose has: a fact's name, a store
+// path, a session (<harness>:<id>), a day or a time, a hash.
+var idValue = regexp.MustCompile(`^(?:[a-z0-9][a-z0-9-]*|[\w.@-]+(?:/[\w.@-]+)+\.(?:md|jsonl|json)|[a-z]+:[\w.-]+|\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]+)?|[0-9a-f]{7,64})$`)
+
+// planJSONL plans the mask of the lines of a ledger HEAD does not hold: in
+// each, the string values that are prose, by their key and their shape, each
+// masked alone and written back as JSON. A line that is not JSON is masked
+// whole, as prose.
+func planJSONL(old, now string) maskPlan {
+	lines := splitLines(now)
+	runs := addedRuns(splitLines(old), lines)
+	type value struct {
+		line, start, end int // the literal's bytes in the line
+		text             string
+	}
+	var vals []value
+	var whole []int // lines masked whole
+	for _, r := range runs {
+		for i := r[0]; i < r[1]; i++ {
+			l := strings.TrimRight(lines[i], "\r\n")
+			if strings.TrimSpace(l) == "" {
+				continue
+			}
+			vs, ok := jsonStrings(l)
+			if !ok {
+				whole = append(whole, i)
+				continue
+			}
+			for _, v := range vs {
+				if !ledgerIDKeys[v.key] && !idValue.MatchString(v.text) {
+					vals = append(vals, value{i, v.start, v.end, v.text})
+				}
+			}
+		}
+	}
+	p := maskPlan{}
+	for _, v := range vals {
+		p.texts = append(p.texts, v.text)
+	}
+	for _, i := range whole {
+		p.texts = append(p.texts, lines[i])
+	}
+	p.apply = func(red []string) (string, error) {
+		out := append([]string(nil), lines...)
+		// Values right to left within a line, so earlier offsets stay true.
+		for k := len(vals) - 1; k >= 0; k-- {
+			v := vals[k]
+			if red[k] == v.text {
+				continue
+			}
+			lit, err := json.Marshal(red[k])
+			if err != nil {
+				return "", err
+			}
+			out[v.line] = out[v.line][:v.start] + string(lit) + out[v.line][v.end:]
+		}
+		for j, i := range whole {
+			out[i] = red[len(vals)+j]
+		}
+		return strings.Join(out, ""), nil
+	}
+	return p
+}
+
+// jsonString is one string value of a JSON line: its key (the key of the
+// object it is a value of, or of the array that holds it), its text and its
+// literal's bytes.
+type jsonString struct {
+	key, text  string
+	start, end int
+}
+
+// jsonStrings is every string value of the JSON text l with its key; ok is
+// false when l is not one JSON value.
+func jsonStrings(l string) ([]jsonString, bool) {
+	dec := json.NewDecoder(strings.NewReader(l))
+	dec.UseNumber()
+	type frame struct {
+		object, wantKey bool
+		key             string
+	}
+	var stack []frame
+	var out []jsonString
+	for {
+		before := int(dec.InputOffset())
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, false
+		}
+		after := int(dec.InputOffset())
+		top := len(stack) - 1
+		switch t := tok.(type) {
+		case json.Delim:
+			switch t {
+			case '{', '[':
+				key := ""
+				if top >= 0 {
+					key = stack[top].key
+					if stack[top].object {
+						stack[top].wantKey = true
+					}
+				}
+				stack = append(stack, frame{object: t == '{', wantKey: t == '{', key: key})
+			default:
+				stack = stack[:top]
+			}
+		case string:
+			if top >= 0 && stack[top].object && stack[top].wantKey {
+				stack[top].key, stack[top].wantKey = t, false
+				continue
+			}
+			q := strings.IndexByte(l[before:after], '"')
+			if q < 0 {
+				return nil, false
+			}
+			key := ""
+			if top >= 0 {
+				key = stack[top].key
+				if stack[top].object {
+					stack[top].wantKey = true
+				}
+			}
+			out = append(out, jsonString{key: key, text: t, start: before + q, end: after})
+		default:
+			if top >= 0 && stack[top].object {
+				stack[top].wantKey = true
+			}
+		}
+	}
+	if dec.More() {
+		return nil, false
+	}
+	return out, true
+}
+
 // splitLines splits s into lines that keep their newline, so joining them
 // gives s back.
 func splitLines(s string) []string {
@@ -368,16 +557,17 @@ func splitLines(s string) []string {
 // addedRuns is the runs of lines of now that old does not hold, as
 // [start, end) line ranges. A line counts as old as many times as old holds
 // it, so a line moved within the file is old and a copy of an old line is
-// new. A last line that only lost or gained its newline is old.
+// new. A line that only lost or gained its newline, or a carriage return
+// before it, is old.
 func addedRuns(old, now []string) [][2]int {
 	have := map[string]int{}
 	for _, l := range old {
-		have[strings.TrimSuffix(l, "\n")]++
+		have[strings.TrimRight(l, "\r\n")]++
 	}
 	var runs [][2]int
 	start := -1
 	for i, l := range now {
-		key := strings.TrimSuffix(l, "\n")
+		key := strings.TrimRight(l, "\r\n")
 		if have[key] > 0 {
 			have[key]--
 			if start >= 0 {
@@ -468,10 +658,11 @@ func writeAtomic(p string, data []byte, perm os.FileMode) error {
 }
 
 // touchesIndexes reports a masked file whose text the generated indexes
-// show: a fact or a record (not an inbox note, not a review file).
+// show: a fact or a record (not an inbox note, not a review file, not a
+// ledger).
 func touchesIndexes(rels []string) bool {
 	for _, rel := range rels {
-		if !strings.HasPrefix(rel, "inbox/") && !strings.HasPrefix(rel, "review/") {
+		if strings.HasSuffix(rel, ".md") && !strings.HasPrefix(rel, "inbox/") && !strings.HasPrefix(rel, "review/") {
 			return true
 		}
 	}

@@ -17,16 +17,71 @@ import (
 )
 
 // A write whose mask changed a fact or a record writes the indexes again from
-// the masked text, in the same commit (store.Reindex; SPEC.md, "Every write
-// is masked").
+// the masked text, in the same commit, from the facts as that commit holds
+// them (store.Reindex; SPEC.md, "Every write is masked").
 func init() {
-	store.Reindex = func(ctx context.Context, dir string) ([]string, error) {
-		all, _, err := fact.Walk(dir)
+	store.Reindex = func(ctx context.Context, dir string, rels []string) ([]string, error) {
+		facts, err := commitFacts(ctx, dir, rels)
 		if err != nil {
 			return nil, err
 		}
-		return regenIndexes(ctx, dir, all, nil)
+		return regenIndexes(ctx, dir, facts, nil)
 	}
+}
+
+// commitFacts is the facts as a commit of rels will hold them: a file the
+// commit names as it is in the clone, any other tracked fact as HEAD holds it
+// (a change the commit does not carry is not its), and no fact the clone does
+// not track that the commit does not name (a killed batch's leftover).
+func commitFacts(ctx context.Context, dir string, rels []string) ([]*fact.Fact, error) {
+	all, _, err := fact.Walk(dir)
+	if err != nil {
+		return nil, err
+	}
+	named := map[string]bool{}
+	for _, r := range rels {
+		named[r] = true
+	}
+	set := func(args ...string) (map[string]bool, error) {
+		out, err := store.Git(ctx, dir, args...)
+		if err != nil {
+			return nil, err
+		}
+		m := map[string]bool{}
+		for _, p := range strings.Split(out, "\x00") {
+			if p != "" {
+				m[p] = true
+			}
+		}
+		return m, nil
+	}
+	changed, err := set("diff", "--name-only", "-z", "HEAD")
+	if err != nil {
+		return nil, err
+	}
+	untracked, err := set("ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, err
+	}
+	var out []*fact.Fact
+	for _, f := range all {
+		switch {
+		case named[f.Path]:
+			out = append(out, f)
+		case untracked[f.Path]:
+		case changed[f.Path]:
+			blob, err := store.Git(ctx, dir, "cat-file", "blob", "HEAD:"+f.Path)
+			if err != nil {
+				continue
+			}
+			if h, err := fact.Parse(f.Path, []byte(blob)); err == nil {
+				out = append(out, h)
+			}
+		default:
+			out = append(out, f)
+		}
+	}
+	return out, nil
 }
 
 // regenIndexes writes the store's generated indexes for facts into the clone:

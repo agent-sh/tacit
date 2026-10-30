@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -34,6 +35,9 @@ func TestMain(m *testing.M) {
 		}
 		return out, nil
 	}
+	// cmd/tacit writes the indexes again after a masked fact; here there are
+	// none to write.
+	Reindex = func(context.Context, string, []string) ([]string, error) { return nil, nil }
 	os.Exit(m.Run())
 }
 
@@ -117,8 +121,10 @@ func TestAWriteMasksWhatItAddsAndNothingElse(t *testing.T) {
 			t.Errorf("%s on disk %q, want the masked text", rel, b)
 		}
 	}
+	// A line HEAD holds goes to the redactor only as the context of the run
+	// after it, and is not written back.
 	for _, a := range asked {
-		if strings.Contains(a, "FAKEKEY-111") {
+		if strings.Contains(a, "FAKEKEY-111") && !strings.HasPrefix(a, "old flags FAKEKEY-111 here\nnew flags") {
 			t.Errorf("the redactor was asked about a line HEAD already held: %q", a)
 		}
 	}
@@ -248,7 +254,7 @@ func TestAMaskedFactWritesTheIndexesAgain(t *testing.T) {
 	withRedact(t, maskFake(&asked))
 	calls := 0
 	prev := Reindex
-	Reindex = func(_ context.Context, dir string) ([]string, error) {
+	Reindex = func(_ context.Context, dir string, _ []string) ([]string, error) {
 		calls++
 		b, err := os.ReadFile(filepath.Join(dir, "machines", "h", "serve.md"))
 		if err != nil {
@@ -356,5 +362,167 @@ func TestTheMaskStaysInsideTheClone(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(outside, "f.md")); !strings.Contains(string(b), "FAKEKEY-911") {
 		t.Fatal("the mask wrote a file outside the clone")
+	}
+}
+
+// What the mask cannot read is not written: a Markdown file with a NUL byte.
+// And a masked fact whose indexes cannot be written again is refused.
+func TestTheMaskRefusesWhatItCannotRead(t *testing.T) {
+	s, _ := seedPair(t)
+	run(t, s.Dir, "config", "user.email", "writer@example.test")
+	var asked []string
+	withRedact(t, maskFake(&asked))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	writeFile(t, s.Dir, "machines/h/nul.md", "---\nname: nul\n---\n\nflags FAKEKEY-901 here\x00\n")
+	if err := s.CommitPush(ctx, []string{"machines/h/nul.md"}, "curator: nul", "curator"); !errors.Is(err, ErrRedaction) {
+		t.Fatalf("a NUL byte: %v, want ErrRedaction", err)
+	}
+	prev := Reindex
+	Reindex = nil
+	t.Cleanup(func() { Reindex = prev })
+	writeFile(t, s.Dir, "machines/h/serve.md", "---\nname: serve\n---\n\nflags FAKEKEY-902\n")
+	if err := s.CommitPush(ctx, []string{"machines/h/serve.md"}, "curator: serve", "curator"); !errors.Is(err, ErrRedaction) {
+		t.Fatalf("no reindexer: %v, want ErrRedaction", err)
+	}
+	if staged := strings.TrimSpace(run(t, s.Dir, "diff", "--cached", "--name-only")); staged != "" {
+		t.Fatalf("staged: %q", staged)
+	}
+}
+
+// A frontmatter that does not read leaves the whole file prose; a link's
+// label, section or a target that is no fact's name is prose too.
+func TestTheMaskReadsWhatItCannotParseAsProse(t *testing.T) {
+	s, _ := seedPair(t)
+	run(t, s.Dir, "config", "user.email", "writer@example.test")
+	var asked []string
+	withRedact(t, maskFake(&asked))
+	noop := Reindex
+	Reindex = func(context.Context, string, []string) ([]string, error) { return nil, nil }
+	t.Cleanup(func() { Reindex = noop })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	writeFile(t, s.Dir, "machines/h/c1.md", "---\nname: c1\ndescription: the api key: FAKEKEY-906 opens it\n---\n\nbody line\n")
+	writeFile(t, s.Dir, "machines/h/links.md", "---\nname: links\ndescription: d\n---\n\nalias [[serve|token FAKEKEY-902]]\nheading [[serve#FAKEKEY-903]]\nupper [[FAKEKEY-904]]\nkept [[fakekey-905]]\n")
+	if err := s.CommitPush(ctx, []string{"machines/h/c1.md", "machines/h/links.md"}, "curator: prose", "curator"); err != nil {
+		t.Fatal(err)
+	}
+	for rel, keys := range map[string][]string{"machines/h/c1.md": {"FAKEKEY-906"}, "machines/h/links.md": {"FAKEKEY-902", "FAKEKEY-903", "FAKEKEY-904"}} {
+		head, _ := committed(t, s, rel)
+		for _, k := range keys {
+			if strings.Contains(head, k) {
+				t.Errorf("%s keeps %s:\n%s", rel, k, head)
+			}
+		}
+	}
+	if head, _ := committed(t, s, "machines/h/links.md"); !strings.Contains(head, "[[fakekey-905]]") || !strings.Contains(head, "[[serve|token ") {
+		t.Errorf("a fact's name in a link was masked, or the link broke:\n%s", head)
+	}
+}
+
+// A ledger's lines: the prose values a write adds are masked and written back
+// as JSON; names, paths, sessions, days and the owner's words are not.
+func TestALedgerLineIsMaskedByItsValues(t *testing.T) {
+	s, _ := seedPair(t)
+	run(t, s.Dir, "config", "user.email", "writer@example.test")
+	writeFile(t, s.Dir, "review/folders.jsonl", `{"at":"2026-10-29T10:00:00Z","description":"old FAKEKEY-111 stays"}`+"\n")
+	run(t, s.Dir, "add", "-A")
+	run(t, s.Dir, "commit", "-q", "-m", "old")
+	run(t, s.Dir, "push", "-q", "origin", "HEAD:main")
+	var asked []string
+	withRedact(t, maskFake(&asked))
+	line := `{"id":"fakekey-212","at":"2026-10-30T10:00:00Z","session":"claude:FAKEKEY-313","note":"inbox/x@h/n.md","words":"keep FAKEKEY-414","description":"a proposal with FAKEKEY-515 \"quoted\"","kept":[{"text":"FAKEKEY-616 in a list","cites":[1,2]}]}`
+	b, _ := os.ReadFile(filepath.Join(s.Dir, "review", "folders.jsonl"))
+	writeFile(t, s.Dir, "review/folders.jsonl", string(b)+line+"\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := s.CommitPush(ctx, []string{"review/folders.jsonl"}, "curator: folders", "curator"); err != nil {
+		t.Fatal(err)
+	}
+	head, _ := committed(t, s, "review/folders.jsonl")
+	lines := strings.Split(strings.TrimSpace(head), "\n")
+	if len(lines) != 2 || lines[0] != `{"at":"2026-10-29T10:00:00Z","description":"old FAKEKEY-111 stays"}` {
+		t.Fatalf("the old line changed:\n%s", head)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(lines[1]), &got); err != nil {
+		t.Fatalf("the masked line is no JSON: %v\n%s", err, lines[1])
+	}
+	for _, k := range []string{"FAKEKEY-515", "FAKEKEY-616"} {
+		if strings.Contains(lines[1], k) {
+			t.Errorf("the line keeps %s: %s", k, lines[1])
+		}
+	}
+	for _, k := range []string{`"id":"fakekey-212"`, `"session":"claude:FAKEKEY-313"`, `"note":"inbox/x@h/n.md"`, `"words":"keep FAKEKEY-414"`, `\"quoted\"`} {
+		if !strings.Contains(lines[1], k) {
+			t.Errorf("the line lost %s: %s", k, lines[1])
+		}
+	}
+}
+
+// A write the mask takes back entirely (HEAD holds the masked text already)
+// is done: nothing is committed and no error comes back.
+func TestAWriteTheMaskTakesBackIsDone(t *testing.T) {
+	s, _ := seedPair(t)
+	run(t, s.Dir, "config", "user.email", "writer@example.test")
+	var asked []string
+	withRedact(t, maskFake(&asked))
+	noop := Reindex
+	Reindex = func(context.Context, string, []string) ([]string, error) { return nil, nil }
+	t.Cleanup(func() { Reindex = noop })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	text := "---\nname: commands\ndescription: d\n---\n\nrun with FAKEKEY-909\n"
+	writeFile(t, s.Dir, "derived/r/commands.md", text)
+	if err := s.CommitPushOnceLocked(ctx, []string{"derived/r/commands.md"}, "curator: derived 1", "curator"); err != nil {
+		t.Fatal(err)
+	}
+	before := strings.TrimSpace(run(t, s.Dir, "rev-parse", "HEAD"))
+	writeFile(t, s.Dir, "derived/r/commands.md", text) // the generator writes it again
+	if err := s.CommitPushOnceLocked(ctx, []string{"derived/r/commands.md"}, "curator: derived 2", "curator"); err != nil {
+		t.Fatalf("a write the mask takes back: %v", err)
+	}
+	if after := strings.TrimSpace(run(t, s.Dir, "rev-parse", "HEAD")); after != before {
+		t.Fatal("a commit was made for nothing")
+	}
+}
+
+// Each run of added lines goes to the redactor with the line before it, so a
+// keyword there still masks the token the run starts with; only the run is
+// written back. A line that only gained a carriage return is not added.
+func TestTheMaskReadsARunWithTheLineBeforeIt(t *testing.T) {
+	s, _ := seedPair(t)
+	run(t, s.Dir, "config", "user.email", "writer@example.test")
+	writeFile(t, s.Dir, "machines/h/auth.md", "---\nname: auth\n---\n\nAuthorization: Bearer\nold-token\nplain line\n")
+	run(t, s.Dir, "add", "-A")
+	run(t, s.Dir, "commit", "-q", "-m", "old")
+	run(t, s.Dir, "push", "-q", "origin", "HEAD:main")
+	bearer := regexp.MustCompile(`Bearer\r?\n(\S+)`)
+	var asked []string
+	withRedact(t, func(_ context.Context, texts []string) ([]string, error) {
+		out := make([]string, len(texts))
+		for i, s := range texts {
+			asked = append(asked, s)
+			out[i] = bearer.ReplaceAllStringFunc(s, func(m string) string {
+				nl := strings.IndexByte(m, '\n') + 1
+				return m[:nl] + stars(m[nl:])
+			})
+		}
+		return out, nil
+	})
+	noop := Reindex
+	Reindex = func(context.Context, string, []string) ([]string, error) { return nil, nil }
+	t.Cleanup(func() { Reindex = noop })
+	writeFile(t, s.Dir, "machines/h/auth.md", "---\nname: auth\n---\n\nAuthorization: Bearer\r\nnew-TOKEN-1234\nplain line\r\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := s.CommitPush(ctx, []string{"machines/h/auth.md"}, "curator: auth", "curator"); err != nil {
+		t.Fatal(err)
+	}
+	if head, _ := committed(t, s, "machines/h/auth.md"); strings.Contains(head, "new-TOKEN-1234") || !strings.Contains(head, "Authorization: Bearer") {
+		t.Fatalf("committed:\n%q", head)
+	}
+	if len(asked) != 1 || strings.Contains(asked[0], "plain line") {
+		t.Fatalf("asked %q: only the changed line, with the line before it", asked)
 	}
 }

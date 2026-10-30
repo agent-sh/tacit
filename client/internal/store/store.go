@@ -514,12 +514,18 @@ func (s *Store) commitPush(ctx context.Context, rels []string, message, writer s
 		}
 		if len(masked) > 0 {
 			fmt.Fprintf(os.Stderr, "tacit: masked secret-shaped text in %s before the commit\n", strings.Join(masked, ", "))
-			if Reindex != nil && touchesIndexes(masked) {
-				extra, err := Reindex(ctx, s.Dir)
+			if touchesIndexes(masked) {
+				if Reindex == nil {
+					return fmt.Errorf("%w: a masked fact's indexes cannot be written again here", ErrRedaction)
+				}
+				extra, err := Reindex(ctx, s.Dir, rels)
 				if err != nil {
 					return fmt.Errorf("%w: the indexes could not be written again from the masked text: %v", ErrRedaction, err)
 				}
 				rels = withAll(rels, extra)
+			}
+			if s.unchanged(ctx, rels) {
+				return nil // the store holds it already, masked
 			}
 		}
 	}
