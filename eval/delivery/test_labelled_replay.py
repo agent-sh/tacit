@@ -75,7 +75,9 @@ class LabelledReplay(unittest.TestCase):
         store = os.path.join(t, "store")
         os.makedirs(store)
         run("git", "init", "-q", "-b", "main", store)
-        fact(store, "projects/demo-api", "release-tags-are-signed", "Release tags of demo-api are signed with the release key")
+        # Its words are not mostly the prompt's: the prompt block leaves out a
+        # line that says the request back (SPEC, the echo rule).
+        fact(store, "projects/demo-api", "release-tags-are-signed", "Release tags of demo-api are signed with the hardware release key kept in the vault")
         fact(store, "projects/demo-api", "deploy-runs-the-smoke-suite", "A deploy of demo-api runs the smoke suite first", typ="design_decision", commands=["make deploy"])
         for i in range(30):
             fact(store, "user", f"filler-{i}", f"Unrelated filler note number {i} about gardening and tea")
