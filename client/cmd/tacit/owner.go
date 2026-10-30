@@ -1212,8 +1212,10 @@ func (rs *reviewServer) linkItems(ctx context.Context) []linkItem {
 		return nil
 	}
 	open := map[string]links.Edit{}
+	var planner *links.Planner
 	if sn, err := rs.snapshot(ctx); err == nil {
-		if plan, err := links.Compute(rs.s.Dir, sn.all, isRuling); err == nil {
+		planner = links.NewPlanner(rs.s.Dir, sn.all, isRuling, nil)
+		if plan, err := planner.Plan(); err == nil {
 			for _, fx := range plan.Rulings {
 				for _, e := range fx.Edits {
 					open[links.Key(fx.Name, e.Target)] = e
@@ -1223,6 +1225,12 @@ func (rs *reviewServer) linkItems(ctx context.Context) []linkItem {
 	}
 	var out []linkItem
 	for _, r := range refs {
+		// A line an older curator raised for a link to what the ruling
+		// replaced (the statements a rebuilt ruling was made of): the link
+		// is where the rule came from, not a broken one, so it is no item.
+		if f := rs.facts[r.ruling]; planner != nil && f != nil && planner.History(f, r.target) {
+			continue
+		}
 		it := linkItem{ID: pairID(kindLink, r.ruling, r.target), Kind: kindLink, Source: r.src, A: rs.view(r.ruling), Single: true, Allowed: []string{}, Notes: rs.ownerNotes().For(pairID(kindLink, r.ruling, r.target), r.ruling)}
 		it.Link = linkFlag{Target: r.target, Line: r.line}
 		if _, rest, ok := strings.Cut(r.line, ", and "); ok {

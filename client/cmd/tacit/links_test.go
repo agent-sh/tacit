@@ -142,8 +142,6 @@ func TestLinksRewriteUnwrapAndLeaveRulingsInboxAndGenerated(t *testing.T) {
 	for rel, want := range map[string]string{
 		// the live successor; a label stays, a section does not (the old fact's section)
 		"projects/x/uses-old.md": "Read [[new-engine]] first.\nAlso [[new-engine|the engine note]] and [[new-engine]].\n",
-		// the only match is the fact itself
-		"projects/x/new-engine.md": "The engine replaced old-engine. See the old note.\n",
 		// a superseded fact is repaired too
 		"projects/x/old-engine.md": "Old engine notes. Related: missing-thing.\n",
 		// one live fact answers to the spelling
@@ -166,8 +164,9 @@ func TestLinksRewriteUnwrapAndLeaveRulingsInboxAndGenerated(t *testing.T) {
 			t.Errorf("%s: more than its links changed", rel)
 		}
 	}
-	// Not edited: rulings, the inbox note, the generated fact, a live target.
-	for _, rel := range []string{"projects/x/ruling-a.md", "projects/x/ruling-b.md", "inbox/claude@host-a/an-inbox-note.md", "derived/demo/demo-note.md", "projects/x/gpu-notes.md"} {
+	// Not edited: rulings, the inbox note, the generated fact, a live target,
+	// and a link to the fact this one replaced (history, not dead).
+	for _, rel := range []string{"projects/x/ruling-a.md", "projects/x/ruling-b.md", "inbox/claude@host-a/an-inbox-note.md", "derived/demo/demo-note.md", "projects/x/gpu-notes.md", "projects/x/new-engine.md"} {
 		if r.onServer(rel) != before[rel] {
 			t.Errorf("%s was edited", rel)
 		}
@@ -291,7 +290,7 @@ func TestLinksDryRunTouchesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	re, un := rep.Plan.Links()
-	if re != 6 || un != 10 || len(rep.Plan.Fixes) != 9 || len(rep.Rulings) != 2 || len(rep.Plan.Generated) != 1 {
+	if re != 6 || un != 8 || len(rep.Plan.Fixes) != 8 || len(rep.Rulings) != 2 || len(rep.Plan.Generated) != 1 {
 		t.Fatalf("plan: %d rewritten, %d unwrapped, %d fixes, %d rulings, %d generated", re, un, len(rep.Plan.Fixes), len(rep.Rulings), len(rep.Plan.Generated))
 	}
 	if gitIn(t, r.clone, "rev-parse", "HEAD") != head || r.serverHead() != server {
@@ -512,5 +511,57 @@ func TestCurateRunsTheLinkStep(t *testing.T) {
 	}
 	if got := lintRules(r2.serverLint()); got != "" {
 		t.Fatalf("lint after `tacit links`:\n%s", got)
+	}
+}
+
+// A ruling made of the owner's statements links to them, and the statements
+// point at the ruling (superseded_by): history, not a dead link. It is not
+// put to the owner, and when the ruling is later replaced in turn its links
+// are not pointed at the new rule, which was not made of them.
+func TestLinksLeaveALinkToWhatTheFactReplaced(t *testing.T) {
+	r := newRig(t, rigOpts{})
+	writeFact(t, r.clone, fact.Meta{Name: "said-once", Description: "d", Type: "design_decision", Scope: "projects/x", SupersededBy: "made-rule"}, "you said once")
+	writeFact(t, r.clone, fact.Meta{Name: "made-rule", Description: "d", Type: "design_decision", Scope: "projects/x", Source: ownerSource("keep the gpu notes short")},
+		"You decided (2026-10-20): \"keep the gpu notes short\"\nMade from your statement [[said-once]].")
+	writeFact(t, r.clone, fact.Meta{Name: "said-twice", Description: "d", Type: "design_decision", Scope: "projects/x", SupersededBy: "older-rule"}, "you said it again")
+	writeFact(t, r.clone, fact.Meta{Name: "older-rule", Description: "d", Type: "design_decision", Scope: "projects/x", SupersededBy: "newer-rule", Source: ownerSource("keep the cpu notes short")},
+		"You decided (2026-10-19): \"keep the cpu notes short\"\nMade from your statement [[said-twice]].")
+	writeFact(t, r.clone, fact.Meta{Name: "newer-rule", Description: "d", Type: "design_decision", Scope: "projects/x", Source: ownerSource("keep all notes short")},
+		"You decided (2026-10-21): \"keep all notes short\"\nIt replaced [[older-rule]] and, through it, [[said-twice]].")
+	r.commitIndex(r.clone, "fixture")
+	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
+	commits := r.commitCount()
+	rep, err := r.links(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Plan.Fixes) != 0 || len(rep.Rulings) != 0 || rep.Pushed || r.commitCount() != commits {
+		t.Fatalf("%d fixes, %d ruling lines, pushed=%v; want nothing", len(rep.Plan.Fixes), len(rep.Rulings), rep.Pushed)
+	}
+}
+
+// In a fact that is no ruling: a link to what the fact replaced through
+// another fact stays, and one spelled other than the fact's name is spelled
+// right, still a link to where the fact came from (a ruling would get the
+// same fix as a LINK? line).
+func TestLinksSpellALinkToWhatTheFactReplaced(t *testing.T) {
+	r := newRig(t, rigOpts{})
+	writeFact(t, r.clone, fact.Meta{Name: "first-note", Description: "d", Type: "design_decision", Scope: "projects/x", SupersededBy: "middle-note"}, "first")
+	writeFact(t, r.clone, fact.Meta{Name: "middle-note", Description: "d", Type: "design_decision", Scope: "projects/x", SupersededBy: "agent-fact"}, "middle")
+	writeFact(t, r.clone, fact.Meta{Name: "old-agent", Description: "d", Type: "design_decision", Scope: "projects/x", SupersededBy: "agent-fact"}, "old")
+	writeFact(t, r.clone, fact.Meta{Name: "agent-fact", Description: "d", Type: "design_decision", Scope: "projects/x"}, "This replaced [[Old_Agent]] and, through [[middle-note]], [[first-note]].")
+	writeFact(t, r.clone, fact.Meta{Name: "spelt-rule", Description: "d", Type: "design_decision", Scope: "projects/x", Source: ownerSource("keep notes short")}, "You decided: \"keep notes short\"\nMade from [[Said_Once]].")
+	writeFact(t, r.clone, fact.Meta{Name: "said-once", Description: "d", Type: "design_decision", Scope: "projects/x", SupersededBy: "spelt-rule"}, "said")
+	r.commitIndex(r.clone, "fixture")
+	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
+	if _, err := r.links(false); err != nil {
+		t.Fatal(err)
+	}
+	_, body, _ := strings.Cut(strings.TrimPrefix(r.onServer("projects/x/agent-fact.md"), "---\n"), "\n---\n\n")
+	if body != "This replaced [[old-agent]] and, through [[middle-note]], [[first-note]].\n" {
+		t.Fatalf("agent-fact: %q", body)
+	}
+	if review := r.onServer("review/2026-10-10.md"); strings.Count(review, "- LINK? ") != 1 || !strings.Contains(review, "- LINK? [[spelt-rule]] (projects/x) links to [[Said_Once]]") || !strings.Contains(review, "it would write [[said-once]]") {
+		t.Fatalf("review file:\n%s", review)
 	}
 }

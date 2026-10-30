@@ -328,7 +328,7 @@ func TestLinksReportCountsOnlyWhatWasCommitted(t *testing.T) {
 	if !strings.Contains(errw.String(), "not done: projects/x/uses-dup.md") || !strings.Contains(out.String(), "1 not done") {
 		t.Fatalf("stdout:\n%s\nstderr:\n%s", out.String(), errw.String())
 	}
-	if !strings.Contains(out.String(), "14 link(s) in 7 fact(s) repaired") {
+	if !strings.Contains(out.String(), "12 link(s) in 6 fact(s) repaired") {
 		t.Fatalf("the total is not what was committed:\n%s", out.String())
 	}
 
@@ -342,7 +342,7 @@ func TestLinksReportCountsOnlyWhatWasCommitted(t *testing.T) {
 	out.Reset()
 	errw.Reset()
 	writeLinks(&out, &errw, rep2, false)
-	if strings.Contains(out.String(), "rewrote") || strings.Contains(out.String(), "unwrapped [[") || !strings.Contains(out.String(), "0 link(s) in 0 fact(s) repaired") || !strings.Contains(out.String(), "15 not done") {
+	if strings.Contains(out.String(), "rewrote") || strings.Contains(out.String(), "unwrapped [[") || !strings.Contains(out.String(), "0 link(s) in 0 fact(s) repaired") || !strings.Contains(out.String(), "13 not done") {
 		t.Fatalf("after a failed run:\n%s", out.String())
 	}
 }

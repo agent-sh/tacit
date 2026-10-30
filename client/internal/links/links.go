@@ -2,8 +2,10 @@
 // and without a model. SPEC.md "Link repair" is the contract.
 //
 // A link is dead when its target names no fact (lint L6), or names only a
-// fact that something replaced. Each dead link is rewritten to a fact only
-// when one clear match exists; otherwise it becomes plain text. The package
+// fact that something replaced, unless that fact's chain of replacements
+// reaches the linking fact: a link to what a fact replaced says where it
+// came from. Each dead link is rewritten to a fact only when one clear
+// match exists; otherwise it becomes plain text. The package
 // plans and rewrites bytes; the store lock, the sync, the lint and the push
 // are the caller's (cmd/tacit/links.go).
 package links
@@ -165,10 +167,30 @@ func (ix *index) resolve(name string) (string, outcome) {
 	return "", none
 }
 
+// replacedBy reports whether the superseded_by chain from target reaches the
+// fact named name: the fact target was folded into, or one that later
+// replaced that fact in turn.
+func (ix *index) replacedBy(target, name string) bool {
+	seen := map[string]bool{}
+	for step := 0; step < 16 && !seen[target]; step++ {
+		seen[target] = true
+		cands := ix.curated[target]
+		if len(cands) != 1 || cands[0].Meta.SupersededBy == "" {
+			return false
+		}
+		target = cands[0].Meta.SupersededBy
+		if target == name {
+			return true
+		}
+	}
+	return false
+}
+
 // classify settles one target of fact f. ok is false when the link needs no
-// repair: it names a live fact, or only a fact something else than a
-// successor can answer for (a retired fact, an inbox note), which lint
-// resolves and the curator leaves alone.
+// repair: it names a live fact, a fact f replaced (directly or through
+// another), or only a fact something else than a successor can answer for
+// (a retired fact, an inbox note), which lint resolves and the curator
+// leaves alone.
 func (ix *index) classify(f *fact.Fact, target string) (Edit, bool) {
 	e := Edit{Target: target}
 	if ix.all[target] > 0 {
@@ -181,13 +203,21 @@ func (ix *index) classify(f *fact.Fact, target string) (Edit, bool) {
 			}
 		}
 		to, o := ix.resolve(target)
-		if o != found || len(cands) != 1 {
+		if o != found || len(cands) != 1 || ix.replacedBy(target, f.Meta.Name) {
+			// A link to a fact this one replaced, itself or through others,
+			// says where it came from (the statements a ruling was made of):
+			// it is history, not dead.
 			return e, false
 		}
 		return ix.rewrite(f, e, to, Successor, fmt.Sprintf("[[%s]] is superseded by [[%s]]", target, to)), true
 	}
 	n := Normalize(target)
 	if n != "" && n != target {
+		if ix.replacedBy(n, f.Meta.Name) {
+			// A misspelt link to what f replaced: spelt right, it stays a
+			// link to where f came from.
+			return ix.rewrite(f, e, n, Normalized, fmt.Sprintf("[[%s]] spelled as a fact name is [[%s]], which this fact replaced", target, n)), true
+		}
 		switch to, o := ix.resolve(n); o {
 		case found:
 			why, detail := Normalized, fmt.Sprintf("[[%s]] spelled as a fact name is [[%s]]", target, to)
@@ -231,6 +261,22 @@ type Planner struct {
 // they are never planned and never a match (see buildIndex).
 func NewPlanner(root string, facts []*fact.Fact, isRuling func(*fact.Fact) bool, uncommitted map[string]bool) *Planner {
 	return &Planner{root: root, facts: facts, ix: buildIndex(facts, uncommitted), isRuling: isRuling, uncommitted: uncommitted}
+}
+
+// History reports a link from f to target that says where f came from:
+// target names a fact f replaced, directly or through another fact, and f
+// still links it. Such a link is not dead (classify), and a LINK? line
+// raised for it before is no finding.
+func (p *Planner) History(f *fact.Fact, target string) bool {
+	if !p.ix.replacedBy(target, f.Meta.Name) {
+		return false
+	}
+	for _, sp := range fact.LinkSpans(f.Body) {
+		if sp.Target == target {
+			return true
+		}
+	}
+	return false
 }
 
 // Compute plans the repair of every curated fact in facts (fact.Walk of root).
