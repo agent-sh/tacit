@@ -223,3 +223,29 @@ func TestLinesReadMidTurnMessages(t *testing.T) {
 		t.Errorf("agent session: %q", got)
 	}
 }
+
+// Claude Code's interruption mark is harness text (H:) in the digest of every
+// session, as in a turn of theirs: in a subagent's transcript and in a Codex
+// rollout a program wrote it is no agent's prompt (P:). Their own sentence
+// that names it stays theirs.
+func TestInterruptionMarkIsHarnessTextInEveryDigest(t *testing.T) {
+	const mark = "[Request interrupted by user]"
+	sub := `{"parentUuid":"a1","isSidechain":true,"agentId":"a7b8","promptId":"p1","type":"user","message":{"role":"user","content":[{"type":"text","text":"` + mark + `"}]},"uuid":"u9","timestamp":"2026-10-20T11:05:00.000Z","userType":"external","entrypoint":"cli","cwd":"/home/u/projects/shop","sessionId":"s1","version":"2.1.312"}` + "\n" +
+		`{"type":"assistant","entrypoint":"cli","isSidechain":true,"message":{"content":[{"type":"text","text":"Stopped."}]}}` + "\n"
+	if got := Lines(strings.NewReader(sub), Claude, SessionWho("/h/.claude/projects/p/s1/subagents/agent-a7b8.jsonl", []byte(sub), Claude).Owner()); strings.Join(got, "|") != "H: "+mark+"|A: Stopped." {
+		t.Errorf("claude subagent: %q", got)
+	}
+	imp := codexMeta("codex_cli", `"cli"`, "user", "") + `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"` + mark + `"}]}}` + "\n"
+	if got := Lines(strings.NewReader(imp), Codex, SessionWho("r.jsonl", []byte(imp), Codex).Owner()); strings.Join(got, "|") != "H: "+mark {
+		t.Errorf("codex rollout a program wrote: %q", got)
+	}
+	for _, f := range []Format{Claude, Codex, Pi, Hermes} {
+		if w := UntypedWho(f, "\n[Request interrupted by user for tool use]"); w != Harness {
+			t.Errorf("format %d: %s", f, w)
+		}
+	}
+	said := "why does " + mark + " show up twice"
+	if HarnessText(Claude, said) || len(OwnerPieces(TurnPieces(said))) != 1 {
+		t.Errorf("their own sentence: %+v", TurnPieces(said))
+	}
+}

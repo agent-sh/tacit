@@ -517,9 +517,10 @@ var (
 
 // InjectedNotices open turns a harness or a front end wrote into a person's
 // session: Claude Code's summary of a compacted conversation, a front end's
-// status prompts, scheduled automations, an interruption mark, and a Relay
-// hand-off of a conversation to another harness (which then holds the
-// transcript as one user message).
+// status prompts, scheduled automations, and a Relay hand-off of a
+// conversation to another harness (which then holds the transcript as one
+// user message). An interruption mark is not one of them: it is harness text
+// in every session (HarnessText).
 var InjectedNotices = []string{
 	"This session is being continued from a previous conversation",
 	"Continue the current task",
@@ -528,7 +529,6 @@ var InjectedNotices = []string{
 	// A wake loop's prompt, which a program types into a person's Codex
 	// session (310 in 30 days of the owner's turns, 2026-10-30).
 	"Wake nonce=",
-	"[Request interrupted",
 	"The app was quit while you were working",
 	"The user moved this existing Relay conversation to you",
 }
@@ -556,8 +556,9 @@ var InjectedNotices = []string{
 //     turn;
 //   - any other text that opens with a tag (Claude Code's and Codex's
 //     frames, a delegation, a task notification, an attached file), a
-//     harness's own heading (HarnessText) or one of InjectedNotices is the
-//     harness's;
+//     harness's own heading or mark (HarnessText, the rule for a turn no
+//     person typed, so an interruption mark is the harness's in every turn)
+//     or one of InjectedNotices is the harness's;
 //   - an orchestrator's role prompt ("You are manager-01 ...", "You are a
 //     worker for ..."): an agent's; the person writes in lower case, and no
 //     turn of theirs opens that way;
@@ -610,7 +611,7 @@ func pieces(text string) []Piece {
 		}
 		return out
 	}
-	if strings.HasPrefix(t, "<") || claudeHarness.MatchString(t) || codexHarness.MatchString(t) {
+	if strings.HasPrefix(t, "<") || HarnessText(Claude, t) || HarnessText(Codex, t) {
 		// A local command's echo with its caveat (ClaudeCommands) is the
 		// harness's whole.
 		if m := commandArgs.FindStringSubmatch(t); m != nil && strings.Contains(t, "<command-name>") && !strings.Contains(t, "<local-command-caveat>") {

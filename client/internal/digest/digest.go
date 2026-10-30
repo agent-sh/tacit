@@ -550,9 +550,23 @@ func Width(line string) int {
 	return capFor(line) + 3
 }
 
+// interrupted opens Claude Code's mark of a turn the person interrupted,
+// "[Request interrupted by user]" or "[Request interrupted by user for tool
+// use]". Claude Code writes it as a user line of the transcript the
+// interruption happened in, a subagent's too, and a Codex rollout that holds a
+// Claude Code conversation (an import, a Relay hand-off) keeps it as a user
+// message. No person typed it and no agent wrote it: it is harness text in
+// every session and every format.
+var interrupted = regexp.MustCompile(`^\s*\[Request interrupted`)
+
 // HarnessText reports text a harness injected into a user turn (a
-// notification, a command echo, a reminder): not the owner's words.
+// notification, a command echo, a reminder, an interruption mark): not the
+// owner's words, and no agent's prompt. A turn of theirs is split by the same
+// rule (TurnPieces).
 func HarnessText(f Format, txt string) bool {
+	if interrupted.MatchString(txt) {
+		return true
+	}
 	switch f {
 	case Claude:
 		return claudeHarness.MatchString(txt)
