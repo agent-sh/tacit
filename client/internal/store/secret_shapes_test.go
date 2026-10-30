@@ -30,6 +30,8 @@ func syntheticKeys(seed uint64) map[string]string {
 		b64url = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 		alnum  = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 		hex    = "0123456789abcdef"
+		digits = "0123456789"
+		upper  = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	)
 	var chunks []string
 	for len(strings.Join(chunks, "-")) < 93 {
@@ -52,19 +54,33 @@ func syntheticKeys(seed uint64) map[string]string {
 		"mark at end":       "sk-abcd-efghi-jklmn-opqrsQ",
 		"short token":       "sk-abcd-efgh-ijkLmn",
 		"uuid only":         "sk-lf-00000000-0000-4000-8000-000000000000",
+		// Slack (gitleaks' slack.go) and Tailscale (its key reference).
+		"slack bot":           "xoxb-" + pick(digits, 12) + "-" + pick(digits, 13) + "-" + pick(alnum, 24),
+		"slack user":          "xoxp-" + pick(digits, 11) + "-" + pick(digits, 10) + "-" + pick(digits, 11) + "-" + pick(hex, 32),
+		"slack legacy":        "xoxs-" + pick(digits, 10) + "-" + pick(digits, 10) + "-" + pick(digits, 10) + "-" + pick(hex, 10),
+		"slack refresh":       "xoxe-1-" + pick(alnum, 146),
+		"slack app":           "xapp-1-A" + pick(upper, 10) + "-" + pick(digits, 13) + "-" + pick(hex, 64),
+		"tailscale auth":      "tskey-auth-k" + pick(alnum, 6) + "CNTRL-" + pick(alnum, 32),
+		"tailscale untyped":   "tskey-k" + pick(alnum, 6) + "CNTRL-" + pick(alnum, 26),
+		"slack mark only":     "xoxb-abcd-efgh-ijkL",
+		"slack digits only":   "xoxs-0123456789-abc",
+		"tailscale mark only": "tskey-auth-abcdeCNTRL-xyz",
+		"tailscale run only":  "tskey-" + strings.Repeat("a1", 10),
 	}
 }
 
 // Fact names are lowercase letters, digits and hyphens. One with an sk-
 // segment is no key: v0.9.14 refused every push that held one, and the
-// curator's batches never landed. Real key shapes are still refused.
-func TestLocalCommitTakesSkFactNamesAndRefusesSkKeys(t *testing.T) {
+// curator's batches never landed. Before v0.9.16 the same went for a tskey-
+// or Slack segment. Real key shapes are still refused.
+func TestLocalCommitTakesFactNamesAndRefusesKeys(t *testing.T) {
 	ctx := context.Background()
 	s := &Store{Dir: filepath.Join(t.TempDir(), "facts")}
 	if err := s.Init(ctx); err != nil {
 		t.Fatal(err)
 	}
-	names := []string{"lint-cc-sk-017-only-plain-commands", "sk-learn-pipeline-cache-notes", "docs-sk-locale-fallback-order-v2"}
+	names := []string{"lint-cc-sk-017-only-plain-commands", "sk-learn-pipeline-cache-notes", "docs-sk-locale-fallback-order-v2",
+		"tskey-auth-expires-in-90-days", "slack-xoxb-token-scopes-for-the-bot", "xapp-level-token-for-socket-mode"}
 	var b strings.Builder
 	for _, n := range names {
 		fmt.Fprintf(&b, "- [[%s]]: a fact\n- [%s](%s.md) - a fact\n", n, n, n)
@@ -73,7 +89,7 @@ func TestLocalCommitTakesSkFactNamesAndRefusesSkKeys(t *testing.T) {
 	os.MkdirAll(filepath.Dir(filepath.Join(s.Dir, rel)), 0o700)
 	os.WriteFile(filepath.Join(s.Dir, rel), []byte("---\nname: "+names[0]+"\n---\n\n"+b.String()), 0o600)
 	if err := s.CommitPush(ctx, []string{rel}, "names", "curator"); err != nil {
-		t.Fatalf("fact names with sk- refused: %v", err)
+		t.Fatalf("fact names with sk-, tskey- or Slack segments refused: %v", err)
 	}
 	for seed := uint64(1); seed <= 20; seed++ {
 		for shape, key := range syntheticKeys(seed) {

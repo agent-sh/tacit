@@ -136,16 +136,86 @@ defmodule TacitServer.E2ETest do
     assert status == 0, out
   end
 
+  # The rule before v0.9.16 read `tskey-` or a Slack prefix (`xoxb-`, `xoxp-`,
+  # ...) and 10 such characters as a key, as it did `sk-` before v0.9.15.
+  test "a fact name with a tskey- or Slack segment is no secret", %{keyid: keyid, priv: priv} do
+    dir = clone!()
+
+    body =
+      for name <- [
+            "tskey-auth-expires-in-90-days",
+            "use-tskey-auth-for-ci-runners-not-oauth-clients",
+            "slack-xoxb-token-scopes-for-the-bot",
+            "xoxp-user-token-needs-chat-write-2026-10-28",
+            "xapp-level-token-for-socket-mode"
+          ],
+          into: "",
+          do: "- [[#{name}]]: a fact\n- [#{name}](#{name}.md) - a fact\n"
+
+    write_commit!(dir, "inbox/#{keyid}/tskey-auth-expires-in-90-days.md", body, "names")
+    {out, status} = git(dir, ["push", "origin", "HEAD:main"], git_env(keyid, priv))
+    assert status == 0, out
+  end
+
+  test "Slack and Tailscale keys of every shape are still refused", %{keyid: keyid, priv: priv} do
+    dir = clone!()
+
+    for seed <- 1..3, {shape, key} <- synthetic_slack_tailscale_keys(seed) do
+      write_commit!(dir, "inbox/#{keyid}/key.md", "export KEY=\"#{key}\"\n", shape)
+      {out, status} = git(dir, ["push", "origin", "HEAD:main"], git_env(keyid, priv))
+      assert status != 0 and out =~ "contains a secret", "#{shape} (seed #{seed}) got in: #{key}"
+      git!(dir, ["reset", "--quiet", "--hard", "HEAD~1"])
+    end
+  end
+
+  # Random keys of the shapes Slack (gitleaks' slack.go) and Tailscale (its
+  # key reference) issue, never a real one. The fixed ones can each be caught
+  # by one arm of the rule only: an uppercase letter, a run of 20 letters and
+  # digits, a run of 10 digits.
+  defp synthetic_slack_tailscale_keys(seed) do
+    :rand.seed(:exsss, {seed, 13, 17})
+    alnum = ~c"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    upper = ~c"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    hex = ~c"0123456789abcdef"
+    digits = ~c"0123456789"
+    pick = fn chars, n -> for _ <- 1..n, into: "", do: <<Enum.random(chars)>> end
+
+    [
+      {"slack bot", "xoxb-#{pick.(digits, 12)}-#{pick.(digits, 13)}-#{pick.(alnum, 24)}"},
+      {"slack user",
+       "xoxp-#{pick.(digits, 11)}-#{pick.(digits, 10)}-#{pick.(digits, 11)}-#{pick.(hex, 32)}"},
+      {"slack legacy bot", "xoxb-#{pick.(digits, 9)}-#{pick.(alnum, 22)}"},
+      {"slack legacy",
+       "xoxs-#{pick.(digits, 10)}-#{pick.(digits, 10)}-#{pick.(digits, 10)}-#{pick.(hex, 10)}"},
+      {"slack configuration", "xoxe.xoxp-1-" <> pick.(alnum, 163)},
+      {"slack refresh", "xoxe-1-" <> pick.(alnum, 146)},
+      {"slack app", "xapp-1-A#{pick.(upper, 10)}-#{pick.(digits, 13)}-#{pick.(hex, 64)}"},
+      {"tailscale auth", "tskey-auth-k#{pick.(alnum, 6)}CNTRL-#{pick.(alnum, 32)}"},
+      {"tailscale api", "tskey-api-k#{pick.(alnum, 6)}CNTRL-#{pick.(alnum, 33)}"},
+      {"tailscale untyped", "tskey-k#{pick.(alnum, 6)}CNTRL-#{pick.(alnum, 26)}"},
+      {"slack mark only", "xoxb-abcd-efgh-ijkL"},
+      {"slack run only", "xoxa-" <> String.duplicate("ab", 10)},
+      {"slack digits only", "xoxs-0123456789-abc"},
+      {"tailscale mark only", "tskey-auth-abcdeCNTRL-xyz"},
+      {"tailscale run only", "tskey-" <> String.duplicate("a1", 10)}
+    ]
+  end
+
   # The push lease is one for every writer, so the scan of one blob must cost
   # what its size does. Under the server's C.UTF-8, GNU grep took minutes on
   # a long line of sk- runs; the hook scans in the C locale.
-  test "a long line of sk- runs is scanned in linear time and taken", %{keyid: keyid, priv: priv} do
+  test "long lines of sk-, xoxb- and tskey- runs are scanned in linear time and taken", %{
+    keyid: keyid,
+    priv: priv
+  } do
     dir = clone!()
 
     write_commit!(
       dir,
       "inbox/#{keyid}/long-line.md",
-      String.duplicate("sk-", 90_000) <> "\n",
+      String.duplicate("sk-", 90_000) <>
+        "\n" <>
+        String.duplicate("xoxb-", 60_000) <> "\n" <> String.duplicate("tskey-", 50_000) <> "\n",
       "long line"
     )
 

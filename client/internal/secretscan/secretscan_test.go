@@ -18,13 +18,63 @@ func TestTheExpressionsAreTheHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, re := range map[string]*regexp.Regexp{"secret_re": Shapes, "sk_token_re": SkToken, "sk_key_re": SkKey} {
+	exprs := map[string]*regexp.Regexp{"secret_re": Shapes}
+	for _, f := range Families {
+		exprs[f.Name+"_token_re"], exprs[f.Name+"_key_re"] = f.Token, f.Key
+	}
+	if len(exprs) != 7 {
+		t.Fatalf("%d expressions, want secret_re and three families", len(exprs))
+	}
+	for name, re := range exprs {
 		m := regexp.MustCompile(`(?m)^` + name + `='([^']*)'`).FindSubmatch(b)
 		if m == nil {
 			t.Fatalf("%s not found in the pre-receive hook", name)
 		}
 		if string(m[1]) != re.String() {
 			t.Fatalf("%s differs from the hook's:\ngo:   %s\nhook: %s", name, re, m[1])
+		}
+	}
+	// The hook scans the families its loop names, in this order.
+	var names []string
+	for _, f := range Families {
+		names = append(names, f.Name)
+	}
+	if m := regexp.MustCompile(`(?m)^\s*for family in ([a-z ]+); do$`).FindSubmatch(b); m == nil || string(m[1]) != strings.Join(names, " ") {
+		t.Fatalf("the hook's family loop is %q, want %q", m, strings.Join(names, " "))
+	}
+}
+
+// A fact name with a tskey- or a Slack segment (xoxb-, xoxp-, xapp-, ...) is
+// no key: the rule before v0.9.16 took the prefix and 10 key characters for
+// one, as sk- was before v0.9.15. A key is refused by each arm alone.
+func TestSlackAndTailscaleNamesPassKeysDoNot(t *testing.T) {
+	for _, s := range []string{
+		"- [[tskey-auth-expires-in-90-days]]: a fact",
+		"use-tskey-auth-for-ci-runners-not-oauth-clients",
+		"- [slack-xoxb-token-scopes-for-the-bot](slack-xoxb-token-scopes-for-the-bot.md) - a fact",
+		"name: xoxp-user-token-needs-chat-write-2026-10-28",
+		"xapp-level-token-for-socket-mode and xoxe-refresh-rotation-every-12-hours",
+		"xoxa-xoxr-xoxs-legacy-tokens-are-retired",
+		strings.Repeat("xoxb-", 100_000),
+		strings.Repeat("tskey-", 100_000),
+	} {
+		if MatchString(s) {
+			t.Errorf("refused %.60q", s)
+		}
+	}
+	for _, s := range []string{
+		"SLACK=xoxb-abcd-efgh-ijkL",                            // an uppercase letter
+		"xoxa-" + strings.Repeat("ab", 10),                     // 20 letters and digits
+		"xoxs-0123456789-abc",                                  // 10 digits
+		"xapp-1-" + strings.Repeat("c", 20),                    // the app-level prefix
+		"xoxe-1-" + strings.Repeat("d", 20),                    // the refresh prefix
+		"xoxe.xoxp-1-" + strings.Repeat("e", 20),               // a configuration token
+		"TS_AUTHKEY=tskey-auth-abcdeCNTRL-xyz",                 // its id's CNTRL
+		"tskey-" + strings.Repeat("a1", 10),                    // 20 letters and digits
+		strings.Repeat("tskey-", 50_000) + "tskey-abcdefghijQ", // after a long run
+	} {
+		if !MatchString(s) {
+			t.Errorf("took %.60q", s)
 		}
 	}
 }
@@ -59,7 +109,8 @@ func TestFactNamesPassKeysDoNot(t *testing.T) {
 
 // The Go scan decides as the hook's grep steps do, on inputs built from the
 // pieces where the two could differ: line breaks, NUL and bytes that are not
-// UTF-8, tokens at the 16 and 20 thresholds, UUIDs, and the other shapes.
+// UTF-8, tokens at each family's thresholds (16 or 10 key characters, a run of
+// 20, 10 digits), UUIDs, and the other shapes.
 func TestGoDecidesAsTheHooksGrep(t *testing.T) {
 	out, err := exec.Command("grep", "--version").Output()
 	if err != nil || !strings.Contains(string(out), "GNU grep") {
@@ -72,7 +123,7 @@ func TestGoDecidesAsTheHooksGrep(t *testing.T) {
 	expr := func(name string) string {
 		return string(regexp.MustCompile(`(?m)^` + name + `='([^']*)'`).FindSubmatch(hook)[1])
 	}
-	shapes, token, key := expr("secret_re"), expr("sk_token_re"), expr("sk_key_re")
+	shapes := expr("secret_re")
 	dir := t.TempDir()
 	blob, tokens := filepath.Join(dir, "blob"), filepath.Join(dir, "tokens")
 	grep := func(args ...string) bool {
@@ -91,27 +142,35 @@ func TestGoDecidesAsTheHooksGrep(t *testing.T) {
 		if grep("-aEq", "--", shapes, blob) {
 			return true
 		}
-		out, err := exec.Command("sh", "-c", `LC_ALL=C grep -aEo -- "$1" "$2" > "$3"; s=$?; [ $s -le 1 ] && exit 0; exit $s`, "sh", token, blob, tokens).CombinedOutput()
-		if err != nil {
-			t.Fatalf("token step: %v %s", err, out)
+		for _, f := range Families {
+			out, err := exec.Command("sh", "-c", `LC_ALL=C grep -aEo -- "$1" "$2" > "$3"; s=$?; [ $s -le 1 ] && exit 0; exit $s`, "sh", expr(f.Name+"_token_re"), blob, tokens).CombinedOutput()
+			if err != nil {
+				t.Fatalf("%s token step: %v %s", f.Name, err, out)
+			}
+			if grep("-aEq", "--", expr(f.Name+"_key_re"), tokens) {
+				return true
+			}
 		}
-		return grep("-aEq", "--", key, tokens)
+		return false
 	}
 	// Short pieces and many hyphens keep runs under 20, so each arm decides
-	// on its own; every input holds an sk- token.
-	pieces := []string{"sk-", "-", "-", "-", "_", "ab", "Q", "0", "abcd", "xyz9", "\n", "\r\n", "\x00", "\xff", "\xc3", "é", " ", "=",
-		strings.Repeat("a1", 10), "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "0A1B2C3D-4E5F", "ghp_" + strings.Repeat("z", 20),
-		"xoxb-", "AKIA" + strings.Repeat("Z", 16), "hf_" + strings.Repeat("y", 20)}
+	// on its own; every input holds a token of one family.
+	pieces := []string{"sk-", "xoxb-", "xapp-", "tskey-", "-", "-", "_", "ab", "Q", "0", "abcd", "xyz9", "\n", "\r\n", "\x00", "\xff", "\xc3", "é", " ", "=",
+		strings.Repeat("a1", 10), "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "0A1B2C3D-4E5F", "0123456789", "012345678", "ghp_" + strings.Repeat("z", 20),
+		"AKIA" + strings.Repeat("Z", 16), "hf_" + strings.Repeat("y", 20)}
+	body := []string{"ab", "Q", "0", "abcd", "xyz9", "01234", "56789"}
+	prefixes := []string{"sk-", "xoxb-", "xoxs-", "xapp-", "xoxe-", "tskey-"}
 	r := rand.New(rand.NewPCG(3, 9))
-	refused := 0
-	for i := 0; i < 1500; i++ {
+	refused := map[string]int{}
+	for i := 0; i < 3000; i++ {
 		var b strings.Builder
 		for n := r.IntN(12) + 1; n > 0; n-- {
 			b.WriteString(pieces[r.IntN(len(pieces))])
 		}
-		b.WriteString("sk-")
-		for n := r.IntN(14) + 4; n > 0; n-- {
-			b.WriteString(pieces[5+r.IntN(4)])
+		prefix := prefixes[r.IntN(len(prefixes))]
+		b.WriteString(prefix)
+		for n := r.IntN(10) + 2; n > 0; n-- {
+			b.WriteString(body[r.IntN(len(body))])
 			b.WriteString([]string{"-", "-", "", "_"}[r.IntN(4)])
 		}
 		in := []byte(b.String())
@@ -123,10 +182,12 @@ func TestGoDecidesAsTheHooksGrep(t *testing.T) {
 			t.Fatalf("input %q: Go says %v, the hook's grep %v", in, got, want)
 		}
 		if got {
-			refused++
+			refused[prefix]++
 		}
 	}
-	if refused < 300 || refused > 1200 {
-		t.Fatalf("%d of 1500 inputs refused: the inputs do not exercise both outcomes", refused)
+	for _, p := range prefixes {
+		if n := refused[p]; n < 100 || n > 450 {
+			t.Fatalf("%d of about 500 %s inputs refused (%v): the inputs do not exercise both outcomes", n, p, refused)
+		}
 	}
 }

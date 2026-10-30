@@ -24,18 +24,31 @@ difffile=$(mktemp "${TMPDIR:-/tmp}/tacit-diff.XXXXXX")
 blobfile=$(mktemp "${TMPDIR:-/tmp}/tacit-blob.XXXXXX")
 tokenfile=$(mktemp "${TMPDIR:-/tmp}/tacit-tokens.XXXXXX")
 trap 'rm -f "$difffile" "$blobfile" "$tokenfile"' EXIT
-# Token shapes and private-key headers. sk- keys take two steps: a token is
-# sk- and at least 16 key characters ([A-Za-z0-9_-]), and a token is a key
-# when that run holds an uppercase letter or underscore, a run of 20 letters
-# and digits, or a lowercase UUID. Random keys (Anthropic sk-ant-..., OpenAI
-# sk-proj-... and the legacy 48 characters, OpenRouter, Langfuse, LiteLLM)
-# do; a fact name is lowercase letters, digits and hyphens, so
-# lint-cc-sk-017-only-plain-commands is no key. Measured:
-# eval/secrets/sk_rule.py. client/internal/secretscan holds the same three
-# expressions; its test keeps them equal to these lines.
-secret_re='(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|tskey-[A-Za-z0-9-]{10,}|(^|[^A-Za-z0-9])hf_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+# Token shapes and private-key headers (secret_re), and three families of
+# keys that take two steps, since a fact name can start like one: a token is
+# the family's prefix and a run of key characters (<family>_token_re), and a
+# token is a key when that run holds what a real key has (<family>_key_re).
+# A fact name is lowercase letters, digits and hyphens, so
+# lint-cc-sk-017-only-plain-commands, tskey-auth-expires-in-90-days and
+# slack-xoxb-token-scopes are no keys.
+#   sk-: 16 key characters ([A-Za-z0-9_-]); a key holds an uppercase letter
+#     or underscore, a run of 20 letters and digits, or a lowercase UUID
+#     (Anthropic sk-ant-..., OpenAI sk-proj-... and the legacy 48 characters,
+#     OpenRouter, Langfuse, LiteLLM).
+#   slack: xoxa-, xoxb-, xoxe-, xoxp-, xoxr-, xoxs- or xapp- and 10 key
+#     characters ([A-Za-z0-9-]); a key holds an uppercase letter, a run of 20
+#     letters and digits, or a run of 10 digits (a team or user id).
+#   tskey: tskey- and 10 key characters; a key holds an uppercase letter (its
+#     id ends in CNTRL) or a run of 20 letters and digits.
+# Measured: eval/secrets/token_rules.py. client/internal/secretscan holds the
+# same expressions; its test keeps them equal to these lines.
+secret_re='(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|(^|[^A-Za-z0-9])hf_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
 sk_token_re='(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}'
 sk_key_re='sk-[A-Za-z0-9_-]*([A-Z_]|[A-Za-z0-9]{20}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'
+slack_token_re='(xox[abeprs]|xapp)-[A-Za-z0-9-]{10,}'
+slack_key_re='(xox[abeprs]|xapp)-[A-Za-z0-9-]*([A-Z]|[A-Za-z0-9]{20}|[0-9]{10})'
+tskey_token_re='tskey-[A-Za-z0-9-]{10,}'
+tskey_key_re='tskey-[A-Za-z0-9-]*([A-Z]|[A-Za-z0-9]{20})'
 
 # scan RE FILE [-o]: 0 when FILE holds RE (with -o, the matches go to
 # $tokenfile), 1 when it does not. Bytes, not characters (LC_ALL=C, -a): the
@@ -96,9 +109,12 @@ while read -r old new ref; do
       if scan "$secret_re" "$blobfile"; then
         fail "$path looks like it contains a secret"
       fi
-      if scan "$sk_token_re" "$blobfile" -o && scan "$sk_key_re" "$tokenfile"; then
-        fail "$path looks like it contains a secret"
-      fi
+      for family in sk slack tskey; do
+        token_re="${family}_token_re" key_re="${family}_key_re"
+        if scan "${!token_re}" "$blobfile" -o && scan "${!key_re}" "$tokenfile"; then
+          fail "$path looks like it contains a secret"
+        fi
+      done
     fi
   done < "$difffile"
 done
