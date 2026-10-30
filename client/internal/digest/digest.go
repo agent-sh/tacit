@@ -99,27 +99,49 @@ func RedactAllContext(ctx context.Context, texts []string) ([]string, error) {
 var ErrNoRecords = errors.New("scrump has no records mode (--records); install scrump 0.2.0 or later")
 
 // recordsMode is what the installed scrump showed of its records mode:
-// 0 nothing yet, 1 it has it, 2 it refused the flag (ErrNoRecords), which
-// is remembered for the rest of the process.
+// 0 nothing yet, 1 it keeps records apart, 2 it refused the flag or did not
+// keep the probe's records apart (ErrNoRecords). The answer holds for the
+// rest of the process.
 var recordsMode atomic.Int32
 
 // RedactRecordsContext redacts texts in one scrump call with each text a
 // record of its own (`scrump --records`, records split by the ASCII record
 // separator), so no hit can start in one text and reach into the next. A
 // text that holds a record separator is masked alone. A scrump that refuses
-// the flag gives ErrNoRecords and is not asked again in this process; any
-// other failure is an error, and none of the texts may be used.
+// the flag, or whose first records call does not keep the probe's records
+// apart (recordsProbe), gives ErrNoRecords and is not asked again in this
+// process; any other failure is an error, and none of the texts may be used.
 func RedactRecordsContext(ctx context.Context, texts []string) ([]string, error) {
 	return apart(ctx, texts, func(b []string) ([]string, error) {
 		return redactRecords(ctx, b)
 	})
 }
 
+// recordsProbe is #84's repro: alone, the second record's password is
+// masked; in one stream the first record's open setting runs into it, the
+// filter keeps the setting, and the scan resumes past the password's key.
+// Built from pieces, so no secret-shaped literal sits in the source.
+func recordsProbe() [2]string {
+	return [2]string{
+		"deploy token_url: 'https://auth.example.invalid/oauth/" + strings.Repeat("p", 80),
+		"pass" + "word: '" + "Zq7Vx9" + "Lm2Kp4" + "' and the rest",
+	}
+}
+
 func redactRecords(ctx context.Context, texts []string) ([]string, error) {
-	if recordsMode.Load() == 2 {
+	mode := recordsMode.Load()
+	if mode == 2 {
 		return nil, ErrNoRecords
 	}
-	out, err := scrub(ctx, strings.Join(texts, "\x1e"), true)
+	// The first call of the process carries the probe ahead of the texts:
+	// a scrump that takes the flag but does not keep records apart is told
+	// from one that does at no cost of its own.
+	in := texts
+	probe := recordsProbe()
+	if mode == 0 {
+		in = append([]string{probe[0], probe[1]}, texts...)
+	}
+	out, err := scrub(ctx, strings.Join(in, "\x1e"), true)
 	if errors.Is(err, ErrNoRecords) {
 		recordsMode.Store(2)
 	}
@@ -128,13 +150,21 @@ func redactRecords(ctx context.Context, texts []string) ([]string, error) {
 	}
 	// The separators lie in no record, so they come back where they were.
 	parts := strings.Split(out, "\x1e")
-	if len(parts) != len(texts) {
-		return nil, fmt.Errorf("scrump --records returned %d records for %d", len(parts), len(texts))
+	if len(parts) != len(in) {
+		return nil, fmt.Errorf("scrump --records returned %d records for %d", len(parts), len(in))
 	}
 	for i, p := range parts {
-		if len(p) != len(texts[i]) {
+		if len(p) != len(in[i]) {
 			return nil, fmt.Errorf("scrump --records changed the length of record %d", i)
 		}
+	}
+	if mode == 0 {
+		if parts[0] != probe[0] || strings.Contains(parts[1], "Zq7Vx9") {
+			// One stream under the flag: the boundary keeps texts apart.
+			recordsMode.Store(2)
+			return nil, ErrNoRecords
+		}
+		parts = parts[2:]
 	}
 	recordsMode.Store(1)
 	return parts, nil

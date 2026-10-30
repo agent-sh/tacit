@@ -66,19 +66,46 @@ func TestRedactAllFallsBackToTheBoundaryWithoutRecordsMode(t *testing.T) {
 }
 
 // Any other failure in records mode fails closed: no text comes back, and
-// the boundary is not tried with a scrump that broke.
+// the boundary is not tried with a scrump that broke. The cases that keep
+// the output's length reach the record checks themselves.
 func TestRedactAllFailsClosedInRecordsMode(t *testing.T) {
 	for name, body := range map[string]string{
-		"another usage error": "echo 'error: invalid value for --profile' >&2\nexit 2\n",
-		"a runtime error":     "echo 'error: reading stdin' >&2\nexit 1\n",
-		"records merged":      "exec tr -d '\\036'\n",
-		"a record cut short":  "exec sed 's/two/tw/'\n",
+		"another usage error":           "echo 'error: invalid value for --profile' >&2\nexit 2\n",
+		"a runtime error":               "echo 'error: reading stdin' >&2\nexit 1\n",
+		"records merged":                "exec tr -d '\\036'\n",
+		"a record cut short":            "exec sed 's/two/tw/'\n",
+		"a separator masked, same size": "exec tr '\\036' '*'\n",
+		"a separator moved, same size":  "exec perl -0777 -pe 's/one\\x1etwo/on\\x1eetwo/'\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			fakeScrump(t, body)
+			calls := fakeScrump(t, body)
 			if out, err := RedactAll([]string{"one", "two"}); err == nil {
 				t.Fatalf("RedactAll returned %q and no error", out)
 			}
+			b, _ := os.ReadFile(calls)
+			if got := strings.TrimSpace(string(b)); got != "--profile text --records scrub - -o -" {
+				t.Fatalf("calls %q, want the one records call", got)
+			}
 		})
+	}
+}
+
+// A scrump that takes --records but scans one stream would bring #84 back:
+// the first records call carries the issue's repro ahead of the texts, the
+// stream keeps its password, and the texts go joined by the boundary.
+func TestRedactAllCatchesAScrumpThatTakesRecordsButScansOneStream(t *testing.T) {
+	calls := fakeScrump(t, "exec cat\n")
+	out, err := RedactAll([]string{"one", "two"})
+	if err != nil || len(out) != 2 || out[0] != "one" || out[1] != "two" {
+		t.Fatalf("RedactAll: %v %q", err, out)
+	}
+	b, _ := os.ReadFile(calls)
+	got := strings.Split(strings.TrimSpace(string(b)), "\n")
+	want := []string{"--profile text --records scrub - -o -", "--profile text scrub - -o -"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("calls %q, want %q", got, want)
+	}
+	if _, err := RedactRecordsContext(t.Context(), []string{"x"}); err != ErrNoRecords {
+		t.Fatalf("RedactRecordsContext: %v, want ErrNoRecords", err)
 	}
 }
