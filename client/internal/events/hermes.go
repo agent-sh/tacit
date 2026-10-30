@@ -37,9 +37,9 @@ const hermesPage = 4 << 20
 // rows, cut out of the gateway's frames as the corpus reads them
 // (ownerwords.TurnReader.Hermes); every other session's user rows are an
 // agent's or the gateway's. ReadHermesState is ReadHermes without the pass
-// over the rows before the cursor.
+// over the rows before the cursor. A read at the last row reads nothing.
 func ReadHermes(ctx context.Context, db *hermes.DB, s hermes.Session, after int64, emit func(Event) error) (int64, error) {
-	st, err := ReadHermesState(ctx, db, s, State{Offset: after}, emit)
+	st, err := readHermesRows(ctx, db, s, State{Offset: after}, emit, false)
 	return st.Offset, err
 }
 
@@ -50,15 +50,24 @@ func ReadHermes(ctx context.Context, db *hermes.DB, s hermes.Session, after int6
 // after it, and gives the events ReadHermes gives after it. A bare cursor, or
 // a session whose rows Hermes wrote again (its /retry, /undo and /compress
 // replace them), is read as ReadHermes reads it, with a pass over the rows
-// before the cursor. A State at the session's last row is returned as it is.
-// The State returned counts the rows up to its cursor whose tool calls did
-// not parse (State.Unparsed), as ReadFileState counts a transcript's lines.
-// When emit returns an error the read stops and returns it with the State a
-// read from gives that row's events again: from itself when the read started
-// after its cursor and the error came at the first event, else a bare cursor
-// at the id before the row's.
+// before the cursor. The State returned counts the rows up to its cursor
+// whose tool calls did not parse (State.Unparsed), as ReadFileState counts a
+// transcript's lines. At the session's last row a State a read returned for
+// this session is returned as it is; a bare cursor there is read with the
+// pass, so the State returned holds the count. When emit returns an error
+// the read stops and returns it with the State a read from gives that row's
+// events again: from itself when the read started after its cursor and the
+// error came at the first event, else a bare cursor at the id before the
+// row's.
 func ReadHermesState(ctx context.Context, db *hermes.DB, s hermes.Session, from State, emit func(Event) error) (State, error) {
+	return readHermesRows(ctx, db, s, from, emit, true)
+}
+
+// readHermesRows is ReadHermesState. count is false for ReadHermes, which
+// returns no count, so a cursor at the last row is returned with no read.
+func readHermesRows(ctx context.Context, db *hermes.DB, s hermes.Session, from State, emit func(Event) error, count bool) (State, error) {
 	after := from.Offset
+	key := hermes.Key(db.Path, s.ID)
 	r := &hermesReader{base: newBase("hermes", s.ID)}
 	r.parent, r.cwd, r.model = s.Parent, s.Cwd, s.Model
 	if r.cwd == "" {
@@ -74,8 +83,10 @@ func ReadHermesState(ctx context.Context, db *hermes.DB, s hermes.Session, from 
 		// The store went back (restored from a backup): the cursor names a
 		// row it no longer has.
 		return from, fmt.Errorf("hermes session %s: %w (%d > %d)", s.ID, ErrPastEnd, after, last)
-	case last == after:
-		return from, nil // nothing after the cursor: no pass over the session
+	case last == after && (!count || after == 0 || from.kept != nil && from.kept.Format == digest.Hermes && from.kept.Head == key):
+		// Nothing after the cursor, and a State a read returned holds its
+		// count: no pass. A bare cursor's count is the pass's.
+		return from, nil
 	}
 	r.verdict = digest.Verdict{Who: digest.Agent, Why: "hermes session from " + s.Source}
 	if s.Owner {
@@ -86,14 +97,13 @@ func ReadHermesState(ctx context.Context, db *hermes.DB, s hermes.Session, from 
 		}
 		r.turns.Pastes = ps
 	}
-	key := hermes.Key(db.Path, s.ID)
 	var read int64
 	used := false
 	// unparsed is how many rows up to the last one read had tool calls that
 	// did not parse: from's count when the read starts after its cursor, else
 	// counted again in the pass.
 	unparsed := 0
-	if k := from.kept; k != nil && after > 0 && from.unparsed >= 0 && k.Format == digest.Hermes && k.Head == key {
+	if k := from.kept; k != nil && after > 0 && k.Format == digest.Hermes && k.Head == key {
 		rows, err := db.Messages(ctx, s.ID, after-1, 1)
 		if err != nil {
 			return from, err
@@ -133,7 +143,8 @@ func ReadHermesState(ctx context.Context, db *hermes.DB, s hermes.Session, from 
 		for _, m := range rows {
 			evs, ok := r.row(m)
 			read = m.ID
-			if m.ID > after {
+			switch {
+			case m.ID > after:
 				for i := range evs {
 					e := &evs[i]
 					e.Path, e.Offset, e.Next, e.Index = db.Path, m.ID, m.ID, i
@@ -146,6 +157,8 @@ func ReadHermesState(ctx context.Context, db *hermes.DB, s hermes.Session, from 
 					emitted++
 				}
 				last, lastRow = m.ID, m
+			case m.ID == after:
+				lastRow = m // the row at the cursor, which a State there names
 			}
 			if !ok {
 				unparsed++

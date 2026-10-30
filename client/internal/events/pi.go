@@ -118,8 +118,9 @@ func piTexts(raw json.RawMessage) []string {
 }
 
 // line is a line's events, and false when the line does not parse: it is not
-// JSON, not a JSON object of an entry's fields, or a message entry whose
-// message does not decode.
+// JSON, its JSON is not a pi entry (a list or a string where the object goes,
+// a field the reader reads of another type), or a message entry's message
+// does not decode.
 func (r *piReader) line(raw []byte) ([]Event, bool) {
 	var l piLine
 	if json.Unmarshal(raw, &l) != nil {

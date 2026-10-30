@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/hermes"
@@ -39,7 +40,7 @@ import (
 // MarshalBinary and UnmarshalBinary save a State and load it back, as do
 // MarshalJSON and UnmarshalJSON inside a caller's JSON.
 //
-// Every State a read returns counts the lines before its cursor that did not
+// A State a read returns counts the lines before its cursor that did not
 // parse (Unparsed), from the session's start, however the read came there.
 //
 // A State is as private as its transcript: it holds whole lines of it
@@ -59,21 +60,31 @@ type State struct {
 // row it names, are still the ones it was kept from.
 func (s State) Kept() bool { return s.kept != nil }
 
-// Unparsed is how many lines before the cursor did not parse: the reader
-// gave them no events, as they are not JSON (a line a crash cut short, which
-// the next write joined) or not the record their format writes (not an
-// object, a field of another type, a Codex response_item whose payload or a
-// pi message entry whose message does not decode). A line that holds nothing
-// (blank, or null) is not one, nor a last line still being written. For a Hermes session it is how many
-// rows up to the cursor are assistant rows whose tool calls did not parse:
-// their text was read, their calls were not.
+// Unparsed is how many lines before the cursor did not parse: lines whose
+// record the reader could not decode, so it read nothing of them. A line is
+// one when it is not JSON (a line a crash cut short, which the next write
+// joined), or when its JSON is not the record its format writes: not an
+// object, a field the reader reads of another type, or for Codex the payload
+// of a response_item, event_msg, turn_context or compacted entry, for pi the
+// message of a message entry, that does not decode. A line that holds nothing
+// (blank, or null) is not one, nor a last line still being written, nor a
+// line whose record decodes and holds a part of a shape the reader does not
+// know. For a Hermes session it is how many of the rows up to the cursor are
+// assistant rows the reader reads (not a compaction copy or a summary) whose
+// tool calls did not parse: their text was read, their calls were not.
 //
 // The count is from the session's start however the read came there: a read
 // that starts at a State's cursor (Kept, its items unchanged) adds the lines
 // it reads to its count, and any other read counts the lines before the
 // cursor in its pass over them. So a session read in parts ends with the
-// count one read from the start gives. A bare cursor the caller makes counts
-// none, and a State a read returns as it is (one at the end) keeps its count.
+// count one read from the start gives, unless a harness wrote its next record
+// on the same line as one a read took whole before its newline: that read
+// gave the line's events, and a read from the start counts the joined line
+// instead. A State a read returned is returned as it is at the end, with its
+// count; a bare cursor at the end is read with the pass, so the State
+// returned holds the count. A bare cursor the caller makes counts none, and
+// one a read returns after an I/O or store error that came before the read
+// reached from's cursor holds from's count.
 func (s State) Unparsed() int { return s.unparsed }
 
 // keptVersion is the format of what a State keeps. Bump it when what a
@@ -126,16 +137,21 @@ type kept struct {
 	Working bool `json:"working,omitempty"`
 }
 
+// stateWire is a saved State. Unparsed is read only in keptVersion, so a State
+// of another format that holds something else there loads as a bare cursor.
 type stateWire struct {
 	V        int             `json:"v"`
 	Offset   int64           `json:"offset"`
-	Unparsed int             `json:"unparsed,omitempty"`
+	Unparsed json.RawMessage `json:"unparsed,omitempty"`
 	Kept     json.RawMessage `json:"kept,omitempty"`
 }
 
 // MarshalBinary is the State as bytes to save (JSON).
 func (s State) MarshalBinary() ([]byte, error) {
-	w := stateWire{V: keptVersion, Offset: s.Offset, Unparsed: s.unparsed}
+	w := stateWire{V: keptVersion, Offset: s.Offset}
+	if s.unparsed != 0 {
+		w.Unparsed = json.RawMessage(strconv.Itoa(s.unparsed))
+	}
 	if s.kept != nil {
 		k, err := json.Marshal(s.kept)
 		if err != nil {
@@ -147,8 +163,9 @@ func (s State) MarshalBinary() ([]byte, error) {
 }
 
 // UnmarshalBinary loads a State MarshalBinary saved, its count with it. A
-// State saved in another format loads as a bare cursor (State{Offset: n}),
-// with no count; bytes that are no State are an error.
+// State saved in another format, or whose count is not a whole number of 0
+// or more (a damaged one), loads as a bare cursor (State{Offset: n}) with no
+// count, which a read counts again; bytes that are no State are an error.
 func (s *State) UnmarshalBinary(b []byte) error {
 	var w stateWire
 	if err := json.Unmarshal(b, &w); err != nil {
@@ -158,7 +175,13 @@ func (s *State) UnmarshalBinary(b []byte) error {
 	if w.V != keptVersion {
 		return nil
 	}
-	s.unparsed = w.Unparsed
+	if len(w.Unparsed) > 0 {
+		var n int
+		if json.Unmarshal(w.Unparsed, &n) != nil || n < 0 {
+			return nil
+		}
+		s.unparsed = n
+	}
 	if len(w.Kept) == 0 || string(w.Kept) == "null" {
 		return nil
 	}
