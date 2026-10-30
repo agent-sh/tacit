@@ -1,30 +1,25 @@
 Tacit keeps memory for coding agents in Markdown and git. Use a local store or share one across machines.
 
-This release fixes which repository a fact's paths send it to. A checkout the catalog takes counts wherever it is, and a scratch clone or a Claude Code memory folder no longer sends a fact anywhere. Claude Code's interruption mark is now the harness's in every session, and `tacit doctor` checks scrump's records mode.
+This release lets agents close the questions they can prove, so fewer wait on you. Every write into the store is now masked before it is staged. It also puts back the links older runs unwrapped, and the event reader counts the lines it cannot parse.
 
-- **A checkout outside the usual roots is found.** Routing decides which repository a fact belongs to for an org's migration, the moves out of a folder that is no project, code's folds and assess's evidence. It read only paths under `~` and nine system roots (`/Users`, `/home`, `/opt`, `/etc`, `/var`, `/usr`, `/srv`, `/mnt`, `/Library`). A fact that named its checkout under `/tmp`, `/data`, `/root`, `/workspace` or `/Volumes` named no repository, though SPEC routes a fact by the absolute paths it names.
-  - Every `~` and absolute path outside `/proc`, `/sys`, `/dev` and `/net` is now read, and names the repository of its real git root on this machine (#91).
-  - Links in those kernel views resolve to what the reading process has open (`/proc/self/cwd`). On macOS a lookup under `/net` mounts another host's export.
-  - On the author's machine `~/projects` is a bind mount of `/data/projects`. 5 facts that name a checkout by its `/data/projects/...` path now point at its repository.
-- **A scratch clone the catalog does not take names nothing.** A checkout outside home or in a temp directory, and no main checkout of the projects directory, counts once 2 sessions worked in it, as Scopes says.
-  - It also counts when the catalog's repository of its name shares a remote with it: the same checkout through a bind mount, or a clone of a fork.
-  - Before, any checkout counted. So a fact that named its project and a task's scratch clone pointed at two repositories and stayed where it was.
-  - A vendored clone or submodule whose name is no slug (`third_party/llama.cpp`) counts as the checkout holding it.
-- **Another machine's path names a checkout only under a home's projects directory:** `~/projects`, `/root/projects`, `/home/<user>/projects` or `/Users/<user>/projects`. The fallback for a path with no checkout here matched `projects/<name>` anywhere. So a Claude Code memory folder, `~/.claude/projects/<folder>/memory/`, named the repository the catalog calls `memory`. A store's own `projects/<name>` folder named that project.
-  - On the author's machine `memory` is another name of tacit. 147 facts pointed at tacit that way, and one pointed at darklanes through the store's `projects/darklanes` folder.
-  - One of them had been held by that false pointer in a folder that is no project. It now moves to its repository.
-  - Below a folder of checkouts, the second level counts by a repository's own name only, never by another name of it.
-  - A route such as `/api/projects/<name>` names nothing.
-- **Claude Code's interruption mark is the harness's in every session.** `[Request interrupted by user]` was harness text in sessions a person typed into. Sessions no person types into read it otherwise: subagent transcripts, sessions in an agent's directory and Codex rollouts converted from Claude Code.
-  - There the event reader called it agent text. In the ones the dreamer reads, its digest wrote it as an agent's prompt, `P:`.
-  - One rule now decides it for every format: the digest writes `H:` and the event reader reports `harness_text` (#92).
-  - A dream window of an agent's session whose only prompt was the mark no longer counts as holding one, so the dreamer skips it.
-- **`tacit doctor` checks scrump's records mode.** It sends #84's repro as two records and reports `scrump records`.
-  - The line is ok when scrump keeps them apart, a warning when scrump has no records mode, and a failure when its answer is malformed.
-  - Without records mode, batched texts go joined by a boundary, which still redacts.
-  - The `scrump` check also fails a scrump that leaves a quoted value a cut left open unmasked, as scrump before 0.2.0 does.
-  - The canary's error now says to install scrump 0.2.0 or later instead of rebuilding it from main. The dreamer, the MCP server and the other redacting commands return it too (0af0bd3).
+- **Agents close the questions they can prove.** A question is what tacit leaves for you to answer: an agent's ask or query on a pair of facts, the rotation's `check?` on one of your facts, or the reviewer's question about an agent's note. Two ways now close one (SPEC "Closing questions", #97).
+  - **Moot, by code.** When a fact a question is about was retired, replaced or is gone, `tacit verify` closes the question before it sends anything, with the reason. When the replaced fact has a live successor, the finding moves to the live facts. `tacit questions moot [--dry-run]` runs this on its own. A store whose facts do not read closes nothing.
+  - **Proved, by an agent.** `tacit questions close ID --answer A --proof git|file|config|words|gone --evidence E --reason R` closes a question an agent can prove. A `words` proof is your own words, which code finds as a statement of yours in your turns. `--dry-run` runs every guard and writes nothing. `tacit questions` lists what is open, and says which questions are yours and which ones code closes.
+  - **What a closure may not do.** A closure never changes your ruling. It retires a fact that holds your words only on your own later words on the same subject. It never answers a question you marked, reopened, kept a fact of or left a note on. Your answer comes first: one you gave in a session the question was put in or in the rulebook pane keeps every agent from closing it.
+  - tacit app and the review page show each closure with who closed it, the answer, the proof, the reason and the question it closed. Change this answer puts back what it changed, as it was, and the question is yours from then on.
+- **Every write is masked.** On 2026-10-27 a curated fact held a loopback llama-server key. The 2026-10-26 rebuild's curator had split an imported memory that came into the inbox unmasked, and nothing between the note and the push masked what the curator wrote. Every client write now masks what it adds before it stages anything (`store.Store.commitPush`, #93).
+  - In a fact, a note, a record or an overview: the description when the write changed it, the commands it adds (`applies_to.commands`, a record's `commands`) and the body lines the store does not hold yet, each with the line before it as context.
+  - In a review file: its added lines. In a ledger: the string values of the lines it adds that are prose.
+  - The mask leaves what the store already holds, frontmatter names, sessions and dates, a `[[link]]`'s target, your recorded words and the generated indexes. Your own text from tacit app is not masked.
+  - When the mask changes a fact, or a commit names an index while the clone holds a fact the commit does not carry (a killed batch's leftover), the indexes are written again from the facts the commit holds.
+  - A write whose mask cannot run is refused before anything is staged. That covers no scrump, a failure, a short or reshaped answer, a redactor that does not mask the canary riding with each batch, and a file with a NUL byte.
+  - Every commit names its files, so what someone else staged in the clone stays out of it. A commit made in the clone by other tooling is pushed as it was made, and only the server's scan checks it.
+- **Older runs' unwrapped links come back.** Runs before v0.9.17 unwrapped a link to what the fact replaced as dead. `tacit links --restore [--dry-run]` puts those links back through the step's locked write, in one commit gitev reads as a repair, so no fact's date moves (#96). On the author's store its dry run finds 20 links in 5 facts.
+- **The event reader counts the lines it cannot parse.** `State.Unparsed()` is the count from the session's start: a line that is not JSON, or whose record does not decode where its kind is read. The saved State keeps it (version 2), and the `client/pkg/evidence` facade exports it (#94). On the author's machine the 1,371 newest transcripts and the 400 newest Hermes sessions hold none.
 
-Upgrading: no index, store format or server change. Install it on every machine that runs the curator, whose assessment and migrate steps route facts, and on every machine that dreams. A program that reads sessions through `client/pkg/evidence` gets the new label once it requires the client module at this release's commit. An older binary reads what this one writes, and keeps the old reading of paths and of the interruption mark. With a scrump before 0.2.0 first on PATH, `tacit doctor` now exits 1: its `scrump` check fails and `scrump records` warns. Redaction still runs with that scrump as before. The release archives bundle 0.2.0, and `scrump --version` shows which one is on PATH.
+Upgrading: no index, store format or server change; the server needs no deploy.
+- Install it on every machine that writes to the store, since an older client writes without the mask.
+- An older client reads the closure records as agents' marks and passes over the reviewer-question records.
+- A program that reads sessions through `client/pkg/evidence` gets `Unparsed` once it requires the client module at this release's commit. A State saved before it is read once more from its cursor.
 
 Builds for Linux, macOS and Windows on amd64 and arm64 include the CLI, the browser app and a compatible scrump redactor. Git 2.29+ is required. [Setup and platform validation](https://github.com/agent-sh/tacit/blob/main/docs/portable.md).
