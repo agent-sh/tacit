@@ -2,6 +2,7 @@ package hermes
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -103,5 +104,54 @@ func TestDefaultDB(t *testing.T) {
 	t.Setenv("TACIT_HERMES_DB", "/srv/h.db")
 	if DefaultDB(home) != "/srv/h.db" {
 		t.Fatal("setting ignored")
+	}
+}
+
+// A row's tool call id and finish reason and a session's model are read
+// when the store has them; a store from an older Hermes without those
+// columns reads as before.
+func TestOptionalColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	st := hermestest.Create(t, path, hermestest.Session{ID: "s", Source: "cli", CreatedSource: "cli", Model: "gpt-6.1-sol", StartedAt: 1})
+	st.Add(
+		hermestest.Message{Session: "s", Role: "assistant", Content: "Checking.", Finish: "tool_calls", ToolCalls: `[{"id":"call_1","function":{"name":"terminal","arguments":"{}"}}]`, Timestamp: 2},
+		hermestest.Message{Session: "s", Role: "tool", ToolName: "terminal", ToolCallID: "call_1", Content: "ok", Timestamp: 3},
+	)
+	d, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ss, err := d.Sessions(context.Background())
+	if err != nil || len(ss) != 1 || ss[0].Model != "gpt-6.1-sol" {
+		t.Fatalf("sessions: %+v %v", ss, err)
+	}
+	ms, err := d.Messages(context.Background(), "s", 0, 1<<20)
+	if err != nil || len(ms) != 2 || ms[0].Finish != "tool_calls" || ms[1].ToolCallID != "call_1" {
+		t.Fatalf("messages: %+v %v", ms, err)
+	}
+	d.Close()
+
+	old := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`create table sessions (id text primary key, source text not null, created_source text, model_config text, parent_session_id text, started_at real not null, end_reason text, cwd text, git_repo_root text);
+create table messages (id integer primary key autoincrement, session_id text not null, role text not null, content text, tool_calls text, tool_name text, timestamp real not null, _compressed_summary integer default 0, display_kind text);
+insert into sessions (id, source, created_source, started_at) values ('s', 'cli', 'cli', 1);
+insert into messages (session_id, role, content, timestamp) values ('s', 'user', 'keep the logs a week', 2);`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	d, err = Open(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if ss, err := d.Sessions(context.Background()); err != nil || len(ss) != 1 || ss[0].Model != "" || !ss[0].Owner {
+		t.Fatalf("old store sessions: %+v %v", ss, err)
+	}
+	if ms, err := d.Messages(context.Background(), "s", 0, 1<<20); err != nil || len(ms) != 1 || ms[0].Content != "keep the logs a week" {
+		t.Fatalf("old store messages: %+v %v", ms, err)
 	}
 }

@@ -180,3 +180,30 @@ func TestLinesSplitTypedTurns(t *testing.T) {
 		t.Errorf("agent prompt: %q", got)
 	}
 }
+
+// A paste the desktop app framed is pasted text, not words of theirs: an
+// agent's (P: in the digest), the words they typed around it theirs. A wake
+// loop's prompt, which a program types into a person's session, is the
+// harness's.
+func TestTurnPiecesPastesAndWakePrompts(t *testing.T) {
+	paste := `<pasted_content id="1">build failed: the cache key is stale</pasted_content>`
+	ps := TurnPieces("read this " + paste + " and fix the build")
+	if len(ps) != 2 || ps[0].Who != Agent || ps[0].Text != paste || ps[1].Who != Owner || strings.Join(strings.Fields(ps[1].Text), " ") != "read this and fix the build" {
+		t.Fatalf("paste in a turn: %+v", ps)
+	}
+	if own := OwnerPieces(TurnPieces(paste)); own != nil {
+		t.Errorf("a paste alone holds nothing of theirs: %q", own)
+	}
+	lines := Lines(strings.NewReader(claudeTyped("read this "+paste+" and fix the build")+"\n"), Claude, true)
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "P: <pasted_content") || !strings.HasPrefix(lines[1], "U: read this") || strings.Contains(lines[1], "cache key") {
+		t.Errorf("digest of a turn with a paste: %q", lines)
+	}
+	for _, wake := range []string{"Wake nonce=7f3a9c: check the queue and report back", "  Wake nonce=1\nstill there?"} {
+		if ps := TurnPieces(wake); len(ps) != 1 || ps[0].Who != Harness {
+			t.Errorf("wake prompt %q: %+v", wake, ps)
+		}
+	}
+	if own := OwnerPieces(TurnPieces("the wake nonce= line in the log is the loop, ignore it")); len(own) != 1 {
+		t.Errorf("the words inside their own sentence: %q", own)
+	}
+}

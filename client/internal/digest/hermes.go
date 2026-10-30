@@ -154,7 +154,7 @@ func HermesLines(ms []HermesMessage) []string {
 				}
 			}
 		case "tool":
-			if e, ok := hermesToolError(m.Content); ok {
+			if e, ok := HermesToolError(m.Content); ok {
 				out = append(out, "E: "+clip(strings.TrimSpace(m.ToolName+": "+e), eMax))
 			}
 		}
@@ -162,11 +162,12 @@ func HermesLines(ms []HermesMessage) []string {
 	return out
 }
 
-// hermesToolError is the failure a tool row reports: a JSON result with an
+// HermesToolError is the failure a tool row reports: a JSON result with an
 // error, a nonzero exit_code, success or ok false; or plain text that opens
 // with "Error". Other plain text is a file, a page or a listing, where the
-// word error says nothing.
-func hermesToolError(content string) (string, bool) {
+// word error says nothing. The digest's E: lines and the session events'
+// error flag (internal/events) read it.
+func HermesToolError(content string) (string, bool) {
 	t := strings.TrimSpace(content)
 	var o map[string]any
 	if strings.HasPrefix(t, "{") && json.Unmarshal([]byte(t), &o) == nil {

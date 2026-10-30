@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/digest"
+	"github.com/agent-sh/tacit/client/internal/harnesses"
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/transcript"
 )
@@ -32,21 +33,21 @@ type Source struct {
 	Format digest.Format
 }
 
-// DefaultSources are the transcripts of this machine: Claude Code projects
-// (top-level sessions only; subagent transcripts are agents talking to
-// agents), Codex sessions (and the archived ones) and pi sessions (top-level
-// only: the glob, digest.PiSessionGlob, does not reach a subagent's
+// DefaultSources are the transcripts of this machine, the top-level globs of
+// harnesses.Sources: Claude Code projects (top-level sessions only; subagent
+// transcripts are agents talking to agents), Codex sessions (and the
+// archived ones) and pi sessions (top-level only, not a subagent's
 // <session>/tasks/). Each glob takes the compressed copies of its
 // transcripts too (transcript.Glob: Codex's .jsonl.zst). Hermes keeps its
 // sessions in a database (AddHermes).
 func DefaultSources(home string) []Source {
-	return []Source{
-		{Glob: filepath.Join(home, ".claude", "projects", "*", "*.jsonl"), Format: digest.Claude},
-		{Glob: filepath.Join(home, ".codex", "sessions", "*", "*", "*", "*.jsonl"), Format: digest.Codex},
-		{Glob: filepath.Join(home, ".codex", "sessions", "*", "*.jsonl"), Format: digest.Codex},
-		{Glob: filepath.Join(home, ".codex", "archived_sessions", "*.jsonl"), Format: digest.Codex},
-		{Glob: digest.PiSessionGlob(home), Format: digest.Pi},
+	var out []Source
+	for _, s := range harnesses.TopLevel(harnesses.Sources(home)) {
+		if s.Format != digest.Hermes {
+			out = append(out, Source{Glob: s.Glob, Format: s.Format})
+		}
 	}
+	return out
 }
 
 // DefaultDigests is where eval/mine/digest.py writes session digests.
@@ -110,17 +111,11 @@ func (b *Builder) Add(source, ref, text string) { b.AddAt(source, ref, text, tim
 // day a statement of theirs was said is that turn's (SaidAt), never the day
 // a step read it.
 func (b *Builder) AddAt(source, ref, text string, at time.Time) {
-	text, ok := OwnerPart(text)
+	text, _, dropped, ok := cutWords(text, b.pastes)
 	if !ok {
 		b.c.Stats.AgentTurns++
 		return
 	}
-	for _, p := range b.pastes {
-		if strings.Contains(text, p) {
-			text = strings.ReplaceAll(text, p, " ")
-		}
-	}
-	text, dropped := dropRelayed(text)
 	b.c.Stats.RelayedLines += dropped
 	n := Normalize(text)
 	if n == "" {
@@ -146,6 +141,32 @@ func (b *Builder) AddAt(source, ref, text string, at time.Time) {
 	b.buf.WriteString(" ")
 }
 
+// cutWords is what of a text of a turn of theirs is their words, the one rule
+// the corpus (AddAt) and TurnReader keep it by: what a harness or another
+// agent wrote in it left out (OwnerPart), the texts they pasted cut (pastes,
+// from their prompt history), then the lines of agent text they relayed
+// (dropRelayed), which it counts. cut is each part it left out, as it was;
+// ok is false when none of it is theirs (cut is then all of it).
+func cutWords(text string, pastes []string) (words string, cut []string, relayedLines int, ok bool) {
+	text, cut, ok = ownerSplit(text)
+	if !ok {
+		return "", cut, 0, false
+	}
+	for _, p := range pastes {
+		if p == "" {
+			continue
+		}
+		if n := strings.Count(text, p); n > 0 {
+			text = strings.ReplaceAll(text, p, " ")
+			for range n {
+				cut = append(cut, p)
+			}
+		}
+	}
+	text, dropped := relayed(text)
+	return text, append(cut, dropped...), len(dropped), true
+}
+
 // Agent text the owner relayed inside their own turn, with no paste record (a lane's
 // report, a chat model's answer): the owner types plain lowercase lines in a
 // terminal, an agent writes markdown. A line is left out of their turn when it
@@ -165,8 +186,14 @@ var (
 // dropRelayed removes the lines of text that are agent text the owner relayed, and
 // says how many it removed.
 func dropRelayed(text string) (string, int) {
+	kept, dropped := relayed(text)
+	return kept, len(dropped)
+}
+
+// relayed is dropRelayed with the lines it removed.
+func relayed(text string) (string, []string) {
 	if !strings.ContainsAny(text, "\n#`*-•0123456789") {
-		return text, 0
+		return text, nil
 	}
 	ls := strings.Split(text, "\n")
 	drop := make([]bool, len(ls))
@@ -185,19 +212,19 @@ func dropRelayed(text string) (string, int) {
 		}
 		i = j
 	}
-	n := 0
+	var dropped []string
 	kept := ls[:0]
 	for i, l := range ls {
 		if drop[i] || mdHeader.MatchString(l) || markdownCode.MatchString(l) || mdBullet.MatchString(l) {
-			n++
+			dropped = append(dropped, l)
 			continue
 		}
 		kept = append(kept, l)
 	}
-	if n == 0 {
-		return text, 0
+	if len(dropped) == 0 {
+		return text, nil
 	}
-	return strings.Join(kept, "\n"), n
+	return strings.Join(kept, "\n"), dropped
 }
 
 // Build indexes the turns.
@@ -435,12 +462,12 @@ func LineTime(line []byte) time.Time {
 	if json.Unmarshal(line, &o) != nil || len(o.Timestamp) == 0 {
 		return time.Time{}
 	}
-	return jsonTime(o.Timestamp)
+	return JSONTime(o.Timestamp)
 }
 
-// jsonTime reads a JSON time: an RFC 3339 string, or Unix seconds or
-// milliseconds.
-func jsonTime(raw json.RawMessage) time.Time {
+// JSONTime reads a JSON time: an RFC 3339 string, or Unix seconds or
+// milliseconds; zero when it is neither. LineTime reads a line's with it.
+func JSONTime(raw json.RawMessage) time.Time {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
 		if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
@@ -876,12 +903,20 @@ func hasText(content json.RawMessage) bool {
 	return false
 }
 
-var pastedBlock = regexp.MustCompile(`(?s)<pasted_content\b[^>]*>.*?</pasted_content>`)
+// pastedBlock is a paste the desktop app framed (digest.PastedContent).
+var pastedBlock = digest.PastedContent
 
 // piUserTurns is what the owner typed in one pi user message: its text
 // blocks, less harness frames (an attached file, a skill expansion) and
-// pasted tables or logs (pi keeps no record of pastes either).
+// pasted tables or logs (pi keeps no record of pastes either; piTurns
+// returns them).
 func piUserTurns(line []byte) []string {
+	own, _ := piTurns(line)
+	return own
+}
+
+// piTurns is piUserTurns with the pasted tables or logs it left out.
+func piTurns(line []byte) (own, blobs []string) {
 	var o struct {
 		Type    string `json:"type"`
 		Message struct {
@@ -890,7 +925,7 @@ func piUserTurns(line []byte) []string {
 		} `json:"message"`
 	}
 	if json.Unmarshal(line, &o) != nil || o.Type != "message" || o.Message.Role != "user" {
-		return nil
+		return nil, nil
 	}
 	var texts []string
 	var s string
@@ -908,15 +943,16 @@ func piUserTurns(line []byte) []string {
 			}
 		}
 	}
-	var out []string
 	for _, t := range texts {
-		for _, own := range digest.OwnerPieces(digest.TurnPieces(t)) {
-			if !PastedBlob(own) {
-				out = append(out, own)
+		for _, p := range digest.OwnerPieces(digest.TurnPieces(t)) {
+			if PastedBlob(p) {
+				blobs = append(blobs, p)
+			} else {
+				own = append(own, p)
 			}
 		}
 	}
-	return out
+	return own, blobs
 }
 
 // codexUserTurns is what the owner typed in one Codex user message: its
@@ -925,6 +961,12 @@ func piUserTurns(line []byte) []string {
 // their answers), an answer that is an option its question offered (asked)
 // and pasted tables or logs left out.
 func codexUserTurns(line []byte, asked digest.CodexAsked) []string {
+	own, _ := codexTurns(line, asked)
+	return own
+}
+
+// codexTurns is codexUserTurns with the pasted tables or logs it left out.
+func codexTurns(line []byte, asked digest.CodexAsked) (own, blobs []string) {
 	var o struct {
 		Type    string `json:"type"`
 		Payload struct {
@@ -936,17 +978,18 @@ func codexUserTurns(line []byte, asked digest.CodexAsked) []string {
 		} `json:"payload"`
 	}
 	if json.Unmarshal(line, &o) != nil || o.Type != "response_item" || o.Payload.Type != "message" || o.Payload.Role != "user" {
-		return nil
+		return nil, nil
 	}
-	var out []string
 	for _, c := range o.Payload.Content {
-		for _, own := range digest.OwnerPieces(asked.Chosen(digest.TurnPieces(c.Text))) {
-			if !PastedBlob(own) {
-				out = append(out, own)
+		for _, p := range digest.OwnerPieces(asked.Chosen(digest.TurnPieces(c.Text))) {
+			if PastedBlob(p) {
+				blobs = append(blobs, p)
+			} else {
+				own = append(own, p)
 			}
 		}
 	}
-	return out
+	return own, blobs
 }
 
 var logLine = regexp.MustCompile(`^\s*(\d{4}-\d{2}-\d{2}|\d{1,2}:\d{2}|\[|\$ |>>> |[A-Z][A-Z_]{2,}[:=]|[-*] \S+: |\S+\.(go|rs|py|ts|js|md):\d+)`)

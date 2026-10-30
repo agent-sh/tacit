@@ -278,7 +278,7 @@ func userLines(f Format, txt string, typed bool, asked CodexAsked) []string {
 		return nil
 	}
 	if !typed {
-		if HarnessText(f, txt) {
+		if UntypedWho(f, txt) == Harness {
 			return []string{"H: " + clip(txt, hMax)}
 		}
 		return []string{"P: " + clip(txt, uMax)}
@@ -298,6 +298,17 @@ func userLines(f Format, txt string, typed bool, asked CodexAsked) []string {
 		}
 	}
 	return out
+}
+
+// UntypedWho is who wrote the text of a user turn no person typed (a turn of
+// an agent's session, or a line whose marks say no person typed it), whole:
+// the harness when it is text a harness injected (HarnessText), else another
+// agent (P: in the digest).
+func UntypedWho(f Format, txt string) Who {
+	if HarnessText(f, txt) {
+		return Harness
+	}
+	return Agent
 }
 
 // capFor is the final width of a digest line by its prefix.

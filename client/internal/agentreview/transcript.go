@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/digest"
+	"github.com/agent-sh/tacit/client/internal/harnesses"
 	"github.com/agent-sh/tacit/client/internal/hermes"
 	"github.com/agent-sh/tacit/client/internal/ownerwords"
 	"github.com/agent-sh/tacit/client/internal/transcript"
@@ -72,14 +73,23 @@ type Sources struct {
 	HermesDB          string
 }
 
-// DefaultSources are the dreamer's sources under home.
+// DefaultSources are the dreamer's sources under home: the top-level ones of
+// harnesses.Sources.
 func DefaultSources(home string) Sources {
-	return Sources{
-		Claude:   []string{filepath.Join(home, ".claude", "projects", "*", "*.jsonl")},
-		Codex:    []string{filepath.Join(home, ".codex", "sessions", "*", "*", "*", "*.jsonl"), filepath.Join(home, ".codex", "sessions", "*", "*.jsonl"), filepath.Join(home, ".codex", "archived_sessions", "*.jsonl")},
-		Pi:       []string{digest.PiSessionGlob(home)},
-		HermesDB: hermes.DefaultDB(home),
+	var src Sources
+	for _, s := range harnesses.TopLevel(harnesses.Sources(home)) {
+		switch s.Format {
+		case digest.Claude:
+			src.Claude = append(src.Claude, s.Glob)
+		case digest.Codex:
+			src.Codex = append(src.Codex, s.Glob)
+		case digest.Pi:
+			src.Pi = append(src.Pi, s.Glob)
+		case digest.Hermes:
+			src.HermesDB = s.DB
+		}
 	}
+	return src
 }
 
 var sessionID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{3,127}$`)

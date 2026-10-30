@@ -2,9 +2,12 @@ package ownerwords
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/agent-sh/tacit/client/internal/digest"
+	"github.com/agent-sh/tacit/client/internal/harnesses"
 	"github.com/agent-sh/tacit/client/internal/hermes/hermestest"
 )
 
@@ -96,5 +99,107 @@ func TestCorpusReadsPiAndHermesOwnerTurns(t *testing.T) {
 	t.Setenv("TACIT_HERMES_DB", "off")
 	if c, err := LoadAll(home, ""); err != nil || c.Stats.Turns["hermes"] != 0 {
 		t.Errorf("hermes off: %v %v", err, c.Stats.Turns)
+	}
+}
+
+// TurnReader.Hermes reads a row as the corpus does (AddHermes): what it keeps
+// of each row is what the corpus holds, pastes from the prompt history cut
+// in both.
+func TestTurnReaderHermesIsTheCorpusReading(t *testing.T) {
+	paste := "the cache key is the lockfile hash and nothing else, measured"
+	rows := []struct{ content, kind, want string }{
+		{"[Replying to: \"Agent report: rotate the keys monthly\"]\n\nonly rotate the keys after a release", "", "only rotate the keys after a release"},
+		{"[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position]\nand keep the build cache\n[/OUT-OF-BAND USER MESSAGE]", "steer", "and keep the build cache"},
+		{"Background job finished.", "internal_notification", ""},
+		{"| host | disk |\n| a | 91% |\n| b | 40% |\n| c | 12% |\n| d | 77% |\n| e | 63% |", "", ""},
+		{"<file name=\"plan.md\">the agent works in the payments repo</file>", "", ""},
+		{"check the queue\n## Findings\n- **The queue is full.**", "", "check the queue"},
+		{"keep this in mind: " + paste, "", "keep this in mind:"},
+	}
+	db := filepath.Join(t.TempDir(), "state.db")
+	st := hermestest.Create(t, db, hermestest.Session{ID: "phone", Source: "mobile", StartedAt: 1})
+	for i, r := range rows {
+		st.Add(hermestest.Message{Session: "phone", Role: "user", Content: r.content, Kind: r.kind, Timestamp: float64(10 + i)})
+	}
+	b := NewBuilder()
+	b.pastes = []string{paste}
+	if err := b.AddHermes(db); err != nil {
+		t.Fatal(err)
+	}
+	c := b.Build()
+	tr := &TurnReader{Pastes: []string{paste}}
+	var kept []string
+	for _, r := range rows {
+		got, ok := tr.Hermes(r.content, r.kind, false)
+		if strings.TrimSpace(got) != r.want || ok != (r.want != "") {
+			t.Errorf("Hermes(%.40q) = %q, %v; want %q", r.content, got, ok, r.want)
+		}
+		if ok {
+			kept = append(kept, got)
+		}
+	}
+	if !reflect.DeepEqual(kept, c.raw) {
+		t.Fatalf("the reader keeps %q, the corpus %q", kept, c.raw)
+	}
+}
+
+// TurnReader with the prompt history's pastes keeps of a Claude Code turn
+// what the corpus keeps: a paste the CLI put inline in the turn is cut.
+func TestTurnReaderCutsPastesAsTheCorpusDoes(t *testing.T) {
+	home := t.TempDir()
+	paste := "panic: runtime error: index out of range [3] with length 3 in cache.go"
+	writeFile(t, filepath.Join(home, ".claude", "history.jsonl"), `{"display":"why does this fail [Pasted text #1 +1 lines]","pastedContents":{"1":{"id":1,"type":"text","content":"`+paste+`"}},"sessionId":"own","project":"/home/u/projects/shop"}`+"\n")
+	line := `{"type":"user","entrypoint":"cli","sessionId":"own","cwd":"/home/u/projects/shop","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"why does this fail ` + paste + `"}}`
+	writeFile(t, filepath.Join(home, ".claude", "projects", "-home-u-projects-shop", "own.jsonl"), line+"\n")
+	t.Setenv("TACIT_HERMES_DB", "off")
+	c, err := LoadAll(home, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps, err := ClaudePastes(home)
+	if err != nil || len(ps) != 1 || ps[0] != paste {
+		t.Fatalf("pastes %q %v", ps, err)
+	}
+	own, _ := (&TurnReader{Pastes: ps}).Parts(digest.Claude, []byte(line))
+	// The transcript's turn is the session's first in the corpus (the prompt
+	// history's copy of it comes after).
+	if len(own) != 1 || strings.Contains(own[0], "index out of range") || len(c.raw) == 0 || c.refs[0] != "claude:own" || own[0] != c.raw[0] {
+		t.Fatalf("reader %q, corpus %q %q", own, c.refs, c.raw)
+	}
+	if own, _ := (&TurnReader{}).Parts(digest.Claude, []byte(line)); len(own) != 1 || !strings.Contains(own[0], "index out of range") {
+		t.Fatalf("without the pastes: %q", own)
+	}
+}
+
+// The corpus reads the top-level sources of the one list (harnesses.Sources),
+// the same globs as before it.
+func TestDefaultSourcesAreTheTopLevelSources(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
+	home := "/home/u"
+	want := []Source{
+		{Glob: filepath.Join(home, ".claude", "projects", "*", "*.jsonl"), Format: digest.Claude},
+		{Glob: filepath.Join(home, ".codex", "sessions", "*", "*", "*", "*.jsonl"), Format: digest.Codex},
+		{Glob: filepath.Join(home, ".codex", "sessions", "*", "*.jsonl"), Format: digest.Codex},
+		{Glob: filepath.Join(home, ".codex", "archived_sessions", "*.jsonl"), Format: digest.Codex},
+		{Glob: filepath.Join(home, ".pi", "agent", "sessions", "*", "*.jsonl"), Format: digest.Pi},
+	}
+	var top []Source
+	for _, s := range harnesses.TopLevel(harnesses.Sources(home)) {
+		if s.Format != digest.Hermes {
+			top = append(top, Source{Glob: s.Glob, Format: s.Format})
+		}
+	}
+	if got := DefaultSources(home); !reflect.DeepEqual(got, want) || !reflect.DeepEqual(got, top) {
+		t.Fatalf("DefaultSources:\n%v\nwant\n%v", got, want)
+	}
+}
+
+// An empty paste cuts nothing (a TurnReader's Pastes come from a caller too).
+func TestEmptyPasteCutsNothing(t *testing.T) {
+	line := `{"type":"user","entrypoint":"cli","origin":{"kind":"human"},"message":{"role":"user","content":"keep the cache"}}`
+	own, _, cut := (&TurnReader{Pastes: []string{""}}).PartsCut(digest.Claude, []byte(line))
+	if len(own) != 1 || own[0] != "keep the cache" || len(cut) != 0 {
+		t.Fatalf("own %q cut %q", own, cut)
 	}
 }

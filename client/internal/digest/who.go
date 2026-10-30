@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -259,8 +260,23 @@ func codexWho(head []byte) Verdict {
 	return Verdict{Owner, "originator " + m.Originator}
 }
 
+// PiTask reports a pi subagent's session by its place: a file in a tasks
+// folder of a session, <session>/tasks/<task>.jsonl, where <session> is named
+// as pi names a session's file (<time>_<id>, piSessionName), under pi's
+// sessions directory or $PI_CODING_AGENT_SESSION_DIR (harnesses.Sources reads
+// both). A sessions directory that is itself named tasks holds no task.
+func PiTask(p string) bool {
+	dir := path.Dir(filepath.ToSlash(p))
+	return path.Base(dir) == "tasks" && piSessionName.MatchString(path.Base(path.Dir(dir)))
+}
+
+// piSessionName is how pi names a session's file, less its ending: the time
+// it started, as an ISO 8601 time with its colons and dot made dashes, and
+// the session's id (2026-10-22T08-00-00-000Z_<id>).
+var piSessionName = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z_.`)
+
 func piWho(path string, head []byte) Verdict {
-	if strings.Contains(path, "/tasks/") && strings.Contains(path, "/sessions/") {
+	if PiTask(path) || strings.Contains(path, "/tasks/") && strings.Contains(path, "/sessions/") {
 		return Verdict{Agent, "pi subagent"}
 	}
 	h, ok := ReadPiHeader(head)
@@ -477,6 +493,12 @@ type Piece struct {
 	Item string
 }
 
+// PastedContent is a block of text the person pasted into their message,
+// as the desktop app frames it: `<pasted_content ...>...</pasted_content>`.
+// Pasted text is often an agent's output passed along, not words of theirs
+// (TurnPieces).
+var PastedContent = regexp.MustCompile(`(?s)<pasted_content\b[^>]*>.*?</pasted_content>`)
+
 var (
 	// systemReminder is a whole block Claude Code wraps its own notes in.
 	systemReminder = regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>`)
@@ -503,6 +525,9 @@ var InjectedNotices = []string{
 	"Continue the current task",
 	"Status check so I can identify which conversation",
 	"Automation:",
+	// A wake loop's prompt, which a program types into a person's Codex
+	// session (310 in 30 days of the owner's turns, 2026-10-30).
+	"Wake nonce=",
 	"[Request interrupted",
 	"The app was quit while you were working",
 	"The user moved this existing Relay conversation to you",
@@ -517,6 +542,9 @@ var InjectedNotices = []string{
 //     one before (or after) a message the person typed (a background task
 //     they started, the scratch folder of a session with no project), and
 //     the rest is decided on its own;
+//   - every whole paste the desktop app framed (PastedContent) is pasted
+//     text, an agent's: what the person pasted is often an agent's output
+//     they pass along; what they typed around it is decided on its own;
 //   - a note a side agent offers (sideNote): its header and the quoted lines
 //     that follow it are that agent's; what the person typed below the quote
 //     is theirs;
@@ -539,6 +567,10 @@ func TurnPieces(text string) []Piece {
 	rest := systemReminder.ReplaceAllStringFunc(text, func(b string) string {
 		out = append(out, Piece{Who: Harness, Text: b})
 		return "\n"
+	})
+	rest = PastedContent.ReplaceAllStringFunc(rest, func(b string) string {
+		out = append(out, Piece{Who: Agent, Text: b})
+		return " "
 	})
 	return append(out, pieces(rest)...)
 }
@@ -695,12 +727,18 @@ func (a CodexAsked) Offered(item, answer string) bool {
 }
 
 // Chosen is ps with each answer that is an option its question offered
-// (Offered) made the harness's: the person chose it, the model wrote it.
+// (OfferedPiece) made the harness's: the person chose it, the model wrote it.
 func (a CodexAsked) Chosen(ps []Piece) []Piece {
 	for i, p := range ps {
-		if p.Who == Owner && p.Item != "" && a.Offered(p.Item, p.Text) {
+		if a.OfferedPiece(p) {
 			ps[i].Who, ps[i].Text = Harness, "the person chose the option offered: "+p.Text
 		}
 	}
 	return ps
+}
+
+// OfferedPiece reports a piece of the person's that answers a question with
+// one of the options it offered (Offered): the model's words, not theirs.
+func (a CodexAsked) OfferedPiece(p Piece) bool {
+	return p.Who == Owner && p.Item != "" && a.Offered(p.Item, p.Text)
 }
