@@ -310,8 +310,14 @@ func TestPointedReposReadsCheckoutsAsTheCatalogTakesThem(t *testing.T) {
 	// the checkout outside home is billing.
 	checkout(filepath.Join(home, "projects", "workco", "billing"), billingURL)
 	mounted := checkout(filepath.Join(root, "mnt", "billing"), billingURL)
+	fork := checkout(filepath.Join(root, "forks", "billing"), "https://github.com/contrib/billing.git")
+	gitIn(t, fork, "remote", "add", "upstream", billingURL)
 	other := checkout(filepath.Join(root, "scratch", "billing"), "https://github.com/vendor/billing.git")
 	checkout(filepath.Join(home, "tmp", "projects", "billing", "vendor_lib"), "https://github.com/vendor/lib.git")
+	// A vendored clone inside billing's checkout, its name no slug.
+	checkout(filepath.Join(home, "projects", "billing", "third_party", "vendor_lib"), "https://github.com/vendor/lib.git")
+	// tacit's origin ends in memory, so memory is one of its other names.
+	checkout(filepath.Join(home, "projects", "tacit"), "https://github.com/agent-sh/memory.git")
 	storeDir := filepath.Join(root, "store")
 	os.MkdirAll(storeDir, 0o755)
 	recs := map[string]*record.Record{}
@@ -320,12 +326,15 @@ func TestPointedReposReadsCheckoutsAsTheCatalogTakesThem(t *testing.T) {
 	for _, c := range []struct{ text, want string }{
 		{"reads ~/projects/billing/config.yaml", "billing"},
 		{"the same repository at " + mounted + "/config.yaml", "billing"},
+		{"a clone of a fork of it at " + fork + "/config.yaml", "billing"},
 		{"another repository under billing's name at " + other + "/main.go", ""},
 		{"a scratch clone with no slug name at ~/tmp/projects/billing/vendor_lib/lib.go", ""},
+		{"the vendored lib at ~/projects/billing/third_party/vendor_lib/x.go", "billing"},
 		{"a scratch clone that is gone, ~/tmp/projects/billing/gone/lib.go", ""},
-		{"on the Mac, /Users/owner/projects/billing/config.yaml", "billing"},
+		{"on the Mac, /Users/someone-else/projects/billing/config.yaml", "billing"},
 		{"the store's folder ~/.local/share/tacit/store/projects/billing/rule.md", ""},
 		{"Claude's memory, ~/.claude/projects/-home-owner-projects-billing/memory/a.md", ""},
+		{"another machine's ~/projects/unknown-dir/memory/a.md", ""},
 		{"the dashboard calls /api/projects/billing/settings", ""},
 	} {
 		got := pointedRepos(rf.cache, catalog, recs, &fact.Fact{Meta: fact.Meta{Description: c.text}})
