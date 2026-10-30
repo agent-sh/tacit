@@ -16,6 +16,8 @@ Your own inputs (`truth.jsonl`, `ab/tasks.json`, `ab/results/`, a corpus manifes
 | `baseline/grep_baseline.py` | Grep over the memory files: is the stored fact in the top k? The baseline every ranker is measured against. Needs ripgrep. | none |
 | `delivery/delivery.py` | Offline: would the SessionStart block for the situation's repo and host carry the fact? | none |
 | `delivery/repo_first.py` | Offline replay of the shipped hooks (SessionStart, prompt, PreToolUse) for delivery settings on your cases: items or truth facts reached, characters and lines per case, the judge's noise share, tool-call lines. | the judge only, cached per case and line |
+| `delivery/deliveries.py` | Turns the tacit blocks Claude Code transcripts recorded into replay cases: the request or tool call, the cwd and store commit the hook read, the facts the session had. | none |
+| `delivery/labelled_replay.py` | Replays graded deliveries through actual binaries at their store commits and scores rules on the grades: useful lines kept, noise share, probes reached. Method and fidelity: `delivery/LABELLED-REPLAY.md`. | none |
 | `delivery/search_replay.py` | Offline replay of `tacit_search` through `tacit mcp`: each case's request as the query in its cwd, graded with repo_first.py's judge and cache: truth facts found, lines, noise share, characters. | the judge only, cached per case and line |
 | `delivery/embed_rank.py` | Dense retrieval (EmbeddingGemma 2) against idf and RRF on the same check. Needs numpy and sentence-transformers. | none (local embedder) |
 | `delivery/hindsight_rank.py` | Hindsight's recall against idf on the same check. Needs a running Hindsight API and `hindsight_client`. | none |
