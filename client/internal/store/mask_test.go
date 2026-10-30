@@ -546,6 +546,98 @@ func TestALedgerLineIsMaskedByItsValues(t *testing.T) {
 	}
 }
 
+// A value with an id's shape that holds a key is prose: a session's shape
+// with no harness's name (password:<token>) and a family's key in a name's
+// shape are masked; a session, a cite and a fact's name stay.
+func TestALedgerValueShapedLikeAnIDCanStillBeAKey(t *testing.T) {
+	for v, want := range map[string]bool{
+		"claude:0b2c-11aa":                                 true,
+		"hermes:20261030_101500_ab12cd":                    true,
+		"git:abc1234":                                      true,
+		"lint-cc-sk-017-only-plain-commands":               true,
+		"2026-10-30T10:00:00Z":                             true,
+		"password:FAKEKEY-77":                              false,
+		"token:" + "gh" + "p_" + strings.Repeat("Ab1", 12): false,
+		"sk-" + "or-v1-" + strings.Repeat("ab12", 16):      false,
+	} {
+		if got := idLike(v); got != want {
+			t.Errorf("idLike(%q) = %v, want %v", v, got, want)
+		}
+	}
+	s, _ := seedPair(t)
+	run(t, s.Dir, "config", "user.email", "writer@example.test")
+	var asked []string
+	withRedact(t, maskFake(&asked))
+	writeFile(t, s.Dir, "review/agent-reviews.jsonl", `{"session":"claude:FAKEKEY-313","reason":"password:FAKEKEY-77"}`+"\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := s.CommitPush(ctx, []string{"review/agent-reviews.jsonl"}, "curator: reviews", "curator"); err != nil {
+		t.Fatal(err)
+	}
+	head, _ := committed(t, s, "review/agent-reviews.jsonl")
+	if strings.Contains(head, "FAKEKEY-77") || !strings.Contains(head, `"session":"claude:FAKEKEY-313"`) {
+		t.Fatalf("committed: %s", head)
+	}
+}
+
+// The commands a write adds to a fact's applies_to, or to a record's
+// commands, are masked each alone (an argv can carry a key); the rest of the
+// frontmatter reads back as it was.
+func TestTheCommandsAWriteAddsAreMasked(t *testing.T) {
+	s, _ := seedPair(t)
+	run(t, s.Dir, "config", "user.email", "writer@example.test")
+	var asked []string
+	withRedact(t, maskFake(&asked))
+	noop := Reindex
+	Reindex = func(context.Context, string, []string) ([]string, error) { return nil, nil }
+	t.Cleanup(func() { Reindex = noop })
+	writeFile(t, s.Dir, "machines/h/serve.md", "---\nname: serve\ndescription: The serve wrapper's flags\ntype: machine_fact\nscope: machines/h\napplies_to:\n  paths: [\"/opt/serve\"]\n  commands:\n    - llama-server --api-key FAKEKEY-555 --port 8080\n    - llama-server --help\nsource:\n  harness: curator\n  host: h\n  kind: observed\ncreated: \"2026-10-30\"\n---\n\nThe wrapper sets the flags.\n")
+	writeFile(t, s.Dir, "projects/widget/_record.md", "---\nkind: project\nname: widget\ndescription: the widget service\nstatus: live\nwas: []\ncreated: \"2026-10-30\"\ncreated_by: curator\ncommands:\n  - widget serve --token FAKEKEY-556\n---\n\nThe widget.\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := s.CommitPush(ctx, []string{"machines/h/serve.md", "projects/widget/_record.md"}, "curator: serve", "curator"); err != nil {
+		t.Fatal(err)
+	}
+	head, _ := committed(t, s, "machines/h/serve.md")
+	f, err := fact.Parse("machines/h/serve.md", []byte(head))
+	if err != nil {
+		t.Fatalf("the masked fact does not parse: %v\n%s", err, head)
+	}
+	if want := []string{"llama-server --api-key " + stars("FAKEKEY-555") + " --port 8080", "llama-server --help"}; strings.Join(f.Meta.AppliesTo.Commands, "|") != strings.Join(want, "|") {
+		t.Errorf("commands: %q, want %q", f.Meta.AppliesTo.Commands, want)
+	}
+	if strings.Join(f.Meta.AppliesTo.Paths, "|") != "/opt/serve" || f.Meta.Description != "The serve wrapper's flags" || f.Meta.Created != "2026-10-30" {
+		t.Errorf("the rest of the frontmatter changed: %+v\n%s", f.Meta, head)
+	}
+	rec, _ := committed(t, s, "projects/widget/_record.md")
+	if strings.Contains(rec, "FAKEKEY-556") || !strings.Contains(rec, "widget serve --token "+stars("FAKEKEY-556")) {
+		t.Errorf("the record's command: %s", rec)
+	}
+}
+
+// A write commits only what it names: what someone else staged in the clone,
+// which the mask never read, stays staged and out of the commit.
+func TestAWriteCommitsOnlyWhatItNames(t *testing.T) {
+	s, _ := seedPair(t)
+	run(t, s.Dir, "config", "user.email", "writer@example.test")
+	var asked []string
+	withRedact(t, maskFake(&asked))
+	writeFile(t, s.Dir, "inbox/y@h/staged.md", "---\nname: staged\n---\n\nsomeone staged FAKEKEY-557\n")
+	run(t, s.Dir, "add", "inbox/y@h/staged.md")
+	writeFile(t, s.Dir, "inbox/x@h/mine.md", "---\nname: mine\n---\n\nmy note\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := s.CommitPush(ctx, []string{"inbox/x@h/mine.md"}, "agent: mine", "agent"); err != nil {
+		t.Fatal(err)
+	}
+	if files := run(t, s.Dir, "show", "--name-only", "--format=", "HEAD"); strings.Contains(files, "staged.md") || !strings.Contains(files, "mine.md") {
+		t.Fatalf("the commit holds: %q", files)
+	}
+	if staged := strings.TrimSpace(run(t, s.Dir, "diff", "--cached", "--name-only")); staged != "inbox/y@h/staged.md" {
+		t.Fatalf("staged after the write: %q", staged)
+	}
+}
+
 // A write the mask takes back entirely (HEAD holds the masked text already)
 // is done: nothing is committed and no error comes back.
 func TestAWriteTheMaskTakesBackIsDone(t *testing.T) {

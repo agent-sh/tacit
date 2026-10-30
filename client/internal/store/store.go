@@ -529,6 +529,10 @@ func (s *Store) commitPush(ctx context.Context, rels []string, message, writer s
 			}
 		}
 	}
+	// What the mask did not read never rides a write: every commit names its
+	// files (git commit --only), so a change someone else staged in the clone
+	// stays staged and out of it (SPEC.md, "Every write is masked").
+	only = true
 	// Store-wide merge rules belong to the curator, never an inbox writer.
 	curator := writer == "curator" || strings.HasPrefix(writer, "curator@")
 	if local || curator {
