@@ -38,7 +38,7 @@ func TestMain(m *testing.M) {
 	}
 	// cmd/tacit writes the indexes again after a masked fact; here there are
 	// none to write.
-	Reindex = func(context.Context, string, []string) ([]string, error) { return nil, nil }
+	Reindex = func(context.Context, string, []string, bool) ([]string, error) { return nil, nil }
 	os.Exit(m.Run())
 }
 
@@ -340,7 +340,7 @@ func TestAMaskedFactWritesTheIndexesAgain(t *testing.T) {
 	withRedact(t, maskFake(&asked))
 	calls := 0
 	prev := Reindex
-	Reindex = func(_ context.Context, dir string, _ []string) ([]string, error) {
+	Reindex = func(_ context.Context, dir string, _ []string, _ bool) ([]string, error) {
 		calls++
 		b, err := os.ReadFile(filepath.Join(dir, "machines", "h", "serve.md"))
 		if err != nil {
@@ -484,7 +484,7 @@ func TestTheMaskReadsWhatItCannotParseAsProse(t *testing.T) {
 	var asked []string
 	withRedact(t, maskFake(&asked))
 	noop := Reindex
-	Reindex = func(context.Context, string, []string) ([]string, error) { return nil, nil }
+	Reindex = func(context.Context, string, []string, bool) ([]string, error) { return nil, nil }
 	t.Cleanup(func() { Reindex = noop })
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -589,7 +589,7 @@ func TestTheCommandsAWriteAddsAreMasked(t *testing.T) {
 	var asked []string
 	withRedact(t, maskFake(&asked))
 	noop := Reindex
-	Reindex = func(context.Context, string, []string) ([]string, error) { return nil, nil }
+	Reindex = func(context.Context, string, []string, bool) ([]string, error) { return nil, nil }
 	t.Cleanup(func() { Reindex = noop })
 	writeFile(t, s.Dir, "machines/h/serve.md", "---\nname: serve\ndescription: The serve wrapper's flags\ntype: machine_fact\nscope: machines/h\napplies_to:\n  paths: [\"/opt/serve\"]\n  commands:\n    - llama-server --api-key FAKEKEY-555 --port 8080\n    - llama-server --help\nsource:\n  harness: curator\n  host: h\n  kind: observed\ncreated: \"2026-10-30\"\n---\n\nThe wrapper sets the flags.\n")
 	writeFile(t, s.Dir, "projects/widget/_record.md", "---\nkind: project\nname: widget\ndescription: the widget service\nstatus: live\nwas: []\ncreated: \"2026-10-30\"\ncreated_by: curator\ncommands:\n  - widget serve --token FAKEKEY-556\n---\n\nThe widget.\n")
@@ -646,7 +646,7 @@ func TestAWriteTheMaskTakesBackIsDone(t *testing.T) {
 	var asked []string
 	withRedact(t, maskFake(&asked))
 	noop := Reindex
-	Reindex = func(context.Context, string, []string) ([]string, error) { return nil, nil }
+	Reindex = func(context.Context, string, []string, bool) ([]string, error) { return nil, nil }
 	t.Cleanup(func() { Reindex = noop })
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -693,7 +693,7 @@ func TestTheMaskReadsARunWithTheLineBeforeIt(t *testing.T) {
 		return out, nil
 	})
 	noop := Reindex
-	Reindex = func(context.Context, string, []string) ([]string, error) { return nil, nil }
+	Reindex = func(context.Context, string, []string, bool) ([]string, error) { return nil, nil }
 	t.Cleanup(func() { Reindex = noop })
 	writeFile(t, s.Dir, "machines/h/auth.md", "---\nname: auth\n---\n\nAuthorization: Bearer\r\nnew-TOKEN-1234\nplain line\r\n")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

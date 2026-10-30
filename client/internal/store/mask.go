@@ -53,11 +53,14 @@ import (
 var Redact = digest.RedactAllContext
 
 // Reindex writes again the indexes tacit generates from the facts (MEMORY.md
-// and the folder indexes), from the facts as the commit of rels will hold them,
-// and returns the files it wrote, which join the commit. A write that masked a
-// fact or a record calls it, so the indexes hold the text the commit holds;
-// with none set such a write is refused. cmd/tacit sets it.
-var Reindex func(ctx context.Context, dir string, rels []string) ([]string, error)
+// and the folder indexes), from the facts and records as the commit of rels
+// will hold them, and returns the files it wrote, which join the commit. A
+// write that masked a fact or a record calls it with always set, so the
+// indexes hold the text the commit holds (with none set such a write is
+// refused); a write that names an index calls it without, and it writes
+// nothing when the clone holds no fact or record the commit does not carry.
+// cmd/tacit sets it.
+var Reindex func(ctx context.Context, dir string, rels []string, always bool) ([]string, error)
 
 // ErrRedaction is a write refused because what it adds could not be
 // masked: nothing was staged or committed.
@@ -845,6 +848,17 @@ func writeAtomic(p string, data []byte, perm os.FileMode) error {
 func touchesIndexes(rels []string) bool {
 	for _, rel := range rels {
 		if strings.HasSuffix(rel, ".md") && !strings.HasPrefix(rel, "inbox/") && !strings.HasPrefix(rel, "review/") {
+			return true
+		}
+	}
+	return false
+}
+
+// namesIndex reports a commit that names an index tacit generates: MEMORY.md
+// or a folder's _index.md.
+func namesIndex(rels []string) bool {
+	for _, rel := range rels {
+		if rel == index.File || path.Base(rel) == tree.FileName {
 			return true
 		}
 	}
