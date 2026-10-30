@@ -324,6 +324,12 @@ function recordHTML(it) {
   const d = it.decision; if (!d) return "";
   const who = d.by === "agent" ? "An agent answered" : "You answered";
   const reopen = can(it, "reopen") ? btn("reopen", "undo", "Change this answer", "z") : "";
+  // A pair whose fact a third fact replaced: closed by code. The plain words
+  // say what became of it; its reason, with the facts' names, is in details.
+  if (d.action === "moot") {
+    const what = d.repointed ? "The facts it asks about were replaced since, so it is asked again about the facts that replaced them." : "The facts it asks about were replaced since, and nothing is left to decide.";
+    return `<div class="record"><p><b>The curator closed this: no longer a question</b>, ${esc(WHEN.format(new Date(d.at)))}.</p>${reopen}</div><p class="evidence">${what}</p>${d.evidence ? `<details class="more"><summary>Details</summary><p>${esc(d.evidence)}</p></details>` : ""}`;
+  }
   return `<div class="record"><p><b>${who}: ${esc(pastFor(it, it.mark || d.action))}</b>${d.owner_only ? ", only you could know" : ""}, ${esc(WHEN.format(new Date(d.at)))}.</p>${reopen}</div>${d.comment ? `<p class="your-note"><b>Your note:</b> ${esc(d.comment)}</p>` : ""}${d.evidence && d.by === "agent" && !it.needs_owner ? `<p class="evidence">${esc(plainEvidence(d.evidence, sides(it)))}</p>` : ""}`;
 }
 // The notes the owner left on a finding without answering it.
