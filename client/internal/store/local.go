@@ -8,22 +8,21 @@ import (
 	"github.com/agent-sh/tacit/client/internal/platform"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/index"
 	"github.com/agent-sh/tacit/client/internal/ledger"
+	"github.com/agent-sh/tacit/client/internal/secretscan"
 	"github.com/agent-sh/tacit/client/internal/tree"
 )
 
 const localKey = "tacit.local"
 
-// Same token shapes as the server's pre-receive check. Agent writes still
-// use scrump first; this is the second check when there is no server.
+// The server's pre-receive secret scan (secretscan holds it, equal to the
+// hook's). Agent writes still use scrump first; this is the second check when
+// there is no server.
 var errLocalPolicy = errors.New("local policy refused the write")
-
-var localSecrets = regexp.MustCompile(`(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|(^|[^A-Za-z0-9])sk-(proj-|ant-)?[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|tskey-[A-Za-z0-9-]{10,}|(^|[^A-Za-z0-9])hf_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----`)
 
 func (s *Store) checkLocalFiles(rels []string) error {
 	for _, rel := range rels {
@@ -58,8 +57,8 @@ func (s *Store) checkLocalFiles(rels []string) error {
 		if err != nil {
 			return err
 		}
-		if localSecrets.Match(b) {
-			return fmt.Errorf("%w: a file looks like it contains a secret", errLocalPolicy)
+		if secretscan.Match(b) {
+			return fmt.Errorf("%w: %s looks like it contains a secret", errLocalPolicy, rel)
 		}
 	}
 	return nil

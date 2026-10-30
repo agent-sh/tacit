@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -183,22 +182,6 @@ func TestUsable(t *testing.T) {
 	}
 	if !Usable("x/" + strings.Repeat("a", maxComponent)) {
 		t.Error("a component of exactly the limit is fine")
-	}
-}
-
-// The Go copy of the server's secret scan must be the server's: a path the
-// hook refuses would get the curator's whole push refused.
-func TestSecretReIsTheServers(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("..", "..", "..", "server", "priv", "hooks", "pre-receive"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := regexp.MustCompile(`(?m)^secret_re='([^']*)'`).FindSubmatch(b)
-	if m == nil {
-		t.Fatal("secret_re not found in the pre-receive hook")
-	}
-	if string(m[1]) != secretRe.String() {
-		t.Fatalf("secretRe differs from the hook's secret_re:\ngo:   %s\nhook: %s", secretRe, m[1])
 	}
 }
 

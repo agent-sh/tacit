@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/agent-sh/tacit/client/internal/secretscan"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
@@ -241,11 +242,6 @@ func (s *Snapshot) lastChange(ctx context.Context, path string) string {
 	return strings.TrimSpace(out)
 }
 
-// secretRe is the secret scan of server/priv/hooks/pre-receive (secret_re),
-// copied; a test holds the two equal. A path matching it would get the whole
-// push refused.
-var secretRe = regexp.MustCompile(`(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|(^|[^A-Za-z0-9])sk-(proj-|ant-)?[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|tskey-[A-Za-z0-9-]{10,}|(^|[^A-Za-z0-9])hf_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----`)
-
 // pathRe is the only shape of path that is written into a fact. File and
 // directory names in a repository are text chosen by whoever committed them,
 // and a fact's description is the line a hook prints into an agent's context;
@@ -261,7 +257,7 @@ const maxComponent = 100
 
 // Usable reports whether a repo-relative path may be written into a fact.
 func Usable(p string) bool {
-	if !pathRe.MatchString(p) || secretRe.MatchString(p) {
+	if !pathRe.MatchString(p) || secretscan.MatchString(p) {
 		return false
 	}
 	for _, c := range strings.Split(p, "/") {
