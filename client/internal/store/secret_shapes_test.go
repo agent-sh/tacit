@@ -83,7 +83,7 @@ func TestLocalCommitTakesFactNamesAndRefusesKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := []string{"lint-cc-sk-017-only-plain-commands", "sk-learn-pipeline-cache-notes", "docs-sk-locale-fallback-order-v2",
-		"tskey-auth-expires-in-90-days", "slack-xoxb-token-scopes-for-the-bot", "xapp-level-token-for-socket-mode"}
+		"tskey-auth-expires-in-90-days", "slack-xoxb-token-scopes-for-the-bot", "xapp-level-token-for-socket-mode", "slack-xoxa-2-workspace-tokens-are-retired"}
 	var b strings.Builder
 	for _, n := range names {
 		fmt.Fprintf(&b, "- [[%s]]: a fact\n- [%s](%s.md) - a fact\n", n, n, n)

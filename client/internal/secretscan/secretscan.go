@@ -13,22 +13,24 @@
 // xoxc-, xoxd-, xoxe-, xoxo-, xoxp-, xoxr-, xoxs-, xapp-) or a Tailscale one
 // (tskey-) is 10 key characters ([A-Za-z0-9-]); a Slack key holds an
 // uppercase letter, a run of 20 letters and digits, a run of 10 digits or two
-// runs of 6 joined by a hyphen, or is a legacy workspace token's
-// xoxa-<digit>- or xoxr-<digit>-; a Tailscale key holds an uppercase letter
-// or a run of 20 letters and digits. A fact name is lowercase letters, digits
-// and hyphens, so a slug with such a segment is no key.
+// runs of 6 joined by a hyphen, or is a legacy workspace token (xoxa- or
+// xoxr-, a digit, and a run of 8 letters and digits that ends it); a
+// Tailscale key holds an uppercase letter or a run of 20 letters and digits.
+// A fact name is lowercase letters, digits and hyphens, so a slug with such a
+// segment is no key.
 //
-// The hook greps a blob for any family's prefix (family_prefix_re) before
-// the family steps, for speed; Match needs no such step, and the test holds
-// the two decisions equal.
+// The hook greps a blob for any family's token (any_token_re, their union)
+// before the family steps, for speed; Match needs no such step, and the test
+// holds the two decisions equal.
 package secretscan
 
 import "regexp"
 
 var (
 	// Shapes is the hook's secret_re: GitHub, AWS and Hugging Face token
-	// shapes, Slack webhook URLs and private-key headers.
-	Shapes = regexp.MustCompile(`(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|(^|[^A-Za-z0-9])hf_[A-Za-z0-9]{20,}|hooks\.slack\.com/(services|workflows|triggers)/[A-Za-z0-9+/]{43,}|-----BEGIN [A-Z ]*PRIVATE KEY-----`)
+	// shapes, Slack webhook URLs and session cookies, and private-key
+	// headers.
+	Shapes = regexp.MustCompile(`(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|(^|[^A-Za-z0-9])hf_[A-Za-z0-9]{20,}|hooks\.slack\.com\\?/(services|workflows|triggers)\\?/[A-Za-z0-9+/\\]{43,}|xoxd-[A-Za-z0-9%+/=]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----`)
 	// SkToken is the hook's sk_token_re: sk- and 16 or more key characters.
 	SkToken = regexp.MustCompile(`(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}`)
 	// SkKey is the hook's sk_key_re, matched against each token.
@@ -37,7 +39,7 @@ var (
 	// key characters.
 	SlackToken = regexp.MustCompile(`(xox[abcdeoprs]|xapp)-[A-Za-z0-9-]{10,}`)
 	// SlackKey is the hook's slack_key_re, matched against each token.
-	SlackKey = regexp.MustCompile(`(xox[abcdeoprs]|xapp)-[A-Za-z0-9-]*([A-Z]|[A-Za-z0-9]{20}|[0-9]{10}|[0-9]{6}-[0-9]{6})|xox[ar]-[0-9]-`)
+	SlackKey = regexp.MustCompile(`(xox[abcdeoprs]|xapp)-[A-Za-z0-9-]*([A-Z]|[A-Za-z0-9]{20}|[0-9]{10}|[0-9]{6}-[0-9]{6})|xox[ar]-[0-9]-[A-Za-z0-9]{8,}$`)
 	// TskeyToken is the hook's tskey_token_re: tskey- and 10 or more key
 	// characters.
 	TskeyToken = regexp.MustCompile(`tskey-[A-Za-z0-9-]{10,}`)

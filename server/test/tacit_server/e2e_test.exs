@@ -147,7 +147,8 @@ defmodule TacitServer.E2ETest do
             "use-tskey-auth-for-ci-runners-not-oauth-clients",
             "slack-xoxb-token-scopes-for-the-bot",
             "xoxp-user-token-needs-chat-write-2026-10-28",
-            "xapp-level-token-for-socket-mode"
+            "xapp-level-token-for-socket-mode",
+            "slack-xoxa-2-workspace-tokens-are-retired"
           ],
           into: "",
           do: "- [[#{name}]]: a fact\n- [#{name}](#{name}.md) - a fact\n"
@@ -196,7 +197,9 @@ defmodule TacitServer.E2ETest do
        "xoxo-#{pick.(digits, 10)}-#{pick.(digits, 10)}-#{pick.(digits, 10)}-#{pick.(hex, 10)}"},
       {"slack client session",
        "xoxc-#{pick.(digits, 12)}-#{pick.(digits, 12)}-#{pick.(digits, 13)}-#{pick.(hex, 64)}"},
-      {"slack session cookie", "xoxd-" <> pick.(alnum, 30) <> "%2F" <> pick.(alnum, 40)},
+      {"slack session cookie", "xoxd-" <> pick.(alnum, 3) <> "%2F" <> pick.(alnum, 40) <> "%3D"},
+      {"slack webhook in JSON",
+       "https:\\/\\/hooks.slack.com\\/services\\/T#{pick.(upper, 8)}\\/B#{pick.(upper, 8)}\\/#{pick.(alnum, 24)}"},
       {"slack legacy workspace, versioned", "xoxa-1-" <> pick.(alnum, 8)},
       {"slack webhook",
        "https://hooks.slack.com/services/T#{pick.(upper, 8)}/B#{pick.(upper, 8)}/#{pick.(alnum, 24)}"},

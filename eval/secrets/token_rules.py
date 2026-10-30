@@ -10,7 +10,8 @@ fact names with a segment that starts like a key. Every key is random; none
 is real. The key shapes follow gitleaks' rules (anthropic.go, openai.go,
 slack.go), TruffleHog's detectors (deepseek, openrouter, langfuse, tailscale),
 LiteLLM's key generator and Tailscale's key reference; the Slack session
-cookie (xoxd-) is URL-encoded, so its run of key characters ends at a %. --compare adds another
+cookie (xoxd-) is URL-encoded base64, so a run of key characters can end at
+its first %, and secret_re takes it whole. --compare adds another
 regex as a column. --hook reads another copy of the hook, for example the one
 a change replaces: `git show <base>:server/priv/hooks/pre-receive > old`.
 
@@ -63,6 +64,11 @@ def digits(rnd, lo, hi):
     return pick(rnd, DIGITS, rnd.randint(lo, hi))
 
 
+def urlenc(b64):
+    """A base64 string as a cookie carries it: + / = percent-encoded."""
+    return b64.replace("+", "%2B").replace("/", "%2F").replace("=", "%3D")
+
+
 def ts_id(rnd):
     # The key id Tailscale shows: k and six letters or digits, then CNTRL
     # (kPjmma7CNTRL), or seven of them (abcDEF1CNTRL in its key reference).
@@ -111,9 +117,10 @@ def shapes(rnd):
         "slack legacy xoxs, 6 to 9 digit ids": lambda: "xoxs-%s-%s-%s-%s" % (digits(rnd, 6, 9), digits(rnd, 6, 9), digits(rnd, 6, 9), pick(rnd, HEX, 10)),
         "slack legacy xoxo": lambda: "xoxo-%s-%s-%s-%s" % (digits(rnd, 6, 12), digits(rnd, 6, 12), digits(rnd, 6, 12), pick(rnd, HEX, rnd.randint(10, 18))),
         "slack client session xoxc": lambda: "xoxc-%s-%s-%s-%s" % (digits(rnd, 10, 13), digits(rnd, 10, 13), digits(rnd, 10, 13), pick(rnd, HEX, 64)),
-        "slack session cookie xoxd": lambda: "xoxd-" + pick(rnd, ALNUM, rnd.randint(20, 60)) + "%2F" + pick(rnd, ALNUM, 40) + "%3D",
+        "slack session cookie xoxd (URL-encoded base64)": lambda: "xoxd-" + urlenc(pick(rnd, ALNUM + "+/", rnd.randint(100, 180)) + "=="),
         "slack webhook services": lambda: "https://hooks.slack.com/services/T%s/B%s/%s" % (pick(rnd, UPPER_ALNUM, 8), pick(rnd, UPPER_ALNUM, 8), pick(rnd, ALNUM, 24)),
         "slack webhook workflows": lambda: "https://hooks.slack.com/workflows/T%s/A%s/%s/%s" % (pick(rnd, UPPER_ALNUM, 10), pick(rnd, UPPER_ALNUM, 10), digits(rnd, 18, 18), pick(rnd, ALNUM, 24)),
+        "slack webhook in JSON (escaped slashes)": lambda: ("https://hooks.slack.com/services/T%s/B%s/%s" % (pick(rnd, UPPER_ALNUM, 8), pick(rnd, UPPER_ALNUM, 8), pick(rnd, ALNUM, 24))).replace("/", "\\/"),
         "slack config access xoxe.xoxp": lambda: "xoxe.xox" + rnd.choice("bp") + "-1-" + pick(rnd, ALNUM, rnd.randint(163, 166)),
         "slack config refresh xoxe": lambda: "xoxe-1-" + pick(rnd, ALNUM, 146),
         "slack app-level xapp": lambda: "xapp-1-A%s-%s-%s" % (pick(rnd, UPPER_ALNUM, 10), digits(rnd, 13, 13), pick(rnd, HEX, 64)),
@@ -145,6 +152,7 @@ def prefixed_name(rnd, prefix):
     """A fact name with a segment that starts like a key: tskey-auth-expires-in-90-days."""
     return rnd.choice([
         prefix + "-" + words(rnd, rnd.randint(2, 7)),
+        words(rnd, rnd.randint(1, 2)) + "-" + prefix + "-" + str(rnd.randint(0, 9)) + "-" + words(rnd, rnd.randint(2, 5)),
         words(rnd, rnd.randint(1, 3)) + "-" + prefix + "-" + words(rnd, rnd.randint(2, 6)),
         words(rnd, rnd.randint(1, 2)) + "-" + prefix + "-" + num(rnd) + "-" + words(rnd, rnd.randint(2, 5)) + "-v" + str(rnd.randint(1, 9)),
         prefix + "-" + words(rnd, rnd.randint(1, 3)) + "-2026-" + str(rnd.randint(1, 12)).zfill(2) + "-" + str(rnd.randint(1, 28)).zfill(2),
