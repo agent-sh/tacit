@@ -16,6 +16,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/lint"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
 	"github.com/agent-sh/tacit/client/internal/rotation"
+	"github.com/agent-sh/tacit/client/internal/store"
 )
 
 // rotFile is a curated fact file with its own dates.
@@ -385,5 +386,77 @@ func TestRotationPlanCompressStaysInItsLayer(t *testing.T) {
 	}
 	if _, ok := files["user/b.md"]; ok {
 		t.Fatalf("a gone member was written back: %v", sortedFileKeys(files))
+	}
+}
+
+// A fact of this machine whose description names a path that is gone is
+// checked first, before older facts; one whose path is here, or that says
+// its path was moved, waits its turn by age.
+func TestRotationTakesFactsWhosePathIsGoneFirst(t *testing.T) {
+	stubScrump(t)
+	r := rotationRig(t)
+	home := filepath.Join(r.root, "home")
+	os.MkdirAll(filepath.Join(home, "tools"), 0o755)
+	scope := "machines/" + store.ShortHost()
+	os.MkdirAll(filepath.Join(r.clone, filepath.FromSlash(scope)), 0o755)
+	for name, desc := range map[string]string{
+		"build-cache-dir": "The build cache lives in ~/caches/build-cache",
+		"tools-dir":       "The helper tools live in ~/tools",
+		"cache-moved":     "~/old-cache was moved to ~/caches; read the new place",
+	} {
+		os.WriteFile(filepath.Join(r.clone, filepath.FromSlash(scope), name+".md"), []byte(rotFile(name, scope, "machine_fact", desc, desc+".", "2026-10-25", "")), 0o644)
+	}
+	r.commitIndex(r.clone, "machine facts")
+	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
+	fr := &fakeRotator{answer: func(it rotation.Item) (rotation.Verdict, bool) {
+		return rotation.Verdict{Outcome: rotation.Still}, true
+	}}
+	prev := rotationRun
+	rotationRun = fr.run
+	t.Cleanup(func() { rotationRun = prev })
+	st := runRotationStep(t, r, rotationOpts{model: "m", age: 30, batch: 50, max: 1})
+	if st.Gone != 1 || len(fr.prompts) != 1 || !strings.Contains(fr.prompts[0], `"name":"build-cache-dir"`) {
+		t.Fatalf("the fact whose path is gone is not first: %+v\n%s", st, fr.prompts)
+	}
+	for _, n := range []string{"tools-dir", "cache-moved"} {
+		if strings.Contains(fr.prompts[0], `"name":"`+n+`"`) {
+			t.Fatalf("%s came first", n)
+		}
+	}
+}
+
+// The probe's rules, each from a kind of false flag the hand-checked
+// samples showed (eval/VALUE.md, "Machine facts whose paths are gone").
+func TestGonePathsRules(t *testing.T) {
+	home := t.TempDir()
+	os.MkdirAll(filepath.Join(home, "here"), 0o755)
+	host := "rig"
+	for _, c := range []struct {
+		desc  string
+		scope string
+		want  string
+	}{
+		{"The build cache lives in ~/gone/cache", "machines/rig", "~/gone/cache"},
+		{"The tools live in ~/here", "machines/rig", ""},
+		{"The build cache lives in ~/gone/cache", "machines/other", ""},
+		{"The build cache lives in ~/gone/cache", "user", ""},
+		{"Logs are kept in a dated dir, eg ~/gone/logs", "machines/rig", ""},
+		{"On wrx the weights are in ~/gone/models", "machines/rig", ""},
+		{"Build it with `go build -o ~/gone/bin/tool .`", "machines/rig", ""},
+		{"Each run writes ~/gone/run-<id>/log.txt", "machines/rig", ""},
+		{"Push it with ~/gone/boxN-ssh", "machines/rig", ""},
+		{"Run mkdir -p ~/gone/scratch first", "machines/rig", ""},
+		{"The old ~/gone/tool was removed; use the new one", "machines/rig", ""},
+		{"Copies live in ~/gone/a,b,c", "machines/rig", ""},
+		{"The plugin docs are under ~/gone/plugins/cache/openai...", "machines/rig", ""},
+		{"Screenshots are written to ~/gone/shots", "machines/rig", ""},
+		{"It is rsynced to spark:~/gone/models", "machines/rig", ""},
+		{"System units are in /etc/gone-units", "machines/rig", ""},
+	} {
+		f := &fact.Fact{Meta: fact.Meta{Name: "x", Scope: c.scope, Description: c.desc}}
+		got := strings.Join(gonePaths(f, host, home), ",")
+		if got != c.want {
+			t.Errorf("%q in %s: got %q, want %q", c.desc, c.scope, got, c.want)
+		}
 	}
 }

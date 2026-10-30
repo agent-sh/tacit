@@ -1299,3 +1299,24 @@ Measured with `client/tools/envelope` (no store write; every call's session on t
 Note by note, 18 of the 20 owner-word notes got the same count under both prompts (17 of them 3 of 3, one 0 of 3). The two that differ (2 and 3 of 3 before, 0 and 2 after) hold no words the owner typed: each quotes an instruction from an agent's prompt ("Quoted from the session: ..."), which the pass is told not to list, and the curator's evidence check finds no such quote in the owner's turns. An earlier run of the same 60 calls, counting any entry, gave 54 of 60 to both prompts. The measurement always sends an empty extracted list, so it does not show the case the pass was made for (D6: the split listed some rulings and missed one).
 
 Both changes ship: the prompt says what the empty answer is, and the rulings pass sends back an answer refused for its envelope (no array, or one that does not parse) once, like one refused for its entries. With the old prompt the retry alone took every refused answer back to a clean one; with the new one none needed it on these 110 calls. The closing line added nothing and is not shipped. The split pass does not send its envelope refusals back: its answers are long (up to 45,000 characters of notes in, the whole array out), no whole refusal of one was measured, and its batch splits for one as before. A second refusal still fails the batch: a model that never answers with an array still fails the run. Spend: $2.80 for the old prompt, $3.86 for the two variants, $6.16 for the two runs on the owner-word notes.
+
+## Machine facts whose paths are gone (2026-10-30)
+
+The graded deliveries of 14 days held 32 lines pointing to a durable path that is gone and 63 to a deleted `~/.cache` folder, while no fact on the machine had ever been checked: the rotation ran only in `tacit maintain`, which the machine's own curate unit did not run. A fact of this machine that names a path that is not there is most often stale (a moved checkout, a key moved to the keyring, a scratch folder of a finished task), so the rotation takes those first.
+
+The probe is code (`gonePaths`): the paths a fact of this machine names in its description, under the home directory, that a stat does not find. No model. Each of its rules is a kind of false flag the hand-checked samples showed: the clause around the path says it is gone, moved, removed or an example; a command writes it (`-o`, `--target-dir`, `TMPDIR=`, "written to", "goes in"); a run makes it on use (`mkdir -p`, an environment assignment); it is a template (`<id>`, `boxN`), cut short (`...`), a list (`a,b,c`) or a quoted path with a space; the fact is about another machine (`on wrx`, `ssh user@host`, `host:~/path`). The body is not read: its paths are context and history.
+
+Hand-checked, a fact counted stale when the gone path makes what it says no longer true (a detail included), each sample drawn fresh after the rules before it were written:
+
+| rules | flagged on the machine | fresh sample of 30: stale |
+|---|---:|---:|
+| first version: every machine fact, description and body | 1,173 | 18 |
+| home only, templates, outputs, negation near the path | 958 | 17 |
+| the clause around the path, examples, another host | 762 | 20 |
+| the description only, made on use, spaces in paths | 590 | 25 |
+| the Go port | 580 | 23 |
+| cut and listed paths, a fact that says the path is gone | 554 | 22 |
+| writes and downloads, `ssh` and `host:~` paths | 535 | 20 |
+| **shipped: sentence ends only at ". ", "do not exist", "moved", templates like `boxN`** | **527 of 8,668** | **27** |
+
+Under the shipped rules the four fresh samples drawn from the last versions keep 102 of their 120 facts flagged, and 89 of those are stale (87%); the one drawn after the last rule change, 27 of 30. The probe costs a stat per path in the rotation's pick; a flag costs at most one rotation verdict ($0.0097 a fact), which checks the fact with the stat as proof and stamps it.
