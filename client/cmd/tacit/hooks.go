@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/agent-sh/tacit/client/internal/auth"
 	"github.com/agent-sh/tacit/client/internal/fact"
@@ -393,8 +394,35 @@ func promptHits(ctx context.Context, ix *search.Index, sit search.Situation, p s
 	// The repo-first lines: the fact whose metadata names a path or command
 	// of the request, and the best rule or decision for it (hooks_delivery.go).
 	out = append(out, promptMetaHits(ctx, ix, sit, p, withSeen(seen, out))...)
-	out = append(out, promptActionHits(ctx, ix, sit, p, withSeen(seen, out), out)...)
+	if !shortRequest(p) {
+		out = append(out, promptActionHits(ctx, ix, sit, p, withSeen(seen, out), out)...)
+	}
 	return withoutEchoes(out, p), nil
+}
+
+// shortRequest: a request of fewer than shortRequestTerms distinct words of
+// 3 letters or more (the search's stop words aside, a path's parts counted
+// as words, compared by stem) names too little to pick a rule or an action
+// for it, so it gets neither the rule slot nor the action line; its ranked,
+// metadata and derived lines stay. On the graded prompt blocks it removed 5
+// noise lines and 1 weak one and no useful line (eval/DELIVERY.md, "Short
+// requests").
+func shortRequest(p string) bool {
+	keys := map[string]bool{}
+	for _, t := range search.Terms(p) {
+		if utf8.RuneCountInString(t) >= 3 {
+			keys[search.TermKey(t)] = true
+		}
+	}
+	return len(keys) < shortRequestTerms
+}
+
+const shortRequestTerms = 3
+
+// promptSelectionFor is promptSelection for the request p: a short request
+// gets no rule slot.
+func promptSelectionFor(p string, hits, derived []search.Hit, seen map[string]bool, floor float64) []search.Hit {
+	return selectPrompt(hits, derived, seen, floor, !shortRequest(p))
 }
 
 // echoShare: a line whose name and description words the request holds for
@@ -460,6 +488,11 @@ func withoutEchoes(hits []search.Hit, p string) []search.Hit {
 // saw, then adds the best derived fact if it clears its separate floor. No
 // backfill: repeated requests must not pull weaker facts into the context.
 func promptSelection(hits, derived []search.Hit, seen map[string]bool, floor float64) []search.Hit {
+	return selectPrompt(hits, derived, seen, floor, true)
+}
+
+// selectPrompt is promptSelection, with the rule slot only when slot is set.
+func selectPrompt(hits, derived []search.Hit, seen map[string]bool, floor float64, slot bool) []search.Hit {
 	var strong []search.Hit
 	ruling := false
 	limit, relative := promptCaps()
@@ -485,7 +518,7 @@ func promptSelection(hits, derived []search.Hit, seen map[string]bool, floor flo
 	}
 	// A ruling the session already saw counts too: it is in the context. So
 	// does the best ruling here when it was seen: the slot is not backfilled.
-	if !ruling {
+	if !ruling && slot {
 		for _, h := range hits {
 			if h.Rule() && h.Score >= ruleSlotFloor && !isDerived(h) && !slices.ContainsFunc(strong, func(s search.Hit) bool { return s.Name == h.Name }) {
 				if !seen[h.Name] {

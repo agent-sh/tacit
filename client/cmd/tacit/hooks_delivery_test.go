@@ -225,3 +225,32 @@ func TestPromptSelectionThresholdAndCeiling(t *testing.T) {
 		t.Fatalf("ceiling 2: %s", got)
 	}
 }
+
+// A request of fewer than 3 distinct words gets no rule slot; the ranked
+// lines stay. One of 3 words or more keeps the slot.
+func TestPromptShortRequestHasNoRuleSlot(t *testing.T) {
+	releaseCaps(t)
+	hits := []search.Hit{
+		{Name: "a", Score: 30}, {Name: "b", Score: 25}, {Name: "c", Score: 20},
+		{Name: "r1", Score: 14, Ruling: true},
+	}
+	for p, want := range map[string]string{
+		"deploy now?":              "a,b,c",
+		"deploy the widget now":    "a,b,c,r1",
+		"the deploy, the deploys?": "a,b,c",
+	} {
+		if got := names(promptSelectionFor(p, hits, nil, nil, promptFloor)); got != want {
+			t.Errorf("%q: %s, want %s", p, got, want)
+		}
+	}
+	for p, want := range map[string]bool{
+		"deploy now":            true,
+		"deploy the widget now": false,
+		"déploie ça maintenant": true,  // a word of 2 letters counts for no script
+		"fix src/main.go":       false, // a path's parts are words
+	} {
+		if shortRequest(p) != want {
+			t.Errorf("shortRequest(%q) = %v", p, !want)
+		}
+	}
+}

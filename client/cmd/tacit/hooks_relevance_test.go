@@ -236,3 +236,48 @@ func TestPromptEchoFilterRunsAfterTheSelection(t *testing.T) {
 		t.Fatalf("got %s", names(got))
 	}
 }
+
+// A request of fewer than 3 distinct words gets no action line: the repo's
+// decision a longer request about the same thing gets is not printed for it.
+func TestPromptShortRequestHasNoActionLine(t *testing.T) {
+	root := relevanceStore(t, nil)
+	writeFact(t, root, fact.Meta{Name: "widget-deploy-checks", Description: "Every deploy runs the smoke checks first", Type: "design_decision", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Repos: []string{"widget"}}}, "detail")
+	ix := openRelevance(t, root)
+	sit := search.Situation{Repo: "widget"}
+	long, err := promptHits(context.Background(), ix, sit, "deploy the release tonight", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	short, err := promptHits(context.Background(), ix, sit, "deploy tonight?", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names(long) != "widget-deploy-checks" || names(short) != "" {
+		t.Fatalf("long request: %q, short request: %q", names(long), names(short))
+	}
+}
+
+// Through the hook: an owner ruling that only the rule slot would print
+// (under 0.7 of the best line) is printed for a request of 3 words, not for
+// one of 2.
+func TestPromptShortRequestHasNoRuleSlotInTheHook(t *testing.T) {
+	root := relevanceStore(t, []fact.Meta{
+		{Name: "cache-eviction-lru-policy", Description: "Cache eviction uses an LRU policy with a two minute window"},
+		{Name: "cache-eviction-metrics", Description: "Cache eviction metrics are exported to the dashboard"},
+	})
+	writeFact(t, root, fact.Meta{Name: "keep-it-small", Description: "Keep the cache small; benchmark any eviction change first on the quiet host, measure it twice with the same load, compare medians, write down why it was made and who asked for it, and keep the old numbers next to the new ones", Type: "user_standard", Scope: "system", Source: fact.Source{Kind: "user", Harness: "curator", Host: "h", Endorsed: mineID("keep-it-small")}}, "detail")
+	markAudited(t, root)
+	ix := openRelevance(t, root)
+	for p, want := range map[string]string{
+		"cache eviction":        "cache-eviction-metrics,cache-eviction-lru-policy",
+		"cache eviction tuning": "cache-eviction-metrics,cache-eviction-lru-policy,keep-it-small",
+	} {
+		got, err := promptHits(context.Background(), ix, search.Situation{}, p, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if names(got) != want {
+			t.Errorf("%q: %s, want %s", p, names(got), want)
+		}
+	}
+}
