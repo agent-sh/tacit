@@ -509,21 +509,23 @@ func (r *refiler) pick(set map[string]bool) string {
 var projectsPathRx = regexp.MustCompile(`^(?:~|/root|/(?:home|Users)/[^/]+)/+projects/+([A-Za-z0-9._-]+)(?:/+([A-Za-z0-9._-]+))?`)
 
 // catalogTakes reports whether rp, a checkout on this machine, counts as a
-// repository (SPEC.md, "Scopes"): the catalog accepts it, or lists a
-// repository of its name whose remotes hold its origin, the same repository
-// by another path (a bind mount, or a clone whose origin two main
-// checkouts share, which Mains.Canonical leaves as it is).
+// repository: the catalog accepts it (SPEC.md, "Scopes"), or lists a
+// repository of its name that shares a remote with it, the same repository
+// by another path (a bind mount, a clone whose origin two main checkouts
+// share, which Mains.Canonical leaves as it is, or a clone of a fork).
 func catalogTakes(catalog *repoid.Catalog, rp repoid.Repo) bool {
 	if catalog.Accepted(rp) {
 		return true
 	}
 	known, ok := catalog.Repo(rp.Slug())
-	if !ok || rp.Origin == "" {
+	if !ok {
 		return false
 	}
-	for _, u := range known.URLs {
-		if u == rp.Origin {
-			return true
+	for _, u := range rp.URLs {
+		for _, k := range known.URLs {
+			if u == k {
+				return true
+			}
 		}
 	}
 	return false
@@ -531,24 +533,27 @@ func catalogTakes(catalog *repoid.Catalog, rp repoid.Repo) bool {
 
 // pointedRepos are the repositories f's own words point at (SPEC.md,
 // "Suppression", "Orgs"): the absolute and ~ paths it names (its text,
-// applies_to.paths and commands, repoPaths). A path in a checkout on this
-// machine names the repository repoid makes of it when the catalog takes
-// that checkout (catalogTakes), and nothing otherwise (a task's scratch
-// clone). A path with no checkout here, another machine's, names the
-// checkout a home's projects directory path names (projectsPathRx) that
-// some machine's catalog lists (by name or another name of it), or a
-// project folder whose record
-// the path's name is (an old name the forge renamed, its folder suppressed
-// into the current one: a checked pointer code may follow); and the
-// repositories of the forge URLs it names (github.com/<owner>/<name>) that
-// a catalog lists. Names are the catalogs' (a checkout's own name, lower
-// case), or the live folder a record resolves to.
+// applies_to.paths and commands, repoPaths) and the forge URLs it names.
+// A path in a checkout on this machine names the repository repoid makes
+// of it when the catalog takes that checkout (catalogTakes), and nothing
+// otherwise (a task's scratch clone); a checkout whose name is no slug (a
+// submodule or a vendored clone, third_party/llama.cpp) is read as the
+// checkout holding it. A path with no checkout here, another machine's,
+// under a home's projects directory (projectsPathRx) names the checkout
+// there that some machine's catalog lists (the first level by its name or
+// another name of it, the second, below a folder of checkouts, by its own
+// name only), or a project folder whose record the path's name is (an old
+// name the forge renamed, its folder suppressed into the current one: a
+// checked pointer code may follow). A forge URL
+// (github.com/<owner>/<name>) names the repository a catalog lists. Names
+// are the catalogs' (a checkout's own name, lower case), or the live
+// folder a record resolves to.
 func pointedRepos(cache *repoid.Cache, catalog *repoid.Catalog, recs map[string]*record.Record, f *fact.Fact) map[string]bool {
 	text := f.Meta.Description + "\n" + f.Body + "\n" + strings.Join(f.Meta.AppliesTo.Paths, "\n") + "\n" + strings.Join(f.Meta.AppliesTo.Commands, "\n")
 	set := map[string]bool{}
-	known := func(n string) string {
+	known := func(n string, alias bool) string {
 		n = strings.ToLower(n)
-		if own := catalog.AliasOf(n); own != "" {
+		if own := catalog.AliasOf(n); alias && own != "" {
 			return own
 		}
 		if catalog.Has(n) {
@@ -569,22 +574,27 @@ func pointedRepos(cache *repoid.Cache, catalog *repoid.Catalog, recs map[string]
 	}
 	for _, p := range repoPaths(text, 40) {
 		if rp, ok := cache.Of(p); ok {
+			if up := filepath.Dir(rp.Root); rp.Slug() == "" && rp.Worktree == rp.Root && rp.Clone == "" && up != rp.Root {
+				if holder, ok := cache.Of(up); ok {
+					rp = holder
+				}
+			}
 			if s := rp.Slug(); s != "" && catalogTakes(catalog, rp) {
 				set[s] = true
 			}
 			continue
 		}
 		if pm := projectsPathRx.FindStringSubmatch(p); pm != nil {
-			if n := known(pm[1]); n != "" {
+			if n := known(pm[1], true); n != "" {
 				set[n] = true
-			} else if n := known(pm[2]); pm[2] != "" && n != "" {
+			} else if n := known(pm[2], false); pm[2] != "" && n != "" {
 				set[n] = true
 			}
 		}
 	}
 	for _, ref := range check.Refs(text) {
 		if ref.Kind == check.KindRepo {
-			if n := known(ref.Value); n != "" {
+			if n := known(ref.Value, true); n != "" {
 				set[n] = true
 			}
 		}
