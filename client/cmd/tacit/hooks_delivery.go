@@ -493,7 +493,7 @@ func commandWords(command string, names []string, folders string) map[string]boo
 }
 
 // scriptKey: a command of one word that is a script's path or file name
-// (scripts/release.sh, tools/check.py) names one program of one repository,
+// (scripts/release.sh, tools/lint.py) names one program of one repository,
 // not a program every session runs, so it needs no second word.
 func scriptKey(c string) bool {
 	w := cmdWords(c)
