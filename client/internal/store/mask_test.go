@@ -16,6 +16,7 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/ownerwords"
 )
 
 // scrumpErr is why scrump with its text profile cannot run here, or nil;
@@ -163,6 +164,62 @@ func TestTheMaskLeavesNamesSessionsLinksAndTheOwnersWords(t *testing.T) {
 	for _, a := range asked {
 		if strings.Contains(a, "session:") || strings.Contains(a, "origin:") {
 			t.Errorf("a frontmatter field went to the redactor: %q", a)
+		}
+	}
+}
+
+// The owner's words are left wherever lint's check finds them (L15), not
+// only byte for byte: in another case, with an apostrophe or across a line
+// break, a hit inside them stays, and the check still finds them in what the
+// commit holds.
+func TestTheMaskLeavesTheOwnersWordsAsLintReadsThem(t *testing.T) {
+	s, _ := seedPair(t)
+	run(t, s.Dir, "config", "user.email", "writer@example.test")
+	var asked []string
+	withRedact(t, maskFake(&asked))
+	words := "dont touch the FAKEKEY-152 wrapper"
+	note := "---\nname: serve-wrapper\ndescription: The wrapper the owner guards\ntype: machine_fact\nsource:\n  harness: claude\n  session: claude:s-1\n  owner_words: " + words + "\n  owner_words_from: claude:s-1\n---\n\nThey said: Don't touch\nthe FAKEKEY-152 wrapper.\nThe agent pasted FAKEKEY-172 here.\n"
+	writeFile(t, s.Dir, "machines/h/serve-wrapper.md", note)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := s.CommitPush(ctx, []string{"machines/h/serve-wrapper.md"}, "curator: test", "curator"); err != nil {
+		t.Fatal(err)
+	}
+	head, _ := committed(t, s, "machines/h/serve-wrapper.md")
+	if !strings.Contains(head, "They said: Don't touch\nthe FAKEKEY-152 wrapper.") {
+		t.Errorf("the mask changed the owner's words:\n%s", head)
+	}
+	if strings.Contains(head, "FAKEKEY-172") {
+		t.Errorf("the agent's key reached the commit:\n%s", head)
+	}
+	fm, body, ok := fact.Split([]byte(head))
+	var meta struct{ Description string }
+	if !ok || yaml.Unmarshal(fm, &meta) != nil {
+		t.Fatalf("the frontmatter does not read:\n%s", head)
+	}
+	if !ownerwords.In(meta.Description+"\n"+string(body), words) {
+		t.Errorf("lint's check no longer finds the owner's words:\n%s", head)
+	}
+}
+
+// The mask reads the owner's words with ownerwords' normalization.
+func TestTheMaskNormalizesAsTheOwnersWordsCheck(t *testing.T) {
+	for _, in := range []string{
+		"They said: Don't touch\nthe FAKEKEY-152 wrapper.",
+		"İSTANBUL ß Straße ΣΊΣΥΦΟΣ",
+		"a`b’c‘d'e",
+		"tab\there,  two  spaces... and an ellipsis… [...]",
+		"\xffbad\xfe bytes",
+		"  lead and trail  ",
+		"",
+		"日本語 テキスト ١٢٣ x²",
+	} {
+		got, at := normalized(in)
+		if want := ownerwords.Normalize(in); got != want {
+			t.Errorf("normalized(%q) = %q, ownerwords.Normalize = %q", in, got, want)
+		}
+		if len(at) != len(got) {
+			t.Errorf("normalized(%q): %d bytes, %d sources", in, len(got), len(at))
 		}
 	}
 }

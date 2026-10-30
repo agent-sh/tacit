@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"go.yaml.in/yaml/v3"
 
@@ -357,7 +359,8 @@ func protected(text string, words []string) [][2]int {
 	return append(out, wordSpans(text, words)...)
 }
 
-// wordSpans is every place text holds one of words.
+// wordSpans is every place text holds one of words: byte for byte, or as
+// lint's check of the owner's words reads them (ownerSpans).
 func wordSpans(text string, words []string) [][2]int {
 	var out [][2]int
 	for _, w := range words {
@@ -369,8 +372,68 @@ func wordSpans(text string, words []string) [][2]int {
 			out = append(out, [2]int{from + i, from + i + len(w)})
 			from += i + len(w)
 		}
+		out = append(out, ownerSpans(text, w)...)
 	}
 	return out
+}
+
+// ownerSpans is every place text holds words as lint's check of the owner's
+// words reads them (ownerwords.In, L15): case, apostrophes, punctuation and
+// line breaks aside, on word boundaries. A span runs from the first letter or
+// digit of a match to the end of its last one, so a hit inside it is left and
+// the check still finds the words.
+func ownerSpans(text, words string) [][2]int {
+	seg, _ := normalized(words)
+	if seg == "" {
+		return nil
+	}
+	norm, at := normalized(text)
+	padded := " " + norm + " "
+	var out [][2]int
+	for from := 0; ; {
+		i := strings.Index(padded[from:], " "+seg+" ")
+		if i < 0 {
+			break
+		}
+		p := from + i // padded[p] is the space before the match, norm[p] its first byte
+		out = append(out, [2]int{at[p][0], at[p+len(seg)-1][1]})
+		from = p + 1 + len(seg)
+	}
+	return out
+}
+
+// normalized is s as ownerwords.Normalize writes it (lower case, no
+// apostrophes, one space for each run of other characters that are no letter
+// or digit), with the bytes of s each of its bytes comes from. The store does
+// not import ownerwords, which reads the harnesses' sessions and their
+// databases; a test holds the two equal.
+func normalized(s string) (string, [][2]int) {
+	var b []byte
+	var at [][2]int
+	space := true
+	for i := 0; i < len(s); {
+		r, n := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == '\'' || r == '’' || r == '‘' || r == '`':
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			for _, c := range utf8.AppendRune(nil, unicode.ToLower(r)) {
+				b = append(b, c)
+				at = append(at, [2]int{i, i + n})
+			}
+			space = false
+		default:
+			if !space {
+				b = append(b, ' ')
+				at = append(at, [2]int{i, i + n})
+				space = true
+			}
+		}
+		i += n
+	}
+	for len(b) > 0 && b[len(b)-1] == ' ' {
+		b, at = b[:len(b)-1], at[:len(at)-1]
+	}
+	return string(b), at
 }
 
 // phrases is the owner's recorded words as the text holds them: each quote
