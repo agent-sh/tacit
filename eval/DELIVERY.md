@@ -103,3 +103,22 @@ The precision checks above use authored prompts. This one grades what the hooks 
 Recall: of 22 owner prompts of the 3 days that a fact in the store answered, 10 got one.
 
 Where the prompt block's noise comes from, on the 3 days (an analysis build that logs why each line got in, not shipped): the ranked lines are 201 of the 238 and 45% noise; the action line 28 lines, 2 useful and 20 noise; the metadata line 5, all noise; the rule slot 4, 1 useful. Ranked lines whose only coherence was the anchor (no two name matches, no phrase) are 58 lines, 10 useful and 37 noise: the anchor is the request's least frequent known word, and in a request of common words that is a word like "out" (in 1,392 facts).
+
+## Pushes keyed on a bare program (2026-10-30)
+
+A fact's `applies_to.commands` entry of one word (`ssh`, `python3`, `git`, `sed`) matched every call of that program. On the graded pushes of the 3 days, those lines were 9% useful and 63% noise, against 36% and 26% for longer commands and 62% and 8% for edits by path. Separately, an area written with the tools pattern `Bash` pushed at the first shell command of every session: 7 lines, none useful.
+
+The rule now: a command of one word matches only when a word of the fact's name or description, other than the command's own, is in the command line too, not counting the words of the session's repository names, folder and home (every fact of the repository shares them); and an area's tools patterns match MCP tools only. Measured with `delivery/labelled_replay.py` at each call's commit, every line either arm printed graded (14-day cases whose checkout is gone left out):
+
+| arm | 3 days: lines | useful kept | noise | 14 days: lines | useful kept | noise |
+|---|---:|---:|---:|---:|---:|---:|
+| release 0.9.14 | 124 | 30 of 30 | 55 (44%) | 65 | 13 of 14 | 34 (52%) |
+| areas match MCP tools only | 117 | 30 | 49 (42%) | 64 | 13 | 33 (52%) |
+| one-word command needs a second word | 111 | 29 | 44 (40%) | 60 | 13 | 25 (42%) |
+| **both, the session's repository and folder words not counted (shipped)** | **102** | **29** | **36 (35%)** | **57** | **13** | **23 (40%)** |
+| every command needs a second word, areas MCP only | 91 | 25 | 36 (40%) | 52 | 12 | 20 (38%) |
+| one-word commands, the second word in at most 50 facts' summaries, areas MCP only | 67 | 22 | 16 (24%) | 38 | 11 | 14 (38%) |
+
+Over all 536 logged pushes of the 14 days whose checkout still exists, the shipped rule prints 458 lines where release 0.9.14 prints 523 (12% fewer). The prompt block is unchanged (its metadata line names commands by the prompt's words). The target set before measuring, noise at or below 25% with 12 of the 14 useful kept, is not met: the stricter rules reach 24% only by dropping a quarter of the useful pushes, whose second word is a common one. What is left of the noise is mostly two-word commands that are still generic (`git diff`, `gh pr`) and second words that are incidental.
+
+After the review (same cases, every changed line graded by hand, 13 of them new): the session's repository names, folders and home are left out word by word however many there are (`search.Terms` stopped near 24 terms, so in a workspace of many repositories the folder words were not left out), and a one-word command that is a script's path or file name (`scripts/release.sh`, `deploy.sh`) needs no second word. Against the rule above, over the 3-day, 14-day and all-pushes cases: 9 lines added (2 useful, 2 weak, 5 noise), 7 removed (3 weak, 4 noise); in the table, 3 days stays 102 lines, 29 useful, 36 noise, and 14 days becomes 56 lines (one weak line fewer), 13 useful, 23 noise. The fact's own name and description are read whole too (no line changes on these cases). Counting every word of the command line as well (a heredoc's prose, a script's text) added 19 lines (3 useful, 2 weak, 14 noise) and removed 13: the command's words stay its first terms.

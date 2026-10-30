@@ -131,7 +131,7 @@ func TestPreToolPushesAnAreaOutsideARepoOncePerSession(t *testing.T) {
 // facts follow when the same call is an area's.
 func TestPreToolRepoMatchRanksAboveTheArea(t *testing.T) {
 	r, cwd, _ := areaRig(t)
-	writeFact(t, r.clone, fact.Meta{Name: "gadget-tix-rule", Description: "In gadget run tix with the gadget queue", Type: "user_standard", Scope: "projects/gadget", AppliesTo: fact.AppliesTo{Commands: []string{"tix"}}}, "x\n")
+	writeFact(t, r.clone, fact.Meta{Name: "gadget-tix-rule", Description: "In gadget run tix with the gadget queue", Type: "user_standard", Scope: "projects/gadget", AppliesTo: fact.AppliesTo{Commands: []string{"tix update"}}}, "x\n")
 	writeRecordFile(t, r.clone, &record.Record{Folder: "projects/gadget", Kind: record.KindRepo, Name: "gadget", Description: "gadget", Status: record.StatusActive})
 	r.commitIndex(r.clone, "gadget")
 	gadget := r.checkout("gadget")
@@ -207,5 +207,23 @@ func TestPreToolMCPLatency(t *testing.T) {
 	t.Logf("pre-tool on MCP calls, in-process: p50 %v p95 %v over %d calls", p50, p95, len(d))
 	if p95 > toolBudget {
 		t.Fatalf("p95 %v over the budget %v", p95, toolBudget)
+	}
+}
+
+// An area's tool patterns are for MCP tools: one that matches a harness's
+// own tool (Bash) pushes nothing at a shell command; the area's commands and
+// an MCP tool still reach it.
+func TestAreaToolPatternsMatchMCPToolsOnly(t *testing.T) {
+	r, cwd := repoFirstRig(t, fact.Meta{Name: "box-needs-lease", Description: "Take the box lease before any job on the box", Type: "user_standard", Scope: "areas/box"})
+	writeRecordFile(t, r.clone, &record.Record{Folder: "areas/box", Kind: record.KindArea, Name: "box", Description: "the gpu box", Status: record.StatusActive, Tools: []string{"Bash", "mcp__*__Box*"}, Commands: []string{"ssh box"}})
+	r.commitIndex(r.clone, "records")
+	if got := preToolContext(t, hookOut(t, toolPayload(cwd, "s1", "Bash", map[string]any{"command": "ls -la"}), "pre-tool")); got != "" {
+		t.Fatalf("a shell call pushed the area by its Bash pattern:\n%s", got)
+	}
+	if got := preToolContext(t, hookOut(t, toolPayload(cwd, "s2", "Bash", map[string]any{"command": "ssh box nvidia-smi"}), "pre-tool")); !strings.Contains(got, "box-needs-lease") {
+		t.Fatalf("the area's command:\n%s", got)
+	}
+	if got := preToolContext(t, hookOut(t, toolPayload(cwd, "s3", "mcp__lab__BoxStatus", map[string]any{}), "pre-tool")); !strings.Contains(got, "box-needs-lease") {
+		t.Fatalf("an MCP tool:\n%s", got)
 	}
 }

@@ -1625,14 +1625,17 @@ func (a *assessor) proposalCandidates(n int, only map[string]bool) []assess.Cand
 	return out
 }
 
-// sharedTools are the tool names and command programs that two or more of
-// the sessions used (this machine's tool usage), as lines for the model.
+// sharedTools are the MCP tool names and command programs that two or more
+// of the sessions used (this machine's tool usage), as lines for the model.
+// A harness's own tools (Bash, Edit) are every session's: no area's.
 func (a *assessor) sharedTools(sessions map[string]bool) []string {
 	tools, progs := map[string]int{}, map[string]int{}
 	for s := range sessions {
 		u := a.tools.Sessions[s]
 		for _, t := range u.Tools {
-			tools[t]++
+			if strings.HasPrefix(t, "mcp__") {
+				tools[t]++
+			}
 		}
 		for _, p := range u.Commands {
 			progs[p]++
@@ -1653,7 +1656,7 @@ func (a *assessor) sharedTools(sessions map[string]bool) []string {
 	}
 	var out []string
 	if ts := pick(tools); len(ts) > 0 {
-		out = append(out, "tools two or more of its sessions used: "+strings.Join(ts, ", "))
+		out = append(out, "MCP tools two or more of its sessions used: "+strings.Join(ts, ", "))
 	}
 	if ps := pick(progs); len(ps) > 0 {
 		out = append(out, "programs two or more of its sessions ran: "+strings.Join(ps, ", "))

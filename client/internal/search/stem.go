@@ -236,3 +236,7 @@ var wordRx = regexp.MustCompile(`[\p{L}\p{N}_]+`)
 // Words splits text into lowercase words, without stop-word removal or
 // splitting limits: for matching commands a prompt names.
 func Words(text string) []string { return wordRx.FindAllString(strings.ToLower(text), -1) }
+
+// TermKey is the form a query term takes in the index: its pieces stemmed.
+// Words compared by it are compared as the index compares them.
+func TermKey(term string) string { return stemKey(term) }
