@@ -66,4 +66,13 @@ func TestRestoreRefusesWhatItCannotPlace(t *testing.T) {
 	if out, got := Restore(before, after, cur, keep); len(got) != 0 || string(out) != string(cur) {
 		t.Errorf("a line that moved into code: %v\n%s", got, out)
 	}
+	// A line in code gets no link, and the line beside it still gets its own.
+	keep = func(target string) bool { return target == "stmt-a" || target == "stmt-b" }
+	before = file("From [[stmt-a]].\nAlso from [[stmt-b]].\n")
+	after = file("From stmt-a.\nAlso from stmt-b.\n")
+	cur = file("```\nFrom stmt-a.\n```\nAlso from stmt-b.\n")
+	out, got := Restore(before, after, cur, keep)
+	if want := file("```\nFrom stmt-a.\n```\nAlso from [[stmt-b]].\n"); string(out) != string(want) || got["stmt-b"] != 1 || got["stmt-a"] != 0 {
+		t.Errorf("one line in code: %v\n%s", got, out)
+	}
 }

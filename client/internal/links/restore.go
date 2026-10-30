@@ -17,11 +17,12 @@ const Restored Why = "restored"
 // before and after that run's commit; cur is the file now. Each line the run
 // changed is rebuilt from after with those links back as before wrote them,
 // and it replaces that line in cur when the run's text and cur each hold it
-// once, word for word. The result must be cur with those links put back and
-// nothing else (IsRepair the other way round: a line that moved into code
-// gets no link). It returns the new file and how many of each target it put
-// back; cur as it is and none when before to after is no repair of this step,
-// or nothing can be put back safely.
+// once, word for word. Each line is put back only when the file stays cur
+// with links put back and nothing else (IsRepair the other way round): a
+// line that moved into code gets no link, and the other lines still get
+// theirs. It returns the new file and how many of each target it put back;
+// cur as it is and none when before to after is no repair of this step, or
+// nothing can be put back safely.
 func Restore(before, after, cur []byte, keep func(target string) bool) ([]byte, map[string]int) {
 	if !IsRepair(before, after) {
 		return cur, nil
@@ -86,7 +87,12 @@ func Restore(before, after, cur []byte, keep func(target string) bool) ([]byte, 
 		if n != 1 {
 			continue // edited since, or not one place to put it
 		}
-		now[at] = restored[line]
+		trial := append([]string(nil), now...)
+		trial[at] = restored[line]
+		if !IsRepair([]byte(head+strings.Join(trial, "\n")), cur) {
+			continue // a link would land in code there, or change more than the link
+		}
+		now = trial
 		for t, c := range got[line] {
 			out[t] += c
 		}
