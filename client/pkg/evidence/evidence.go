@@ -63,7 +63,8 @@ var ErrPastEnd = events.ErrPastEnd
 
 // ReadFile reads the events of a Claude Code, Codex or pi transcript from
 // byte offset from, calling emit for each in order, and returns the offset to
-// resume from (events.ReadFile).
+// resume from (events.ReadFile). ReadFileState also counts the lines that did
+// not parse.
 func ReadFile(path string, f Format, from int64, emit func(Event) error) (int64, error) {
 	return events.ReadFile(path, f, from, emit)
 }
@@ -79,20 +80,23 @@ func ReadHermes(ctx context.Context, db *HermesDB, s HermesSession, after int64,
 // State is a saved place in a session's history: its cursor (Offset) and
 // what the reader kept from the items before it, so a read from it costs
 // only what came after, while those items are the ones it was kept from
-// (events.State). The zero State is the start; MarshalBinary and
-// UnmarshalBinary save and load one, as do MarshalJSON and UnmarshalJSON. It
-// is as private as its transcript: never send it.
+// (events.State). Unparsed counts the lines before the cursor that gave no
+// events because they did not parse (Hermes: the rows whose tool calls did
+// not). The zero State is the start; MarshalBinary and UnmarshalBinary save
+// and load one, as do MarshalJSON and UnmarshalJSON. It is as private as its
+// transcript: never send it.
 type State = events.State
 
 // ReadFileState is ReadFile from a State, returning the State after the last
-// line read; limit > 0 stops it at a line boundary past limit bytes
-// (events.ReadFileState).
+// line read, with the count of lines that did not parse; limit > 0 stops it
+// at a line boundary past limit bytes (events.ReadFileState).
 func ReadFileState(path string, f Format, from State, limit int64, emit func(Event) error) (State, error) {
 	return events.ReadFileState(path, f, from, limit, emit)
 }
 
 // ReadHermesState is ReadHermes from a State, returning the State after the
-// last row read (events.ReadHermesState).
+// last row read, with the count of rows whose tool calls did not parse
+// (events.ReadHermesState).
 func ReadHermesState(ctx context.Context, db *HermesDB, s HermesSession, from State, emit func(Event) error) (State, error) {
 	return events.ReadHermesState(ctx, db, s, from, emit)
 }

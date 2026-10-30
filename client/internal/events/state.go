@@ -39,6 +39,9 @@ import (
 // MarshalBinary and UnmarshalBinary save a State and load it back, as do
 // MarshalJSON and UnmarshalJSON inside a caller's JSON.
 //
+// Every State a read returns counts the lines before its cursor that did not
+// parse (Unparsed), from the session's start, however the read came there.
+//
 // A State is as private as its transcript: it holds whole lines of it
 // (Replay), the working directory and tool names, unredacted. Keep it where
 // the transcript may be kept, and never send it.
@@ -46,8 +49,9 @@ type State struct {
 	// Offset is where the next read resumes: a byte offset in a transcript's
 	// JSONL bytes (a compressed copy's decompressed stream), or the id of the
 	// last Hermes message read.
-	Offset int64
-	kept   *kept
+	Offset   int64
+	kept     *kept
+	unparsed int
 }
 
 // Kept reports whether s holds what the reader kept: a read from it starts
@@ -55,11 +59,29 @@ type State struct {
 // row it names, are still the ones it was kept from.
 func (s State) Kept() bool { return s.kept != nil }
 
+// Unparsed is how many lines before the cursor did not parse: the reader
+// gave them no events, as they are not JSON (a line a crash cut short, which
+// the next write joined) or not the record their format writes (not an
+// object, a field of another type, a Codex response_item whose payload or a
+// pi message entry whose message does not decode). A line that holds nothing
+// (blank, or null) is not one, nor a last line still being written. For a Hermes session it is how many
+// rows up to the cursor are assistant rows whose tool calls did not parse:
+// their text was read, their calls were not.
+//
+// The count is from the session's start however the read came there: a read
+// that starts at a State's cursor (Kept, its items unchanged) adds the lines
+// it reads to its count, and any other read counts the lines before the
+// cursor in its pass over them. So a session read in parts ends with the
+// count one read from the start gives. A bare cursor the caller makes counts
+// none, and a State a read returns as it is (one at the end) keeps its count.
+func (s State) Unparsed() int { return s.unparsed }
+
 // keptVersion is the format of what a State keeps. Bump it when what a
-// reader keeps or replays changes (TestStateCoversEveryField lists both): a
-// State saved in another format loads as a bare cursor, and a read from it
-// rebuilds what it kept.
-const keptVersion = 1
+// reader keeps or replays, or what a State counts, changes
+// (TestStateCoversEveryField lists them): a State saved in another format
+// loads as a bare cursor, and a read from it rebuilds what it kept and counts
+// again. Version 2 added the count of lines that did not parse.
+const keptVersion = 2
 
 // kept is what a reader keeps across a session's items, as of a cursor.
 type kept struct {
@@ -105,14 +127,15 @@ type kept struct {
 }
 
 type stateWire struct {
-	V      int             `json:"v"`
-	Offset int64           `json:"offset"`
-	Kept   json.RawMessage `json:"kept,omitempty"`
+	V        int             `json:"v"`
+	Offset   int64           `json:"offset"`
+	Unparsed int             `json:"unparsed,omitempty"`
+	Kept     json.RawMessage `json:"kept,omitempty"`
 }
 
 // MarshalBinary is the State as bytes to save (JSON).
 func (s State) MarshalBinary() ([]byte, error) {
-	w := stateWire{V: keptVersion, Offset: s.Offset}
+	w := stateWire{V: keptVersion, Offset: s.Offset, Unparsed: s.unparsed}
 	if s.kept != nil {
 		k, err := json.Marshal(s.kept)
 		if err != nil {
@@ -123,16 +146,20 @@ func (s State) MarshalBinary() ([]byte, error) {
 	return json.Marshal(w)
 }
 
-// UnmarshalBinary loads a State MarshalBinary saved. A State saved in another
-// format loads as a bare cursor (State{Offset: n}); bytes that are no State
-// are an error.
+// UnmarshalBinary loads a State MarshalBinary saved, its count with it. A
+// State saved in another format loads as a bare cursor (State{Offset: n}),
+// with no count; bytes that are no State are an error.
 func (s *State) UnmarshalBinary(b []byte) error {
 	var w stateWire
 	if err := json.Unmarshal(b, &w); err != nil {
 		return fmt.Errorf("events state: %w", err)
 	}
 	*s = State{Offset: w.Offset}
-	if w.V != keptVersion || len(w.Kept) == 0 || string(w.Kept) == "null" {
+	if w.V != keptVersion {
+		return nil
+	}
+	s.unparsed = w.Unparsed
+	if len(w.Kept) == 0 || string(w.Kept) == "null" {
 		return nil
 	}
 	var k kept

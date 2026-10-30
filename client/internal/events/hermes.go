@@ -29,7 +29,9 @@ const hermesPage = 4 << 20
 // call a result names, the reply before a turn), their events not emitted.
 // When emit returns an error ReadHermes stops and returns it, with the id
 // before that row's. Rows Hermes wrote again when it compacted a conversation
-// (hermes.Message.Copy) are passed over, as the dreamer passes them.
+// (hermes.Message.Copy) are passed over, as the dreamer passes them. An
+// assistant row whose tool calls do not parse gives its text and no calls;
+// ReadHermesState counts such rows (State.Unparsed).
 //
 // Who wrote a row: a session of the owner's holds their words in its user
 // rows, cut out of the gateway's frames as the corpus reads them
@@ -49,6 +51,8 @@ func ReadHermes(ctx context.Context, db *hermes.DB, s hermes.Session, after int6
 // a session whose rows Hermes wrote again (its /retry, /undo and /compress
 // replace them), is read as ReadHermes reads it, with a pass over the rows
 // before the cursor. A State at the session's last row is returned as it is.
+// The State returned counts the rows up to its cursor whose tool calls did
+// not parse (State.Unparsed), as ReadFileState counts a transcript's lines.
 // When emit returns an error the read stops and returns it with the State a
 // read from gives that row's events again: from itself when the read started
 // after its cursor and the error came at the first event, else a bare cursor
@@ -85,7 +89,11 @@ func ReadHermesState(ctx context.Context, db *hermes.DB, s hermes.Session, from 
 	key := hermes.Key(db.Path, s.ID)
 	var read int64
 	used := false
-	if k := from.kept; k != nil && after > 0 && k.Format == digest.Hermes && k.Head == key {
+	// unparsed is how many rows up to the last one read had tool calls that
+	// did not parse: from's count when the read starts after its cursor, else
+	// counted again in the pass.
+	unparsed := 0
+	if k := from.kept; k != nil && after > 0 && from.unparsed >= 0 && k.Format == digest.Hermes && k.Head == key {
 		rows, err := db.Messages(ctx, s.ID, after-1, 1)
 		if err != nil {
 			return from, err
@@ -97,7 +105,7 @@ func ReadHermesState(ctx context.Context, db *hermes.DB, s hermes.Session, from 
 			r.prior = k.Prior
 			r.calls = make(map[string]string, len(k.Calls))
 			maps.Copy(r.calls, k.Calls)
-			read, used = after, true
+			read, used, unparsed = after, true, from.unparsed
 		}
 	}
 	last, emitted := after, 0
@@ -107,34 +115,41 @@ func ReadHermesState(ctx context.Context, db *hermes.DB, s hermes.Session, from 
 		if lastRow.ID == last && last > 0 {
 			k.Last, k.LastAt = rowID(lastRow), last
 		}
-		return State{Offset: last, kept: k}
+		return State{Offset: last, kept: k, unparsed: unparsed}
 	}
 	for {
 		rows, err := db.Messages(ctx, s.ID, read, hermesPage)
 		if err != nil {
-			return State{Offset: last}, err
+			if read < after {
+				// The pass did not reach the cursor: the rows it did not read
+				// are from's to count.
+				return State{Offset: last, unparsed: from.unparsed}, err
+			}
+			return State{Offset: last, unparsed: unparsed}, err
 		}
 		if len(rows) == 0 {
 			return at(), nil
 		}
 		for _, m := range rows {
-			evs := r.row(m)
+			evs, ok := r.row(m)
 			read = m.ID
-			if m.ID <= after {
-				continue
-			}
-			for i := range evs {
-				e := &evs[i]
-				e.Path, e.Offset, e.Next, e.Index = db.Path, m.ID, m.ID, i
-				if err := emit(*e); err != nil {
-					if used && emitted == 0 {
-						return from, err
+			if m.ID > after {
+				for i := range evs {
+					e := &evs[i]
+					e.Path, e.Offset, e.Next, e.Index = db.Path, m.ID, m.ID, i
+					if err := emit(*e); err != nil {
+						if used && emitted == 0 {
+							return from, err
+						}
+						return State{Offset: last, unparsed: unparsed}, err
 					}
-					return State{Offset: last}, err
+					emitted++
 				}
-				emitted++
+				last, lastRow = m.ID, m
 			}
-			last, lastRow = m.ID, m
+			if !ok {
+				unparsed++
+			}
 		}
 	}
 }
@@ -144,9 +159,12 @@ type hermesReader struct {
 	turns ownerwords.TurnReader
 }
 
-func (r *hermesReader) row(m hermes.Message) []Event {
+// row is a row's events, and false for an assistant row whose tool calls do
+// not parse (not JSON, or calls of another shape): its text is read, its
+// calls are not. A row with no calls holds none to parse.
+func (r *hermesReader) row(m hermes.Message) ([]Event, bool) {
 	if m.Copy {
-		return nil
+		return nil, true
 	}
 	var at time.Time
 	if m.Timestamp > 0 {
@@ -155,9 +173,10 @@ func (r *hermesReader) row(m hermes.Message) []Event {
 	}
 	if m.Summary && (m.Role == "user" || m.Role == "assistant") {
 		r.prior = ""
-		return []Event{r.text(KindCompaction, m.Role, digest.Harness, "compaction summary", m.Content, at)}
+		return []Event{r.text(KindCompaction, m.Role, digest.Harness, "compaction summary", m.Content, at)}, true
 	}
 	var out []Event
+	ok := true
 	switch m.Role {
 	case "user":
 		if strings.TrimSpace(m.Content) != "" {
@@ -178,7 +197,8 @@ func (r *hermesReader) row(m hermes.Message) []Event {
 				Arguments string `json:"arguments"`
 			} `json:"function"`
 		}
-		if json.Unmarshal([]byte(m.ToolCalls), &calls) == nil {
+		switch err := json.Unmarshal([]byte(m.ToolCalls), &calls); {
+		case err == nil:
 			for _, c := range calls {
 				id := c.ID
 				if id == "" {
@@ -189,6 +209,8 @@ func (r *hermesReader) row(m hermes.Message) []Event {
 				e.ToolID, e.ToolName, e.ToolInput = id, c.Function.Name, c.Function.Arguments
 				out = append(out, e)
 			}
+		case strings.TrimSpace(m.ToolCalls) != "":
+			ok = false // calls the row holds, and none read
 		}
 		r.prior = m.Finish
 	case "tool":
@@ -202,7 +224,7 @@ func (r *hermesReader) row(m hermes.Message) []Event {
 		out = append(out, e)
 		r.prior = ""
 	}
-	return out
+	return out, ok
 }
 
 func (r *hermesReader) user(m hermes.Message, at time.Time) []Event {

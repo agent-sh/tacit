@@ -103,27 +103,29 @@ func (r *claudeReader) note(l claudeLine) {
 	}
 }
 
-func (r *claudeReader) line(raw []byte) []Event {
+// line is a line's events, and false when the line does not parse: it is not
+// JSON, or not a JSON object whose fields have the types Claude Code writes.
+func (r *claudeReader) line(raw []byte) ([]Event, bool) {
 	var l claudeLine
 	if json.Unmarshal(raw, &l) != nil {
-		return nil
+		return nil, false
 	}
 	r.note(l)
 	at := ownerwords.JSONTime(l.Timestamp)
 	switch l.Type {
 	case "assistant":
-		return r.assistant(l, at)
+		return r.assistant(l, at), true
 	case "user":
-		return r.user(raw, l, at)
+		return r.user(raw, l, at), true
 	case "attachment":
-		return r.attachment(raw, l, at)
+		return r.attachment(raw, l, at), true
 	case "system":
 		// A system line is a record of the harness's (a compaction's boundary
 		// among them; its summary is the compaction event): what came before
 		// the next turn.
 		r.prior = l.Subtype
 	}
-	return nil
+	return nil, true
 }
 
 func (r *claudeReader) assistant(l claudeLine, at time.Time) []Event {

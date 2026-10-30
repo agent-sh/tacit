@@ -117,10 +117,13 @@ func piTexts(raw json.RawMessage) []string {
 	return out
 }
 
-func (r *piReader) line(raw []byte) []Event {
+// line is a line's events, and false when the line does not parse: it is not
+// JSON, not a JSON object of an entry's fields, or a message entry whose
+// message does not decode.
+func (r *piReader) line(raw []byte) ([]Event, bool) {
 	var l piLine
 	if json.Unmarshal(raw, &l) != nil {
-		return nil
+		return nil, false
 	}
 	at := ownerwords.JSONTime(l.Timestamp)
 	switch l.Type {
@@ -130,24 +133,24 @@ func (r *piReader) line(raw []byte) []Event {
 		}
 	case "compaction":
 		r.prior = "compaction"
-		return []Event{r.text(KindCompaction, "system", digest.Harness, "compaction", l.Summary, at)}
+		return []Event{r.text(KindCompaction, "system", digest.Harness, "compaction", l.Summary, at)}, true
 	case "branch_summary":
 		r.prior = "branch_summary"
 		if strings.TrimSpace(l.Summary) != "" {
-			return []Event{r.text(KindHarnessText, "system", digest.Harness, "branch summary", l.Summary, at)}
+			return []Event{r.text(KindHarnessText, "system", digest.Harness, "branch summary", l.Summary, at)}, true
 		}
 	case "custom_message":
 		if t := strings.Join(piTexts(l.Content), "\n"); strings.TrimSpace(t) != "" {
-			return []Event{r.text(KindHarnessText, "user", digest.Harness, "extension message", t, at)}
+			return []Event{r.text(KindHarnessText, "user", digest.Harness, "extension message", t, at)}, true
 		}
 	case "message":
 		var m piMessage
 		if json.Unmarshal(l.Message, &m) != nil {
-			return nil
+			return nil, false
 		}
-		return r.message(raw, l.ID, m, at)
+		return r.message(raw, l.ID, m, at), true
 	}
-	return nil
+	return nil, true
 }
 
 func (r *piReader) message(raw []byte, entry string, m piMessage, at time.Time) []Event {

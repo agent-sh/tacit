@@ -380,7 +380,10 @@ func TestStateEdges(t *testing.T) {
 	}
 
 	b := marshal(t, mid)
-	other := bytes.Replace(b, []byte(`"v":1`), []byte(`"v":99`), 1)
+	other := bytes.Replace(b, fmt.Appendf(nil, `"v":%d`, keptVersion), []byte(`"v":99`), 1)
+	if bytes.Equal(other, b) {
+		t.Fatalf("no version in %s", b)
+	}
 	var back State
 	if err := back.UnmarshalBinary(other); err != nil || back.Kept() || back.Offset != mid.Offset {
 		t.Fatalf("another format: %+v %v", back, err)
@@ -658,9 +661,9 @@ func transcriptState(t *testing.T) State {
 
 // Every field a reader carries from one line to the next is kept in a State,
 // rebuilt by the replay, set again by each read or scratch for one line; a
-// field added to a reader, to the owner's words' TurnReader or to the local
-// command rule fails here until it is placed, and a change to what is kept or
-// replayed bumps keptVersion.
+// field added to a reader, to the owner's words' TurnReader, to the local
+// command rule or to the State itself fails here until it is placed, and a
+// change to what is kept, replayed or counted bumps keptVersion.
 func TestStateCoversEveryField(t *testing.T) {
 	const (
 		kept     = "kept in the State"
@@ -672,6 +675,9 @@ func TestStateCoversEveryField(t *testing.T) {
 		v      any
 		fields map[string]string
 	}{
+		// The count of lines that did not parse is the read's, carried in the
+		// State (version 2).
+		"State": {State{}, map[string]string{"Offset": kept, "kept": kept, "unparsed": kept}},
 		"base": {base{}, map[string]string{"harness": perRead, "session": kept, "subagent": kept, "parent": kept, "cwd": kept,
 			"model": kept, "verdict": perRead, "prior": kept, "calls": kept}},
 		"claudeReader": {claudeReader{}, map[string]string{"base": kept, "turns": replayed, "cmds": replayed, "replay": kept}},
@@ -698,8 +704,8 @@ func TestStateCoversEveryField(t *testing.T) {
 			t.Errorf("%s has fields %v; this test places %v: place each new one, and bump keptVersion if it is kept or replayed", name, got, want)
 		}
 	}
-	if keptVersion != 1 {
-		t.Errorf("keptVersion is %d; this test places the fields of version 1: change the two together", keptVersion)
+	if keptVersion != 2 {
+		t.Errorf("keptVersion is %d; this test places the fields of version 2: change the two together", keptVersion)
 	}
 	if k := reflect.TypeOf(digest.CodexAsked{}).Kind(); k != reflect.Map {
 		t.Errorf("digest.CodexAsked is a %s: the replay relies on Note only adding options by question", k)
