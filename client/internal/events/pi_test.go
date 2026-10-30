@@ -107,6 +107,21 @@ func TestPiSessionEvents(t *testing.T) {
 		}
 	}
 
+	// A task under $PI_CODING_AGENT_SESSION_DIR, whose path has no sessions
+	// folder and whose header names no parent: still an agent's, its parent
+	// the folder's session.
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", filepath.Join(home, "pi-sessions"))
+	flat := write(t, filepath.Join(home, "pi-sessions", "2026-10-22T08-00-00-000Z_04own", "tasks", "2026-10-22T08-20-00-000Z_05task.jsonl"),
+		`{"type":"session","version":3,"id":"05task","timestamp":"2026-10-22T08:20:00.000Z","cwd":"/home/u/projects/shop"}`,
+		piEntry(1200, `"type":"model_change","id":"m1","provider":"p","modelId":"qwen3-coder"`),
+		piMsg(1205, "u1", map[string]any{"role": "user", "content": piText("Review cache/key.go.")}),
+	)
+	evs, _ = readAll(t, flat, digest.Pi, 0)
+	check(t, 2, evs, want{Kind: KindAgentText, Who: digest.Agent, Why: "pi subagent", Text: "Review cache/key.go."})
+	if e := evs[0]; e.Subagent != "05task" || e.Parent != "04own" {
+		t.Errorf("task under the session dir: subagent %q parent %q", e.Subagent, e.Parent)
+	}
+
 	// A program's session (its first prompt right after pi started): an agent's.
 	headless := write(t, filepath.Join(dir, "2026-10-22T09-00-00-000Z_03hl.jsonl"),
 		`{"type":"session","version":3,"id":"03hl","timestamp":"2026-10-22T09:00:00.000Z","cwd":"/home/u/projects/shop"}`,

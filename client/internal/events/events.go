@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -395,9 +394,4 @@ func leftOut(pieces, own []string) string {
 		}
 	}
 	return strings.Join(out, "\n")
-}
-
-// inTasks reports a pi task's transcript, under <session>/tasks/.
-func inTasks(path string) bool {
-	return strings.Contains(filepath.ToSlash(path), "/tasks/")
 }

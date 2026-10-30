@@ -66,6 +66,10 @@ func TestSessionWhoClaudeAndPi(t *testing.T) {
 		{"typed pi session", "/home/u/.pi/agent/sessions/--home-u--/t_p1.jsonl", piSession("2026-10-01T10:00:05.000Z"), Pi, Owner},
 		{"headless pi session", "/home/u/.pi/agent/sessions/--home-u--/t_p2.jsonl", piSession("2026-10-01T10:00:00.250Z"), Pi, Agent},
 		{"pi subagent by path", "/home/u/.pi/agent/sessions/--home-u--/t_p1/tasks/t_p3.jsonl", piSession("2026-10-01T10:00:05.000Z"), Pi, Agent},
+		// $PI_CODING_AGENT_SESSION_DIR holds sessions directly, their tasks one
+		// level down: no sessions folder in the path.
+		{"pi subagent under the session dir", "/srv/pi/t_p1/tasks/t_p3.jsonl", piSession("2026-10-01T10:00:05.000Z"), Pi, Agent},
+		{"pi session under the session dir", "/srv/pi/t_p1.jsonl", piSession("2026-10-01T10:00:05.000Z"), Pi, Owner},
 		{"pi subagent by header", "/home/u/.pi/agent/sessions/--home-u--/t_p4.jsonl", strings.Replace(piSession("2026-10-01T10:00:05.000Z"), `"cwd":`, `"parentSession":"/home/u/.pi/agent/sessions/--home-u--/t_p1.jsonl","cwd":`, 1), Pi, Agent},
 	} {
 		if got := SessionWho(c.path, []byte(c.head), c.f); got.Who != c.want {

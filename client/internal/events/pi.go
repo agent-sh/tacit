@@ -42,7 +42,7 @@ func newPi(plain string, head []byte, from int64) *piReader {
 		r.cwd = h.Cwd
 		r.parent = piSessionID(h.ParentSession)
 	}
-	if inTasks(plain) {
+	if digest.PiTask(plain) {
 		if r.parent == "" {
 			// <session>/tasks/<task>.jsonl: the folder is named after the
 			// parent's file.

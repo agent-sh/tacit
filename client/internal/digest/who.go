@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -259,8 +260,15 @@ func codexWho(head []byte) Verdict {
 	return Verdict{Owner, "originator " + m.Originator}
 }
 
+// PiTask reports a pi subagent's session by its place: a file directly in a
+// tasks folder, <session>/tasks/<task>.jsonl, under pi's sessions directory
+// or $PI_CODING_AGENT_SESSION_DIR (harnesses.Sources reads both).
+func PiTask(p string) bool {
+	return path.Base(path.Dir(filepath.ToSlash(p))) == "tasks"
+}
+
 func piWho(path string, head []byte) Verdict {
-	if strings.Contains(path, "/tasks/") && strings.Contains(path, "/sessions/") {
+	if PiTask(path) || strings.Contains(path, "/tasks/") && strings.Contains(path, "/sessions/") {
 		return Verdict{Agent, "pi subagent"}
 	}
 	h, ok := ReadPiHeader(head)
