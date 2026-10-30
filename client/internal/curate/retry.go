@@ -18,30 +18,34 @@ type Check func([]Entry) []Problem
 const maxEchoChars = 60_000
 
 // SplitChecked asks run for prompt's answer, parses it (ParseChecked) and
-// checks its entries (check, may be nil). A refused answer is sent back to
-// the model once, with why: every problem of an entry a field rule or check
-// rejects and the value it refused, or that the answer is no JSON array (a
-// sentence before it, a code fence after one) or not one that parses. The
+// checks its entries (check, may be nil). An answer refused for its entries
+// (a field ParseChecked or check rejects) is sent back to the model once,
+// with every problem and the value it refused; with whole set, so is an
+// answer refused whole, that is no JSON array (a sentence before it, a code
+// fence after one) or not one that parses, with the parser's reason. The
 // model's second answer stands or falls as it is: code never edits an
 // answer to make it pass, and a second refusal is invalid as before (the
-// curator splits the batch, and a note refused alone counts against it).
-// first is the first answer's refusal (nil when it passed), for the caller's
-// log; err is the final result's (a runner error, or an invalid answer
-// wrapping modelrun.ErrInvalidResult).
+// curator splits the batch, and a note refused alone counts against it). An
+// answer refused whole without whole is returned at once, as before (the
+// caller's bisection handles it). first is the first answer's refusal (nil
+// when it passed or was not sent back), for the caller's log; err is the
+// final result's (a runner error, or an invalid answer wrapping
+// modelrun.ErrInvalidResult).
 //
-// Until v0.9.16 an answer that was no JSON array was not sent back: the batch
-// was split instead, and a lone note failed. The rulings pass answers with a
-// sentence before an empty array about half the time when a note holds no
+// The rulings pass sends back whole refusals since v0.9.16: it answered with
+// a sentence before an empty array about half the time when a note held no
 // owner words, and every such answer sent back came back clean
-// (eval/VALUE.md, "The rulings answer").
-func SplitChecked(ctx context.Context, run Runner, model, prompt string, check Check) (entries []Entry, cost float64, first, err error) {
+// (eval/VALUE.md, "The rulings answer"). The split pass does not: its
+// answers are long, and no whole refusal of one was measured.
+func SplitChecked(ctx context.Context, run Runner, model, prompt string, check Check, whole bool) (entries []Entry, cost float64, first, err error) {
 	res, cost, err := run(ctx, model, prompt)
 	if err != nil {
 		return nil, cost, nil, err
 	}
 	entries, err = parseAndCheck(res, check)
-	if err == nil || !errors.Is(err, modelrun.ErrInvalidResult) {
-		// Valid, or a runner's error: nothing to send back.
+	if err == nil || !errors.Is(err, modelrun.ErrInvalidResult) || (len(Problems(err)) == 0 && (!whole || WholeRefusal(err) == "")) {
+		// Valid, a runner's error, or an answer refused whole the caller
+		// splits (whole unset).
 		return entries, cost, nil, err
 	}
 	first = err

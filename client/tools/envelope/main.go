@@ -13,10 +13,15 @@
 //
 // -template replaces the built-in prompt with a file holding the same two
 // %s verbs (the extracted rulings, the notes), for the prompt a change
-// replaces: -print-template at the base commit writes it. The route is
-// TACIT_JUDGE_RUNNER, TACIT_JUDGE_MODEL and TACIT_JUDGE_EFFORT, or claude
-// with the flags given. Only counts and the first 160 characters of each
-// refused answer are printed; nothing is written.
+// replaces. The tool is newer than the prompt it was first measured
+// against: copy this file onto the base commit and run -print-template
+// there to write the old one. The route is TACIT_JUDGE_RUNNER,
+// TACIT_JUDGE_MODEL and TACIT_JUDGE_EFFORT, or claude with the flags given.
+// For each note it also counts the calls whose answer holds an entry whose
+// owner_quote is in the note word for word (a ruling the pass would keep),
+// so two prompts can be compared note by note. Only counts and the first
+// 160 characters of each refused answer are printed; nothing is written to
+// the store, and every call's session is on the dreamer's exclude list.
 package main
 
 import (
@@ -64,6 +69,7 @@ func main() {
 		n, err := fact.Parse(rel, b)
 		check(err)
 		prompt := fmt.Sprintf(tmpl, "(none)", curate.Render([]*fact.Fact{n}))
+		quoted := 0
 		for i := 0; i < *calls; i++ {
 			text, c, err := call(ctx, route.Model, prompt)
 			cost += c
@@ -75,8 +81,13 @@ func main() {
 			kind := envelope(text)
 			counts[kind]++
 			if kind == "array" {
-				if es, _ := curate.ParseChecked(text); len(es) > 0 {
+				es, _ := curate.ParseChecked(text)
+				if len(es) > 0 {
 					counts["array with entries"]++
+				}
+				if holdsQuote(es, n) {
+					counts["array with a quote from the note"]++
+					quoted++
 				}
 				continue
 			}
@@ -100,6 +111,7 @@ func main() {
 				fmt.Printf("%s call %d retry: %s: %q\n", n.Meta.Name, i+1, k2, clip(text2))
 			}
 		}
+		fmt.Printf("note %s: %d of %d call(s) with a quote from the note\n", n.Meta.Name, quoted, *calls)
 	}
 	fmt.Printf("route %s, %d note(s) x %d call(s): %v, $%.3f\n", route.Label(), len(flag.Args()), *calls, counts, cost)
 }
@@ -107,8 +119,27 @@ func main() {
 func call(ctx context.Context, model, prompt string) (string, float64, error) {
 	c, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	res, err := modelrun.Run(c, "judge", model, prompt, modelrun.NewSessionID())
+	// The call is a session of its runner: the dreamer must never read it.
+	sid := modelrun.NewSessionID()
+	_ = modelrun.Exclude(sid)
+	res, err := modelrun.Run(c, "judge", model, prompt, sid)
+	if res.SessionID != "" && res.SessionID != sid {
+		_ = modelrun.Exclude(res.SessionID)
+	}
 	return res.Text, res.CostUSD, err
+}
+
+// holdsQuote reports an entry whose owner_quote is in the note word for word
+// (spaces collapsed), as the curator's evidence check needs.
+func holdsQuote(es []curate.Entry, n *fact.Fact) bool {
+	norm := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	text := norm(n.Meta.Description + " " + n.Body)
+	for _, e := range es {
+		if q := norm(e.OwnerQuote); len(strings.Fields(q)) >= 6 && strings.Contains(text, q) {
+			return true
+		}
+	}
+	return false
 }
 
 // envelope names what ParseChecked makes of an answer: "array" (parsed,

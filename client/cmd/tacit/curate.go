@@ -939,6 +939,13 @@ func runCurate(args []string) int {
 // line per entry and field, to stderr and to the run's report (curator.log):
 // the field and the rule, never the entry's text.
 func logInvalid(rep *curate.Report, pass string, err error) {
+	// An answer refused whole: the parser's fixed reason, never the text.
+	if why := curate.WholeRefusal(err); why != "" && len(curate.Problems(err)) == 0 {
+		line := pass + ": " + why
+		fmt.Fprintln(os.Stderr, "curate: invalid answer:", line)
+		rep.InvalidEntries = append(rep.InvalidEntries, line)
+		return
+	}
 	for _, p := range curate.Problems(err) {
 		line := pass + ": " + p.String()
 		fmt.Fprintln(os.Stderr, "curate: invalid answer:", line)

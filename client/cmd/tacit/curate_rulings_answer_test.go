@@ -1,10 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/agent-sh/tacit/client/internal/curate"
+	"github.com/agent-sh/tacit/client/internal/platform"
 )
 
 // rulingsAnswers makes the stand-in CLI of quickHome answer the rulings pass
@@ -74,6 +78,18 @@ func TestQuickCurateSendsBackARulingsAnswerThatIsNoArray(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, "store", "system", "fresh-note-fact.md")); err != nil {
 		t.Fatalf("the note was not curated: %v\n%s", err, errs)
 	}
+	// The report line counts the answer sent back and names the refusal by
+	// its reason; neither log holds the answer's text.
+	lb, err := os.ReadFile(filepath.Join(platform.StateDir(home), "curator.log"))
+	var rep curate.Report
+	if err != nil || json.Unmarshal(lb, &rep) != nil || strings.Join(rep.InvalidEntries, "|") != "rulings (sent back): curator must return a JSON array" || rep.Retries != 1 {
+		t.Fatalf("curator.log: %s %v", lb, err)
+	}
+	for _, log := range []string{string(lb), errs} {
+		if strings.Contains(log, "quotes no owner words") {
+			t.Fatalf("a log holds the answer's text:\n%s", log)
+		}
+	}
 }
 
 // A model whose second answer is no JSON array either fails the run: the
@@ -86,6 +102,12 @@ func TestQuickCurateFailsWhenTheRulingsAnswerIsNoArrayTwice(t *testing.T) {
 	errs := captureStderr(t, func() { code = runCurate([]string{"--quick"}) })
 	if code != 1 || !strings.Contains(errs, "curate: rulings: invalid model result: curator must return a JSON array") {
 		t.Fatalf("quick exit %d:\n%s", code, errs)
+	}
+	// Both refusals are logged by their reason, never the text.
+	lb, _ := os.ReadFile(filepath.Join(platform.StateDir(home), "curator.log"))
+	var rep curate.Report
+	if json.Unmarshal(lb, &rep) != nil || strings.Join(rep.InvalidEntries, "|") != "rulings (sent back): curator must return a JSON array|rulings: curator must return a JSON array" || strings.Contains(string(lb), "Nothing to extract") {
+		t.Fatalf("curator.log: %s", lb)
 	}
 	if _, err := os.Stat(filepath.Join(home, "store", "system", "fresh-note-fact.md")); err == nil {
 		t.Fatal("a note whose rulings pass failed was curated")
