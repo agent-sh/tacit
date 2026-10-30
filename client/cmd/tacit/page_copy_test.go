@@ -83,6 +83,7 @@ func TestPageAsksEachFindingInPlainWords(t *testing.T) {
 		"link":               "Your rule links to a fact that does not exist.",
 		"stale":              "Git says something this fact names was deleted. Is it still true?",
 		"check":              "The curator checked this fact against what tacit knows now and reads it differently. Is it still true?",
+		"question":           "The reviewer had this question for you about an agent's note. An agent closed it.",
 	}
 	q := got["q"].(map[string]any)
 	for k, w := range want {

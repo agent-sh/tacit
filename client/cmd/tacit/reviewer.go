@@ -107,6 +107,12 @@ type reviewOpts struct {
 	active       func(repo string) bool
 	ownerSettled func(note *fact.Fact) string
 	checkSettled func(note *fact.Fact) string
+	// closed is the reviewer questions an agent closed, by id, with what the
+	// closure said, and reopened those the owner reopened, from the store's
+	// decision log (SPEC.md, "Closing questions"); nil: not read (the local
+	// layer's questions are this machine's, and no agent closes them).
+	closed   map[string]string
+	reopened map[string]bool
 }
 
 // reviewReport is what one run of the step did.
@@ -147,6 +153,8 @@ type reviewReport struct {
 	Answered  int               `json:"answers_read,omitempty"`
 	Applied   int               `json:"answers_applied,omitempty"`
 	Settled   int               `json:"questions_settled,omitempty"`
+	Closed    int               `json:"questions_closed,omitempty"`
+	Reopened  int               `json:"questions_reopened,omitempty"`
 	Expired   int               `json:"questions_expired,omitempty"`
 	Errors    []string          `json:"errors,omitempty"`
 }
@@ -166,8 +174,8 @@ func (r reviewReport) String() string {
 	for _, n := range r.Silent {
 		silent += n
 	}
-	return fmt.Sprintf("reviewer: %d note(s) to judge, %d judged by the model, %d from the rulebook, %d failed, %d waiting, %d older than the reviewer (--backfill reads them); verdicts: %s; trims: %d note(s), %d statement(s), %d refused; $%.3f; questions: %d queued, %d silent, %d answered, %d applied, %d settled, %d expired",
-		r.Candidates, r.Reviewed, r.Rulebook, r.Failed, r.Waiting, r.Before, v, r.Trimmed, r.TrimStatement, r.TrimRefused, r.CostUSD, r.Queued, silent, r.Answered, r.Applied, r.Settled, r.Expired)
+	return fmt.Sprintf("reviewer: %d note(s) to judge, %d judged by the model, %d from the rulebook, %d failed, %d waiting, %d older than the reviewer (--backfill reads them); verdicts: %s; trims: %d note(s), %d statement(s), %d refused; $%.3f; questions: %d queued, %d silent, %d answered, %d applied, %d settled, %d closed by an agent, %d reopened, %d expired",
+		r.Candidates, r.Reviewed, r.Rulebook, r.Failed, r.Waiting, r.Before, v, r.Trimmed, r.TrimStatement, r.TrimRefused, r.CostUSD, r.Queued, silent, r.Answered, r.Applied, r.Settled, r.Closed, r.Reopened, r.Expired)
 }
 
 // reviewWork is what the step decided, for one writer to write: the
@@ -417,6 +425,11 @@ func reviewStep(ctx context.Context, facts []*fact.Fact, reviews *ledger.Reviews
 		}
 		if agentreview.TakeRulebookAnswers(q, agentreview.RulebookAnswers(rows)) {
 			changed = true
+		}
+		// What agents closed, and what the owner reopened, in the store's
+		// decision log (SPEC.md, "Closing questions").
+		if c, r := syncQuestionClosures(q, o.closed, o.reopened, now); c+r > 0 {
+			rep.Closed, rep.Reopened, changed = rep.Closed+c, rep.Reopened+r, true
 		}
 		for i := range q.Items {
 			it := &q.Items[i]
@@ -1072,4 +1085,7 @@ func gateOpts(ctx context.Context, o *reviewOpts, dir string, facts []*fact.Fact
 	o.active = projectActive(storeRecords(dir))
 	o.ownerSettled = ownerSettles(facts)
 	o.checkSettled = checkSettles(ctx, dir, local)
+	if !local {
+		o.closed, o.reopened = questionClosures(dir)
+	}
 }

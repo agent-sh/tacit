@@ -1294,11 +1294,16 @@ func (rs *reviewServer) applyLinkFix(ctx context.Context, id string) (*saveResul
 
 // queue is everything waiting on the owner, for the app's Needs you: the
 // pairs, the stale checks (with the agents' questions on them) and the dead
-// links in their rulings. The rulings audit adds nothing here: what agents
-// believe the owner prefers waits in its own place. The caller holds rs.mu.
+// links in their rulings, and among past answers the reviewer's questions an
+// agent closed, which the owner may reopen (SPEC.md, "Closing questions").
+// The rulings audit adds nothing here: what agents believe the owner prefers
+// waits in its own place. The caller holds rs.mu.
 func (rs *reviewServer) queue(ctx context.Context) []any {
 	out := rs.allItems()
 	for _, it := range rs.linkItems(ctx) {
+		out = append(out, it)
+	}
+	for _, it := range rs.questionItems() {
 		out = append(out, it)
 	}
 	if out == nil {
