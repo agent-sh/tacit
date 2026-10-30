@@ -129,7 +129,9 @@ func addFact(ctx context.Context, s *store.Store, harness string, m fact.Meta, b
 		if err := os.WriteFile(full, b, 0o644); err != nil {
 			return err
 		}
-		if err := s.CommitPushLocked(ctx, []string{rel}, "fact: "+m.Name, harness); err != nil {
+		// The note's description and body were masked above, as the store's
+		// mask would mask them; it is not masked twice.
+		if err := s.CommitPushLocked(store.WithMasked(ctx), []string{rel}, "fact: "+m.Name, harness); err != nil {
 			return fmt.Errorf("written locally, push failed: %w", err)
 		}
 		return nil

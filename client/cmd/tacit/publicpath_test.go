@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,7 +38,24 @@ func TestMain(m *testing.M) {
 			buildIndexForHooks(s)
 		}
 	}
-	os.Exit(m.Run())
+	// Every store write masks what it adds with scrump (store.Redact), so a
+	// test that writes needs it. Where scrump with its text profile is
+	// absent, a stand-in that masks only the canary goes first on PATH for
+	// the whole run; a test of what the real redactor masks still skips
+	// (requireScrump reads the machine as it was before this).
+	var stub string
+	if realScrump() != nil && runtime.GOOS != "windows" {
+		if dir, err := os.MkdirTemp("", "tacit-scrump-"); err == nil {
+			stub = dir
+			_ = os.WriteFile(filepath.Join(dir, "scrump"), []byte("#!/bin/sh\nexec sed 's/Zq7Vx9/******/g'\n"), 0o755)
+			os.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		}
+	}
+	code := m.Run()
+	if stub != "" {
+		os.RemoveAll(stub)
+	}
+	os.Exit(code)
 }
 
 // publicServer stands in for the server's public path: every request needs
