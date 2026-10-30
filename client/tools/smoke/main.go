@@ -13,11 +13,24 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 )
 
+// openerNames are the commands the client runs to open its owner page in a
+// browser (cmd/tacit openURL): xdg-open, open (macOS), rundll32.exe (Windows).
+var openerNames = map[string]bool{"xdg-open": true, "open": true, "rundll32": true}
+
 func main() {
+	// Run as the browser opener: record the page's link (its last argument)
+	// for the smoke run that put this copy first on PATH, and open nothing.
+	if openerNames[strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe")] {
+		if f := os.Getenv("TACIT_SMOKE_LINK_FILE"); f != "" && len(os.Args) > 1 {
+			check(os.WriteFile(f, []byte(os.Args[len(os.Args)-1]), 0o600))
+		}
+		return
+	}
 	binary := flag.String("binary", "tacit", "client to exercise")
 	redactor := flag.Bool("with-redactor", false, "also exercise agent note redaction with installed scrump")
 	flag.Parse()
@@ -30,6 +43,7 @@ func main() {
 	root, err := os.MkdirTemp(parent, "smoke-")
 	check(err)
 	defer os.RemoveAll(root)
+	cleanup = append(cleanup, func() { os.RemoveAll(root) })
 	cfg := filepath.Join(root, "config.yaml")
 	// Quoted forward slashes work in YAML on Windows and Unix alike.
 	store := filepath.Join(root, "My Facts")
@@ -100,36 +114,77 @@ func main() {
 	run("lint")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	app := exec.CommandContext(ctx, abs, "app", "--browser", "--no-open", "--addr", "127.0.0.1:0")
-	app.Env = env
+	// The page's link carries its token and is printed only to a terminal;
+	// the app hands it to the browser opener. This smoke run is that opener:
+	// a copy of itself first on PATH under the opener's name records it.
+	self, err := os.Executable()
+	check(err)
+	openers := filepath.Join(root, "opener")
+	check(os.MkdirAll(openers, 0o700))
+	name := map[string]string{"windows": "rundll32.exe", "darwin": "open"}[runtime.GOOS]
+	if name == "" {
+		name = "xdg-open"
+	}
+	selfBin, err := os.ReadFile(self)
+	check(err)
+	check(os.WriteFile(filepath.Join(openers, name), selfBin, 0o700))
+	linkFile := filepath.Join(root, "link")
+	app := exec.CommandContext(ctx, abs, "app", "--browser", "--addr", "127.0.0.1:0")
+	app.Env = append(append([]string{}, env...), "PATH="+openers+string(os.PathListSeparator)+os.Getenv("PATH"), "TACIT_SMOKE_LINK_FILE="+linkFile)
 	out, err := app.StdoutPipe()
 	check(err)
 	app.Stderr = os.Stderr
 	check(app.Start())
 	defer func() { app.Process.Kill(); app.Wait() }()
-	urls := make(chan string, 1)
+	cleanup = append(cleanup, func() { app.Process.Kill(); app.Wait() })
+	lines := make(chan string, 1)
+	exited := make(chan struct{})
 	go func() {
+		defer close(exited)
 		s := bufio.NewScanner(out)
 		for s.Scan() {
-			line := s.Text()
-			if strings.HasPrefix(line, "tacit app: ") {
-				urls <- strings.Fields(line)[2]
-				return
+			if line := s.Text(); strings.HasPrefix(line, "tacit app: ") {
+				lines <- line
 			}
 		}
-		close(urls)
 	}()
-	var url string
+	var line string
 	select {
-	case url = <-urls:
+	case line = <-lines:
+	case <-exited:
+		check(fmt.Errorf("app exited before serving"))
 	case <-ctx.Done():
 		check(fmt.Errorf("app startup exceeded its deadline"))
 	}
-	if url == "" {
-		check(fmt.Errorf("app exited before serving"))
+	url := strings.Fields(line)[2]
+	var link string
+	for link == "" && ctx.Err() == nil {
+		if b, err := os.ReadFile(linkFile); err == nil && len(b) > 0 {
+			link = string(b)
+			break
+		}
+		select {
+		case <-exited:
+			check(fmt.Errorf("app exited before its browser opener ran"))
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	if !strings.HasPrefix(link, url+"?") {
+		check(fmt.Errorf("the browser opener got %q, want the page's link at %s", link, url))
+	}
+	// A pipe never sees the token: not on the line the app printed.
+	if token := link[strings.Index(link, "=")+1:]; token == "" || strings.Contains(line, token) {
+		check(fmt.Errorf("app printed its page's token to a pipe: %s", line))
 	}
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(url)
+	// Without the token the page refuses.
+	if resp, err := client.Get(url); err == nil {
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			check(fmt.Errorf("the page answered %d without its token", resp.StatusCode))
+		}
+	}
+	resp, err := client.Get(link)
 	check(err)
 	b, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
@@ -178,9 +233,16 @@ func main() {
 	fmt.Println("PASS: local init, config path with spaces, sync, owner browser write, search, lint, no remote feed")
 }
 
+// cleanup runs before a failed check exits, newest first: os.Exit skips the
+// deferred calls, which would leave the app running and its directory behind.
+var cleanup []func()
+
 func check(err error) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "smoke:", err)
+		for i := len(cleanup) - 1; i >= 0; i-- {
+			cleanup[i]()
+		}
 		os.Exit(1)
 	}
 }
