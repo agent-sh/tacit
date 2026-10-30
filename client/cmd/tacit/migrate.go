@@ -511,10 +511,10 @@ var projectsPathRx = regexp.MustCompile(`(?:^|/)projects/([A-Za-z0-9._-]+)(?:/([
 // applies_to.paths and commands, repoPaths), each the repository repoid
 // makes of it on this machine when the catalog takes that checkout
 // (Catalog.Accepted, or a name the catalog lists, such as a clone repoid
-// names for its main checkout: a scratch clone in a temp directory is
-// none), or, for a path of another machine (none taken here, a place under
-// ~ or a system root as machinePathRx reads it, so never a route such as
-// /api/projects/<name>), the checkout a projects
+// names for its main checkout; a scratch clone in a temp directory names
+// nothing, whatever its path holds), or, for a path of another machine (no
+// checkout here, a place under ~ or a system root as machinePathRx reads
+// it, so never a route such as /api/projects/<name>), the checkout a projects
 // directory path names that some machine's catalog lists (by name or
 // another name of it), or a project folder whose record
 // the path's name is (an old name the forge renamed, its folder suppressed
@@ -547,8 +547,10 @@ func pointedRepos(cache *repoid.Cache, catalog *repoid.Catalog, recs map[string]
 		return path.Base(w)
 	}
 	for _, p := range repoPaths(text, 40) {
-		if rp, ok := cache.Of(p); ok && rp.Slug() != "" && (catalog.Accepted(rp) || catalog.Has(rp.Slug())) {
-			set[rp.Slug()] = true
+		if rp, ok := cache.Of(p); ok && rp.Slug() != "" {
+			if catalog.Accepted(rp) || catalog.Has(rp.Slug()) {
+				set[rp.Slug()] = true
+			}
 			continue
 		}
 		if !machinePathRx.MatchString(p) {

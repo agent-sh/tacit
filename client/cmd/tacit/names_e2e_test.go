@@ -344,9 +344,18 @@ func testLocalOrg(t *testing.T, underHome bool) {
 	os.MkdirAll(scratch, 0o755)
 	gitIn(t, scratch, "init", "-q", "-b", "main")
 	gitIn(t, scratch, "remote", "add", "origin", "https://github.com/vendor/lib.git")
+	// Another, in a temp directory under home, whose path holds
+	// projects/billing: a checkout here, so it names nothing, never another
+	// machine's billing checkout. Its fact stays in the org.
+	t.Setenv("TMPDIR", filepath.Join(r.home, "tmp"))
+	scratchHome := filepath.Join(r.home, "tmp", "projects", "billing", "vendor-lib")
+	os.MkdirAll(scratchHome, 0o755)
+	gitIn(t, scratchHome, "init", "-q", "-b", "main")
+	gitIn(t, scratchHome, "remote", "add", "origin", "https://github.com/vendor/lib.git")
 	for name, desc := range map[string]string{
-		"workco-reviews": "Every workco change needs two reviewers",
-		"billing-config": "The billing service reads " + named + "; a one-off copy of the vendor lib was at " + filepath.ToSlash(filepath.Join(scratch, "lib.go")),
+		"vendor-lib-scratch": "A one-off clone of the vendor lib sat in ~/tmp/projects/billing/vendor-lib",
+		"workco-reviews":     "Every workco change needs two reviewers",
+		"billing-config":     "The billing service reads " + named + "; a one-off copy of the vendor lib was at " + filepath.ToSlash(filepath.Join(scratch, "lib.go")),
 		// A route names no checkout, though it holds projects/<a known
 		// name>: the fact stays in the org.
 		"workco-dashboard-route": "The workco dashboard calls /api/projects/billing/settings",
@@ -394,7 +403,7 @@ func testLocalOrg(t *testing.T, underHome bool) {
 			where[f.Meta.Origin] = f.Meta.Scope
 		}
 	}
-	if where["workco-reviews"] != "orgs/workco" || where["billing-config"] != "projects/billing" || where["workco-dashboard-route"] != "orgs/workco" {
+	if where["workco-reviews"] != "orgs/workco" || where["billing-config"] != "projects/billing" || where["workco-dashboard-route"] != "orgs/workco" || where["vendor-lib-scratch"] != "orgs/workco" {
 		t.Fatalf("where the org folder's facts went: %v", where)
 	}
 }
