@@ -43,17 +43,61 @@ func repointable(it reviewItem, owned map[string]bool) bool {
 		!it.A.Missing && !it.B.Missing && replacedSide(it)
 }
 
+// findingIndex is the review files' findings read once: by id, and the first
+// finding on each unordered pair of facts.
+type findingIndex struct {
+	byID   map[string]reviewItem
+	byPair map[[2]string]string
+}
+
+func indexFindings(items []reviewItem) findingIndex {
+	ix := findingIndex{byID: map[string]reviewItem{}, byPair: map[[2]string]string{}}
+	for _, it := range items {
+		ix.byID[it.ID] = it
+		k := pairKey(it.A.Name, it.B.Name)
+		if _, ok := ix.byPair[k]; !ok {
+			ix.byPair[k] = it.ID
+		}
+	}
+	return ix
+}
+
+// pairKey is an unordered pair of fact names.
+func pairKey(a, b string) [2]string {
+	if b < a {
+		a, b = b, a
+	}
+	return [2]string{a, b}
+}
+
+// chainHolds reports whether x is name or on name's superseded_by chain.
+func (rs *reviewServer) chainHolds(name, x string) bool {
+	seen := map[string]bool{}
+	for cur := name; cur != "" && !seen[cur]; {
+		if cur == x {
+			return true
+		}
+		seen[cur] = true
+		f := rs.facts[cur]
+		if f == nil {
+			return false
+		}
+		cur = f.Meta.SupersededBy
+	}
+	return false
+}
+
 // mootStale reports a moot closure of the curator's that the store no longer
 // agrees with: its facts are both in the store and neither is retired, and
 // either no fact of the pair is replaced by a third fact any more (a supersede
 // it rested on was undone), or the move it made is not the one it would make
-// now (the chain it followed changed) while the finding it moved to, if any,
-// is still open. The curator reopens such a finding; the next run moves it
-// again or sends it. A closure on a retired or missing fact stands: that fact
-// has no live successor either way. So does one whose moved finding was
-// answered: the question was settled there, and that answer may itself have
-// changed the chain. open holds the ids of the open findings.
-func (rs *reviewServer) mootStale(it reviewItem, open map[string]bool) bool {
+// now (the chain it followed changed). The curator reopens such a finding; it
+// is then moved again or sent. A closure on a retired or missing fact stands:
+// that fact has no live successor either way. So does one whose moved-to
+// finding was answered while both chains still run through that finding's
+// facts: the question was settled there, and the answer may itself have
+// extended the chain (keep b on c / b makes a -> c -> b).
+func (rs *reviewServer) mootStale(it reviewItem, ix findingIndex) bool {
 	d := it.Decision
 	if d == nil || d.Action != mootMark || d.By != "curator" || it.A.Missing || it.B.Missing || it.A.Retired != "" || it.B.Retired != "" {
 		return false
@@ -61,21 +105,15 @@ func (rs *reviewServer) mootStale(it reviewItem, open map[string]bool) bool {
 	if !replacedSide(it) {
 		return true
 	}
-	if rs.planRepoint(it).To == d.Repointed {
+	if rs.planRepoint(it, ix).To == d.Repointed {
 		return false
 	}
-	return d.Repointed == "" || open[d.Repointed]
-}
-
-// openIDs are the ids of the findings with no mark and no question.
-func openIDs(items []reviewItem) map[string]bool {
-	out := map[string]bool{}
-	for _, it := range items {
-		if it.Decision == nil && it.Ask == nil {
-			out[it.ID] = true
-		}
+	to, ok := ix.byID[d.Repointed]
+	if d.Repointed == "" || !ok || (to.Decision == nil && to.Ask == nil) {
+		return true
 	}
-	return out
+	through := func(name string) bool { return rs.chainHolds(name, to.A.Name) || rs.chainHolds(name, to.B.Name) }
+	return !(through(it.A.Name) && through(it.B.Name))
 }
 
 // repointedFile is the review file the step writes the moved findings to,
@@ -139,7 +177,7 @@ type repointPlan struct {
 }
 
 // planRepoint works out what becomes of it from the store as it is now.
-func (rs *reviewServer) planRepoint(it reviewItem) repointPlan {
+func (rs *reviewServer) planRepoint(it reviewItem, ix findingIndex) repointPlan {
 	a, whyA := rs.liveEnd(it.A.Name)
 	b, whyB := rs.liveEnd(it.B.Name)
 	switch {
@@ -155,12 +193,10 @@ func (rs *reviewServer) planRepoint(it reviewItem) repointPlan {
 		return repointPlan{Why: fmt.Sprintf("moot: both facts now lead to %s (%s)", a, movedSides(it.A.Name, a, it.B.Name, b))}
 	}
 	p := repointPlan{NewA: a, NewB: b, Kind: repointKind(it.Kind, rs.facts[a] != nil && isRuling(rs.facts[a]))}
-	for _, x := range rs.items() {
-		if (x.A.Name == a && x.B.Name == b) || (x.A.Name == b && x.B.Name == a) {
-			p.To = x.ID
-			p.Why = fmt.Sprintf("re-pointed to %s / %s, already finding %s: %s", a, b, x.ID, movedSides(it.A.Name, a, it.B.Name, b))
-			return p
-		}
+	if id, ok := ix.byPair[pairKey(a, b)]; ok {
+		p.To = id
+		p.Why = fmt.Sprintf("re-pointed to %s / %s, already finding %s: %s", a, b, id, movedSides(it.A.Name, a, it.B.Name, b))
+		return p
 	}
 	p.To = pairID(p.Kind, a, b)
 	p.Why = fmt.Sprintf("re-pointed to %s / %s, finding %s: %s", a, b, p.To, movedSides(it.A.Name, a, it.B.Name, b))
@@ -225,7 +261,7 @@ func (rs *reviewServer) applyMoot(o *op, it *reviewItem) (string, []string, erro
 	if !repointable(*it, rs.ownerTouched()) {
 		return "", nil, errors.New("this finding is not open with a fact replaced by a third one")
 	}
-	p := rs.planRepoint(*it)
+	p := rs.planRepoint(*it, indexFindings(rs.items()))
 	files := map[string][]byte{}
 	if p.Line != "" {
 		rel := repointedFile(time.Now())
@@ -254,7 +290,7 @@ func (rs *reviewServer) curatorMayReopen(it *reviewItem) error {
 	if owned := rs.ownerTouched(); owned[it.ID] || owned[it.A.Name] || owned[it.B.Name] {
 		return errors.New("the owner has marked or reopened this finding or one of its facts; it is theirs")
 	}
-	if !rs.mootStale(*it, openIDs(rs.items())) {
+	if !rs.mootStale(*it, indexFindings(rs.items())) {
 		return errors.New("only a moot closure of the curator's that no longer holds is reopened by the curator")
 	}
 	return nil
@@ -268,82 +304,93 @@ const repointChunk = 20
 // repoint closes, as moot, every open pair finding with a fact replaced by a
 // third fact, and raises the finding on the live facts in its place, in
 // commits of at most repointChunk findings, before the run sends anything
-// (SPEC.md, "Replaced facts"). A replay (--ids) moves only the findings it
-// names. A dry run prints the plan and writes nothing. What each finding
-// became is read back from the decision log, not from the notes.
+// (SPEC.md, "Replaced facts"). First it reopens the curator's closures the
+// store no longer agrees with (mootStale), so those are moved again in the
+// same run or sent by it. A replay (--ids) moves and reopens only the
+// findings it names, verifies in place of one this run moved the finding on
+// the live facts, and names each finding once. A dry run prints the plan and
+// writes nothing. What each finding became is read back from the decision
+// log, not from the notes.
 func (r *verifyRun) repoint(ctx context.Context, rs *reviewServer, owned map[string]bool) error {
 	named := map[string]bool{}
 	for _, id := range r.only {
 		named[id] = true
 	}
-	var ops, reopens []op
-	items := rs.items()
-	open := openIDs(items)
-	for _, it := range items {
-		if len(named) > 0 && !named[it.ID] {
-			continue
-		}
-		// A moot closure the store no longer agrees with: the curator reopens
-		// it, and the next run moves it again or sends it.
-		if rs.mootStale(it, open) && !owned[it.ID] && !owned[it.A.Name] && !owned[it.B.Name] {
-			reopens = append(reopens, op{ID: it.ID, Mark: "reopen", By: "curator", A: it.A.Name, B: it.B.Name})
-			if r.dry {
-				fmt.Printf("verify: would reopen %s (%s / %s): the store no longer agrees with its moot closure\n", it.ID, it.A.Name, it.B.Name)
+	var lastErr error
+	apply := func(ops []op) {
+		for start := 0; start < len(ops); start += repointChunk {
+			chunk := ops[start:min(start+repointChunk, len(ops))]
+			actx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+			_, _, err := rs.applyOps(actx, chunk)
+			cancel()
+			if err != nil {
+				lastErr = err
 			}
+		}
+	}
+	// Pass 1: reopen what the store no longer agrees with.
+	items := rs.items()
+	ix := indexFindings(items)
+	var reopens []op
+	for _, it := range items {
+		if (len(named) > 0 && !named[it.ID]) || owned[it.ID] || owned[it.A.Name] || owned[it.B.Name] || !rs.mootStale(it, ix) {
 			continue
 		}
-		if !repointable(it, owned) {
+		reopens = append(reopens, op{ID: it.ID, Mark: "reopen", By: "curator", A: it.A.Name, B: it.B.Name})
+		if r.dry {
+			fmt.Printf("verify: would reopen %s (%s / %s): the store no longer agrees with its moot closure\n", it.ID, it.A.Name, it.B.Name)
+		}
+	}
+	if len(reopens) > 0 && !r.dry {
+		apply(reopens)
+		ds, _ := rs.decisions()
+		for _, o := range reopens {
+			if ds[o.ID] == nil {
+				fmt.Fprintf(os.Stderr, "verify: reopened %s (%s / %s): the store no longer agrees with its moot closure\n", o.ID, o.A, o.B)
+			} else {
+				fmt.Fprintf(os.Stderr, "verify: %s (%s / %s) not reopened\n", o.ID, o.A, o.B)
+			}
+		}
+		items = rs.items()
+		ix = indexFindings(items)
+	}
+	// Pass 2: close what has a fact replaced by a third one.
+	var ops []op
+	for _, it := range items {
+		if (len(named) > 0 && !named[it.ID]) || !repointable(it, owned) {
 			continue
 		}
 		ops = append(ops, op{ID: it.ID, Mark: mootMark, By: "curator", A: it.A.Name, B: it.B.Name})
 		if r.dry {
-			fmt.Printf("verify: would close %s (%s / %s): %s\n", it.ID, it.A.Name, it.B.Name, rs.planRepoint(it).Why)
+			fmt.Printf("verify: would close %s (%s / %s): %s\n", it.ID, it.A.Name, it.B.Name, rs.planRepoint(it, ix).Why)
 		}
 	}
-	if len(ops)+len(reopens) == 0 || r.dry {
-		return nil
-	}
-	var lastErr error
-	all := append(reopens, ops...)
-	for start := 0; start < len(all); start += repointChunk {
-		chunk := all[start:min(start+repointChunk, len(all))]
-		actx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-		_, _, err := rs.applyOps(actx, chunk)
-		cancel()
-		if err != nil {
-			lastErr = err
+	ds := map[string]*decision{}
+	if len(ops) > 0 && !r.dry {
+		apply(ops)
+		// A commit kept on this machine when its push failed still closed its
+		// findings here; a refused one closed nothing.
+		ds, _ = rs.decisions()
+		moved, moot := 0, 0
+		for _, o := range ops {
+			d := ds[o.ID]
+			switch {
+			case d == nil || d.Action != mootMark:
+				fmt.Fprintf(os.Stderr, "verify: %s (%s / %s) not closed\n", o.ID, o.A, o.B)
+				continue
+			case d.Repointed != "":
+				moved++
+			default:
+				moot++
+			}
+			fmt.Fprintf(os.Stderr, "verify: closed %s (%s / %s): %s\n", o.ID, o.A, o.B, d.Evidence)
 		}
-	}
-
-	// A commit kept on this machine when its push failed still closed its
-	// findings here; a refused one closed nothing.
-	ds, _ := rs.decisions()
-	for _, o := range reopens {
-		if d := ds[o.ID]; d == nil {
-			fmt.Fprintf(os.Stderr, "verify: reopened %s (%s / %s): the store no longer agrees with its moot closure\n", o.ID, o.A, o.B)
-		} else {
-			fmt.Fprintf(os.Stderr, "verify: %s (%s / %s) not reopened\n", o.ID, o.A, o.B)
+		if moved+moot > 0 {
+			fmt.Fprintf(os.Stderr, "verify: %d finding(s) with a fact replaced by a third one: %d re-pointed to the live facts, %d moot\n", moved+moot, moved, moot)
 		}
-	}
-	moved, moot := 0, 0
-	for _, o := range ops {
-		d := ds[o.ID]
-		switch {
-		case d == nil || d.Action != mootMark:
-			fmt.Fprintf(os.Stderr, "verify: %s (%s / %s) not closed\n", o.ID, o.A, o.B)
-			continue
-		case d.Repointed != "":
-			moved++
-		default:
-			moot++
-		}
-		fmt.Fprintf(os.Stderr, "verify: closed %s (%s / %s): %s\n", o.ID, o.A, o.B, d.Evidence)
-	}
-	if moved+moot > 0 {
-		fmt.Fprintf(os.Stderr, "verify: %d finding(s) with a fact replaced by a third one: %d re-pointed to the live facts, %d moot\n", moved+moot, moved, moot)
 	}
 	// A replay verifies, in place of a finding this run moved, the one on
-	// the live facts, once.
+	// the live facts, and each finding once.
 	closed := map[string]bool{}
 	for _, o := range ops {
 		closed[o.ID] = true

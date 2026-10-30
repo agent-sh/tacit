@@ -383,10 +383,20 @@ func TestVerifyRepointFollowsReplaysAndReopens(t *testing.T) {
 		return captureStderr(t, func() { r.run(ctx, rs.s, call) })
 	}
 
-	// A replay of a / b and c / b: a / b moves to c / b, sent once.
-	run(ab.ID, cb.ID)
+	// A replay of a / b moves it to c / b and verifies c / b; one naming c / b
+	// twice sends it once; a replay of a / b in a later run does not follow the
+	// earlier move.
+	run(ab.ID)
 	if d := decisionsOf(t, rs); d[ab.ID].Repointed != cb.ID || sent[cb.ID] != 1 || sent[ab.ID] != 0 {
 		t.Fatalf("replay: record %+v, sent %v", d[ab.ID], sent)
+	}
+	verdicts[cb.ID] = verifyVerdict{ID: cb.ID, Mark: "both", Evidence: "different subjects"}
+	run(cb.ID, cb.ID)
+	if sent[cb.ID] != 2 || decisionsOf(t, rs)[cb.ID].Action != "both" {
+		t.Fatalf("a replay naming c / b twice: sent %v", sent)
+	}
+	if errs := run(ab.ID); sent[cb.ID] != 2 || !strings.Contains(errs, "verify: "+ab.ID+" is not open, skipped") {
+		t.Fatalf("a later replay of a / b: sent %v\n%s", sent, errs)
 	}
 
 	// k / n moves to m / n though "m replaces k" is still open; that finding
@@ -409,8 +419,10 @@ func TestVerifyRepointFollowsReplaysAndReopens(t *testing.T) {
 		t.Fatalf("k / n after k stands again: decision %+v, sent %v\n%s", it.Decision, sent, errs)
 	}
 
-	// a / b was moved along a -> c; now a is replaced by e instead. The
-	// closure no longer says what the store does: reopened, then moved to e / b.
+	// a / b was moved along a -> c to c / b, which was answered; now a is
+	// replaced by e instead, so a's chain no longer runs through c / b's
+	// facts. The closure no longer says what the store does: reopened and
+	// moved to e / b.
 	path := filepath.Join(rs.s.Dir, "system", "a.md")
 	b, _ := os.ReadFile(path)
 	os.WriteFile(path, []byte(strings.Replace(string(b), "superseded_by: c\n", "superseded_by: e\n", 1)), 0o644)
@@ -435,27 +447,59 @@ func TestVerifyRepointFollowsReplaysAndReopens(t *testing.T) {
 }
 
 // The curator reopens only its own moot closure that the store no longer
-// agrees with, checked under the lock: never the owner's answer, nor a
-// closure that still holds.
+// agrees with, checked under the lock: never the owner's answer, never a
+// closure on facts the owner kept in a pair, never a closure that still holds.
+// A closure whose retired end comes back is reopened and moved in one run.
 func TestCuratorReopenTakesOnlyItsOwnStaleClosure(t *testing.T) {
 	stubScrump(t)
-	rs := repointFixture(t)
+	rs, _ := repointStore(t, nil, nil, "- supersedes? [[b]] may replace [[a]]\n- CONTRADICTION?: [[f]] (system) vs [[d]] (system)\n- CONTRADICTION?: [[j]] (system) vs [[i]] (system)\n- CONTRADICTION?: [[i]] (system) vs [[b]] (system)\n")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	sandboxVerify(t, rs.s.Dir)
-	ij, df := itemFor(t, rs, "i", "j"), itemFor(t, rs, "d", "f")
-	if err := mark(ctx, rs, ij.ID, "left"); err != nil { // the owner keeps i
+	ab, df, ij, bi := itemFor(t, rs, "a", "b"), itemFor(t, rs, "d", "f"), itemFor(t, rs, "i", "j"), itemFor(t, rs, "b", "i")
+	r := verifyRun{model: "m", max: 0, per: 50, budget: 1, cwd: t.TempDir(), stateDir: filepath.Join(t.TempDir(), "verify")}
+	captureStderr(t, func() { r.repoint(ctx, rs, rs.ownerTouched()) }) // a / b moves to c / b, d / f is moot
+	// The owner keeps i over j, and b over i: i, j and b are theirs.
+	if err := mark(ctx, rs, ij.ID, "left"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mark(ctx, rs, bi.ID, "left"); err != nil {
 		t.Fatal(err)
 	}
 	git(t, rs.s.Dir, "pull", "-q", "--rebase")
-	r := verifyRun{model: "m", max: 0, per: 50, budget: 1, cwd: t.TempDir(), stateDir: filepath.Join(t.TempDir(), "verify")}
-	captureStderr(t, func() { r.repoint(ctx, rs, rs.ownerTouched()) }) // d / f closes as moot
+	// a stands again: a / b's closure is stale, but b is the owner's.
+	path := filepath.Join(rs.s.Dir, "system", "a.md")
+	b, _ := os.ReadFile(path)
+	os.WriteFile(path, []byte(strings.Replace(string(b), "superseded_by: c\n", "", 1)), 0o644)
+	git(t, rs.s.Dir, "commit", "-q", "-am", "a stands again")
+	git(t, rs.s.Dir, "push", "-q", "origin", "HEAD:main")
+	rs.loadFacts()
+	if it := itemFor(t, rs, "a", "b"); !rs.mootStale(it, indexFindings(rs.items())) {
+		t.Fatal("a / b's closure should be stale")
+	}
 	before := read(t, rs, "j")
-	_, errs, _ := rs.applyOps(ctx, []op{{ID: ij.ID, Mark: "reopen", By: "curator", A: "i", B: "j"}, {ID: df.ID, Mark: "reopen", By: "curator", A: "d", B: "f"}})
-	if errs[0] == nil || !strings.Contains(errs[0].Error(), "it is theirs") || errs[1] == nil || !strings.Contains(errs[1].Error(), "no longer holds") {
+	_, errs, _ := rs.applyOps(ctx, []op{
+		{ID: ij.ID, Mark: "reopen", By: "curator", A: "i", B: "j"},
+		{ID: ab.ID, Mark: "reopen", By: "curator", A: "a", B: "b"},
+		{ID: df.ID, Mark: "reopen", By: "curator", A: "d", B: "f"},
+	})
+	if errs[0] == nil || !strings.Contains(errs[0].Error(), "it is theirs") || errs[1] == nil || !strings.Contains(errs[1].Error(), "it is theirs") || errs[2] == nil || !strings.Contains(errs[2].Error(), "no longer holds") {
 		t.Fatalf("curator reopens: %v", errs)
 	}
-	if d := decisionsOf(t, rs); d[ij.ID].Action != "left" || d[df.ID].Action != mootMark || read(t, rs, "j") != before {
-		t.Fatalf("records after refused reopens: %+v %+v", d[ij.ID], d[df.ID])
+	captureStderr(t, func() { r.repoint(ctx, rs, rs.ownerTouched()) })
+	if d := decisionsOf(t, rs); d[ij.ID].Action != "left" || d[ab.ID].Action != mootMark || d[df.ID].Action != mootMark || read(t, rs, "j") != before {
+		t.Fatalf("records after refused reopens: %+v %+v %+v", d[ij.ID], d[ab.ID], d[df.ID])
+	}
+	// g, the retired end d / f's closure rested on, comes back: one run
+	// reopens it and moves it to d / g.
+	path = filepath.Join(rs.s.Dir, "system", "g.md")
+	b, _ = os.ReadFile(path)
+	os.WriteFile(path, []byte(strings.Replace(string(b), "retired: 2026-10-27\n", "", 1)), 0o644)
+	git(t, rs.s.Dir, "commit", "-q", "-am", "g is live again")
+	git(t, rs.s.Dir, "push", "-q", "origin", "HEAD:main")
+	rs.loadFacts()
+	errsOut := captureStderr(t, func() { r.repoint(ctx, rs, rs.ownerTouched()) })
+	if d := decisionsOf(t, rs)[df.ID]; d.Action != mootMark || d.Repointed != pairID(kindContradiction, "d", "g") || !strings.Contains(errsOut, "verify: reopened "+df.ID) {
+		t.Fatalf("d / f after g came back: %+v\n%s", d, errsOut)
 	}
 }
