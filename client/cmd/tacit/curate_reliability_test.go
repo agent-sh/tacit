@@ -95,9 +95,11 @@ func TestCuratorFreshInstallAndMalformedRetry(t *testing.T) {
 				if code := runCurate([]string{"--max-batches", "1"}); code != 1 {
 					t.Fatalf("retry exit %d", code)
 				}
+				// Each run sends the malformed answer back once and keeps the
+				// note pending for the next run: two calls a run.
 				calls, _ := os.ReadFile(filepath.Join(home, "calls"))
-				if strings.Count(string(calls), "call") != 2 {
-					t.Fatal("malformed note was not retried")
+				if strings.Count(string(calls), "call") != 4 {
+					t.Fatalf("%d calls, want 4: the malformed note was not sent back once a run and tried again the next", strings.Count(string(calls), "call"))
 				}
 			} else {
 				if code != 0 {

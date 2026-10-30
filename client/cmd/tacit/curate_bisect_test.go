@@ -177,8 +177,10 @@ func TestCuratorSplitsABatchWithAnInvalidAnswer(t *testing.T) {
 			curated++
 		}
 	}
-	if curated != 2 || callCount(t, home) != 3 {
-		t.Fatalf("curated %d facts in %d calls, want 2 in 3", curated, callCount(t, home))
+	// The malformed answer goes back once, still malformed, then the batch
+	// is split: four calls.
+	if curated != 2 || callCount(t, home) != 4 {
+		t.Fatalf("curated %d facts in %d calls, want 2 in 4", curated, callCount(t, home))
 	}
 }
 

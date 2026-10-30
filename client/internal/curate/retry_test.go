@@ -61,10 +61,11 @@ func TestSplitCheckedGivesUpAfterOneRetry(t *testing.T) {
 	if calls != 2 || first == nil || !errors.Is(err, modelrun.ErrInvalidResult) || len(Problems(err)) != 1 {
 		t.Fatalf("calls %d first %v err %v", calls, first, err)
 	}
-	// A malformed answer is not sent back: the caller splits the batch.
+	// An answer that is no JSON array goes back once too; a second one is
+	// invalid as it is, and the caller splits the batch.
 	calls = 0
 	run = func(context.Context, string, string) (string, float64, error) { calls++; return "not json", 0, nil }
-	if _, _, first, err := SplitChecked(context.Background(), run, "m", "p", scopeCheck); !errors.Is(err, modelrun.ErrInvalidResult) || first != nil || calls != 1 {
+	if _, _, first, err := SplitChecked(context.Background(), run, "m", "p", scopeCheck); !errors.Is(err, modelrun.ErrInvalidResult) || first == nil || calls != 2 {
 		t.Fatalf("malformed: %v %v %d", first, err, calls)
 	}
 	// A runner error is not the model's answer: no retry.
@@ -75,6 +76,41 @@ func TestSplitCheckedGivesUpAfterOneRetry(t *testing.T) {
 	}
 	if _, _, first, err := SplitChecked(context.Background(), run, "m", "p", scopeCheck); err == nil || first != nil || calls != 1 {
 		t.Fatalf("runner error: %v %v %d", first, err, calls)
+	}
+}
+
+// The rulings pass's answer is most often empty, and the model put a
+// sentence before half of the empty ones: code refuses such an answer whole.
+// It goes back once, saying why, and the model's clean answer is taken.
+// Before v0.9.16 it was not sent back, and a note alone in its batch failed
+// every quick run.
+func TestSplitCheckedSendsBackAnAnswerThatIsNoArray(t *testing.T) {
+	const prose = "The note quotes no owner words, so there are no rulings to extract.\n\n```json\n[]\n```"
+	var prompts []string
+	answers := []string{prose, "[]"}
+	run := func(_ context.Context, _, prompt string) (string, float64, error) {
+		prompts = append(prompts, prompt)
+		a := answers[0]
+		answers = answers[1:]
+		return a, 0.01, nil
+	}
+	entries, cost, first, err := SplitChecked(context.Background(), run, "m", "RULINGS OF THESE", scopeCheck)
+	if err != nil || len(entries) != 0 || !errors.Is(first, modelrun.ErrInvalidResult) || len(prompts) != 2 || cost != 0.02 {
+		t.Fatalf("entries %v err %v first %v, %d prompts, cost %v", entries, err, first, len(prompts), cost)
+	}
+	for _, s := range []string{"RULINGS OF THESE", prose, "CODE REFUSED THAT ANSWER", "- invalid model result: curator must return a JSON array", "Output ONLY the JSON array."} {
+		if !strings.Contains(prompts[1], s) {
+			t.Errorf("retry prompt lacks %q:\n%s", s, prompts[1])
+		}
+	}
+}
+
+// The rulings prompt says what the empty answer is: [] alone.
+func TestRulingsPromptSaysTheEmptyAnswerIsABareArray(t *testing.T) {
+	for _, s := range []string{"with no sentence before or after it and no code fence", "the whole answer is [] and nothing else"} {
+		if !strings.Contains(RulingsPrompt, s) {
+			t.Errorf("rulings prompt lacks %q", s)
+		}
 	}
 }
 

@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/agent-sh/tacit/client/internal/curate"
 	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/modelrun"
 	"github.com/agent-sh/tacit/client/internal/overlay"
 	"github.com/agent-sh/tacit/client/internal/repoid"
 	"github.com/agent-sh/tacit/client/internal/store"
@@ -84,14 +86,21 @@ func entryHint(e curate.Entry, p validate.Problem) string {
 
 // splitChecked is one model pass of the curator (split or rulings) through
 // curate.SplitChecked: the first answer's refusal is logged (field and rule,
-// never the text) and counted as a retry; the result is the second answer's
-// when there was one.
+// or for an answer that is no JSON array the parser's reason; never the
+// text) and counted as a retry; the result is the second answer's when there
+// was one.
 func splitChecked(ctx context.Context, rep *curate.Report, pass string, run curate.Runner, model, prompt string, check curate.Check) ([]curate.Entry, error) {
 	entries, cost, first, err := curate.SplitChecked(ctx, run, model, prompt, check)
 	rep.CostUSD += cost
 	if first != nil {
 		rep.Retries++
-		logInvalid(rep, pass+" (sent back)", first)
+		if len(curate.Problems(first)) == 0 {
+			line := pass + " (sent back): " + strings.TrimPrefix(first.Error(), modelrun.ErrInvalidResult.Error()+": ")
+			fmt.Fprintln(os.Stderr, "curate: invalid answer:", line)
+			rep.InvalidEntries = append(rep.InvalidEntries, line)
+		} else {
+			logInvalid(rep, pass+" (sent back)", first)
+		}
 	}
 	return entries, err
 }

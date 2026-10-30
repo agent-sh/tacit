@@ -18,24 +18,30 @@ type Check func([]Entry) []Problem
 const maxEchoChars = 60_000
 
 // SplitChecked asks run for prompt's answer, parses it (ParseChecked) and
-// checks its entries (check, may be nil). An answer whose entries are refused
-// (a field ParseChecked or check rejects) is sent back to the model once,
-// with every problem and the value it refused, and the model's second answer
-// stands or falls as it is: code never edits an entry to make it pass. An
-// answer that is not a JSON array of entries at all is returned as invalid
-// without a retry (the curator splits its batch, as before). first is the first answer's
-// refusal (nil when it passed), for the caller's log; err is the final
-// result's (a runner error, or an invalid answer wrapping
-// modelrun.ErrInvalidResult).
+// checks its entries (check, may be nil). A refused answer is sent back to
+// the model once, with why: every problem of an entry a field rule or check
+// rejects and the value it refused, or that the answer is no JSON array (a
+// sentence before it, a code fence after one) or not one that parses. The
+// model's second answer stands or falls as it is: code never edits an
+// answer to make it pass, and a second refusal is invalid as before (the
+// curator splits the batch, and a note refused alone counts against it).
+// first is the first answer's refusal (nil when it passed), for the caller's
+// log; err is the final result's (a runner error, or an invalid answer
+// wrapping modelrun.ErrInvalidResult).
+//
+// Until v0.9.16 an answer that was no JSON array was not sent back: the batch
+// was split instead, and a lone note failed. The rulings pass answers with a
+// sentence before an empty array about half the time when a note holds no
+// owner words, and every such answer sent back came back clean
+// (eval/VALUE.md, "The rulings answer").
 func SplitChecked(ctx context.Context, run Runner, model, prompt string, check Check) (entries []Entry, cost float64, first, err error) {
 	res, cost, err := run(ctx, model, prompt)
 	if err != nil {
 		return nil, cost, nil, err
 	}
 	entries, err = parseAndCheck(res, check)
-	if err == nil || !errors.Is(err, modelrun.ErrInvalidResult) || len(Problems(err)) == 0 {
-		// Valid, a runner's error, or an answer that is no JSON array of
-		// entries at all: the caller's bisection handles the last.
+	if err == nil || !errors.Is(err, modelrun.ErrInvalidResult) {
+		// Valid, or a runner's error: nothing to send back.
 		return entries, cost, nil, err
 	}
 	first = err
