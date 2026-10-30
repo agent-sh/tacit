@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/platform"
@@ -66,39 +67,185 @@ func RedactErr(s string) (string, error) {
 	return redactWithScrump(s)
 }
 
-// RedactAll redacts several texts in one scrump call. Texts are joined
-// with a record separator that masking never touches; a changed count is
-// a failure.
+// RedactAll redacts several texts in one scrump call, each masked as it
+// would be alone (RedactAllContext).
 func RedactAll(texts []string) ([]string, error) {
 	return RedactAllContext(context.Background(), texts)
 }
 
 // RedactAllContext is RedactAll that stops when ctx ends: a caller that gives
 // up (a cancelled request) does not wait for scrump.
+//
+// One stream would let a hit that starts in one text run into the next
+// (#84): a quoted value a cut left open, a candidate the rule's filter
+// rejects (a setting, a reference to a vault), a keyword rule's reach
+// across lines. Where it runs in, the scan resumes past that text's key and
+// keeps its secret. So the texts go to scrump as records, each scanned on
+// its own (RedactRecordsContext); a scrump without records mode gets them
+// joined by a boundary no hit crosses (boundarySep). A text that holds a
+// record separator is masked alone.
 func RedactAllContext(ctx context.Context, texts []string) ([]string, error) {
+	out, err := RedactRecordsContext(ctx, texts)
+	if errors.Is(err, ErrNoRecords) {
+		out, err = apart(ctx, texts, func(b []string) ([]string, error) {
+			return redactJoined(ctx, b, boundarySep)
+		})
+	}
+	return out, err
+}
+
+// ErrNoRecords is RedactRecordsContext's error when the installed scrump
+// has no records mode (`scrump --records`, scrump 0.2.0 and later).
+var ErrNoRecords = errors.New("scrump has no records mode (--records); install scrump 0.2.0 or later")
+
+// recordsMode is what the installed scrump showed of its records mode:
+// 0 nothing yet, 1 it keeps records apart, 2 it refused the flag or did not
+// keep the probe's records apart (ErrNoRecords). The answer holds for the
+// rest of the process.
+var recordsMode atomic.Int32
+
+// RedactRecordsContext redacts texts in one scrump call with each text a
+// record of its own (`scrump --records`, records split by the ASCII record
+// separator), so no hit can start in one text and reach into the next. A
+// text that holds a record separator is masked alone. A scrump that refuses
+// the flag, or whose first records call does not keep the probe's records
+// apart (recordsProbe), gives ErrNoRecords and is not asked again in this
+// process; any other failure is an error, and none of the texts may be used.
+func RedactRecordsContext(ctx context.Context, texts []string) ([]string, error) {
+	return apart(ctx, texts, func(b []string) ([]string, error) {
+		return redactRecords(ctx, b)
+	})
+}
+
+// recordsProbe is #84's repro: alone, the second record's password is
+// masked; in one stream the first record's open setting runs into it, the
+// filter keeps the setting, and the scan resumes past the password's key.
+// Built from pieces, so no secret-shaped literal sits in the source.
+func recordsProbe() [2]string {
+	return [2]string{
+		"deploy token_url: 'https://auth.example.invalid/oauth/" + strings.Repeat("p", 80),
+		"pass" + "word: '" + "Zq7Vx9" + "Lm2Kp4" + "' and the rest",
+	}
+}
+
+func redactRecords(ctx context.Context, texts []string) ([]string, error) {
+	mode := recordsMode.Load()
+	if mode == 2 {
+		return nil, ErrNoRecords
+	}
+	// The first call of the process carries the probe ahead of the texts:
+	// a scrump that takes the flag but does not keep records apart is told
+	// from one that does at no cost of its own.
+	in := texts
+	probe := recordsProbe()
+	if mode == 0 {
+		in = append([]string{probe[0], probe[1]}, texts...)
+	}
+	out, err := scrub(ctx, strings.Join(in, "\x1e"), true)
+	if errors.Is(err, ErrNoRecords) {
+		recordsMode.Store(2)
+	}
+	if err != nil {
+		return nil, err
+	}
+	// The separators lie in no record, so they come back where they were.
+	parts := strings.Split(out, "\x1e")
+	if len(parts) != len(in) {
+		return nil, fmt.Errorf("scrump --records returned %d records for %d", len(parts), len(in))
+	}
+	for i, p := range parts {
+		if len(p) != len(in[i]) {
+			return nil, fmt.Errorf("scrump --records changed the length of record %d", i)
+		}
+	}
+	if mode == 0 {
+		if parts[0] != probe[0] || strings.Contains(parts[1], "Zq7Vx9") {
+			// One stream under the flag: the boundary keeps texts apart.
+			recordsMode.Store(2)
+			return nil, ErrNoRecords
+		}
+		parts = parts[2:]
+	}
+	recordsMode.Store(1)
+	return parts, nil
+}
+
+// apart redacts the texts that hold no record separator with batch, in one
+// go, and then each one that holds a separator alone, in a call of its own.
+func apart(ctx context.Context, texts []string, batch func([]string) ([]string, error)) ([]string, error) {
 	if len(texts) == 0 {
 		return nil, nil
 	}
-	// Masks never overwrite a newline, so a separator wrapped in newlines
-	// always survives; a bare control character could be eaten by a value
-	// that runs to the end of its record.
-	const sep = "\n\x1e\n"
-	for _, t := range texts {
-		if strings.Contains(t, "\x1e") {
-			return nil, errors.New("text holds a record separator")
+	out := make([]string, len(texts))
+	var in []string
+	var at []int
+	for i, t := range texts {
+		if !strings.Contains(t, "\x1e") {
+			in, at = append(in, t), append(at, i)
 		}
 	}
+	if len(in) > 0 {
+		red, err := batch(in)
+		if err != nil {
+			return nil, err
+		}
+		if len(red) != len(in) {
+			return nil, errors.New("redaction returned a different number of texts")
+		}
+		for k, i := range at {
+			out[i] = red[k]
+		}
+	}
+	for i, t := range texts {
+		if strings.Contains(t, "\x1e") {
+			s, err := redactWithScrumpCtx(ctx, t)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = s
+		}
+	}
+	return out, nil
+}
+
+// boundarySep separates texts for a scrump without records mode: a boundary
+// no hit crosses inside a record separator (#84). Its quotes close a quoted
+// value a cut left open, its newlines are longer than the text profile's
+// longest reach across lines (1,000 bytes), and its # stops the values
+// that run on over whitespace. A hit that masks any of it changes the
+// record count, and the batch is halved (bisectCtx).
+var boundarySep = "\n#'\"\n" + strings.Repeat("\n", 1024) + "#\n\x1e\n"
+
+// redactJoined redacts texts, none holding a record separator, joined by
+// sep in one scrump call, halving the batch while the record count comes
+// back changed.
+func redactJoined(ctx context.Context, texts []string, sep string) ([]string, error) {
 	out, err := redactWithScrumpCtx(ctx, strings.Join(texts, sep))
 	if err != nil {
 		return nil, err
 	}
 	parts := strings.Split(out, sep)
 	if len(parts) != len(texts) {
-		// A hit ran across records (a key block whose END sits in a later
-		// record). Halve until every part comes back whole.
+		// A hit masked part of a separator (a key block whose END sits in a
+		// later record). Halve until every part comes back whole.
 		return bisectCtx(ctx, texts, sep)
 	}
 	return parts, nil
+}
+
+// union is a text masked where either of two maskings of it (same length,
+// masks of "*") masked it.
+func union(a, b string) string {
+	if a == b {
+		return a
+	}
+	u := []byte(a)
+	for i := range u {
+		if b[i] == '*' {
+			u[i] = '*'
+		}
+	}
+	return string(u)
 }
 
 // bisect redacts texts joined by sep, splitting the batch in halves while
@@ -154,9 +301,20 @@ func redactWithScrump(s string) (string, error) {
 }
 
 func redactWithScrumpCtx(ctx context.Context, s string) (string, error) {
+	return scrub(ctx, s, false)
+}
+
+// scrub runs `scrump --profile text scrub - -o -` on s, with --records when
+// records is set. A scrump that refuses --records (a usage error, exit 2,
+// that names the flag) gives ErrNoRecords.
+func scrub(ctx context.Context, s string, records bool) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "scrump", "--profile", "text", "scrub", "-", "-o", "-")
+	args := []string{"--profile", "text"}
+	if records {
+		args = append(args, "--records")
+	}
+	cmd := exec.CommandContext(ctx, "scrump", append(args, "scrub", "-", "-o", "-")...)
 	platform.Prepare(cmd)
 	cmd.WaitDelay = 100 * time.Millisecond
 	cmd.Stdin = strings.NewReader(s)
@@ -170,6 +328,10 @@ func redactWithScrumpCtx(ctx context.Context, s string) (string, error) {
 		}
 		if ctx.Err() != nil {
 			return "", fmt.Errorf("scrump: %w", ctx.Err())
+		}
+		var exit *exec.ExitError
+		if records && errors.As(err, &exit) && exit.ExitCode() == 2 && strings.Contains(stderr.String(), "--records") {
+			return "", ErrNoRecords
 		}
 		msg := strings.TrimSpace(stderr.String())
 		if i := strings.IndexByte(msg, '\n'); i > 0 {
@@ -328,10 +490,17 @@ func capFor(line string) int {
 	return uMax
 }
 
-// Finish redacts a digest in one scrump call and cuts every line to its
-// cap. Lines are the unredacted output of Lines; nothing from them may
-// reach a model before Finish. An error means the window must not be used
-// and its cursor must not move.
+// Finish redacts a digest and cuts every line to its cap. Lines are the
+// unredacted output of Lines; nothing from them may reach a model before
+// Finish. An error means the window must not be used and its cursor must
+// not move.
+//
+// The digest is masked twice and a byte stays masked when either masked
+// it: as one text, so a secret whose keyword ends the line before is
+// masked, and line by line (RedactAllContext), because in one text a hit that
+// starts on one line can run into the next and keep its secret (#84).
+// Masks never touch a newline, so the line count of one text never shows
+// that.
 func Finish(lines []string) ([]string, error) {
 	if len(lines) == 0 {
 		return lines, nil
@@ -352,6 +521,16 @@ func Finish(lines []string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+	alone, err := RedactAllContext(context.Background(), lines)
+	if err != nil {
+		return nil, err
+	}
+	for i := range parts {
+		if len(parts[i]) != len(alone[i]) {
+			return nil, errors.New("the two maskings of a digest line differ in length")
+		}
+		parts[i] = union(parts[i], alone[i])
 	}
 	for i, l := range parts {
 		if r := []rune(l); len(r) > Width(l) {

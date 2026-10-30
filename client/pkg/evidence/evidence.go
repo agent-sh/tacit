@@ -329,11 +329,24 @@ func DominantRepo(counts map[string]int, minCount int) string {
 // means the text must not be used.
 func RedactErr(s string) (string, error) { return digest.RedactErr(s) }
 
-// RedactAllContext redacts several texts in one scrump call, stopping when
-// ctx ends; an error means none of them may be used.
+// RedactAllContext redacts several texts in one scrump call, each masked as
+// it would be alone, stopping when ctx ends; an error means none of them may
+// be used.
 func RedactAllContext(ctx context.Context, texts []string) ([]string, error) {
 	return digest.RedactAllContext(ctx, texts)
 }
+
+// RedactRecordsContext is RedactAllContext with each text a record of its
+// own in scrump's records mode (`scrump --records`), and no fallback: a
+// scrump without records mode gives ErrNoRecords, for a caller that has
+// its own way to keep texts apart.
+func RedactRecordsContext(ctx context.Context, texts []string) ([]string, error) {
+	return digest.RedactRecordsContext(ctx, texts)
+}
+
+// ErrNoRecords is RedactRecordsContext's error when the installed scrump
+// has no records mode.
+var ErrNoRecords = digest.ErrNoRecords
 
 // RedactionReady proves scrump with the text profile works on this machine.
 func RedactionReady() error { return digest.RedactionReady() }
