@@ -2,6 +2,7 @@ package events
 
 import (
 	"encoding/json"
+	"maps"
 	"regexp"
 	"strconv"
 	"strings"
@@ -24,6 +25,12 @@ type codexReader struct {
 	// asked are the options a request_user_input call offered, for the
 	// answers that follow (digest.CodexAsked).
 	asked digest.CodexAsked
+	// replay are the lines that changed asked, and the owner's words' own
+	// copy of it, in order: those the rule notes a question's options on
+	// (noted, emptied for each line). Read again, they leave both as they
+	// were (State).
+	replay []string
+	noted  digest.CodexAsked
 	// failed are the calls an event reported failed before their output came
 	// (a patch, an MCP call, a command's exit code): Codex writes the end
 	// event first.
@@ -35,7 +42,7 @@ type codexReader struct {
 }
 
 func newCodex(plain string, head []byte, v digest.Verdict, pastes []string) *codexReader {
-	r := &codexReader{base: newBase("codex", transcript.Name(plain)), asked: digest.CodexAsked{}, failed: map[string]bool{}}
+	r := &codexReader{base: newBase("codex", transcript.Name(plain)), asked: digest.CodexAsked{}, noted: digest.CodexAsked{}, failed: map[string]bool{}}
 	r.verdict = v
 	r.turns.Pastes = pastes
 	if m, ok := digest.ReadCodexMeta(head); ok {
@@ -98,7 +105,14 @@ func (r *codexReader) line(raw []byte) []Event {
 	if json.Unmarshal(raw, &l) != nil {
 		return nil
 	}
-	r.asked.NoteLine(raw)
+	// A line the rule notes a question's options on is one to read again
+	// (State). Note only adds options by question, so they go to asked as
+	// they are.
+	clear(r.noted)
+	if r.noted.NoteLine(raw); len(r.noted) > 0 {
+		r.replay = append(r.replay, string(raw))
+		maps.Copy(r.asked, r.noted)
+	}
 	at := ownerwords.JSONTime(l.Timestamp)
 	switch l.Type {
 	case "turn_context":

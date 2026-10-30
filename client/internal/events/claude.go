@@ -22,6 +22,9 @@ type claudeReader struct {
 	base
 	turns ownerwords.TurnReader
 	cmds  digest.ClaudeCommands
+	// replay are the lines that changed cmds, in order: read again, they
+	// leave cmds, and the owner's words' own copy, as they were (State).
+	replay []string
 }
 
 func newClaude(plain string, v digest.Verdict, pastes []string) *claudeReader {
@@ -196,7 +199,11 @@ func (r *claudeReader) user(raw []byte, l claudeLine, at time.Time) []Event {
 func (r *claudeReader) turn(raw []byte, l claudeLine, texts []string, at time.Time) []Event {
 	// Both follow every user line in order: a local command's caveat comes
 	// on the line before its echo.
+	was := r.cmds
 	local := r.cmds.LocalLine(raw)
+	if r.cmds != was {
+		r.replay = append(r.replay, string(raw))
+	}
 	var own, cut []string
 	if r.verdict.Owner() {
 		own, _, cut = r.turns.PartsCut(digest.Claude, raw)
