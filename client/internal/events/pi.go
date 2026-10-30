@@ -117,13 +117,102 @@ func piTexts(raw json.RawMessage) []string {
 	return out
 }
 
+// piReads reports, for an entry that did not decode whole into piLine,
+// whether what the reader reads of its kind decodes: its type, a model
+// change's model, a compaction's or a branch summary's summary, a message
+// entry's id. A field of another type in a kind the reader passes over (a
+// label), or one its kind does not read, counts nothing: the entry is read
+// from what decoded.
+func piReads(raw []byte) bool {
+	var head struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(raw, &head) != nil {
+		return false
+	}
+	var kind any
+	switch head.Type {
+	case "model_change":
+		kind = &struct {
+			ModelID string `json:"modelId"`
+		}{}
+	case "compaction", "branch_summary":
+		kind = &struct {
+			Summary string `json:"summary"`
+		}{}
+	case "message":
+		kind = &struct {
+			ID string `json:"id"`
+		}{}
+	default:
+		return true
+	}
+	return json.Unmarshal(raw, kind) == nil
+}
+
+// piMessageReads is piReads for a message entry's message, by its role: its
+// role, a reply's model, stop reason and error, a tool result's call id, tool
+// name and error mark, a !command's command, output and exit code, a
+// summary's text.
+func piMessageReads(raw json.RawMessage) bool {
+	var head struct {
+		Role string `json:"role"`
+	}
+	if json.Unmarshal(raw, &head) != nil {
+		return false
+	}
+	var kind any
+	switch head.Role {
+	case "assistant":
+		kind = &struct {
+			Model        string `json:"model"`
+			StopReason   string `json:"stopReason"`
+			ErrorMessage string `json:"errorMessage"`
+		}{}
+	case "toolResult":
+		kind = &struct {
+			ToolCallID string `json:"toolCallId"`
+			ToolName   string `json:"toolName"`
+			IsError    bool   `json:"isError"`
+		}{}
+	case "bashExecution":
+		kind = &struct {
+			Command  string   `json:"command"`
+			Output   string   `json:"output"`
+			ExitCode *float64 `json:"exitCode"`
+		}{}
+	case "custom", "compactionSummary", "branchSummary":
+		kind = &struct {
+			Summary string `json:"summary"`
+		}{}
+	default:
+		return true
+	}
+	return json.Unmarshal(raw, kind) == nil
+}
+
+// piContentShaped reports a message's content of a shape the reader takes
+// text from (textShaped): a reply's is a list, a summary's counts only when
+// it has no summary text.
+func piContentShaped(m piMessage) bool {
+	switch m.Role {
+	case "user":
+		return textShaped(m.Content)
+	case "assistant":
+		return listShaped(m.Content)
+	case "custom", "compactionSummary", "branchSummary":
+		return m.Summary != "" || textShaped(m.Content)
+	}
+	return true
+}
+
 // line is a line's events, and false when the line does not parse: it is not
-// JSON, its JSON is not a pi entry (a list or a string where the object goes,
-// a field the reader reads of another type), or a message entry's message
-// does not decode.
+// JSON, what the reader reads of its kind does not decode (a list or a string
+// where the object goes, a field of another type: piReads, piMessageReads),
+// or a message's content is of another shape (piContentShaped).
 func (r *piReader) line(raw []byte) ([]Event, bool) {
 	var l piLine
-	if json.Unmarshal(raw, &l) != nil {
+	if json.Unmarshal(raw, &l) != nil && !piReads(raw) {
 		return nil, false
 	}
 	at := ownerwords.JSONTime(l.Timestamp)
@@ -144,12 +233,13 @@ func (r *piReader) line(raw []byte) ([]Event, bool) {
 		if t := strings.Join(piTexts(l.Content), "\n"); strings.TrimSpace(t) != "" {
 			return []Event{r.text(KindHarnessText, "user", digest.Harness, "extension message", t, at)}, true
 		}
+		return nil, textShaped(l.Content)
 	case "message":
 		var m piMessage
-		if json.Unmarshal(l.Message, &m) != nil {
+		if json.Unmarshal(l.Message, &m) != nil && !piMessageReads(l.Message) {
 			return nil, false
 		}
-		return r.message(raw, l.ID, m, at), true
+		return r.message(raw, l.ID, m, at), piContentShaped(m)
 	}
 	return nil, true
 }

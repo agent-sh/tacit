@@ -61,17 +61,22 @@ type State struct {
 func (s State) Kept() bool { return s.kept != nil }
 
 // Unparsed is how many lines before the cursor did not parse: lines whose
-// record the reader could not decode, so it read nothing of them. A line is
-// one when it is not JSON (a line a crash cut short, which the next write
-// joined), or when its JSON is not the record its format writes: not an
-// object, a field the reader reads of another type, or for Codex the payload
-// of a response_item, event_msg, turn_context or compacted entry, for pi the
-// message of a message entry, that does not decode. A line that holds nothing
-// (blank, or null) is not one, nor a last line still being written, nor a
-// line whose record decodes and holds a part of a shape the reader does not
-// know. For a Hermes session it is how many of the rows up to the cursor are
-// assistant rows the reader reads (not a compaction copy or a summary) whose
-// tool calls did not parse: their text was read, their calls were not.
+// record the reader could not decode, or whose message held no text it could
+// take, so it gave none of the events they hold. A line is one when it is not
+// JSON (a line a crash cut short, which the next write joined), when what the
+// reader reads of its kind does not decode (not an object, a field its kind
+// reads of another type: a Codex payload's by its type, a pi message's by its
+// role), or when a message's content is neither a string nor a list. A field
+// of a kind the reader passes over, or one the line's kind does not read,
+// counts nothing. What a counted line left still holds: a Codex compacted
+// entry marks its compaction, what decoded of a Codex event_msg is taken, a
+// Codex question's options are noted (digest.CodexAsked), and a line whose
+// content is of another shape gives its session's fields. A line that holds
+// nothing (blank, or null) is not one, nor a last line still being written,
+// nor a part inside a message's content (a block, a tool's output). For a
+// Hermes session it is how many of the rows up to the cursor are assistant
+// rows the reader reads (not a compaction copy or a summary) whose tool calls
+// did not parse: their text was read, their calls were not.
 //
 // The count is from the session's start however the read came there: a read
 // that starts at a State's cursor (Kept, its items unchanged) adds the lines
