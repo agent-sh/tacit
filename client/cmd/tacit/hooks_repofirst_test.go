@@ -276,3 +276,32 @@ func TestCommandMatchThroughARunner(t *testing.T) {
 		}
 	}
 }
+
+// A command of one word, a bare program, matches a shell command only with a
+// word of the fact's own in the command line too: not its key's, not the
+// repository's name, not the session folder's. A longer command matches as
+// before. Of the pushes keyed on a bare program in real sessions, 9% were
+// useful (eval/DELIVERY.md, "Pushes keyed on a bare program").
+func TestPreToolBareProgramNeedsASecondWord(t *testing.T) {
+	_, cwd := repoFirstRig(t,
+		fact.Meta{Name: "ssh-gpubox-batchmode", Description: "Reach the widget gpubox with ssh -o BatchMode=yes; a password prompt hangs the agent", Type: "past_mistake", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Commands: []string{"ssh"}}},
+		fact.Meta{Name: "widget-deploy-checks", Description: "A deploy runs the smoke checks first", Type: "design_decision", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Commands: []string{"make deploy"}}},
+	)
+	t.Setenv("TACIT_DELIVERY_REPO_START", "off")
+	push := func(session, command string) string {
+		t.Helper()
+		return preToolContext(t, hookOut(t, toolPayload(cwd, session, "Bash", map[string]any{"command": command}), "pre-tool"))
+	}
+	if got := push("s1", "ssh -o BatchMode=yes gpubox nvidia-smi"); !strings.Contains(got, "ssh-gpubox-batchmode") {
+		t.Fatalf("the fact's own words in the command:\n%s", got)
+	}
+	if got := push("s2", "ssh build-host uptime"); got != "" {
+		t.Fatalf("a bare program alone pushed:\n%s", got)
+	}
+	if got := push("s3", "cd "+cwd+" && ssh build-host 'ls widget'"); got != "" {
+		t.Fatalf("the repository's name and folder tied the call:\n%s", got)
+	}
+	if got := push("s4", "make deploy"); !strings.Contains(got, "widget-deploy-checks") {
+		t.Fatalf("a command of two words:\n%s", got)
+	}
+}
