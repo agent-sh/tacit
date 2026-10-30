@@ -84,10 +84,12 @@ func entryHint(e curate.Entry, p validate.Problem) string {
 
 // splitChecked is one model pass of the curator (split or rulings) through
 // curate.SplitChecked: the first answer's refusal is logged (field and rule,
-// never the text) and counted as a retry; the result is the second answer's
-// when there was one.
+// or for an answer refused whole the parser's reason; never the text) and
+// counted as a retry; the result is the second answer's when there was one.
 func splitChecked(ctx context.Context, rep *curate.Report, pass string, run curate.Runner, model, prompt string, check curate.Check) ([]curate.Entry, error) {
-	entries, cost, first, err := curate.SplitChecked(ctx, run, model, prompt, check)
+	// The rulings pass sends back an answer refused whole too (no JSON array);
+	// the split pass, whose answers are long, splits its batch for one.
+	entries, cost, first, err := curate.SplitChecked(ctx, run, model, prompt, check, pass == "rulings")
 	rep.CostUSD += cost
 	if first != nil {
 		rep.Retries++

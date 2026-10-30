@@ -89,10 +89,13 @@ Output ONLY a JSON array of strings, one per pair in order, each exactly "contra
 
 // RulingsPrompt is the second pass per batch: every owner sentence in the
 // notes must have a kind:user entry. The first live split dropped a ruling
-// while keeping its surroundings (eval/VALUE.md, D6).
+// while keeping its surroundings (eval/VALUE.md, D6). Its answer is most
+// often empty, and asked only for "a JSON array (possibly empty)" the model
+// put a sentence before half of the empty ones, which code refuses whole; it
+// is told what the empty answer is (eval/VALUE.md, "The rulings answer").
 const RulingsPrompt = `Below are agent memory notes and the list of OWNER RULINGS already extracted from them (kind user: something the owner said, decided or standardized).
 List every owner ruling in the notes that is NOT yet covered by the extracted list. A ruling is covered when an extracted entry states the same decision. A ruling is the owner's OWN WORDS as the note quotes them: list only those, never an agent's reading of what they want. ` + "`owner_quote`" + ` is their words exactly as the note gives them (at least six words, character for character, typos included) and the body holds that phrase in double quotes. Keep the date if visible, one entry per ruling, the note name as origin. An extracted entry marked "dropped" was judged not to matter to future work: it is covered. ` + relevance.Rule + `
-Output ONLY a JSON array (possibly empty) of items:
+Output ONLY a JSON array of items, with no sentence before or after it and no code fence. When the notes hold no owner ruling the extracted list misses, the whole answer is [] and nothing else. The items:
   {"origin": "<note name>", "name": "<slug>", "description": "...", "type": "user_standard|design_decision", "scope": "<same scope as the note>", "kind": "user", "owner_quote": "<their exact words from the note>", "relevance": {"keep": true, "category": "...", "reason": "..."}, "applies_to": {"paths": [], "repos": [], "hosts": [], "commands": []}, "body": "..."}
 
 EXTRACTED RULINGS:

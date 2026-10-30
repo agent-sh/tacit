@@ -24,6 +24,7 @@ Your own inputs (`truth.jsonl`, `ab/tasks.json`, `ab/results/`, a corpus manifes
 | `dream/dream_recall.py` | Would the dreamer have written the facts nobody wrote, from the digest window around the detour? | two per item |
 | `curate/split.py` | Rewrites bundled memory notes as one-fact entries into a scratch store. | one per batch |
 | `curate/recheck.py` | Offline contradiction pass over a curated store, report only. | one per 25 pairs |
+| `../client/tools/envelope` (Go) | The curator's rulings pass for single inbox notes through the judge route: how many answers are no JSON array (the curator refuses them whole), whether a sent-back answer comes back clean, and how many hold an entry; `-template` measures another prompt. | one per call, two with a retry |
 | `derived/backtest.py` | The thresholds behind derived hot spots and co-change, from plain git history. | none |
 | `secrets/token_rules.py` | The pre-receive secret scan, run the hook's way, on random keys of each provider's shape (`sk-`, Slack, Tailscale) and on fact names with a segment that starts like one: the share it refuses, beside any `--compare` regex, for this hook or another (`--hook`). Needs GNU grep. | none |
 
