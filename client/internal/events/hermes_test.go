@@ -136,3 +136,30 @@ func TestHermesSessionEvents(t *testing.T) {
 	evs, _ = readHermes(t, db, "nightly", 0)
 	check(t, 11, evs, want{Kind: KindAgentText, Who: digest.Agent, Why: "hermes session from cron", Text: "check the disk"})
 }
+
+// A row the corpus drops as a pasted table shows each of its parts once: a
+// side agent's note in it is that agent's, the table the cut. A read at the
+// session's last id gives nothing; a cursor past it is ErrPastEnd.
+func TestHermesPastedRowAndCursorEnds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	st := hermestest.Create(t, path, hermestest.Session{ID: "phone", Source: "mobile", CreatedSource: "mobile", StartedAt: 100})
+	note := "Here is a note offered by a side agent:\n\n> The disk is filling up."
+	table := "| host | disk |\n| a | 91% |\n| b | 40% |\n| c | 12% |\n| d | 77% |\n| e | 63% |"
+	st.Add(hermestest.Message{Session: "phone", Role: "user", Content: note + "\n\n" + table, Timestamp: 101})
+	db, err := hermes.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	evs, last := readHermes(t, db, "phone", 0)
+	check(t, 1, evs,
+		want{Kind: KindAgentText, Who: digest.Agent, Why: whyAgentInTurn, Text: note, InputKind: InputTyped},
+		want{Kind: KindAgentText, Who: digest.Agent, Why: whyLeftOut, Text: table, InputKind: InputTyped})
+	if evs, again := readHermes(t, db, "phone", last); len(evs) != 0 || again != last {
+		t.Fatalf("at the last id: %d events, cursor %d", len(evs), again)
+	}
+	ss, _ := db.Sessions(context.Background())
+	if _, err := ReadHermes(context.Background(), db, ss[0], last+5, func(Event) error { return nil }); !errors.Is(err, ErrPastEnd) {
+		t.Fatalf("past the last id: %v", err)
+	}
+}

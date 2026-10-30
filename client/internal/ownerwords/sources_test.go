@@ -194,3 +194,12 @@ func TestDefaultSourcesAreTheTopLevelSources(t *testing.T) {
 		t.Fatalf("DefaultSources:\n%v\nwant\n%v", got, want)
 	}
 }
+
+// An empty paste cuts nothing (a TurnReader's Pastes come from a caller too).
+func TestEmptyPasteCutsNothing(t *testing.T) {
+	line := `{"type":"user","entrypoint":"cli","origin":{"kind":"human"},"message":{"role":"user","content":"keep the cache"}}`
+	own, _, cut := (&TurnReader{Pastes: []string{""}}).PartsCut(digest.Claude, []byte(line))
+	if len(own) != 1 || own[0] != "keep the cache" || len(cut) != 0 {
+		t.Fatalf("own %q cut %q", own, cut)
+	}
+}

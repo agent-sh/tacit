@@ -269,6 +269,13 @@ func (d *DB) LastTimes(ctx context.Context) (map[string]float64, error) {
 	return out, rows.Err()
 }
 
+// LastID is a session's newest message id (0 when it has none).
+func (d *DB) LastID(ctx context.Context, sid string) (int64, error) {
+	var id sql.NullInt64
+	err := d.db.QueryRowContext(ctx, `select max(id) from messages where session_id = ?`, sid).Scan(&id)
+	return id.Int64, err
+}
+
 // NewBytes is the content bytes a session holds after message id after.
 func (d *DB) NewBytes(ctx context.Context, sid string, after int64) (int64, error) {
 	var n sql.NullInt64

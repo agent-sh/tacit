@@ -727,12 +727,18 @@ func (a CodexAsked) Offered(item, answer string) bool {
 }
 
 // Chosen is ps with each answer that is an option its question offered
-// (Offered) made the harness's: the person chose it, the model wrote it.
+// (OfferedPiece) made the harness's: the person chose it, the model wrote it.
 func (a CodexAsked) Chosen(ps []Piece) []Piece {
 	for i, p := range ps {
-		if p.Who == Owner && p.Item != "" && a.Offered(p.Item, p.Text) {
+		if a.OfferedPiece(p) {
 			ps[i].Who, ps[i].Text = Harness, "the person chose the option offered: "+p.Text
 		}
 	}
 	return ps
+}
+
+// OfferedPiece reports a piece of the person's that answers a question with
+// one of the options it offered (Offered): the model's words, not theirs.
+func (a CodexAsked) OfferedPiece(p Piece) bool {
+	return p.Who == Owner && p.Item != "" && a.Offered(p.Item, p.Text)
 }

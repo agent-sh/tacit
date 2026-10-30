@@ -116,7 +116,7 @@ func (b *Builder) AddAt(source, ref, text string, at time.Time) {
 		b.c.Stats.AgentTurns++
 		return
 	}
-	b.c.Stats.RelayedLines += len(dropped)
+	b.c.Stats.RelayedLines += dropped
 	n := Normalize(text)
 	if n == "" {
 		return
@@ -145,24 +145,26 @@ func (b *Builder) AddAt(source, ref, text string, at time.Time) {
 // the corpus (AddAt) and TurnReader keep it by: what a harness or another
 // agent wrote in it left out (OwnerPart), the texts they pasted cut (pastes,
 // from their prompt history), then the lines of agent text they relayed
-// (dropRelayed). It returns the pastes and the relayed lines it cut; ok is
-// false when none of it is theirs.
-func cutWords(text string, pastes []string) (string, []string, []string, bool) {
-	text, ok := OwnerPart(text)
+// (dropRelayed), which it counts. cut is each part it left out, as it was;
+// ok is false when none of it is theirs (cut is then all of it).
+func cutWords(text string, pastes []string) (words string, cut []string, relayedLines int, ok bool) {
+	text, cut, ok = ownerSplit(text)
 	if !ok {
-		return "", nil, nil, false
+		return "", cut, 0, false
 	}
-	var pasted []string
 	for _, p := range pastes {
+		if p == "" {
+			continue
+		}
 		if n := strings.Count(text, p); n > 0 {
 			text = strings.ReplaceAll(text, p, " ")
 			for range n {
-				pasted = append(pasted, p)
+				cut = append(cut, p)
 			}
 		}
 	}
 	text, dropped := relayed(text)
-	return text, pasted, dropped, true
+	return text, append(cut, dropped...), len(dropped), true
 }
 
 // Agent text the owner relayed inside their own turn, with no paste record (a lane's

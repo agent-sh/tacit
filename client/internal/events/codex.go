@@ -265,7 +265,7 @@ func (r *codexReader) call(raw []byte, p codexPayload, at time.Time) Event {
 		// Claude Code names one: mcp__<server>__<tool>.
 		name = p.Namespace + "__" + name
 	}
-	if strings.HasPrefix(name, "request_user_input") && r.verdict.Owner() {
+	if strings.HasPrefix(p.Name, "request_user_input") && r.verdict.Owner() {
 		// The options it offers decide the answers that follow, for the
 		// owner's words as for the pieces (TurnReader keeps its own).
 		r.turns.Parts(digest.Codex, raw)

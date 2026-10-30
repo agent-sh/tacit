@@ -3,6 +3,7 @@ package events
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -41,6 +42,16 @@ func ReadHermes(ctx context.Context, db *hermes.DB, s hermes.Session, after int6
 	}
 	if s.Delegated || s.Source == "subagent" || s.CreatedSource == "subagent" {
 		r.subagent = s.ID
+	}
+	switch last, err := db.LastID(ctx, s.ID); {
+	case err != nil:
+		return after, err
+	case last < after:
+		// The store went back (restored from a backup): the cursor names a
+		// row it no longer has.
+		return after, fmt.Errorf("hermes session %s: %w (%d > %d)", s.ID, ErrPastEnd, after, last)
+	case last == after:
+		return after, nil // nothing after the cursor: no pass over the session
 	}
 	r.verdict = digest.Verdict{Who: digest.Agent, Why: "hermes session from " + s.Source}
 	if s.Owner {

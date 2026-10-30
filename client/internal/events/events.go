@@ -328,7 +328,7 @@ const (
 	whyToolResult  = "tool result"
 	whyHarnessText = "harness text"
 	whyAgentInTurn = "agent text in the owner's turn"
-	whyLeftOut     = "pasted or relayed in the owner's turn"
+	whyLeftOut     = "cut from the owner's turn"
 )
 
 // untyped is the events of the texts of a user turn no person typed (an
@@ -379,7 +379,7 @@ func (b *base) typed(texts, own, cut []string, asked digest.CodexAsked, at time.
 				in = InputAnswer
 			}
 			switch {
-			case p.Who == digest.Owner && p.Item != "" && asked.Offered(p.Item, p.Text):
+			case asked.OfferedPiece(p):
 				out = append(out, b.text(KindHarnessText, "user", digest.Harness, whyOffered, p.Text, at))
 			case p.Who == digest.Owner:
 				mine = append(mine, p.Text)

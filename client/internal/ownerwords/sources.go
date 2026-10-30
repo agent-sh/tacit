@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -31,11 +32,25 @@ func AgentInjected(text string) bool {
 // a harness's reminders and frames, a side agent's note and agents' prompts
 // left out), one piece per line; ok is false when nothing is.
 func OwnerPart(text string) (string, bool) {
-	own := digest.OwnerPieces(digest.TurnPieces(text))
-	if len(own) == 0 {
-		return "", false
+	own, _, ok := ownerSplit(text)
+	return own, ok
+}
+
+// ownerSplit is OwnerPart with the texts of the pieces it left out.
+func ownerSplit(text string) (own string, other []string, ok bool) {
+	var mine []string
+	for _, p := range digest.TurnPieces(text) {
+		switch {
+		case p.Who == digest.Owner:
+			mine = append(mine, p.Text)
+		case strings.TrimSpace(p.Text) != "":
+			other = append(other, p.Text)
+		}
 	}
-	return strings.Join(own, "\n"), true
+	if len(mine) == 0 {
+		return "", other, false
+	}
+	return strings.Join(mine, "\n"), other, true
 }
 
 // pasted is Claude Code's placeholder for a paste in the prompt history; the
@@ -137,7 +152,7 @@ func readPastes(path string) ([]string, error) {
 // corpus reads them (LoadPastes): those of home's ~/.claude/history.jsonl,
 // read again only when the file changes; none when there is no history. A
 // reader of the owner's turns (TurnReader.Pastes) cuts them from their words
-// as the corpus does.
+// as the corpus does. They are the history's text, unredacted.
 func ClaudePastes(home string) ([]string, error) {
 	path := filepath.Join(home, ".claude", "history.jsonl")
 	fi, err := os.Stat(path)
@@ -150,7 +165,7 @@ func ClaudePastes(home string) ([]string, error) {
 	pasteCache.Lock()
 	defer pasteCache.Unlock()
 	if e, ok := pasteCache.byPath[path]; ok && e.size == fi.Size() && e.mod.Equal(fi.ModTime()) {
-		return e.pastes, nil
+		return slices.Clone(e.pastes), nil
 	}
 	ps, err := readPastes(path)
 	if err != nil {
@@ -160,7 +175,7 @@ func ClaudePastes(home string) ([]string, error) {
 		pasteCache.byPath = map[string]pasteEntry{}
 	}
 	pasteCache.byPath[path] = pasteEntry{size: fi.Size(), mod: fi.ModTime(), pastes: ps}
-	return ps, nil
+	return slices.Clone(ps), nil
 }
 
 type pasteEntry struct {

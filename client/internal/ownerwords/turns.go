@@ -44,9 +44,9 @@ func (r *TurnReader) Parts(f digest.Format, line []byte) (own, other []string) {
 }
 
 // PartsCut is Parts with what the corpus cut from the pieces of theirs as not
-// their words, each whole as it was: a pasted table or log (PastedBlob), a
+// their words, each part as it was: a pasted table or log (PastedBlob), a
 // paste their prompt history records (Pastes), a line of agent text they
-// relayed.
+// relayed, and a part the pieces' own split finds not theirs.
 func (r *TurnReader) PartsCut(f digest.Format, line []byte) (own, other, cut []string) {
 	if r.asked == nil {
 		r.asked = digest.CodexAsked{}
@@ -64,8 +64,8 @@ func (r *TurnReader) PartsCut(f digest.Format, line []byte) (own, other, cut []s
 		raw, cut = piTurns(line)
 	}
 	for _, t := range raw {
-		t, pasted, dropped, ok := cutWords(t, r.Pastes)
-		cut = append(append(cut, pasted...), dropped...)
+		t, c, _, ok := cutWords(t, r.Pastes)
+		cut = append(cut, c...)
 		if ok && strings.TrimSpace(t) != "" {
 			own = append(own, t)
 		}
@@ -97,11 +97,12 @@ func (r *TurnReader) HermesCut(content, displayKind string, summary bool) (strin
 	case injected:
 		return "", nil, false
 	case pasted:
+		// The row's own pieces are the cut; what a harness or another agent
+		// wrote in it is a piece of its own (digest.TurnPieces).
 		blob, _ := digest.HermesOwnerText(content, displayKind, summary)
-		return "", []string{blob}, false
+		return "", digest.OwnerPieces(digest.TurnPieces(blob)), false
 	}
-	t, cutPastes, dropped, ok := cutWords(t, r.Pastes)
-	cut := append(cutPastes, dropped...)
+	t, cut, _, ok := cutWords(t, r.Pastes)
 	if !ok || strings.TrimSpace(t) == "" {
 		return "", cut, false
 	}
