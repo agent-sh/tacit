@@ -107,17 +107,37 @@ func mustNotContain(t *testing.T, out string, bad ...string) {
 	}
 }
 
+// recordsScrump stands in for scrump 0.2.0: the text profile's canary
+// masked at the same length, and records mode keeping the issue's repro
+// apart (its second record's password masked).
+const recordsScrump = `sed -e 's/=.*/=************/' -e 's/Zq7Vx9Lm2Kp4/************/'`
+
+// A Mac that already has a scrump with the text profile but no records mode
+// (the old pin) rebuilds at the pinned commit on a rerun.
+func TestMacSetupRebuildsAScrumpWithoutRecordsMode(t *testing.T) {
+	s := newStubMac(t)
+	s.stub(t, "scrump", `case "$*" in *--records*) echo "error: unexpected argument '--records' found" >&2; exit 2;; esac
+sed 's/=.*/=************/'`)
+	s.stub(t, "cargo", `[ "$1" = --version ] && echo cargo; exit 0`)
+	out, err := s.run(t, "--server", "http://mac-reachable.example:7447/", "--enroll-ssh", "root@203.0.113.10")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	mustContain(t, out, "+ cargo install --locked --root "+s.home+"/.local --git https://github.com/avifenesh/scrump --rev b2b3178c412ee5d99aaf36233d3952c2d4e796ca scrump-cli")
+	mustNotContain(t, out, "records mode works")
+}
+
 func TestMacSetupWriterDryRun(t *testing.T) {
 	s := newStubMac(t)
 	// scrump with the text profile: masks the value at the same length.
-	s.stub(t, "scrump", `sed 's/=.*/=************/'`)
+	s.stub(t, "scrump", recordsScrump)
 	out, err := s.run(t, "--server", "http://mac-reachable.example:7447/", "--enroll-ssh", "root@203.0.113.10")
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	bin := s.home + "/.local/bin"
 	mustContain(t, out,
-		"scrump with the text profile works",
+		"scrump with the text profile and records mode works",
 		"+ go -C ", " build -o "+bin+"/tacit ./cmd/tacit",
 		"+ env CGO_ENABLED=1 CGO_LDFLAGS=-framework UniformTypeIdentifiers go -C ", "build -tags desktop,production -o "+bin+"/tacit-app ./cmd/tacit",
 		"+ "+bin+"/tacit keygen claude",
@@ -148,7 +168,7 @@ func TestMacSetupReadOnlyDryRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Read-only still redacts: the agents' notes go to the local overlay.
-	s.stub(t, "scrump", `sed 's/=.*/=************/'`)
+	s.stub(t, "scrump", recordsScrump)
 	s.env = []string{"TACIT_SERVER=https://tacit.example.ts.net"}
 	out, err := s.run(t, "--read-only")
 	if err != nil {
@@ -158,7 +178,7 @@ func TestMacSetupReadOnlyDryRun(t *testing.T) {
 	mustContain(t, out,
 		"checking the server at https://tacit.example.ts.net",
 		"Enroll this Mac's keys: run on the server (public keys only):",
-		"scrump with the text profile works",
+		"scrump with the text profile and records mode works",
 		"+ "+bin+"/tacit keygen reader",
 		`  /opt/tacit/rel/bin/tacit_server rpc 'TacitServer.Auth.Keys.enroll("reader@macbook", "ssh-ed25519 <public-key> reader@macbook")'`,
 		"until the server takes reader@macbook (tacit authcheck reader)",
@@ -183,7 +203,7 @@ func TestMacSetupReadOnlyDryRun(t *testing.T) {
 // first Mac setup) is replaced by one of the public path.
 func TestMacSetupReadOnlyReplacesAnOldReadOnlyClone(t *testing.T) {
 	s := newStubMac(t)
-	s.stub(t, "scrump", `sed 's/=.*/=************/'`)
+	s.stub(t, "scrump", recordsScrump)
 	store := filepath.Join(s.home, ".local/share/tacit/store")
 	if out, err := exec.Command("git", "init", "-q", store).CombinedOutput(); err != nil {
 		t.Fatalf("%v %s", err, out)
@@ -250,7 +270,7 @@ func TestMacSetupStopsEarly(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newStubMac(t)
-			s.stub(t, "scrump", `sed 's/=.*/=************/'`)
+			s.stub(t, "scrump", recordsScrump)
 			if c.stub != "" {
 				s.stub(t, c.stub, c.body)
 			}
