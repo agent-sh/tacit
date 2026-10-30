@@ -76,6 +76,27 @@ func ReadHermes(ctx context.Context, db *HermesDB, s HermesSession, after int64,
 	return events.ReadHermes(ctx, db, s, after, emit)
 }
 
+// State is a saved place in a session's history: its cursor (Offset) and
+// what the reader kept from the items before it, so a read from it costs
+// only what came after, while those items are the ones it was kept from
+// (events.State). The zero State is the start; MarshalBinary and
+// UnmarshalBinary save and load one, as do MarshalJSON and UnmarshalJSON. It
+// is as private as its transcript: never send it.
+type State = events.State
+
+// ReadFileState is ReadFile from a State, returning the State after the last
+// line read; limit > 0 stops it at a line boundary past limit bytes
+// (events.ReadFileState).
+func ReadFileState(path string, f Format, from State, limit int64, emit func(Event) error) (State, error) {
+	return events.ReadFileState(path, f, from, limit, emit)
+}
+
+// ReadHermesState is ReadHermes from a State, returning the State after the
+// last row read (events.ReadHermesState).
+func ReadHermesState(ctx context.Context, db *HermesDB, s HermesSession, from State, emit func(Event) error) (State, error) {
+	return events.ReadHermesState(ctx, db, s, from, emit)
+}
+
 // RedactEvents masks secret-shaped text in events' Text, ToolInput and
 // ToolOutput, and fails closed: on any failure it returns nil and the error
 // (events.Redact).
