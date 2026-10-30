@@ -539,3 +539,29 @@ func TestLinksLeaveALinkToWhatTheFactReplaced(t *testing.T) {
 		t.Fatalf("%d fixes, %d ruling lines, pushed=%v; want nothing", len(rep.Plan.Fixes), len(rep.Rulings), rep.Pushed)
 	}
 }
+
+// In a fact that is no ruling: a link to what the fact replaced through
+// another fact stays, and one spelled other than the fact's name is spelled
+// right, still a link to where the fact came from (a ruling would get the
+// same fix as a LINK? line).
+func TestLinksSpellALinkToWhatTheFactReplaced(t *testing.T) {
+	r := newRig(t, rigOpts{})
+	writeFact(t, r.clone, fact.Meta{Name: "first-note", Description: "d", Type: "design_decision", Scope: "projects/x", SupersededBy: "middle-note"}, "first")
+	writeFact(t, r.clone, fact.Meta{Name: "middle-note", Description: "d", Type: "design_decision", Scope: "projects/x", SupersededBy: "agent-fact"}, "middle")
+	writeFact(t, r.clone, fact.Meta{Name: "old-agent", Description: "d", Type: "design_decision", Scope: "projects/x", SupersededBy: "agent-fact"}, "old")
+	writeFact(t, r.clone, fact.Meta{Name: "agent-fact", Description: "d", Type: "design_decision", Scope: "projects/x"}, "This replaced [[Old_Agent]] and, through [[middle-note]], [[first-note]].")
+	writeFact(t, r.clone, fact.Meta{Name: "spelt-rule", Description: "d", Type: "design_decision", Scope: "projects/x", Source: ownerSource("keep notes short")}, "You decided: \"keep notes short\"\nMade from [[Said_Once]].")
+	writeFact(t, r.clone, fact.Meta{Name: "said-once", Description: "d", Type: "design_decision", Scope: "projects/x", SupersededBy: "spelt-rule"}, "said")
+	r.commitIndex(r.clone, "fixture")
+	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
+	if _, err := r.links(false); err != nil {
+		t.Fatal(err)
+	}
+	_, body, _ := strings.Cut(strings.TrimPrefix(r.onServer("projects/x/agent-fact.md"), "---\n"), "\n---\n\n")
+	if body != "This replaced [[old-agent]] and, through [[middle-note]], [[first-note]].\n" {
+		t.Fatalf("agent-fact: %q", body)
+	}
+	if review := r.onServer("review/2026-10-10.md"); strings.Count(review, "- LINK? ") != 1 || !strings.Contains(review, "- LINK? [[spelt-rule]] (projects/x) links to [[Said_Once]]") || !strings.Contains(review, "it would write [[said-once]]") {
+		t.Fatalf("review file:\n%s", review)
+	}
+}

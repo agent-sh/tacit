@@ -1344,8 +1344,8 @@ Measured on the store at 2026-10-30 (`tacit links --dry-run` on a clone, the v0.
 | of them, links to a fact the ruling replaced | 293 | left as they are |
 | other facts' links the step would change | 0 | 0 |
 
-The review files hold 305 `LINK?` lines. 299 say the link "is superseded by [[the ruling]], which is this fact". 5 propose rewriting a replaced ruling's link to the statement it was made of into a link to the ruling that later replaced it; that rule was not made of that statement, so the rewrite is wrong. 1 named no fact and is settled.
+The review files hold 305 `LINK?` lines. 299 say the link "is superseded by [[the ruling]], which is this fact". 5 propose rewriting a replaced ruling's link to the statement it was made of into a link to the ruling that later replaced it; that rule was not made of that statement, so the rewrite is wrong. 1 named no fact; its ruling is retired since.
 
-Before this, the step had also unwrapped such links in agents' facts: `eval/curate/link_history.py` over the store's 12 link commits finds 22 links changed in fact files, 13 of them links to a fact the fact replaced (4 facts, 2026-10-27 and 10-28) and 9 names no fact had.
+Before this, the step had also unwrapped such links in agents' facts, and it goes on until this ships: `eval/curate/link_history.py` over the store's link commits (to 2026-10-30 morning) finds 29 (fact, target) pairs whose link the step removed, one link each: 20 links to a fact the fact replaced (5 facts, 2026-10-27 to 10-30; 7 of them that morning) and 9 names no fact had.
 
 The proposal to rewrite a ruling's link outside the owner's quoted words to the one live fact that replaced its target was built and measured too. On this store it rewrites 9 links and all 9 are wrong, the replaced rulings' provenance links above; once those are left as they are it has no link to rewrite. It is not shipped.
