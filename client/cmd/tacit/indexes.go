@@ -56,7 +56,10 @@ func cloneChanges(ctx context.Context, dir string) (changed, untracked map[strin
 	if changed, err = set("diff", "--name-only", "-z", "HEAD"); err != nil {
 		return nil, nil, err
 	}
-	if untracked, err = set("ls-files", "--others", "--exclude-standard", "-z"); err != nil {
+	// Every file the clone does not track, ignored ones too: fact.Walk reads
+	// a fact a .gitignore or an exclude file matches, and so would an index
+	// built from the clone.
+	if untracked, err = set("ls-files", "--others", "-z"); err != nil {
 		return nil, nil, err
 	}
 	return changed, untracked, nil

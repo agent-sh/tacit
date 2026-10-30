@@ -865,6 +865,21 @@ func namesIndex(rels []string) bool {
 	return false
 }
 
+// dropUntrackedGone is rels without the paths that are neither in the clone
+// nor at HEAD: git stages nothing for them, and `git add` refuses them.
+func (s *Store) dropUntrackedGone(ctx context.Context, rels []string) []string {
+	out := rels[:0:0]
+	for _, rel := range rels {
+		if _, err := os.Lstat(filepath.Join(s.Dir, filepath.FromSlash(rel))); errors.Is(err, os.ErrNotExist) {
+			if _, err := git(ctx, s.Dir, "cat-file", "-e", "HEAD:"+rel); err != nil {
+				continue
+			}
+		}
+		out = append(out, rel)
+	}
+	return out
+}
+
 // withAll is rels with every path of more it does not hold yet, in order.
 func withAll(rels, more []string) []string {
 	have := map[string]bool{}

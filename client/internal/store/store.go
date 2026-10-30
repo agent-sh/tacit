@@ -528,7 +528,10 @@ func (s *Store) commitPush(ctx context.Context, rels []string, message, writer s
 			if err != nil {
 				return fmt.Errorf("%w: the indexes could not be written again from the commit's facts: %v", ErrRedaction, err)
 			}
-			rels = withAll(rels, extra)
+			// An index the writer named that the rebuild removed (its folder
+			// holds no fact the commit holds) and git never tracked has
+			// nothing to commit.
+			rels = s.dropUntrackedGone(ctx, withAll(rels, extra))
 		case touchesIndexes(masked):
 			return fmt.Errorf("%w: a masked fact's indexes cannot be written again here", ErrRedaction)
 		}
