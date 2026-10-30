@@ -502,6 +502,17 @@ func (rs *reviewServer) questionRecords() (standing map[string]*decision, reopen
 // closure of a reviewer question said (its answer, proof and reason) and the
 // questions the owner reopened, for the reviewer step's queue.
 func questionClosures(dir string) (closed map[string]string, reopened map[string]bool) {
+	// A log that does not read whole (missing, or a line cut short) says
+	// nothing: the queue is left as it is.
+	b, err := os.ReadFile(filepath.Join(dir, "review", "decisions.jsonl"))
+	if err != nil {
+		return nil, nil
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if strings.TrimSpace(l) != "" && !json.Valid([]byte(l)) {
+			return nil, nil
+		}
+	}
 	rs := &reviewServer{s: &store.Store{Dir: dir}}
 	standing, reopened := rs.questionRecords()
 	closed = map[string]string{}
@@ -641,14 +652,27 @@ func syncQuestionClosures(q *agentreview.Queue, closed map[string]string, reopen
 			if reopenQuestion(q, it.ID) {
 				r++
 			}
-		case it.State == agentreview.StateClosed && !isClosed:
-			// Closed here by a closure the store never got (a run stopped
-			// before its push): it waits for the owner again, as it was.
+		case it.State == agentreview.StateClosed && !isClosed && closingLong(it.Closed, now):
+			// Closed here by a closure the store's log never got (a run
+			// stopped before its commit), long past any closure's deadline:
+			// it waits for the owner again, as it was.
 			it.State, it.Closed, it.Why = agentreview.StateOpen, "", ""
 			r++
 		}
 	}
 	return c, r
+}
+
+// closingGrace is how long a question this machine closed may wait for its
+// closure in the store's log before it waits for the owner again: past the
+// closure command's 3 minutes, so a closure still on its way is never
+// undone.
+const closingGrace = 10 * time.Minute
+
+// closingLong reports a queue close older than closingGrace.
+func closingLong(closed string, now time.Time) bool {
+	at, err := time.Parse(time.RFC3339, closed)
+	return err == nil && now.Sub(at) > closingGrace
 }
 
 // reopenQuestion puts a closed question back in the queue, asked afresh: a
@@ -710,6 +734,7 @@ func closeReviewerQuestion(ctx context.Context, rs *reviewServer, o *op, q agent
 		}
 		return "the closure would land", nil
 	}
+	kept := false // a local commit kept after a failed push: it goes up with the next push
 	err = rs.s.WithLock(ctx, func() error {
 		for attempt := 0; attempt < 4; attempt++ {
 			if err := rs.s.SyncLocked(ctx); err != nil {
@@ -773,6 +798,8 @@ func closeReviewerQuestion(ctx context.Context, rs *reviewServer, o *op, q agent
 			if err != nil {
 				if now, _ := rs.s.Head(ctx); now == head {
 					rs.s.Restore(rels) // no commit was made: nothing stays written
+				} else {
+					kept = true
 				}
 			}
 			return err
@@ -781,6 +808,9 @@ func closeReviewerQuestion(ctx context.Context, rs *reviewServer, o *op, q agent
 	})
 	rs.loadFacts()
 	if err != nil {
+		if kept {
+			return "", fmt.Errorf("closed in this clone, but the push failed; the commit goes up with the next push: %w", err)
+		}
 		restore() // the question waits in this machine's queue again, as it was
 		return "", err
 	}
@@ -791,6 +821,9 @@ func closeReviewerQuestion(ctx context.Context, rs *reviewServer, o *op, q agent
 // question an agent closed already, or one the owner reopened, takes no
 // closure.
 func (rs *reviewServer) mayCloseQuestion(q agentreview.Item) error {
+	if rs.walkErr != nil {
+		return fmt.Errorf("the store's facts could not be read, so nothing was closed: %w", rs.walkErr)
+	}
 	standing, reopened := rs.questionRecords()
 	if standing[q.ID] != nil {
 		return errors.New("this question is closed already")
@@ -855,7 +888,12 @@ func claimQuestion(ctx context.Context, id, why string, dry bool) (func(), error
 		}
 		one := &agentreview.Queue{Items: []agentreview.Item{*it}}
 		one.Items[0].Asks = append([]agentreview.Ask(nil), it.Asks...)
-		if !agentreview.ReadAnswers(ctx, one, src, nil, time.Now()) {
+		changed := agentreview.ReadAnswers(ctx, one, src, nil, time.Now())
+		// And in the rulebook pane.
+		if agentreview.TakeRulebookAnswers(one, agentreview.RulebookAnswers(agentreview.ReadRulebook(agentreview.RulebookLog(home)))) {
+			changed = true
+		}
+		if !changed {
 			return false
 		}
 		*it = one.Items[0]

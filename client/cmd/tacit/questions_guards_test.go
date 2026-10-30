@@ -683,19 +683,97 @@ func TestAQueryClosureKeepsWhatItAsked(t *testing.T) {
 	}
 }
 
-// A question this machine closed for a closure the store never got (a run
-// stopped before its push) waits for the owner again, its asks kept.
+// A question this machine closed for a closure the store's log never got (a
+// run stopped before its commit) waits for the owner again once that is long
+// past any closure's deadline, its asks kept; one closed a minute ago may
+// still be on its way and stays. A log that does not read whole changes
+// nothing.
 func TestAClosureTheStoreNeverGotWaitsAgain(t *testing.T) {
 	q := &agentreview.Queue{}
 	now := time.Now()
 	q.Add(agentreview.Item{Note: "inbox/a@h/one.md", Name: "one"}, now)
-	id := q.Items[0].ID
+	q.Add(agentreview.Item{Note: "inbox/a@h/two.md", Name: "two"}, now)
+	old, recent := q.Items[0].ID, q.Items[1].ID
 	q.Items[0].Asks = []agentreview.Ask{{Harness: "claude", Session: "s1", At: now.UTC().Format(time.RFC3339)}}
-	q.Items[0].Close(agentreview.StateClosed, "wrong (config): r", now)
+	q.Items[0].Close(agentreview.StateClosed, "wrong (config): r", now.Add(-20*time.Minute))
+	q.Items[1].Close(agentreview.StateClosed, "holds (file): r", now.Add(-time.Minute))
 	if c, r := syncQuestionClosures(q, map[string]string{}, map[string]bool{}, now); c != 0 || r != 1 {
 		t.Fatalf("closed %d reopened %d", c, r)
 	}
-	if it := q.ByID(id); it.State != agentreview.StateOpen || len(it.Asks) != 1 {
-		t.Fatalf("the question: %+v", it)
+	if it := q.ByID(old); it.State != agentreview.StateOpen || len(it.Asks) != 1 {
+		t.Fatalf("the old close: %+v", it)
+	}
+	if it := q.ByID(recent); it.State != agentreview.StateClosed {
+		t.Fatalf("a closure on its way was undone: %+v", it)
+	}
+	// A log with a line cut short reads as nothing.
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "review"), 0o755)
+	os.WriteFile(filepath.Join(dir, "review", "decisions.jsonl"), []byte(`{"id":"q-aaaaaa","action":"holds","by":"agent","closes":"question"}`+"\n"+`{"id":"q-bbbbbb","act`), 0o644)
+	if closed, reopened := questionClosures(dir); closed != nil || reopened != nil {
+		t.Fatalf("a cut log read as %v %v", closed, reopened)
+	}
+	if closed, _ := questionClosures(t.TempDir()); closed != nil {
+		t.Fatalf("a missing log read as %v", closed)
+	}
+}
+
+// The owner's answer in the rulebook pane comes first too; a store whose
+// facts do not read takes no closure, dry or not; and a closure whose commit
+// was kept after a failed push leaves the question closed, since the commit
+// goes up with the next push.
+func TestAReviewerClosureReadsThePaneAndKeepsAKeptCommit(t *testing.T) {
+	stubScrump(t)
+	rs := questionStore(t, map[string]string{"made-from-note": "origin: the-note\n"}, "")
+	home := questionsHome(t, rs)
+	item := queueNoteQuestion(t, home, "made-from-note", time.Now())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	qpath := agentreview.Path(platform.StateDir(home))
+	// The pane.
+	pane := filepath.Join(home, "rulebook.jsonl")
+	b, _ := json.Marshal(agentreview.RulebookRow{TS: time.Now().UTC().Format(time.RFC3339), Session: "s-pane", By: "owner", Verdict: agentreview.RulebookDiscarded, Text: "the port moved", Tacit: item.ID})
+	os.WriteFile(pane, append(b, '\n'), 0o644)
+	t.Setenv("TACIT_RULEBOOK_LOG", pane)
+	if _, err := closeReviewerQuestion(ctx, rs, wrongOp(item.ID), item); err == nil {
+		t.Fatal("an agent closed a question the owner answered in the rulebook pane")
+	}
+	if got, _ := agentreview.Load(qpath); got.ByID(item.ID).State != agentreview.StateAnswered || got.ByID(item.ID).Answer.Kind != agentreview.AnswerNo {
+		t.Fatalf("the pane's answer was not kept: %+v", got.ByID(item.ID))
+	}
+	t.Setenv("TACIT_RULEBOOK_LOG", "off")
+	q, _ := agentreview.Load(qpath)
+	q.ByID(item.ID).State, q.ByID(item.ID).Answer = agentreview.StateOpen, nil
+	if err := q.Save(qpath); err != nil {
+		t.Fatal(err)
+	}
+	// A store whose facts do not read.
+	marker := filepath.Join(rs.s.Dir, filepath.FromSlash(ledger.MarkerPath))
+	good, _ := os.ReadFile(marker)
+	os.WriteFile(marker, []byte("{not json"), 0o644)
+	for _, dry := range []bool{true, false} {
+		o := wrongOp(item.ID)
+		o.dry = dry
+		if _, err := closeReviewerQuestion(ctx, rs, o, item); err == nil {
+			t.Fatalf("a closure on a store whose facts do not read (dry %v)", dry)
+		}
+	}
+	os.WriteFile(marker, good, 0o644)
+	git(t, rs.s.Dir, "checkout", "--", ".")
+	if got, _ := agentreview.Load(qpath); got.ByID(item.ID).State != agentreview.StateOpen {
+		t.Fatalf("a refused closure left the question closed: %+v", got.ByID(item.ID))
+	}
+	// A push that fails for the machine's key keeps the commit.
+	hook := filepath.Join(rs.s.Dir, ".git", "hooks", "pre-push")
+	os.WriteFile(hook, []byte("#!/bin/sh\necho \"fatal: Authentication failed for 'https://example.test/store.git/'\" >&2\nexit 1\n"), 0o755)
+	head := gitIn(t, rs.s.Dir, "rev-parse", "HEAD")
+	if _, err := closeReviewerQuestion(ctx, rs, wrongOp(item.ID), item); err == nil || !strings.Contains(err.Error(), "next push") {
+		t.Fatalf("a closure whose push failed: %v", err)
+	}
+	if gitIn(t, rs.s.Dir, "rev-parse", "HEAD") == head {
+		t.Fatal("the closure's commit was not kept")
+	}
+	if got, _ := agentreview.Load(qpath); got.ByID(item.ID).State != agentreview.StateClosed {
+		t.Fatalf("a kept closure put the question back: %+v", got.ByID(item.ID))
 	}
 }
