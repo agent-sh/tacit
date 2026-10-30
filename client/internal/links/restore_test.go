@@ -48,3 +48,22 @@ func TestRestorePutsBackOnlyTheKeptLinks(t *testing.T) {
 		t.Fatal("a dead link came back")
 	}
 }
+
+// A line the run wrote twice is not put back (which one it was is not
+// known), and a line that moved into code gets no link: the result must be
+// cur with links put back and nothing else.
+func TestRestoreRefusesWhatItCannotPlace(t *testing.T) {
+	keep := func(target string) bool { return target == "stmt-a" }
+	before := file("From [[stmt-a]].\nFrom [[stmt-a]].\n")
+	after := file("From stmt-a.\nFrom stmt-a.\n")
+	cur := file("From stmt-a.\nAnd more.\n")
+	if out, got := Restore(before, after, cur, keep); len(got) != 0 || string(out) != string(cur) {
+		t.Errorf("a line the run wrote twice: %v\n%s", got, out)
+	}
+	before = file("Made of [[stmt-a]].\n")
+	after = file("Made of stmt-a.\n")
+	cur = file("Example:\n\n```\nMade of stmt-a.\n```\n")
+	if out, got := Restore(before, after, cur, keep); len(got) != 0 || string(out) != string(cur) {
+		t.Errorf("a line that moved into code: %v\n%s", got, out)
+	}
+}

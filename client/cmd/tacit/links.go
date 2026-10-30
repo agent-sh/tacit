@@ -87,6 +87,7 @@ type linksReport struct {
 	NotDone  []notDone    // skipped or dropped, with the reason
 	Deferred bool         // the owner lines were not written: today's review file holds other uncommitted changes
 	Unparsed int          // fact files that did not parse (lint reports them)
+	Restore  bool         // a --restore run: links put back, nothing repaired
 
 	// What reached the server (set after the push only).
 	Repaired []*links.Fix // facts committed
@@ -115,6 +116,7 @@ type linksTree struct {
 	dirty    map[string]string // path -> why it is not touched: changes the step did not make, or not tracked
 	adopt    []string          // dirty fact files whose bytes are exactly what the step would write
 	ownDirt  map[string]bool   // review files holding only this step's lines, uncommitted
+	restore  bool              // the plan puts back links older runs unwrapped (--restore)
 }
 
 // readLinksTree reads the tree at s.Dir: the plan, the ruling links (marked
@@ -155,11 +157,30 @@ func readLinksTreeFor(ctx context.Context, s *store.Store, restore bool) (*links
 	}
 	t.readDirt(ctx, s, planner, untracked)
 	if restore {
-		fixes, err := restoreFixes(ctx, s, planner, facts)
+		fixes, err := restoreFixes(ctx, s, planner, facts, untracked)
 		if err != nil {
 			return nil, err
 		}
-		t.plan, t.rulings, t.adopt = &links.Plan{Fixes: fixes}, nil, nil
+		// The restore is planned on HEAD. A fact file the clone changed is
+		// the restore's own only when its bytes are the plan's (a killed
+		// restore left it); anything else in the clone, a killed daily run's
+		// repairs and review lines among it, is not this commit's.
+		adopted := map[string]bool{}
+		for _, p := range t.adopt {
+			adopted[p] = true
+		}
+		for _, fx := range fixes {
+			_, dirty := t.dirty[fx.Path]
+			if !dirty && !adopted[fx.Path] {
+				continue
+			}
+			if b, err := os.ReadFile(filepath.Join(s.Dir, filepath.FromSlash(fx.Path))); err == nil && bytes.Equal(b, fx.Data) {
+				delete(t.dirty, fx.Path)
+			} else {
+				t.dirty[fx.Path] = "the clone holds changes in it that this restore did not make"
+			}
+		}
+		t.plan, t.rulings, t.adopt, t.ownDirt, t.restore = &links.Plan{Fixes: fixes}, nil, nil, nil, true
 	}
 	return t, nil
 }
@@ -230,7 +251,7 @@ func linksStepFor(ctx context.Context, s *store.Store, dry bool, now func() time
 // fill sets what the step would do with the tree t: the facts to repair, the
 // ones it leaves alone, and the owner lines.
 func (r *linksReport) fill(t *linksTree) {
-	r.Plan, r.Rulings, r.Unparsed = t.plan, t.rulings, t.unparsed
+	r.Plan, r.Rulings, r.Unparsed, r.Restore = t.plan, t.rulings, t.unparsed, t.restore
 	r.ToFix, r.Adopted, r.NotDone = nil, t.adopt, nil
 	for _, fx := range t.plan.Fixes {
 		if why, skip := t.dirty[fx.Path]; skip {
@@ -737,7 +758,7 @@ func writeLinks(out, errw io.Writer, rep *linksReport, dry bool) {
 			}
 		}
 	}
-	if back > 0 {
+	if back > 0 || rep.Restore {
 		fmt.Fprintf(out, "links: %d link(s) to what the fact replaced %s in %d fact(s)\n", back, say("put back", "would put back"), len(fixes))
 		planned := 0
 		for _, fx := range rep.Plan.Fixes {
@@ -770,20 +791,22 @@ func writeLinks(out, errw io.Writer, rep *linksReport, dry bool) {
 		re+un, len(fixes), say("repaired", "would repair"), re, un, len(raised), say("put to the owner", "to put to the owner"), held, notDone, len(rep.Plan.Generated))
 }
 
-// restoreFixes plans `tacit links --restore`: for every commit of this step
-// (links.CommitPrefix), oldest first, each curated fact file it changed that
-// is not a ruling or a generated fact: the links it unwrapped to plain text
-// whose target the fact replaced (planner.Replaced, read on the store as it
-// is now), put back where the line the run wrote is still there word for
-// word (links.Restore). Runs before v0.9.17 unwrapped such links as dead.
-func restoreFixes(ctx context.Context, s *store.Store, planner *links.Planner, facts []*fact.Fact) ([]*links.Fix, error) {
+// restoreFixes plans `tacit links --restore`, on HEAD: for every commit of
+// this step (its subject starts with links.CommitPrefix), newest first so a
+// line two runs repaired comes back whole, each curated fact file it changed
+// that is tracked and not a ruling or a generated fact: the links it unwrapped
+// to plain text whose target the fact replaced (planner.Replaced, read on the
+// store as it is now), put back where the line the run wrote is still there
+// word for word (links.Restore). Runs before v0.9.17 unwrapped such links as
+// dead.
+func restoreFixes(ctx context.Context, s *store.Store, planner *links.Planner, facts []*fact.Fact, untracked map[string]bool) ([]*links.Fix, error) {
 	byPath := map[string]*fact.Fact{}
 	for _, f := range facts {
-		if !f.InInbox() && !isRuling(f) && !isGenerated(f) {
+		if !f.InInbox() && !isRuling(f) && !strings.HasPrefix(f.Meta.Scope, "derived/") && !untracked[f.Path] {
 			byPath[f.Path] = f
 		}
 	}
-	log, err := store.Git(ctx, s.Dir, "log", "--reverse", "--format=%H %ad", "--date=short", "--grep=^"+links.CommitPrefix)
+	log, err := store.Git(ctx, s.Dir, "log", "--format=%H%x09%ad%x09%s", "--date=short", "--grep=^"+links.CommitPrefix)
 	if err != nil {
 		return nil, fmt.Errorf("the step's commits: %w", err)
 	}
@@ -791,10 +814,11 @@ func restoreFixes(ctx context.Context, s *store.Store, planner *links.Planner, f
 	edits := map[string]map[string]*links.Edit{}
 	var order []string
 	for _, line := range strings.Split(strings.TrimSpace(log), "\n") {
-		sha, day, ok := strings.Cut(line, " ")
-		if !ok {
-			continue
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) != 3 || !strings.HasPrefix(parts[2], links.CommitPrefix) {
+			continue // the prefix in a body is not the step's commit
 		}
+		sha, day := parts[0], parts[1]
 		changed, err := store.Git(ctx, s.Dir, "diff-tree", "--no-commit-id", "--name-only", "-r", sha)
 		if err != nil {
 			return nil, fmt.Errorf("commit %s: %w", sha[:9], err)
@@ -811,9 +835,11 @@ func restoreFixes(ctx context.Context, s *store.Store, planner *links.Planner, f
 			}
 			data, seen := cur[rel]
 			if !seen {
-				if data, err = os.ReadFile(filepath.Join(s.Dir, filepath.FromSlash(rel))); err != nil {
+				head, err := store.Git(ctx, s.Dir, "show", "HEAD:"+rel)
+				if err != nil {
 					continue
 				}
+				data = []byte(head)
 			}
 			out, got := links.Restore([]byte(before), []byte(after), data, func(target string) bool { return planner.Replaced(f, target) })
 			if len(got) == 0 {
