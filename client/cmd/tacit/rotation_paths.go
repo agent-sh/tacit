@@ -81,7 +81,7 @@ func newGoneProbe(host, home string, machines []string) *goneProbe {
 
 // machineNames are the store's machines: the hosts of its machines/<host>
 // folders, and the part of a hyphenated host that holds a digit, which is
-// how a machine is often called (spark-b23d, b23d). Not applies_to.hosts:
+// how a machine is often called (gpu-x9k2, x9k2). Not applies_to.hosts:
 // agents put addresses, GPUs and nicknames there.
 func machineNames(facts []*fact.Fact) []string {
 	var out []string

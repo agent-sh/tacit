@@ -457,72 +457,72 @@ func TestGonePathsRules(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(home, "here", "run.sh"), nil, 0o755)
 	os.WriteFile(filepath.Join(home, "here", "main.go"), nil, 0o644)
-	g := newGoneProbe("rig", home+"/", []string{"rig", "wrx", "spark-b23d", "b23d"})
+	g := newGoneProbe("devbox", home+"/", []string{"devbox", "farhost", "gpu-x9k2", "x9k2"})
 	for _, c := range []struct {
 		desc, scope, hosts, want string
 	}{
-		{"The build cache lives in ~/gone/cache", "machines/rig", "", "~/gone/cache"},
-		{"The tools live in ~/here", "machines/rig", "", ""},
+		{"The build cache lives in ~/gone/cache", "machines/devbox", "", "~/gone/cache"},
+		{"The tools live in ~/here", "machines/devbox", "", ""},
 		{"The build cache lives in ~/gone/cache", "machines/other", "", ""},
 		{"The build cache lives in ~/gone/cache", "user", "", ""},
-		{"The build cache lives in ~/gone/cache", "user", "RIG", "~/gone/cache"},
-		{"The build cache lives in ~/gone/cache", "machines/Rig", "", "~/gone/cache"},
+		{"The build cache lives in ~/gone/cache", "user", "DEVBOX", "~/gone/cache"},
+		{"The build cache lives in ~/gone/cache", "machines/Devbox", "", "~/gone/cache"},
 		// another machine: generic words, or one of the store's machines
-		{"On the box the weights are in ~/gone/models", "machines/rig", "", ""},
-		{"Copied via ssh to ~/gone/models", "machines/rig", "", ""},
-		{"Run ssh me@far.example and read ~/gone/models", "machines/rig", "", ""},
-		{"It is rsynced to far:~/gone/models", "machines/rig", "", ""},
-		{"On wrx the weights are in ~/gone/models", "machines/rig", "", ""},
-		{"Run ssh spark-b23d and read ~/gone/models", "machines/rig", "", ""},
-		{"b23d: the weights are in ~/gone/models", "machines/rig", "", ""},
-		{"On rig the weights are in ~/gone/models", "machines/rig", "", "~/gone/models"},
+		{"On the box the weights are in ~/gone/models", "machines/devbox", "", ""},
+		{"Copied via ssh to ~/gone/models", "machines/devbox", "", ""},
+		{"Run ssh me@far.example and read ~/gone/models", "machines/devbox", "", ""},
+		{"It is rsynced to far:~/gone/models", "machines/devbox", "", ""},
+		{"On farhost the weights are in ~/gone/models", "machines/devbox", "", ""},
+		{"Run ssh gpu-x9k2 and read ~/gone/models", "machines/devbox", "", ""},
+		{"x9k2: the weights are in ~/gone/models", "machines/devbox", "", ""},
+		{"On devbox the weights are in ~/gone/models", "machines/devbox", "", "~/gone/models"},
 		// made on use
-		{"Run mkdir -p ~/gone/scratch first", "machines/rig", "", ""},
-		{"Set CACHE_DIR=~/gone/cache", "machines/rig", "", ""},
-		{"Point dir=~/gone/cache at it", "machines/rig", "", "~/gone/cache"},
+		{"Run mkdir -p ~/gone/scratch first", "machines/devbox", "", ""},
+		{"Set CACHE_DIR=~/gone/cache", "machines/devbox", "", ""},
+		{"Point dir=~/gone/cache at it", "machines/devbox", "", "~/gone/cache"},
 		// the fact says it is not there
-		{"~/gone/a was deleted; read ~/gone/b", "machines/rig", "", ""},
-		{"The cache at ~/gone/x is no longer used", "machines/rig", "", ""},
-		{"The cache is ~/gone/cache. The old one sat elsewhere", "machines/rig", "", "~/gone/cache"},
-		{"Not an old note. The cache is ~/gone/cache", "machines/rig", "", "~/gone/cache"},
-		{"The cache is ~/gone/cache, and the old one sat elsewhere", "machines/rig", "", "~/gone/cache"},
+		{"~/gone/a was deleted; read ~/gone/b", "machines/devbox", "", ""},
+		{"The cache at ~/gone/x is no longer used", "machines/devbox", "", ""},
+		{"The cache is ~/gone/cache. The old one sat elsewhere", "machines/devbox", "", "~/gone/cache"},
+		{"Not an old note. The cache is ~/gone/cache", "machines/devbox", "", "~/gone/cache"},
+		{"The cache is ~/gone/cache, and the old one sat elsewhere", "machines/devbox", "", "~/gone/cache"},
 		// an example
-		{"Use a dated dir like ~/gone/logs", "machines/rig", "", ""},
-		{"Dated dirs, e.g., ~/gone/logs", "machines/rig", "", ""},
-		{"Dated dirs, for example, ~/gone/logs", "machines/rig", "", ""},
-		{"E.g. ~/gone/logs holds them", "machines/rig", "", ""},
+		{"Use a dated dir like ~/gone/logs", "machines/devbox", "", ""},
+		{"Dated dirs, e.g., ~/gone/logs", "machines/devbox", "", ""},
+		{"Dated dirs, for example, ~/gone/logs", "machines/devbox", "", ""},
+		{"E.g. ~/gone/logs holds them", "machines/devbox", "", ""},
 		// an output
-		{"Screenshots are written to ~/gone/shots", "machines/rig", "", ""},
-		{"Build it with `go build -o ~/gone/bin/tool .`", "machines/rig", "", ""},
+		{"Screenshots are written to ~/gone/shots", "machines/devbox", "", ""},
+		{"Build it with `go build -o ~/gone/bin/tool .`", "machines/devbox", "", ""},
 		// not a whole path, or not a path
-		{"The plugin docs are under ~/gone/plugins/cache/openai...", "machines/rig", "", ""},
-		{"The plugin docs are under ~/gone/plugins/cache/openai… too", "machines/rig", "", ""},
-		{"Copies live in ~/gone/a,b,c", "machines/rig", "", ""},
-		{"Each run writes ~/gone/run-NN/log.txt", "machines/rig", "", ""},
-		{"Logs roll to ~/gone/logs/%Y-%m", "machines/rig", "", ""},
-		{"Push it with ~/gone/boxN-ssh", "machines/rig", "", ""},
-		{"Backups are in ~/gone/x.bak and ~/gone/backup", "machines/rig", "", ""},
-		{"Each run is ~/gone/run-", "machines/rig", "", ""},
-		{"Read ~/gone/run.* and ~/gone/cfg.{json,yaml}", "machines/rig", "", ""},
-		{"Read ~/gone/out.<ext> and ~/gone/run[0-9] and ~/gone/run?.log", "machines/rig", "", ""},
-		{"Is it in ~/gone/runs?", "machines/rig", "", "~/gone/runs"},
-		{"Support files are in ~/gone/Application Support/x", "machines/rig", "", ""},
-		{"Put ~/here:~/gone/bin on the path", "machines/rig", "", ""},
-		{"System units are in /etc/gone-units", "machines/rig", "", ""},
-		{"Keep it in ~/a", "machines/rig", "", ""},
+		{"The plugin docs are under ~/gone/plugins/cache/openai...", "machines/devbox", "", ""},
+		{"The plugin docs are under ~/gone/plugins/cache/openai… too", "machines/devbox", "", ""},
+		{"Copies live in ~/gone/a,b,c", "machines/devbox", "", ""},
+		{"Each run writes ~/gone/run-NN/log.txt", "machines/devbox", "", ""},
+		{"Logs roll to ~/gone/logs/%Y-%m", "machines/devbox", "", ""},
+		{"Push it with ~/gone/boxN-ssh", "machines/devbox", "", ""},
+		{"Backups are in ~/gone/x.bak and ~/gone/backup", "machines/devbox", "", ""},
+		{"Each run is ~/gone/run-", "machines/devbox", "", ""},
+		{"Read ~/gone/run.* and ~/gone/cfg.{json,yaml}", "machines/devbox", "", ""},
+		{"Read ~/gone/out.<ext> and ~/gone/run[0-9] and ~/gone/run?.log", "machines/devbox", "", ""},
+		{"Is it in ~/gone/runs?", "machines/devbox", "", "~/gone/runs"},
+		{"Support files are in ~/gone/Application Support/x", "machines/devbox", "", ""},
+		{"Put ~/here:~/gone/bin on the path", "machines/devbox", "", ""},
+		{"System units are in /etc/gone-units", "machines/devbox", "", ""},
+		{"Keep it in ~/a", "machines/devbox", "", ""},
 		// a whole path the regex once cut
-		{"Notes are in '~/here/my docs'", "machines/rig", "", ""},
-		{"Notes are in '~/here/our notes'", "machines/rig", "", "~/here/our notes"},
-		{"Notes are in `~/here/my docs`", "machines/rig", "", ""},
-		{"Notes are in `~/here/our notes`", "machines/rig", "", "~/here/our notes"},
-		{"Notes are in `~/gone/our notes`", "machines/rig", "", "~/gone/our notes"},
-		{"Run `~/here/run.sh weekly`", "machines/rig", "", ""},
-		{"Run `~/gone/run.sh weekly`", "machines/rig", "", "~/gone/run.sh"},
-		{"Run `~/gone/tool | tee x`", "machines/rig", "", "~/gone/tool"},
-		{"Notes are in “~/here/my docs”", "machines/rig", "", ""},
-		{"Run `~/gone/tool --flag`", "machines/rig", "", "~/gone/tool"},
-		{"Notes are in ~/here/café/notes", "machines/rig", "", ""},
-		{"See ~/here/main.go:42", "machines/rig", "", ""},
+		{"Notes are in '~/here/my docs'", "machines/devbox", "", ""},
+		{"Notes are in '~/here/our notes'", "machines/devbox", "", "~/here/our notes"},
+		{"Notes are in `~/here/my docs`", "machines/devbox", "", ""},
+		{"Notes are in `~/here/our notes`", "machines/devbox", "", "~/here/our notes"},
+		{"Notes are in `~/gone/our notes`", "machines/devbox", "", "~/gone/our notes"},
+		{"Run `~/here/run.sh weekly`", "machines/devbox", "", ""},
+		{"Run `~/gone/run.sh weekly`", "machines/devbox", "", "~/gone/run.sh"},
+		{"Run `~/gone/tool | tee x`", "machines/devbox", "", "~/gone/tool"},
+		{"Notes are in “~/here/my docs”", "machines/devbox", "", ""},
+		{"Run `~/gone/tool --flag`", "machines/devbox", "", "~/gone/tool"},
+		{"Notes are in ~/here/café/notes", "machines/devbox", "", ""},
+		{"See ~/here/main.go:42", "machines/devbox", "", ""},
 	} {
 		f := &fact.Fact{Meta: fact.Meta{Name: "x", Scope: c.scope, Description: c.desc}}
 		if c.hosts != "" {
@@ -534,27 +534,27 @@ func TestGonePathsRules(t *testing.T) {
 	}
 	// The machines are the store's machine folders, never applies_to.hosts.
 	var fs []*fact.Fact
-	for _, m := range []fact.Meta{{Scope: "machines/spark-b23d"}, {Scope: "machines/wrx"}, {Scope: "machines/rig"}, {Scope: "user", AppliesTo: fact.AppliesTo{Hosts: []string{"5090"}}}} {
+	for _, m := range []fact.Meta{{Scope: "machines/gpu-x9k2"}, {Scope: "machines/farhost"}, {Scope: "machines/devbox"}, {Scope: "user", AppliesTo: fact.AppliesTo{Hosts: []string{"5090"}}}} {
 		fs = append(fs, &fact.Fact{Meta: m})
 	}
-	if got := strings.Join(machineNames(fs), ","); got != "spark-b23d,b23d,wrx,rig" {
+	if got := strings.Join(machineNames(fs), ","); got != "gpu-x9k2,x9k2,farhost,devbox" {
 		t.Errorf("machine names %q", got)
 	}
-	if newGoneProbe("rig-a1", home, []string{"rig-a1", "a1"}).elsewhere != nil {
+	if newGoneProbe("devbox-a1", home, []string{"devbox-a1", "a1"}).elsewhere != nil {
 		t.Error("this machine's own name, or a part of it, is taken for another machine")
 	}
-	if newGoneProbe("rig", "/", nil).paths(&fact.Fact{Meta: fact.Meta{Scope: "machines/rig", Description: "In ~/gone/x"}}) != nil {
+	if newGoneProbe("devbox", "/", nil).paths(&fact.Fact{Meta: fact.Meta{Scope: "machines/devbox", Description: "In ~/gone/x"}}) != nil {
 		t.Error("a home of / looked paths up")
 	}
 	// An absolute path after a colon is another host's (host:/path) or one
 	// of a list; a home that does not exist makes every other path gone.
-	abs := newGoneProbe("rig", "/home/tacit-test-no-such-home", nil)
+	abs := newGoneProbe("devbox", "/home/tacit-test-no-such-home", nil)
 	for desc, want := range map[string]string{
 		"Models are in /home/tacit-test-no-such-home/models":         "/home/tacit-test-no-such-home/models",
 		"Copy them to far:/home/tacit-test-no-such-home/models":      "",
 		"Logs are in /home/tacit-test-no-such-home/x.log:/srv/y.log": "/home/tacit-test-no-such-home/x.log",
 	} {
-		if got := strings.Join(abs.paths(&fact.Fact{Meta: fact.Meta{Scope: "machines/rig", Description: desc}}), ","); got != want {
+		if got := strings.Join(abs.paths(&fact.Fact{Meta: fact.Meta{Scope: "machines/devbox", Description: desc}}), ","); got != want {
 			t.Errorf("%q: got %q, want %q", desc, got, want)
 		}
 	}
