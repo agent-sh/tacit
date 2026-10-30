@@ -36,7 +36,8 @@ func sandboxVerify(t *testing.T, store string) (state string, called func() bool
 // failed, and `tacit verify --requeue` sends it again. v0.9.14 said only how
 // many there were. A pair whose fact a third fact replaced, the cause of the
 // strandings v0.9.15 named, is no longer sent at all: it moves to the live
-// facts (TestVerifyRepointsPairsWhoseFactsWereReplaced), here to b / c.
+// facts (TestVerifyRepointsPairsWhoseFactsWereReplaced), or here, where the
+// supersede it rests on is still under review, waits.
 func TestVerifyNamesStrandedFindingsAndRequeuesThem(t *testing.T) {
 	stubScrump(t)
 	_, clone := reviewFixture(t)
@@ -44,9 +45,9 @@ func TestVerifyNamesStrandedFindingsAndRequeuesThem(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	state, called := sandboxVerify(t, rs.s.Dir)
-	// a is already retired in favour of c, so "b may replace a" moves to the
-	// finding on b and c; d is gone from the store, so its pair takes only
-	// "both": a "keep c" on d / c cannot land.
+	// a is already retired in favour of c, so "b may replace a" would move to
+	// b and c, but c / a still asks about that supersede; d is gone from the
+	// store, so its pair takes only "both": a "keep c" on d / c cannot land.
 	p := filepath.Join(rs.s.Dir, "system", "a.md")
 	b, _ := os.ReadFile(p)
 	os.WriteFile(p, []byte(strings.Replace(string(b), "created:", "superseded_by: c\ncreated:", 1)), 0o644)
@@ -92,8 +93,10 @@ func TestVerifyNamesStrandedFindingsAndRequeuesThem(t *testing.T) {
 	if sent[dc.ID] != 3 || sent[ca.ID] != 3 || sent[ab.ID] != 0 {
 		t.Fatalf("sent %v, want d/c and c/a 3 times each and a/b never", sent)
 	}
-	if d := decisionsOf(t, rs)[ab.ID]; d.Action != mootMark || d.Repointed != bc.ID {
-		t.Fatalf("a/b: %+v, want it closed and moved to b/c", d)
+	// a / b rests on a -> c, which the open c / a findings still ask about:
+	// it waits, neither moved nor sent (TestVerifyRepointFollowsReplaysWaitsAndReopens).
+	if d := decisionsOf(t, rs)[ab.ID]; d.Action != "" {
+		t.Fatalf("a/b: %+v, want it waiting", d)
 	}
 	for _, want := range []string{
 		"verify: 4 finding(s) reached 3 failed attempts and are no longer sent",
@@ -131,15 +134,16 @@ func TestVerifyNamesStrandedFindingsAndRequeuesThem(t *testing.T) {
 	if code := runVerify([]string{"--requeue", "000000000000"}); code != 1 {
 		t.Fatalf("unknown id: exit %d", code)
 	}
-	// Every finding is at the limit, so the next run sends nothing; a finding
-	// the owner settles meanwhile still loses its count on disk.
+	// A finding the owner settles meanwhile loses its count on disk. Their
+	// "both" on c / a also undoes a -> c, so a / b is a plain pair now and is
+	// sent; every other finding is at the limit and is not.
 	if err := mark(ctx, rs, ca.ID, "both"); err != nil {
 		t.Fatal(err)
 	}
 	before := len(sent)
 	run()
-	if r.attempts()[ca.ID] != 0 || strings.Contains(last, ca.ID) || len(sent) != before {
-		t.Fatalf("a settled finding is still counted: %v\n%s", r.attempts(), last)
+	if r.attempts()[ca.ID] != 0 || strings.Contains(last, ca.ID) || len(sent) != before+1 || sent[ab.ID] != 1 {
+		t.Fatalf("after the owner settles c / a: attempts %v, sent %v\n%s", r.attempts(), sent, last)
 	}
 	// Requeue one by id (twice in the list): it is sent again, the others not.
 	if code := runVerify([]string{"--requeue", dc.ID + "," + dc.ID}); code != 0 {

@@ -43,6 +43,58 @@ func repointable(it reviewItem, owned map[string]bool) bool {
 		!it.A.Missing && !it.B.Missing && replacedSide(it)
 }
 
+// pairKey is an unordered pair of fact names.
+func pairKey(a, b string) [2]string {
+	if b < a {
+		a, b = b, a
+	}
+	return [2]string{a, b}
+}
+
+// openPairs are the pairs of facts an open finding (no mark, no question)
+// still asks about.
+func openPairs(items []reviewItem) map[[2]string]bool {
+	out := map[[2]string]bool{}
+	for _, it := range items {
+		if it.Decision == nil && it.Ask == nil {
+			out[pairKey(it.A.Name, it.B.Name)] = true
+		}
+	}
+	return out
+}
+
+// chainUnderReview reports whether a step of name's superseded_by chain is a
+// pair an open finding still asks about: its review may undo the step, so a
+// finding moved along it would rest on an answer not given yet.
+func (rs *reviewServer) chainUnderReview(name string, open map[[2]string]bool) bool {
+	seen := map[string]bool{}
+	for cur := name; !seen[cur]; {
+		seen[cur] = true
+		f := rs.facts[cur]
+		if f == nil || f.Meta.SupersededBy == "" {
+			return false
+		}
+		if open[pairKey(cur, f.Meta.SupersededBy)] {
+			return true
+		}
+		cur = f.Meta.SupersededBy
+	}
+	return false
+}
+
+// waits reports a finding repoint would move but for a step of its chains
+// under review: it is neither moved nor sent until that review is answered.
+func (rs *reviewServer) waits(it reviewItem, owned map[string]bool, open map[[2]string]bool) bool {
+	return repointable(it, owned) && (rs.chainUnderReview(it.A.Name, open) || rs.chainUnderReview(it.B.Name, open))
+}
+
+// mootStands reports whether a finding the curator closed as moot still has
+// a fact replaced by a third fact or retired: when neither, a supersede or a
+// retirement it rested on was undone since, and the question is live again.
+func mootStands(it reviewItem) bool {
+	return it.A.Missing || it.B.Missing || replacedSide(it) || it.A.Retired != "" || it.B.Retired != ""
+}
+
 // repointedFile is the review file the step writes the moved findings to,
 // one per day. It is the step's own: the curator appends to review/<date>.md
 // without the store lock and commits later, so a commit of that file could
@@ -187,8 +239,12 @@ func (rs *reviewServer) applyMoot(o *op, it *reviewItem) (string, []string, erro
 	if o.By != "curator" {
 		return "", nil, errors.New("only the curator closes a finding as moot")
 	}
-	if !repointable(*it, rs.ownerTouched()) {
+	owned := rs.ownerTouched()
+	if !repointable(*it, owned) {
 		return "", nil, errors.New("this finding is not open with a fact replaced by a third one")
+	}
+	if rs.waits(*it, owned, openPairs(rs.items())) {
+		return "", nil, errors.New("a step of its facts' supersede chains is still under review")
 	}
 	p := rs.planRepoint(*it)
 	files := map[string][]byte{}
@@ -227,9 +283,23 @@ func (r *verifyRun) repoint(ctx context.Context, rs *reviewServer, owned map[str
 	for _, id := range r.only {
 		named[id] = true
 	}
-	var ops []op
-	for _, it := range rs.items() {
-		if !repointable(it, owned) || (len(named) > 0 && !named[it.ID]) {
+	items := rs.items()
+	open := openPairs(items)
+	var ops, reopens []op
+	for _, it := range items {
+		if len(named) > 0 && !named[it.ID] {
+			continue
+		}
+		// A moot closure whose supersede or retirement was undone since: the
+		// question is live again, and the curator reopens it.
+		if d := it.Decision; d != nil && d.Action == mootMark && d.By == "curator" && !owned[it.ID] && !mootStands(it) {
+			reopens = append(reopens, op{ID: it.ID, Mark: "reopen", By: "curator"})
+			if r.dry {
+				fmt.Printf("verify: would reopen %s (%s / %s): neither fact is replaced by a third one or retired now\n", it.ID, it.A.Name, it.B.Name)
+			}
+			continue
+		}
+		if !repointable(it, owned) || rs.waits(it, owned, open) {
 			continue
 		}
 		ops = append(ops, op{ID: it.ID, Mark: mootMark, By: "curator", A: it.A.Name, B: it.B.Name})
@@ -237,18 +307,22 @@ func (r *verifyRun) repoint(ctx context.Context, rs *reviewServer, owned map[str
 			fmt.Printf("verify: would close %s (%s / %s): %s\n", it.ID, it.A.Name, it.B.Name, rs.planRepoint(it).Why)
 		}
 	}
-	if len(ops) == 0 || r.dry {
+	if len(ops)+len(reopens) == 0 || r.dry {
 		return nil
 	}
 	var lastErr error
-	for start := 0; start < len(ops); start += repointChunk {
-		chunk := ops[start:min(start+repointChunk, len(ops))]
+	all := append(reopens, ops...)
+	for start := 0; start < len(all); start += repointChunk {
+		chunk := all[start:min(start+repointChunk, len(all))]
 		actx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 		_, _, err := rs.applyOps(actx, chunk)
 		cancel()
 		if err != nil {
 			lastErr = err
 		}
+	}
+	for _, o := range reopens {
+		fmt.Fprintf(os.Stderr, "verify: reopened %s: neither fact is replaced by a third one or retired now\n", o.ID)
 	}
 	// A commit kept on this machine when its push failed still closed its
 	// findings here; a refused one closed nothing.
@@ -269,6 +343,13 @@ func (r *verifyRun) repoint(ctx context.Context, rs *reviewServer, owned map[str
 	}
 	if moved+moot > 0 {
 		fmt.Fprintf(os.Stderr, "verify: %d finding(s) with a fact replaced by a third one: %d re-pointed to the live facts, %d moot\n", moved+moot, moved, moot)
+	}
+	// A replay verifies, in place of a finding it moved, the one on the live
+	// facts.
+	for i, id := range r.only {
+		if d := ds[id]; d != nil && d.Action == mootMark && d.Repointed != "" {
+			r.only[i] = d.Repointed
+		}
 	}
 	return lastErr
 }

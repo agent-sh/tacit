@@ -345,3 +345,81 @@ func TestVerifyRepointKeepsToItsBounds(t *testing.T) {
 		t.Fatal("a model CLI was called")
 	}
 }
+
+// A replay (--ids) of a finding that moves verifies the finding in its place
+// in the same run; a pair whose replacement is itself under review (a supersede
+// with an open finding of its own) waits, neither moved nor sent, until that
+// review is answered; and a moot closure whose supersede was undone since is
+// reopened by the curator and sent.
+func TestVerifyRepointFollowsReplaysWaitsAndReopens(t *testing.T) {
+	stubScrump(t)
+	rs, _ := repointStore(t, []string{"k", "m", "n"}, map[string]string{"k": "superseded_by: m\n"},
+		"- supersedes? [[b]] may replace [[a]]\n- CONTRADICTION?: [[n]] (system) vs [[k]] (system)\n- supersedes: [[m]] replaces [[k]]\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	state, called := sandboxVerify(t, rs.s.Dir)
+	ab, kn, km := itemFor(t, rs, "a", "b"), itemFor(t, rs, "k", "n"), itemFor(t, rs, "k", "m")
+	cb := pairID(kindSupersedeAsk, "c", "b")
+	sent := map[string]int{}
+	verdicts := map[string]verifyVerdict{}
+	call := func(_ context.Context, _, prompt, _ string, _ float64) ([]verifyVerdict, string, float64, error) {
+		var vs []verifyVerdict
+		for _, it := range rs.items() {
+			if strings.Contains(prompt, `"ID":"`+it.ID+`"`) {
+				sent[it.ID]++
+				if v, ok := verdicts[it.ID]; ok {
+					vs = append(vs, v)
+				}
+			}
+		}
+		return vs, "raw", 0.1, nil
+	}
+	newRun := func() verifyRun {
+		return verifyRun{model: "m", max: 50, per: 50, budget: 1, cwd: t.TempDir(), stateDir: filepath.Join(state, "verify")}
+	}
+
+	// A replay of a / b moves it to c / b and verifies c / b.
+	verdicts[cb] = verifyVerdict{ID: cb, Mark: "both", Evidence: "different subjects"}
+	r := newRun()
+	r.only = []string{ab.ID}
+	captureStderr(t, func() { r.run(ctx, rs.s, call) })
+	if d := decisionsOf(t, rs); d[ab.ID].Repointed != cb || sent[cb] != 1 || d[cb].Action != "both" {
+		t.Fatalf("replay of a / b: records %+v %+v, sent %v", d[ab.ID], d[cb], sent)
+	}
+
+	// k / n rests on k -> m, which "m replaces k" still asks about: it waits.
+	verdicts[km.ID] = verifyVerdict{ID: km.ID, Mark: "both", Evidence: "k still holds"}
+	r = newRun()
+	captureStderr(t, func() { r.run(ctx, rs.s, call) })
+	if d := decisionsOf(t, rs); d[kn.ID].Action != "" || sent[kn.ID] != 0 || sent[km.ID] != 1 {
+		t.Fatalf("k / n under review: record %+v, sent %v", d[kn.ID], sent)
+	}
+	// The verifier undid k -> m ("both"): k / n is a plain pair now, sent.
+	if strings.Contains(read(t, rs, "k"), "superseded_by") {
+		t.Fatalf("the verdict on m / k did not undo the supersede:\n%s", read(t, rs, "k"))
+	}
+	r = newRun()
+	captureStderr(t, func() { r.run(ctx, rs.s, call) })
+	if sent[kn.ID] != 1 {
+		t.Fatalf("k / n after its supersede was undone: sent %v", sent)
+	}
+
+	// Undo the supersede a / b moved along: the curator reopens a / b and it
+	// is sent.
+	p := filepath.Join(rs.s.Dir, "system", "a.md")
+	b, _ := os.ReadFile(p)
+	os.WriteFile(p, []byte(strings.Replace(string(b), "superseded_by: c\n", "", 1)), 0o644)
+	git(t, rs.s.Dir, "commit", "-q", "-am", "a stands again")
+	git(t, rs.s.Dir, "push", "-q", "origin", "HEAD:main")
+	r = newRun()
+	errs := captureStderr(t, func() { r.run(ctx, rs.s, call) })
+	if it := itemFor(t, rs, "a", "b"); it.Decision != nil || sent[ab.ID] != 1 || !strings.Contains(errs, "verify: reopened "+ab.ID) {
+		t.Fatalf("a / b after a stands again: decision %+v, sent %v\n%s", it.Decision, sent, errs)
+	}
+	if rs.ownerTouched()[ab.ID] {
+		t.Fatal("the curator's reopen counts as the owner's")
+	}
+	if called() {
+		t.Fatal("a model CLI was called")
+	}
+}
