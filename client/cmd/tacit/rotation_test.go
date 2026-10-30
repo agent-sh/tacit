@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +16,9 @@ import (
 	"github.com/agent-sh/tacit/client/internal/ledger"
 	"github.com/agent-sh/tacit/client/internal/lint"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
+	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/rotation"
+	"github.com/agent-sh/tacit/client/internal/store"
 )
 
 // rotFile is a curated fact file with its own dates.
@@ -385,5 +388,174 @@ func TestRotationPlanCompressStaysInItsLayer(t *testing.T) {
 	}
 	if _, ok := files["user/b.md"]; ok {
 		t.Fatalf("a gone member was written back: %v", sortedFileKeys(files))
+	}
+}
+
+// A fact of this machine whose description names a path that is gone is
+// checked first, before facts that sort earlier by every other key, and its
+// prompt says which path is gone; one whose path is here, one that says its
+// path was moved, and one checked since it last changed wait their turn.
+// A fact that applies to this machine from another folder gets the same
+// path proof.
+func TestRotationTakesFactsWhosePathIsGoneFirst(t *testing.T) {
+	stubScrump(t)
+	r := rotationRig(t)
+	home := filepath.Join(r.root, "home")
+	os.MkdirAll(filepath.Join(home, "tools"), 0o755)
+	host := store.ShortHost()
+	scope := "machines/" + host
+	os.MkdirAll(filepath.Join(r.clone, filepath.FromSlash(scope)), 0o755)
+	for _, c := range []struct{ name, desc, created, extra string }{
+		// checked, then changed: due first again
+		{"zz-build-cache-dir", "The build cache lives in ~/caches/build-cache", "2026-01-01", "updated: 2026-10-25\nlast_checked: 2026-03-01\n"},
+		{"aa-tools-dir", "The helper tools live in ~/tools", "2026-01-01", ""},
+		{"aa-cache-moved", "~/old-cache was moved to ~/caches; read the new place", "2026-01-01", ""},
+		// checked since it last changed: its turn by age
+		{"aa-checked-since", "The model cache lives in ~/caches/models", "2026-01-01", "last_checked: 2026-01-02\n"},
+	} {
+		os.WriteFile(filepath.Join(r.clone, filepath.FromSlash(scope), c.name+".md"), []byte(rotFile(c.name, scope, "machine_fact", c.desc, c.desc+".", c.created, c.extra)), 0o644)
+	}
+	os.WriteFile(filepath.Join(r.clone, "user", "yy-applies-here.md"), []byte(rotFile("yy-applies-here", "user", "user_preference", "Keep notes in ~/notes-gone", "Keep notes in ~/notes-gone.", "2026-10-26", "applies_to:\n  hosts:\n    - "+strings.ToUpper(host)+"\n")), 0o644)
+	r.commitIndex(r.clone, "machine facts")
+	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
+	fr := &fakeRotator{answer: func(it rotation.Item) (rotation.Verdict, bool) {
+		return rotation.Verdict{Outcome: rotation.Still}, true
+	}}
+	prev := rotationRun
+	rotationRun = fr.run
+	t.Cleanup(func() { rotationRun = prev })
+	st := runRotationStep(t, r, rotationOpts{model: "m", age: 30, batch: 1, max: 3})
+	if st.Gone != 2 || len(fr.prompts) != 3 {
+		t.Fatalf("gone %d, %d prompt(s); want 2 and 3: %+v", st.Gone, len(fr.prompts), st)
+	}
+	first := fr.prompts[0] + fr.prompts[1]
+	for _, want := range []string{`"name":"zz-build-cache-dir"`, `"name":"yy-applies-here"`, "~/caches/build-cache does not exist on " + host, "~/notes-gone does not exist on " + host} {
+		if !strings.Contains(first, want) {
+			t.Fatalf("the first two prompts lack %s:\n%s", want, first)
+		}
+	}
+	// The run's log says how many of each batch's facts went first for it.
+	b, _ := os.ReadFile(filepath.Join(platform.StateDir(home), rotationLog))
+	var gone []int
+	for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var rec struct{ Gone int }
+		json.Unmarshal([]byte(l), &rec)
+		gone = append(gone, rec.Gone)
+	}
+	if !slices.Equal(gone, []int{1, 1, 0}) {
+		t.Fatalf("gone per batch in %s: %v", rotationLog, gone)
+	}
+}
+
+// The probe's rules, each from a kind of false flag the hand-checked
+// samples or the review showed (eval/VALUE.md, "Machine facts whose paths
+// are gone"). Each case fails when its rule is taken out.
+func TestGonePathsRules(t *testing.T) {
+	home := t.TempDir()
+	for _, d := range []string{"here", "here/my docs", "here/café/notes", "here/our"} {
+		os.MkdirAll(filepath.Join(home, filepath.FromSlash(d)), 0o755)
+	}
+	os.WriteFile(filepath.Join(home, "here", "run.sh"), nil, 0o755)
+	os.WriteFile(filepath.Join(home, "here", "main.go"), nil, 0o644)
+	g := newGoneProbe("devbox", home+"/", []string{"devbox", "farhost", "gpu-x9k2", "x9k2"})
+	for _, c := range []struct {
+		desc, scope, hosts, want string
+	}{
+		{"The build cache lives in ~/gone/cache", "machines/devbox", "", "~/gone/cache"},
+		{"The tools live in ~/here", "machines/devbox", "", ""},
+		{"The build cache lives in ~/gone/cache", "machines/other", "", ""},
+		{"The build cache lives in ~/gone/cache", "user", "", ""},
+		{"The build cache lives in ~/gone/cache", "user", "DEVBOX", "~/gone/cache"},
+		{"The build cache lives in ~/gone/cache", "machines/Devbox", "", "~/gone/cache"},
+		// another machine: generic words, or one of the store's machines
+		{"On the box the weights are in ~/gone/models", "machines/devbox", "", ""},
+		{"Copied via ssh to ~/gone/models", "machines/devbox", "", ""},
+		{"Run ssh me@far.example and read ~/gone/models", "machines/devbox", "", ""},
+		{"It is rsynced to far:~/gone/models", "machines/devbox", "", ""},
+		{"On farhost the weights are in ~/gone/models", "machines/devbox", "", ""},
+		{"Run ssh gpu-x9k2 and read ~/gone/models", "machines/devbox", "", ""},
+		{"x9k2: the weights are in ~/gone/models", "machines/devbox", "", ""},
+		{"On devbox the weights are in ~/gone/models", "machines/devbox", "", "~/gone/models"},
+		// made on use
+		{"Run mkdir -p ~/gone/scratch first", "machines/devbox", "", ""},
+		{"Set CACHE_DIR=~/gone/cache", "machines/devbox", "", ""},
+		{"Point dir=~/gone/cache at it", "machines/devbox", "", "~/gone/cache"},
+		// the fact says it is not there
+		{"~/gone/a was deleted; read ~/gone/b", "machines/devbox", "", ""},
+		{"The cache at ~/gone/x is no longer used", "machines/devbox", "", ""},
+		{"The cache is ~/gone/cache. The old one sat elsewhere", "machines/devbox", "", "~/gone/cache"},
+		{"Not an old note. The cache is ~/gone/cache", "machines/devbox", "", "~/gone/cache"},
+		{"The cache is ~/gone/cache, and the old one sat elsewhere", "machines/devbox", "", "~/gone/cache"},
+		// an example
+		{"Use a dated dir like ~/gone/logs", "machines/devbox", "", ""},
+		{"Dated dirs, e.g., ~/gone/logs", "machines/devbox", "", ""},
+		{"Dated dirs, for example, ~/gone/logs", "machines/devbox", "", ""},
+		{"E.g. ~/gone/logs holds them", "machines/devbox", "", ""},
+		// an output
+		{"Screenshots are written to ~/gone/shots", "machines/devbox", "", ""},
+		{"Build it with `go build -o ~/gone/bin/tool .`", "machines/devbox", "", ""},
+		// not a whole path, or not a path
+		{"The plugin docs are under ~/gone/plugins/cache/openai...", "machines/devbox", "", ""},
+		{"The plugin docs are under ~/gone/plugins/cache/openai… too", "machines/devbox", "", ""},
+		{"Copies live in ~/gone/a,b,c", "machines/devbox", "", ""},
+		{"Each run writes ~/gone/run-NN/log.txt", "machines/devbox", "", ""},
+		{"Logs roll to ~/gone/logs/%Y-%m", "machines/devbox", "", ""},
+		{"Push it with ~/gone/boxN-ssh", "machines/devbox", "", ""},
+		{"Backups are in ~/gone/x.bak and ~/gone/backup", "machines/devbox", "", ""},
+		{"Each run is ~/gone/run-", "machines/devbox", "", ""},
+		{"Read ~/gone/run.* and ~/gone/cfg.{json,yaml}", "machines/devbox", "", ""},
+		{"Read ~/gone/out.<ext> and ~/gone/run[0-9] and ~/gone/run?.log", "machines/devbox", "", ""},
+		{"Is it in ~/gone/runs?", "machines/devbox", "", "~/gone/runs"},
+		{"Support files are in ~/gone/Application Support/x", "machines/devbox", "", ""},
+		{"Put ~/here:~/gone/bin on the path", "machines/devbox", "", ""},
+		{"System units are in /etc/gone-units", "machines/devbox", "", ""},
+		{"Keep it in ~/a", "machines/devbox", "", ""},
+		// a whole path the regex once cut
+		{"Notes are in '~/here/my docs'", "machines/devbox", "", ""},
+		{"Notes are in '~/here/our notes'", "machines/devbox", "", "~/here/our notes"},
+		{"Notes are in `~/here/my docs`", "machines/devbox", "", ""},
+		{"Notes are in `~/here/our notes`", "machines/devbox", "", "~/here/our notes"},
+		{"Notes are in `~/gone/our notes`", "machines/devbox", "", "~/gone/our notes"},
+		{"Run `~/here/run.sh weekly`", "machines/devbox", "", ""},
+		{"Run `~/gone/run.sh weekly`", "machines/devbox", "", "~/gone/run.sh"},
+		{"Run `~/gone/tool | tee x`", "machines/devbox", "", "~/gone/tool"},
+		{"Notes are in “~/here/my docs”", "machines/devbox", "", ""},
+		{"Run `~/gone/tool --flag`", "machines/devbox", "", "~/gone/tool"},
+		{"Notes are in ~/here/café/notes", "machines/devbox", "", ""},
+		{"See ~/here/main.go:42", "machines/devbox", "", ""},
+	} {
+		f := &fact.Fact{Meta: fact.Meta{Name: "x", Scope: c.scope, Description: c.desc}}
+		if c.hosts != "" {
+			f.Meta.AppliesTo.Hosts = []string{c.hosts}
+		}
+		if got := strings.Join(g.paths(f), ","); got != c.want {
+			t.Errorf("%q in %s: got %q, want %q", c.desc, c.scope, got, c.want)
+		}
+	}
+	// The machines are the store's machine folders, never applies_to.hosts.
+	var fs []*fact.Fact
+	for _, m := range []fact.Meta{{Scope: "machines/gpu-x9k2"}, {Scope: "machines/farhost"}, {Scope: "machines/devbox"}, {Scope: "user", AppliesTo: fact.AppliesTo{Hosts: []string{"5090"}}}} {
+		fs = append(fs, &fact.Fact{Meta: m})
+	}
+	if got := strings.Join(machineNames(fs), ","); got != "gpu-x9k2,x9k2,farhost,devbox" {
+		t.Errorf("machine names %q", got)
+	}
+	if newGoneProbe("devbox-a1", home, []string{"devbox-a1", "a1"}).elsewhere != nil {
+		t.Error("this machine's own name, or a part of it, is taken for another machine")
+	}
+	if newGoneProbe("devbox", "/", nil).paths(&fact.Fact{Meta: fact.Meta{Scope: "machines/devbox", Description: "In ~/gone/x"}}) != nil {
+		t.Error("a home of / looked paths up")
+	}
+	// An absolute path after a colon is another host's (host:/path) or one
+	// of a list; a home that does not exist makes every other path gone.
+	abs := newGoneProbe("devbox", "/home/tacit-test-no-such-home", nil)
+	for desc, want := range map[string]string{
+		"Models are in /home/tacit-test-no-such-home/models":         "/home/tacit-test-no-such-home/models",
+		"Copy them to far:/home/tacit-test-no-such-home/models":      "",
+		"Logs are in /home/tacit-test-no-such-home/x.log:/srv/y.log": "/home/tacit-test-no-such-home/x.log",
+	} {
+		if got := strings.Join(abs.paths(&fact.Fact{Meta: fact.Meta{Scope: "machines/devbox", Description: desc}}), ","); got != want {
+			t.Errorf("%q: got %q, want %q", desc, got, want)
+		}
 	}
 }
