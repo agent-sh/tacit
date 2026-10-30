@@ -393,7 +393,63 @@ func promptHits(ctx context.Context, ix *search.Index, sit search.Situation, p s
 	// The repo-first lines: the fact whose metadata names a path or command
 	// of the request, and the best rule or decision for it (hooks_delivery.go).
 	out = append(out, promptMetaHits(ctx, ix, sit, p, withSeen(seen, out))...)
-	return append(out, promptActionHits(ctx, ix, sit, p, withSeen(seen, out), out)...), nil
+	out = append(out, promptActionHits(ctx, ix, sit, p, withSeen(seen, out), out)...)
+	return withoutEchoes(out, p), nil
+}
+
+// echoShare: a line whose name and description words the request holds for
+// at least this share of them says back what the request says. Measured on
+// the graded prompt blocks (eval/DELIVERY.md, "Echoes of the request"): at
+// 0.7 it drops 32 lines of program-written prompts (a scheduled review's own
+// instructions said back to it) and no useful line; at 0.6 it dropped two
+// useful ones; owner prompts lost nothing at 0.5 to 0.8.
+const echoShare = 0.7
+
+// echoMinTerms: a line of fewer distinct words is no echo, however many of
+// them the request holds: a short rule answers a request in its own words
+// ("never force push to main" for "can I force push to main?").
+const echoMinTerms = 5
+
+// echoNegation is a word that says no. A line that says no where the
+// request does not adds to it: the search drops these words (stop words,
+// or too short), so the share does not see them.
+var echoNegation = regexp.MustCompile(`(?i)\b(?:no|not|never|nor|none|don'?t|doesn'?t|won'?t|can'?t|cannot|avoid|without)\b`)
+
+// withoutEchoes is hits less the lines that echo the request p: every line
+// the prompt hook would print, whatever chose it. No backfill: the line is
+// dropped, not replaced by the next candidate.
+func withoutEchoes(hits []search.Hit, p string) []search.Hit {
+	words := map[string]bool{}
+	for _, t := range search.AllTerms(p) {
+		words[search.TermKey(t)] = true
+	}
+	said := map[string]bool{}
+	for _, w := range echoNegation.FindAllString(p, -1) {
+		said[strings.ToLower(strings.ReplaceAll(w, "'", ""))] = true
+	}
+	out := hits[:0:0]
+	for _, h := range hits {
+		text := h.Name + " " + h.Description
+		keys := map[string]bool{}
+		for _, t := range search.AllTerms(text) {
+			keys[search.TermKey(t)] = true
+		}
+		in := 0
+		for k := range keys {
+			if words[k] {
+				in++
+			}
+		}
+		adds := false
+		for _, w := range echoNegation.FindAllString(strings.ReplaceAll(text, "-", " "), -1) {
+			adds = adds || !said[strings.ToLower(strings.ReplaceAll(w, "'", ""))]
+		}
+		if len(keys) >= echoMinTerms && float64(in) >= echoShare*float64(len(keys)) && !adds {
+			continue
+		}
+		out = append(out, h)
+	}
+	return out
 }
 
 // promptSelection takes curated matches above the BM25 floor or with supported

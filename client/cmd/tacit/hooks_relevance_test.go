@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
@@ -167,5 +168,71 @@ func TestPromptRelevanceBeforeLimit(t *testing.T) {
 	}
 	if names(got) != "valid" {
 		t.Fatalf("valid candidate starved: %s", names(got))
+	}
+}
+
+// A line whose words the request already holds (a scheduled job's own
+// instructions, said back to it) is not printed, and nothing takes its place;
+// a fact that matches the request and adds to it is printed.
+func TestPromptBlockLeavesOutEchoesOfTheRequest(t *testing.T) {
+	ix := relevanceIndex(t, []fact.Meta{
+		{Name: "review-tool-failures-weekly", Description: "Review the tool failures weekly and fix their root cause"},
+		{Name: "tool-failures-fix-at-source", Description: "Review tool failures weekly: fix the root cause in the mods, rules or scripts that let them happen, and log what changed"},
+	})
+	got, err := promptHits(context.Background(), ix, search.Situation{}, "Review the tool failures weekly and fix their root cause, then report", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Split(names(got), ","); slices.Contains(n, "review-tool-failures-weekly") || !slices.Contains(n, "tool-failures-fix-at-source") {
+		t.Fatalf("got %v: want where to fix, not the instructions said back", n)
+	}
+}
+
+// Which lines are echoes: at least 7 in 10 of a line's words in the request,
+// 5 distinct words or more, and no "no" the request does not say. The
+// request is read whole, however long.
+func TestWithoutEchoesRules(t *testing.T) {
+	ten := "alpha bravo charlie delta echo foxtrot golf hotel india juliet"
+	long := "amber basil cedar dune ember fable garnet harbor ivory jasper kettle lantern meadow nectar orchid pebble quartz raven saffron timber umber velvet willow yarrow zephyr acorn birch clover "
+	for _, c := range []struct {
+		name, desc, prompt string
+		echo               bool
+	}{
+		{"alpha-bravo", ten, "alpha bravo charlie delta echo foxtrot golf now", true},
+		{"alpha-bravo", ten, "alpha bravo charlie delta echo foxtrot now", false},
+		{"alpha-bravo", "alpha bravo charlie delta", "alpha bravo charlie delta", false},
+		{"alpha-bravo", "alpha bravo charlie delta echo", "alpha bravo charlie delta echo", true},
+		{"never-alpha-bravo", "Never alpha bravo charlie delta echo", "alpha bravo charlie delta echo?", false},
+		{"never-alpha-bravo", "Never alpha bravo charlie delta echo", "never alpha bravo charlie delta echo, right", true},
+		{"alpha-bravo", "alpha bravo charlie delta echo", long + "alpha bravo charlie delta echo", true},
+	} {
+		got := withoutEchoes([]search.Hit{{Name: c.name, Description: c.desc}}, c.prompt)
+		if (len(got) == 0) != c.echo {
+			t.Errorf("%q / %q for %q: echo=%v, want %v", c.name, c.desc, c.prompt, len(got) == 0, c.echo)
+		}
+	}
+}
+
+// The filter runs after the selection: the echo's place stays empty, and a
+// weaker line the echo's score kept out (below 0.7 of it) stays out.
+// Filtered before, the next candidate took the place (eval/DELIVERY.md,
+// "Echoes of the request").
+func TestPromptEchoFilterRunsAfterTheSelection(t *testing.T) {
+	ix := relevanceIndex(t, []fact.Meta{
+		{Name: "nightly-backup-verify-steps", Description: "Verify the nightly backup restores the ledger snapshot cleanly"},
+		{Name: "backup-snapshot-cleanly-named", Description: "Name each nightly ledger snapshot by its date"},
+		{Name: "backup-restore-ledger-checksum", Description: "A nightly backup restore of the ledger must compare the snapshot checksum"},
+		{Name: "verify-restores-on-staging", Description: "Verify nightly restores of a ledger snapshot on staging first, with the read replica paused"},
+		{Name: "nightly-backup-ledger-owner", Description: "The nightly backup of the ledger snapshot belongs to the data team"},
+		{Name: "ledger-snapshot-retention", Description: "Ledger snapshot retention after a nightly backup is thirty days"},
+	})
+	got, err := promptHits(context.Background(), ix, search.Situation{}, "Verify the nightly backup restores the ledger snapshot cleanly", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := strings.Split(names(got), ",")
+	slices.Sort(g)
+	if strings.Join(g, ",") != "backup-restore-ledger-checksum,backup-snapshot-cleanly-named,ledger-snapshot-retention,nightly-backup-ledger-owner" {
+		t.Fatalf("got %s", names(got))
 	}
 }
