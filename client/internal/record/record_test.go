@@ -248,6 +248,10 @@ func TestValidateAreasAndTopics(t *testing.T) {
 	next := held.Clone()
 	next.Description = "ticketing, on-call and the pager"
 	expect(t, Validate(held, next, ByOwner, e), "")
+	// Lint reads a record as it stands: a pattern it holds is no finding.
+	static := e
+	static.Static = true
+	expect(t, Validate(nil, held, "", static), "")
 	tool.Tools, tool.Commands = nil, []string{" padded"}
 	expect(t, Validate(nil, tool, ByOpus, e), "not a command prefix")
 	// The owner needs no sessions.
