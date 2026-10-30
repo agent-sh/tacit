@@ -114,7 +114,7 @@ func selectionExport(ctx context.Context, ix *search.Index, sit search.Situation
 	if sit.Repo == "" {
 		floor = repoLessPromptFloor
 	}
-	out.Control = promptSelection(originalHits, derived, seen, floor)
+	out.Control = promptSelectionFor(strings.TrimSpace(req.Original), originalHits, derived, seen, floor)
 	return out, nil
 }
 

@@ -235,7 +235,7 @@ type utilityAudit struct {
 }
 
 func utilityPromptSelection(ctx context.Context, p string, hits, derived []search.Hit, seen map[string]bool, floor float64) []search.Hit {
-	fallback := promptSelection(hits, derived, seen, floor)
+	fallback := promptSelectionFor(p, hits, derived, seen, floor)
 	if utilityProvider() == "" || len(hits)+len(derived) == 0 {
 		return fallback
 	}
@@ -309,7 +309,7 @@ func finishUtilitySelection(selected []search.Hit, audit utilityAudit, dir strin
 }
 
 func utilityPromptSelectionWork(ctx context.Context, p string, hits, derived []search.Hit, seen map[string]bool, floor float64, capture func(utilityAudit)) []search.Hit {
-	fallback := promptSelection(hits, derived, seen, floor)
+	fallback := promptSelectionFor(p, hits, derived, seen, floor)
 	if utilityProvider() == "" {
 		return fallback
 	}
