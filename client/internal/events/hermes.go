@@ -43,12 +43,15 @@ func ReadHermes(ctx context.Context, db *hermes.DB, s hermes.Session, after int6
 
 // ReadHermesState is ReadHermes from a State, returning the State after the
 // last row read. When from holds what the reader kept for this store's
-// session (State.Kept), the read starts after from's message id: it reads
-// only the rows after it, and gives the events ReadHermes gives after it. A
-// bare cursor is read as ReadHermes reads it, with a pass over the rows
-// before it. A State at the session's last row is returned as it is. When
-// emit returns an error the read stops and returns it with a bare cursor at
-// the id before that row's.
+// session (State.Kept) and the row at its cursor is still the one it was kept
+// after, the read starts after from's message id: it reads only the rows
+// after it, and gives the events ReadHermes gives after it. A bare cursor, or
+// a session whose rows Hermes wrote again (its /retry, /undo and /compress
+// replace them), is read as ReadHermes reads it, with a pass over the rows
+// before the cursor. A State at the session's last row is returned as it is.
+// When emit returns an error the read stops and returns it with the State a
+// read from gives that row's events again: from itself when the error came
+// at the first event from it, else a bare cursor at the id before the row's.
 func ReadHermesState(ctx context.Context, db *hermes.DB, s hermes.Session, from State, emit func(Event) error) (State, error) {
 	after := from.Offset
 	r := &hermesReader{base: newBase("hermes", s.ID)}
@@ -80,18 +83,34 @@ func ReadHermesState(ctx context.Context, db *hermes.DB, s hermes.Session, from 
 	}
 	key := hermes.Key(db.Path, s.ID)
 	var read int64
+	used := false
 	if k := from.kept; k != nil && k.Format == digest.Hermes && k.Head == key {
-		// Only what a row leaves for the rows after it is kept: the session's
-		// own fields are its row's, read now as a read from the start reads
-		// them.
-		r.prior = k.Prior
-		r.calls = make(map[string]string, len(k.Calls))
-		maps.Copy(r.calls, k.Calls)
-		read = after
+		same := after == 0
+		if !same {
+			rows, err := db.Messages(ctx, s.ID, after-1, 1)
+			if err != nil {
+				return from, err
+			}
+			same = len(rows) > 0 && rows[0].ID == after && rowID(rows[0]) == k.Last
+		}
+		if same {
+			// Only what a row leaves for the rows after it is kept: the
+			// session's own fields are its row's, read now as a read from the
+			// start reads them.
+			r.prior = k.Prior
+			r.calls = make(map[string]string, len(k.Calls))
+			maps.Copy(r.calls, k.Calls)
+			read, used = after, true
+		}
 	}
-	last := after
+	last, emitted := after, 0
+	var lastRow hermes.Message
 	at := func() State {
-		return State{Offset: last, kept: &kept{Format: digest.Hermes, Head: key, Prior: r.prior, Calls: r.calls}}
+		k := &kept{Format: digest.Hermes, Head: key, Prior: r.prior, Calls: r.calls}
+		if lastRow.ID == last && last > 0 {
+			k.Last, k.LastAt = rowID(lastRow), last
+		}
+		return State{Offset: last, kept: k}
 	}
 	for {
 		rows, err := db.Messages(ctx, s.ID, read, hermesPage)
@@ -111,10 +130,14 @@ func ReadHermesState(ctx context.Context, db *hermes.DB, s hermes.Session, from 
 				e := &evs[i]
 				e.Path, e.Offset, e.Next, e.Index = db.Path, m.ID, m.ID, i
 				if err := emit(*e); err != nil {
+					if used && emitted == 0 {
+						return from, err
+					}
 					return State{Offset: last}, err
 				}
+				emitted++
 			}
-			last = m.ID
+			last, lastRow = m.ID, m
 		}
 	}
 }

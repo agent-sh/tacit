@@ -195,8 +195,8 @@ type lineReader interface {
 // (Path, Offset, Index) names one event however the transcript is read. When
 // emit returns an error ReadFile stops and returns it, with the offset of
 // the line it stopped in, from which a read gives that line's events again.
-// ReadFileState is ReadFile without the pass over the lines before the
-// cursor.
+// ReadFileState with a saved State starts at its cursor instead, without the
+// pass over the lines before it.
 func ReadFile(path string, f digest.Format, from int64, emit func(Event) error) (int64, error) {
 	st, err := ReadFileState(path, f, State{Offset: from}, 0, emit)
 	return st.Offset, err
@@ -204,19 +204,21 @@ func ReadFile(path string, f digest.Format, from int64, emit func(Event) error) 
 
 // ReadFileState is ReadFile from a State, returning the State after the last
 // line read. When from holds what the reader kept (State.Kept) and the
-// transcript's head is the one it was kept from, the read starts at from's
-// cursor: it costs only the lines after it, and gives the events ReadFile
-// gives from there. A bare cursor, or a transcript whose head changed (a
-// session shorter than 256 KiB when the State was saved, a file replaced),
-// is read as ReadFile reads it, with a pass over the lines before the
-// cursor. A State at the transcript's end is returned as it is, with no
-// read.
+// transcript still holds the bytes it was kept from (the ones its head hash
+// names, and the line before its cursor), the read starts at from's cursor:
+// it costs only the lines after it, and gives the events ReadFile gives from
+// there. A bare cursor, or a transcript whose bytes changed (a file replaced
+// or rewritten), is read as ReadFile reads it, with a pass over the lines
+// before the cursor. A State at the transcript's end is returned as it is,
+// with no read.
 //
 // limit > 0 stops the read at the end of the first line that ends at least
 // limit bytes past from's cursor, with what the reader kept, so a long
-// transcript can be read and saved in parts; 0 reads to the end. When emit
-// returns an error the read stops and returns it with a bare cursor at the
-// line it stopped in: a read from it gives that line's events again.
+// transcript can be read and saved in parts; 0 reads to the end. Each part
+// of a compressed copy is decompressed from its start again. When emit
+// returns an error the read stops and returns it with the State a read from
+// gives that line's events again: from itself when the error came at the
+// first event from it, else a bare cursor at the line.
 func ReadFileState(path string, f digest.Format, from State, limit int64, emit func(Event) error) (State, error) {
 	plain := transcript.Plain(path)
 	if from.Offset < 0 {
@@ -252,22 +254,34 @@ func ReadFileState(path string, f digest.Format, from State, limit int64, emit f
 	default:
 		rd = newPi(plain, head, v, pastes)
 	}
-	id := headID(head)
 	var start int64
-	if k := from.kept; k != nil && k.Format == f && k.Head == id {
-		// The lines that left another package's rules where they were, then
-		// the rest of what was kept over what they left.
-		for _, l := range k.Replay {
-			rd.line([]byte(l))
+	var fh io.ReadCloser
+	var br *bufio.Reader
+	used := false
+	if k := from.kept; k != nil && k.Format == f && k.HeadLen <= int64(len(head)) && hash(head[:k.HeadLen]) == k.Head {
+		if fh, br, err = openAfter(path, k, from.Offset); err != nil {
+			return from, err
 		}
-		rd.restore(k)
-		start = from.Offset
+		if br != nil {
+			// The lines that left another package's rules where they were,
+			// then the rest of what was kept over what they left.
+			for _, l := range k.Replay {
+				rd.line([]byte(l))
+			}
+			rd.restore(k)
+			start, used = from.Offset, true
+		}
 	}
-	fh, err := transcript.OpenAt(path, start)
-	if err != nil {
-		return from, err
+	if br == nil {
+		if fh, err = transcript.OpenAt(path, 0); err != nil {
+			return from, err
+		}
+		br = bufio.NewReaderSize(fh, 1<<20)
 	}
 	defer fh.Close()
+	// last is the last whole line read and where it starts.
+	var last []byte
+	lastAt := int64(-1)
 	// at is the State after the lines read up to off: what the reader kept,
 	// unless the read ended before from's cursor (one inside a line).
 	at := func(off int64) State {
@@ -275,11 +289,18 @@ func ReadFileState(path string, f digest.Format, from State, limit int64, emit f
 			return State{Offset: from.Offset}
 		}
 		k := rd.keep()
-		k.Format, k.Head = f, id
+		k.Format = f
+		k.HeadLen = min(off, int64(len(head)))
+		k.Head = hash(head[:k.HeadLen])
+		switch {
+		case lastAt >= 0 && lastAt+int64(len(last)) == off:
+			k.Last, k.LastAt = hash(last), lastAt
+		case used && off == from.Offset:
+			k.Last, k.LastAt = from.kept.Last, from.kept.LastAt
+		}
 		return State{Offset: off, kept: k}
 	}
-	br := bufio.NewReaderSize(fh, 1<<20)
-	off := start
+	off, emitted := start, 0
 	for {
 		line, rerr := br.ReadBytes('\n')
 		if rerr != nil && rerr != io.EOF {
@@ -299,15 +320,45 @@ func ReadFileState(path string, f digest.Format, from State, limit int64, emit f
 				e := &evs[i]
 				e.Path, e.Offset, e.Next, e.Index = plain, off, next, i
 				if err := emit(*e); err != nil {
+					if used && emitted == 0 {
+						return from, err
+					}
 					return State{Offset: off}, err
 				}
+				emitted++
 			}
 		}
-		off = next
+		last, lastAt, off = line, off, next
 		if rerr == io.EOF || limit > 0 && off-from.Offset >= limit {
 			return at(off), nil
 		}
 	}
+}
+
+// openAfter opens a transcript at the line before a kept cursor, reads that
+// line and checks it is the one the State was kept after. It returns the
+// reader at the cursor, or a nil reader when the line is another.
+func openAfter(path string, k *kept, cursor int64) (io.ReadCloser, *bufio.Reader, error) {
+	if cursor > 0 && (k.Last == "" || k.LastAt < 0 || k.LastAt >= cursor) {
+		return nil, nil, nil
+	}
+	fh, err := transcript.OpenAt(path, k.LastAt)
+	if err != nil {
+		return nil, nil, err
+	}
+	br := bufio.NewReaderSize(fh, 1<<20)
+	if cursor == 0 {
+		return fh, br, nil
+	}
+	line := make([]byte, cursor-k.LastAt)
+	if _, err := io.ReadFull(br, line); err != nil || hash(line) != k.Last {
+		fh.Close()
+		if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+			return nil, nil, err
+		}
+		return nil, nil, nil
+	}
+	return fh, br, nil
 }
 
 // ownerPastes are the texts the owner pasted into their prompts

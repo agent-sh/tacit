@@ -257,12 +257,9 @@ func TestCodexCurrentFormat(t *testing.T) {
 	}
 }
 
-// An answer the corpus's own split finds not the person's (it opens with a
-// harness notice) is cut from their words, and shown, not lost; a question
-// asked by a namespaced call still decides which answers are an offered
-// option.
 // codexAskSession is a Codex session whose agent asks the person questions
-// with a namespaced call, and their reply (TestCodexAnswersCutAndNamespacedQuestions).
+// with a namespaced call, and their reply
+// (TestCodexAnswersCutAndNamespacedQuestions).
 func codexAskSession() []string {
 	reply := `[{"answer":"memory","question":"Which backend?","questionItemId":"[\"request_user_input\",\"call_q2\",0]"},{"answer":"use 42 and keep it fixed","question":"Which seed?","questionItemId":"[\"request_user_input\",\"call_q2\",1]"},{"answer":"Continue the current task first, then the key","question":"Anything else?","questionItemId":"[\"request_user_input\",\"call_q2\",2]"}]`
 	ask, _ := json.Marshal(`{"questions":[{"title":"Which backend?","options":["redis","memory"]},{"title":"Which seed?","options":["7","42"]},{"title":"Anything else?","options":["no"]}]}`)
@@ -273,6 +270,10 @@ func codexAskSession() []string {
 	}
 }
 
+// An answer the corpus's own split finds not the person's (it opens with a
+// harness notice) is cut from their words, and shown, not lost; a question
+// asked by a namespaced call still decides which answers are an offered
+// option.
 func TestCodexAnswersCutAndNamespacedQuestions(t *testing.T) {
 	home := t.TempDir()
 	lines := codexAskSession()

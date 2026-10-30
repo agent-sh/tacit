@@ -2,6 +2,7 @@ package events
 
 import (
 	"encoding/json"
+	"maps"
 	"regexp"
 	"strconv"
 	"strings"
@@ -105,12 +106,13 @@ func (r *codexReader) line(raw []byte) []Event {
 		return nil
 	}
 	// A line the rule notes a question's options on is one to read again
-	// (State).
+	// (State). Note only adds options by question, so they go to asked as
+	// they are.
 	clear(r.noted)
 	if r.noted.NoteLine(raw); len(r.noted) > 0 {
 		r.replay = append(r.replay, string(raw))
+		maps.Copy(r.asked, r.noted)
 	}
-	r.asked.NoteLine(raw)
 	at := ownerwords.JSONTime(l.Timestamp)
 	switch l.Type {
 	case "turn_context":

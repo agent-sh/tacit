@@ -7,23 +7,37 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 
 	"github.com/agent-sh/tacit/client/internal/digest"
+	"github.com/agent-sh/tacit/client/internal/hermes"
 )
 
 // State is a saved place in a session's history: the cursor a read resumes
-// from (Offset) and what the reader kept from the items before it (the
-// session's ids, cwd and model, the calls a later result names, the record
-// before the next turn, a turn under way, the calls that ended in an error
-// before their output, the local commands Claude Code ran, the options a
-// Codex question offered). A read from a State gives exactly the events a
-// read from the start gives from its cursor, without reading the items
-// before the cursor again, so following a growing session costs only what
-// was added to it.
+// from (Offset) and what the reader kept from the items before it. For a
+// transcript that is the session's ids, cwd and model, the calls a later
+// result names, the record before the next turn, a Codex turn under way and
+// the calls that ended in an error before their output, pi's agent mid-turn,
+// and the lines that changed a local command's caveat or a Codex question's
+// options; for a Hermes session the record before the next turn and the
+// calls (its other fields are its row's).
+//
+// A read from a State that kept them gives exactly the events a read from
+// the start gives from its cursor, without reading the items before the
+// cursor again, as long as those items are the ones it was kept from: a read
+// checks the transcript's bytes the State names (its first 256 KiB, or all
+// of it up to the cursor when shorter) and the line before the cursor, or
+// the Hermes row at the cursor, and reads as from a bare cursor when they
+// changed. A change further inside the transcript is not seen.
 //
 // The zero State is the start. State{Offset: n} is a bare cursor: a read from
 // it passes over the items before n to rebuild what they leave, as ReadFile
-// does. MarshalBinary and UnmarshalBinary save a State and load it back.
+// does. MarshalBinary and UnmarshalBinary save a State and load it back, as
+// do MarshalJSON and UnmarshalJSON inside a caller's JSON.
+//
+// A State is as private as its transcript: it holds whole lines of it
+// (Replay), the working directory and tool names, unredacted. Keep it where
+// the transcript may be kept, and never send it.
 type State struct {
 	// Offset is where the next read resumes: a byte offset in a transcript's
 	// JSONL bytes (a compressed copy's decompressed stream), or the id of the
@@ -32,24 +46,32 @@ type State struct {
 	kept   *kept
 }
 
-// Kept reports whether s holds what the reader kept, so that a read from it
-// starts at its cursor.
+// Kept reports whether s holds what the reader kept: a read from it starts
+// at its cursor when the format, and the transcript's bytes or the Hermes
+// row it names, are still the ones it was kept from.
 func (s State) Kept() bool { return s.kept != nil }
 
-// keptVersion is the format of what a State keeps. A State saved in another
-// format loads as a bare cursor, and a read from it rebuilds what it kept.
+// keptVersion is the format of what a State keeps. Bump it when what a
+// reader keeps or replays changes (TestStateCoversEveryField lists both): a
+// State saved in another format loads as a bare cursor, and a read from it
+// rebuilds what it kept.
 const keptVersion = 1
 
 // kept is what a reader keeps across a session's items, as of a cursor.
 type kept struct {
 	Format digest.Format `json:"format"`
 	// Head names what the reader was made from. A transcript: a hash of its
-	// first headBytes, which decide who wrote its turns (digest.SessionWho)
-	// and hold its first line (Codex's session_meta, pi's header). A State
-	// whose transcript has another head now (a session shorter than that
-	// when it was saved, a file replaced) is read as a bare cursor. Hermes:
-	// the store's cursor key for the session (hermes.Key).
-	Head string `json:"head"`
+	// first HeadLen bytes, the cursor's offset or headBytes when that is
+	// less, so a State of a session shorter than headBytes names every byte
+	// before its cursor. Hermes: the session's cursor key (hermes.Key).
+	Head    string `json:"head"`
+	HeadLen int64  `json:"head_len,omitempty"`
+	// Last names the item before the cursor: a hash of the transcript's line
+	// from LastAt to the cursor, or of the Hermes row at the cursor. A read
+	// checks it, so a transcript rewritten past its head, or a session whose
+	// rows Hermes wrote again, reads as from a bare cursor.
+	Last   string `json:"last,omitempty"`
+	LastAt int64  `json:"last_at,omitempty"`
 
 	Session  string            `json:"session,omitempty"`
 	Subagent string            `json:"subagent,omitempty"`
@@ -116,10 +138,22 @@ func (s *State) UnmarshalBinary(b []byte) error {
 	return nil
 }
 
-// headID names a transcript's head (kept.Head).
-func headID(head []byte) string {
-	h := sha256.Sum256(head)
+// MarshalJSON is MarshalBinary, so a State inside a caller's JSON keeps what
+// it kept.
+func (s State) MarshalJSON() ([]byte, error) { return s.MarshalBinary() }
+
+// UnmarshalJSON is UnmarshalBinary.
+func (s *State) UnmarshalJSON(b []byte) error { return s.UnmarshalBinary(b) }
+
+// hash names bytes (kept.Head, kept.Last).
+func hash(b []byte) string {
+	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:16])
+}
+
+// rowID names a Hermes row by what it holds (kept.Last).
+func rowID(m hermes.Message) string {
+	return hash([]byte(m.Role + "\x00" + strconv.FormatFloat(m.Timestamp, 'g', -1, 64) + "\x00" + m.Content + "\x00" + m.ToolCalls))
 }
 
 // keep is what every reader keeps. The calls are the reader's own map: a
