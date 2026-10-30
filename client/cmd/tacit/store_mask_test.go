@@ -238,11 +238,22 @@ func TestTheIndexesOfAMaskedWriteHoldItsTreesRecords(t *testing.T) {
 // curator builds MEMORY.md and the folder indexes from every fact in the
 // clone, a killed batch's untracked fact among them, and the store writes
 // them again from the facts the commit holds when the clone holds one it does
-// not carry. Nothing in this batch is masked.
+// not carry. Nothing in this batch is masked. The leftover may sit in a
+// folder that holds nothing tracked (its index goes, and the batch still
+// lands), or be a file git ignores.
 func TestACleanBatchCommitsNoLeftoverIntoTheIndexes(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell CLI fixture")
 	}
+	for _, c := range []struct {
+		name, folder string
+		ignored      bool
+	}{{"beside the batch", "machines/" + store.ShortHost(), false}, {"in a folder with nothing tracked", "system", false}, {"ignored by git", "machines/" + store.ShortHost(), true}} {
+		t.Run(c.name, func(t *testing.T) { cleanBatchWithLeftover(t, c.folder, c.ignored) })
+	}
+}
+
+func cleanBatchWithLeftover(t *testing.T, folder string, ignored bool) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("TACIT_STATE_DIR", "")
@@ -274,10 +285,18 @@ func TestACleanBatchCommitsNoLeftoverIntoTheIndexes(t *testing.T) {
 		}
 	}
 	// A killed batch's fact, untracked, with text no mask ever read.
-	stray := "---\nname: stray-leftover\ndescription: a leftover whose description holds LEFTOVER-TEXT-NO-MASK-READ\ntype: machine_fact\nscope: machines/" + host + "\nsource:\n  harness: curator\n  host: " + host + "\n  kind: observed\ncreated: \"2026-10-29\"\n---\n\nleft by a killed run\n"
-	os.MkdirAll(filepath.Join(s.Dir, "machines", host), 0o755)
-	if err := os.WriteFile(filepath.Join(s.Dir, "machines", host, "stray-leftover.md"), []byte(stray), 0o644); err != nil {
+	stray := "---\nname: stray-leftover\ndescription: a leftover whose description holds LEFTOVER-TEXT-NO-MASK-READ\ntype: machine_fact\nscope: " + folder + "\nsource:\n  harness: curator\n  host: " + host + "\n  kind: observed\ncreated: \"2026-10-29\"\n---\n\nleft by a killed run\n"
+	os.MkdirAll(filepath.Join(s.Dir, filepath.FromSlash(folder)), 0o755)
+	if err := os.WriteFile(filepath.Join(s.Dir, filepath.FromSlash(folder), "stray-leftover.md"), []byte(stray), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	if ignored {
+		f, err := os.OpenFile(filepath.Join(s.Dir, ".git", "info", "exclude"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.WriteString("stray-*.md\n")
+		f.Close()
 	}
 	split, _ := json.Marshal([]map[string]any{{"origin": "serve-port", "name": "serve-wrapper-port", "description": "The serve wrapper listens on port 8080",
 		"type": "machine_fact", "scope": "machines/" + host, "kind": "observed", "body": "The wrapper listens on port 8080."}})
@@ -294,11 +313,18 @@ func TestACleanBatchCommitsNoLeftoverIntoTheIndexes(t *testing.T) {
 	if _, ok := findFact(s.Dir, "serve-wrapper-port"); !ok {
 		t.Fatal("the split's fact was not written")
 	}
-	for _, idx := range []string{"MEMORY.md", "machines/" + host + "/_index.md"} {
+	idxs := []string{"MEMORY.md", "machines/" + host + "/_index.md"}
+	if folder != "machines/"+host {
+		idxs = append(idxs, folder+"/_index.md")
+	}
+	for _, idx := range idxs {
 		cmd := exec.Command("git", "show", "HEAD:"+idx)
 		cmd.Dir = s.Dir
 		b, err := cmd.Output()
 		if err != nil {
+			if idx == folder+"/_index.md" {
+				continue // the leftover's folder holds no committed fact: no index
+			}
 			t.Fatalf("%s is not committed: %v", idx, err)
 		}
 		if strings.Contains(string(b), "stray-leftover") || strings.Contains(string(b), "LEFTOVER-TEXT") {
