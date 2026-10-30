@@ -271,9 +271,10 @@ func (b *Builder) storeHistory(ctx context.Context, rel string) (first, last tim
 
 // linkRepairOnly says whether the commit's change to the fact file rel is
 // exactly what the link-repair step writes (links.IsRepair of the file before
-// and after). The subject alone proves nothing: anyone can use it, and a commit
-// of that step may carry more. A commit that cannot be read, or that created
-// the file, counts as an edit.
+// and after), or puts back a link such a repair unwrapped (links.IsRepair the
+// other way: `tacit links --restore`). The subject alone proves nothing:
+// anyone can use it, and a commit of that step may carry more. A commit that
+// cannot be read, or that created the file, counts as an edit.
 func (b *Builder) linkRepairOnly(ctx context.Context, sha, rel string) bool {
 	if sha == "" {
 		return false
@@ -283,7 +284,7 @@ func (b *Builder) linkRepairOnly(ctx context.Context, sha, rel string) bool {
 	if err1 != nil || err2 != nil || cut1 || cut2 {
 		return false
 	}
-	return links.IsRepair([]byte(before), []byte(after))
+	return links.IsRepair([]byte(before), []byte(after)) || links.IsRepair([]byte(after), []byte(before))
 }
 
 // RotationPrefix starts the subject of the rotation's commits (tacit
