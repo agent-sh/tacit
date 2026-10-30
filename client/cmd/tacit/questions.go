@@ -33,6 +33,16 @@ import (
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
+// unreadName is the name of the fact file a parse error of fact.Walk is
+// about: its file name without .md.
+func unreadName(err error) string {
+	rel, _, ok := strings.Cut(err.Error(), ": ")
+	if !ok || !strings.HasSuffix(rel, ".md") {
+		return ""
+	}
+	return strings.TrimSuffix(filepath.Base(rel), ".md")
+}
+
 // What a question is, as a closure's Closes records it.
 const (
 	closesAsk      = "ask"      // an agent's question on a finding
@@ -120,8 +130,8 @@ func (rs *reviewServer) applyClosure(o *op, it *reviewItem) (string, []string, e
 	default:
 		return "", nil, fmt.Errorf("a pair's question closes by keeping one fact, both or neither, not %q", mark)
 	}
-	if it.A.Missing || it.B.Missing {
-		return "", nil, errors.New("a fact of this finding is not in the store: the question is moot, and `tacit questions moot` closes it")
+	if it.A.Missing || it.B.Missing || it.A.Retired != "" || it.B.Retired != "" || replacedSide(*it) {
+		return "", nil, errors.New("a fact of this finding is retired, replaced or not in the store: the question is moot, and `tacit questions moot` closes it")
 	}
 	if !contains(it.Allowed, mark) {
 		return "", nil, errors.New("that answer is not possible for this finding now")
@@ -152,7 +162,7 @@ func (rs *reviewServer) applyClosure(o *op, it *reviewItem) (string, []string, e
 			return "", nil, fmt.Errorf("the answer would change your ruling %s; a closure never does, so the question stays yours", c.Meta.Name)
 		}
 		gone := (c.Meta.Retired != "" && was.Retired == "") || (c.Meta.SupersededBy != "" && was.SupersededBy == "")
-		if w := fact.OwnerWordsOf(f); w != "" && gone && !o.wordsRetire[c.Meta.Name] {
+		if w := fact.OwnerWordsOf(f); w != "" && gone && !o.wordsLetRetire(f) {
 			return "", nil, fmt.Errorf("the answer retires %s, which holds the owner's words %q; only their own later words (a words proof) let a closure do that", c.Meta.Name, w)
 		}
 		c.Meta.Updated = day
@@ -173,9 +183,25 @@ func (rs *reviewServer) applyClosure(o *op, it *reviewItem) (string, []string, e
 		}
 	}
 	d := closureDecision(o, closes, it.A.Name, it.B.Name)
-	d.Before = before
+	d.Before, d.Question = before, questionText(*it)
+	if o.dry {
+		return "the closure would land", nil, nil
+	}
 	rs.appendDecision(files, d)
 	return writeFiles(rs.s.Dir, "", files)
+}
+
+// questionText is what an agent's question on a pair asked: its ask, or for a
+// query the conflict it left to the owner, kept with the closure so the
+// owner's page shows what was closed.
+func questionText(it reviewItem) string {
+	switch {
+	case it.Decision == nil && it.Ask != nil:
+		return it.Ask.Question
+	case it.Decision != nil && it.Decision.Action == "query":
+		return "An agent marked these as conflicting and left the call to you: " + it.Decision.Evidence
+	}
+	return ""
 }
 
 // closureDecision is the record an agent's closure leaves.
@@ -214,7 +240,7 @@ func (rs *reviewServer) applyStaleClosure(o *op, it *staleItem) (string, []strin
 		return "", nil, errors.New("the rotation's question is about the owner's own fact: a closure may say it still holds, never retire it")
 	case o.Mark == "retire" && isRuling(f):
 		return "", nil, fmt.Errorf("%s is your ruling; a closure never retires one, so the question stays yours", name)
-	case o.Mark == "retire" && fact.OwnerWordsOf(f) != "" && !o.wordsRetire[name]:
+	case o.Mark == "retire" && fact.OwnerWordsOf(f) != "" && !o.wordsLetRetire(f):
 		return "", nil, fmt.Errorf("%s holds the owner's words; only their own later words (a words proof) let a closure retire it", name)
 	case o.Mark == "retire":
 	default:
@@ -222,6 +248,12 @@ func (rs *reviewServer) applyStaleClosure(o *op, it *staleItem) (string, []strin
 	}
 	o.A, o.B = name, it.Flag.Sha
 	d := closureDecision(o, closes, name, it.Flag.Sha)
+	if it.Ask != nil {
+		d.Question = it.Ask.Question
+	}
+	if o.dry {
+		return "the closure would land", nil, nil
+	}
 	files := map[string][]byte{}
 	if o.Mark == "retire" {
 		c := *f
@@ -247,6 +279,9 @@ func (rs *reviewServer) applyStaleClosure(o *op, it *staleItem) (string, []strin
 // successor (planRepoint): a fact of it is gone from the store, was replaced
 // by a third fact, or was retired.
 func (rs *reviewServer) questionMoot(it reviewItem, ix findingIndex) (string, repointPlan) {
+	if rs.walkErr != nil || (it.A.Missing && rs.unread[it.A.Name]) || (it.B.Missing && rs.unread[it.B.Name]) {
+		return "", repointPlan{} // a fact that did not read is not gone
+	}
 	switch {
 	case it.A.Missing && it.B.Missing:
 		return fmt.Sprintf("moot: neither %s nor %s is in the store", it.A.Name, it.B.Name), repointPlan{}
@@ -303,7 +338,7 @@ func (rs *reviewServer) applyQuestionMoot(o *op, it *reviewItem) (string, []stri
 		}
 		files[rel] = append(old, p.Line...)
 	}
-	d := decision{ID: o.ID, Action: mootMark, A: it.A.Name, B: it.B.Name, At: time.Now().Format(time.RFC3339), By: "curator", Evidence: why, Closes: closes, Proof: mootMark}
+	d := decision{ID: o.ID, Action: mootMark, A: it.A.Name, B: it.B.Name, At: time.Now().Format(time.RFC3339), By: "curator", Evidence: why, Closes: closes, Proof: mootMark, Question: questionText(*it)}
 	if p.NewA != "" {
 		d.Repointed = p.To
 	}
@@ -322,7 +357,7 @@ func (rs *reviewServer) applyStaleMoot(o *op, it *staleItem) (string, []string, 
 		return "", nil, errors.New("this finding carries no moot question")
 	}
 	files := map[string][]byte{}
-	rs.appendDecision(files, decision{ID: o.ID, Action: mootMark, A: it.A.Name, B: it.Flag.Sha, At: time.Now().Format(time.RFC3339), By: "curator", Evidence: why, Closes: closesAsk, Proof: mootMark})
+	rs.appendDecision(files, decision{ID: o.ID, Action: mootMark, A: it.A.Name, B: it.Flag.Sha, At: time.Now().Format(time.RFC3339), By: "curator", Evidence: why, Closes: closesAsk, Proof: mootMark, Question: it.Ask.Question})
 	return writeFiles(rs.s.Dir, why, files)
 }
 
@@ -331,6 +366,9 @@ func (rs *reviewServer) applyStaleMoot(o *op, it *staleItem) (string, []string, 
 func (rs *reviewServer) staleMoot(it staleItem, owned map[string]bool) (string, bool) {
 	if it.Kind != kindStale || it.Decision != nil || it.Ask == nil || it.Ask.By != "agent" || owned[it.ID] || owned[it.A.Name] || len(it.Notes) > 0 {
 		return "", false
+	}
+	if rs.walkErr != nil || (it.A.Missing && rs.unread[it.A.Name]) {
+		return "", false // a fact that did not read is not gone
 	}
 	switch {
 	case it.A.Missing:
@@ -349,9 +387,25 @@ func (rs *reviewServer) staleMoot(it staleItem, owned map[string]bool) (string, 
 // live. Commits of at most repointChunk; a dry run prints and writes nothing.
 // It returns how many it closed.
 func closeMootQuestions(ctx context.Context, rs *reviewServer, owned map[string]bool, only map[string]bool, dry bool, out func(string)) (int, error) {
+	if rs.walkErr != nil {
+		// Every fact would look gone: nothing is closed on a store not read.
+		return 0, fmt.Errorf("the store's facts could not be read, so no question was closed: %w", rs.walkErr)
+	}
 	items := rs.items()
 	ix := indexFindings(items)
 	var ops []op
+	// A stale ask the curator closed as moot whose fact is live again (its
+	// retirement or replacement undone) asks again.
+	for _, it := range rs.staleItems() {
+		d := it.Decision
+		if (len(only) > 0 && !only[it.ID]) || d == nil || d.Action != mootMark || d.By != "curator" || d.Closes == "" || it.State != "live" || owned[it.ID] || owned[it.A.Name] {
+			continue
+		}
+		ops = append(ops, op{ID: it.ID, Mark: "reopen", By: "curator"})
+		if dry {
+			out(fmt.Sprintf("would reopen %s (%s, its ask): its fact is live again", it.ID, it.A.Name))
+		}
+	}
 	for _, it := range items {
 		if len(only) > 0 && !only[it.ID] {
 			continue
@@ -391,6 +445,12 @@ func closeMootQuestions(ctx context.Context, rs *reviewServer, owned map[string]
 	n := 0
 	for _, o := range ops {
 		d := ds[o.ID]
+		if o.Mark == "reopen" {
+			if d == nil {
+				out(fmt.Sprintf("reopened %s: its fact is live again", o.ID))
+			}
+			continue
+		}
 		if d == nil || d.Action != mootMark || d.Closes == "" {
 			out(fmt.Sprintf("%s not closed", o.ID))
 			continue
@@ -517,6 +577,10 @@ func (rs *reviewServer) applyQuestionOp(o *op) (string, []string, error) {
 	}
 	files := map[string][]byte{}
 	note := ""
+	day := prev.At
+	if len(day) > 10 {
+		day = day[:10] // the closure retired its facts on the day it was made
+	}
 	for name, b := range prev.Before {
 		f := rs.facts[name]
 		if f == nil {
@@ -526,8 +590,13 @@ func (rs *reviewServer) applyQuestionOp(o *op) (string, []string, error) {
 		if f.Meta.Retired == "" {
 			continue
 		}
+		if f.Meta.Retired != day {
+			// Retired again since, by someone else: that retirement stands.
+			note = name + " was retired again after the closure; it stays as it is."
+			continue
+		}
 		c := *f
-		c.Meta.Retired, c.Meta.Updated = b.Retired, time.Now().Format("2006-01-02")
+		c.Meta.Retired, c.Meta.Updated = b.Retired, b.Updated // as it was before the closure
 		old, err := os.ReadFile(filepath.Join(rs.s.Dir, f.Path))
 		if err != nil {
 			return "", nil, err
@@ -575,14 +644,16 @@ func syncQuestionClosures(q *agentreview.Queue, closed map[string]string, reopen
 	return c, r
 }
 
-// reopenQuestion puts a closed question back in the queue; it reports a
-// change.
+// reopenQuestion puts a closed question back in the queue, asked afresh: a
+// new day queued and no sessions asked, so the queue's own limits (30 days,
+// 3 sessions) count from the owner's reopen. It reports a change.
 func reopenQuestion(q *agentreview.Queue, id string) bool {
 	it := q.ByID(id)
 	if it == nil || it.State != agentreview.StateClosed {
 		return false
 	}
-	it.State, it.Closed, it.Why = agentreview.StateOpen, "", ""
+	it.State, it.Closed, it.Why, it.Asks = agentreview.StateOpen, "", "", nil
+	it.Queued = time.Now().UTC().Format(time.RFC3339)
 	return true
 }
 
@@ -608,6 +679,14 @@ func closeReviewerQuestion(ctx context.Context, rs *reviewServer, o *op, q agent
 	if err := rs.writeRefusal(ctx); err != nil {
 		return "", err
 	}
+	// The owner's own answer comes first: one they typed at their prompt
+	// after the question was put, and no step has read yet, is read now; when
+	// there is one the reviewer step applies it and no agent closes it.
+	if answered, err := ownerAnswered(ctx, q.ID); err != nil {
+		return "", fmt.Errorf("the owner's answers could not be read, so nothing was closed: %w", err)
+	} else if answered {
+		return "", errors.New("the owner answered this question at their prompt; the reviewer step applies their answer")
+	}
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	err := rs.s.WithLock(ctx, func() error {
@@ -632,11 +711,15 @@ func closeReviewerQuestion(ctx context.Context, rs *reviewServer, o *op, q agent
 			if o.Mark == "wrong" {
 				d.Before = map[string]snap{}
 				day := time.Now().Format("2006-01-02")
+				owned, notes := rs.ownerTouched(), rs.ownerNotes()
 				for _, f := range rs.madeFrom(q) {
+					if owned[f.Meta.Name] || len(notes.For("", f.Meta.Name)) > 0 {
+						return fmt.Errorf("%s, made from this note, is one the owner kept or left a note on; it stays their question", f.Meta.Name)
+					}
 					if isRuling(f) {
 						return fmt.Errorf("%s, made from this note, is your ruling; a closure never retires one, so the question stays yours", f.Meta.Name)
 					}
-					if w := fact.OwnerWordsOf(f); w != "" && !o.wordsRetire[f.Meta.Name] {
+					if w := fact.OwnerWordsOf(f); w != "" && !o.wordsLetRetire(f) {
 						return fmt.Errorf("%s, made from this note, holds the owner's words %q; only their own later words let a closure retire it", f.Meta.Name, w)
 					}
 					c := *f
@@ -671,6 +754,10 @@ func closeReviewerQuestion(ctx context.Context, rs *reviewServer, o *op, q agent
 				rs.s.Restore(rels)
 				return err
 			}
+			if o.dry {
+				rs.s.Restore(rels)
+				return nil
+			}
 			msg := fmt.Sprintf("review: close %s (%s, %s proof) by agent", q.ID, o.Mark, o.Proof)
 			err = rs.s.CommitPushOnceLocked(ctx, existing(rs.s.Dir, append(dedupe(rels), ".gitattributes")), msg, "curator")
 			if errors.Is(err, store.ErrBehind) {
@@ -689,6 +776,9 @@ func closeReviewerQuestion(ctx context.Context, rs *reviewServer, o *op, q agent
 	if err != nil {
 		return "", err
 	}
+	if o.dry {
+		return "the closure would land", nil
+	}
 	home, _ := os.UserHomeDir()
 	if err := agentreview.Locked(agentreview.Path(platform.StateDir(home)), 10*time.Second, func(qq *agentreview.Queue) bool {
 		it := qq.ByID(q.ID)
@@ -701,6 +791,32 @@ func closeReviewerQuestion(ctx context.Context, rs *reviewServer, o *op, q agent
 		return "closed in the store; this machine's queue could not be written (the next reviewer step closes it there): " + err.Error(), nil
 	}
 	return "", nil
+}
+
+// ownerAnswered reads, for one question of this machine's queue, the answer
+// the owner typed in a session it was put in (agentreview.ReadAnswers), and
+// reports whether there is one; the queue keeps it for the reviewer step.
+func ownerAnswered(ctx context.Context, id string) (bool, error) {
+	home, _ := os.UserHomeDir()
+	src := agentreview.DefaultSources(home)
+	if v := os.Getenv("TACIT_HERMES_DB"); strings.EqualFold(v, "off") {
+		src.HermesDB = ""
+	}
+	answered := false
+	err := agentreview.Locked(agentreview.Path(platform.StateDir(home)), 10*time.Second, func(q *agentreview.Queue) bool {
+		it := q.ByID(id)
+		if it == nil {
+			return false
+		}
+		if it.State == agentreview.StateAnswered {
+			answered = true
+			return false
+		}
+		changed := agentreview.ReadAnswers(ctx, q, src, nil, time.Now())
+		answered = q.ByID(id).State == agentreview.StateAnswered
+		return changed
+	})
+	return answered, err
 }
 
 // madeFrom is the live curated facts made from a question's note.
@@ -719,25 +835,42 @@ func (rs *reviewServer) madeFrom(q agentreview.Item) []*fact.Fact {
 
 // questionRow is one question as `tacit questions` lists it.
 type questionRow struct {
-	ID       string    `json:"id"`
-	Closes   string    `json:"kind"`              // ask, query, check, question
-	Finding  string    `json:"finding,omitempty"` // the finding's kind
-	Asked    string    `json:"asked,omitempty"`   // when it was asked
-	Question string    `json:"question"`
-	Facts    []string  `json:"facts"`
-	Answers  []string  `json:"answers"`
-	Closed   *decision `json:"closed,omitempty"`
+	ID       string   `json:"id"`
+	Closes   string   `json:"kind"`              // ask, query, check, question
+	Finding  string   `json:"finding,omitempty"` // the finding's kind
+	Asked    string   `json:"asked,omitempty"`   // when it was asked
+	Question string   `json:"question"`
+	Facts    []string `json:"facts"`
+	Answers  []string `json:"answers"`
+	// Owners is why an agent may not close it (the owner touched it, left a
+	// note on it or reopened it); empty when it may.
+	Owners string `json:"owners,omitempty"`
+	// Moot is why the question went moot: code closes it (tacit questions
+	// moot), no agent does.
+	Moot   string    `json:"moot,omitempty"`
+	Closed *decision `json:"closed,omitempty"`
 }
 
 // openQuestions is every question waiting for the owner on this machine.
 func openQuestions(rs *reviewServer, q *agentreview.Queue) []questionRow {
 	var out []questionRow
-	for _, it := range rs.items() {
+	owned := rs.ownerTouched()
+	items := rs.items()
+	ix := indexFindings(items)
+	for _, it := range items {
 		k := questionOf(it)
 		if k == "" {
 			continue
 		}
 		r := questionRow{ID: it.ID, Closes: k, Finding: it.Kind, Facts: []string{it.A.Name, it.B.Name}, Answers: []string{"keep:" + it.A.Name, "keep:" + it.B.Name, "both", "neither"}}
+		switch {
+		case owned[it.ID] || owned[it.A.Name] || owned[it.B.Name]:
+			r.Owners = "the owner marked or reopened it, or kept one of its facts"
+		case len(it.Notes) > 0:
+			r.Owners = "the owner left a note on it"
+		default:
+			r.Moot, _ = rs.questionMoot(it, ix)
+		}
 		if k == closesAsk {
 			r.Asked, r.Question = it.Ask.At, it.Ask.Question
 		} else {
@@ -751,6 +884,12 @@ func openQuestions(rs *reviewServer, q *agentreview.Queue) []questionRow {
 			continue
 		}
 		r := questionRow{ID: it.ID, Closes: k, Finding: it.Kind, Facts: []string{it.A.Name}, Answers: []string{"current", "retire"}}
+		switch {
+		case owned[it.ID] || owned[it.A.Name]:
+			r.Owners = "the owner marked or reopened it, or kept its fact"
+		case len(it.Notes) > 0:
+			r.Owners = "the owner left a note on it"
+		}
 		if k == closesAsk {
 			r.Asked, r.Question = it.Ask.At, it.Ask.Question
 		} else {
@@ -759,8 +898,13 @@ func openQuestions(rs *reviewServer, q *agentreview.Queue) []questionRow {
 		out = append(out, r)
 	}
 	if q != nil {
+		_, reopened := rs.questionRecords()
 		for _, it := range q.Open() {
-			out = append(out, questionRow{ID: it.ID, Closes: closesQuestion, Asked: it.Queued, Question: it.Text(), Facts: nonEmpty(it.Fact, it.Note), Answers: []string{"holds", "wrong", "moot"}})
+			r := questionRow{ID: it.ID, Closes: closesQuestion, Asked: it.Queued, Question: it.Text(), Facts: nonEmpty(it.Fact, it.Note), Answers: []string{"holds", "wrong", "moot"}}
+			if reopened[it.ID] {
+				r.Owners = "the owner reopened it"
+			}
+			out = append(out, r)
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Asked < out[j].Asked })
@@ -822,7 +966,14 @@ func runQuestions(args []string) int {
 		if len(day) > 10 {
 			day = day[:10]
 		}
-		fmt.Printf("%s  %s (%s), asked %s, about %s\n  %s\n  answers: %s\n", r.ID, r.Closes, firstNonEmpty(r.Finding, "note"), day, strings.Join(r.Facts, ", "), oneLineNote(r.Question), strings.Join(r.Answers, ", "))
+		answers := "answers: " + strings.Join(r.Answers, ", ")
+		switch {
+		case r.Owners != "":
+			answers = "the owner's, no agent closes it: " + r.Owners
+		case r.Moot != "":
+			answers = "moot, `tacit questions moot` closes it: " + strings.TrimPrefix(r.Moot, "moot: ")
+		}
+		fmt.Printf("%s  %s (%s), asked %s, about %s\n  %s\n  %s\n", r.ID, r.Closes, firstNonEmpty(r.Finding, "note"), day, strings.Join(r.Facts, ", "), oneLineNote(r.Question), answers)
 	}
 	return 0
 }
@@ -867,7 +1018,13 @@ func runQuestionsClose(args []string) int {
 	if !*dry && refuseWriter(context.Background(), s, "curator", "questions close") {
 		return 2
 	}
-	red, err := digest.RedactAll([]string{strings.TrimSpace(*evidence), strings.TrimSpace(*reason)})
+	if err := digest.RedactionReady(); err != nil {
+		fmt.Fprintln(os.Stderr, "questions close: redaction needs scrump with the text profile; nothing closed:", err)
+		return 2
+	}
+	// The record keeps the owner's words masked, as the statements step keeps
+	// them; code finds them in their turns as they wrote them.
+	red, err := digest.RedactAll([]string{strings.TrimSpace(*evidence), strings.TrimSpace(*reason), strings.TrimSpace(*words)})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "questions close: redaction needs scrump with the text profile; nothing closed:", err)
 		return 2
@@ -918,22 +1075,23 @@ func runQuestionsClose(args []string) int {
 			fmt.Fprintln(os.Stderr, "questions close: these words are no statement of the owner's in their turns (not found, a question of theirs, or negated); nothing closed")
 			return 1
 		}
-		o.Words, o.WordsFrom, o.WordsOn = *words, m.Ref, corpus.SaidOn(*words, m.Ref, m.TurnHash)
-		// Their later words let a closure retire a fact that holds older words of theirs.
-		o.wordsRetire = map[string]bool{}
-		all, _, _ := fact.Walk(s.Dir)
-		for _, f := range all {
+		o.Words, o.WordsFrom, o.WordsOn = red[2], m.Ref, corpus.SaidOn(*words, m.Ref, m.TurnHash)
+		// Their later words on the same subject let a closure retire a fact
+		// that holds older words of theirs: said after them, and sharing two
+		// content words with them or with the fact's description. The closure
+		// asks it of each fact as it finds it, under the store's lock.
+		said, on := *words, o.WordsOn
+		o.wordsRetire = func(f *fact.Fact) bool {
 			w := fact.OwnerWordsOf(f)
-			if w == "" {
-				continue
+			if w == "" || on == "" {
+				return false
 			}
-			on := corpus.SaidOn(w, f.Meta.Source.OwnerWordsFrom, "")
-			if on == "" {
-				on = f.Meta.Created
+			was := corpus.SaidOn(w, f.Meta.Source.OwnerWordsFrom, "")
+			if was == "" {
+				was = f.Meta.Created
 			}
-			if o.WordsOn != "" && on != "" && o.WordsOn > on {
-				o.wordsRetire[f.Meta.Name] = true
-			}
+			same := ownerwords.SharedStems(said, w) >= 2 || ownerwords.SharedStems(said, f.Meta.Description) >= 2
+			return same && was != "" && on > was
 		}
 	}
 	if strings.HasPrefix(id, "q-") {
@@ -942,18 +1100,19 @@ func runQuestionsClose(args []string) int {
 			fmt.Fprintf(os.Stderr, "questions close: %s is no open reviewer question on this machine\n", id)
 			return 1
 		}
-		o.Mark = *answer
-		if *dry {
-			b, _ := json.MarshalIndent(closureDecision(&o, closesQuestion, it.Note, it.Fact), "", " ")
-			fmt.Println(string(b))
-			return 0
-		}
+		o.Mark, o.dry = *answer, *dry
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		note, err := closeReviewerQuestion(ctx, rs, &o, *it)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "questions close:", err)
 			return 1
+		}
+		if *dry {
+			b, _ := json.MarshalIndent(closureDecision(&o, closesQuestion, it.Note, it.Fact), "", " ")
+			fmt.Println(string(b))
+			fmt.Fprintln(os.Stderr, "questions close: dry run: "+note)
+			return 0
 		}
 		fmt.Printf("closed %s: %s (%s)\n", id, o.Mark, o.Proof)
 		if note != "" {
@@ -995,8 +1154,18 @@ func runQuestionsClose(args []string) int {
 	}
 	o.A, o.B = a, b
 	if *dry {
-		b, _ := json.MarshalIndent(o, "", " ")
+		// Every guard runs, on the clone as it is; nothing is written.
+		o.dry = true
+		rs.mu.Lock()
+		note, _, err := rs.applyOp(&o)
+		rs.mu.Unlock()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "questions close: dry run:", err)
+			return 1
+		}
+		b, _ := json.MarshalIndent(closureDecision(&o, "", o.A, o.B), "", " ")
 		fmt.Println(string(b))
+		fmt.Fprintln(os.Stderr, "questions close: dry run: "+note)
 		return 0
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
