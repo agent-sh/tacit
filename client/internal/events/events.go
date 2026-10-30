@@ -12,6 +12,10 @@
 // owner's own words ownerwords.TurnReader (Parts, Hermes), with the pastes
 // the owner's prompt history records (ownerwords.ClaudePastes).
 //
+// A read resumes from a cursor, or from a saved State, which keeps what the
+// reader needs of the items before its cursor, so that following a growing
+// session costs only what was added (ReadFileState, ReadHermesState).
+//
 // Events hold the text as the harness recorded it, unredacted. A caller that
 // stores or sends them redacts them first (Redact), which fails closed.
 package events
@@ -166,9 +170,12 @@ var ErrPastEnd = errors.New("cursor past the end of the transcript")
 const headBytes = 256 << 10
 
 // lineReader turns one transcript line into events, keeping what it needs
-// across lines.
+// across lines; keep is what it kept as of the last line it read, restore
+// takes that back into a new reader (State).
 type lineReader interface {
 	line(raw []byte) []Event
+	keep() *kept
+	restore(k *kept)
 }
 
 // ReadFile reads the events of a Claude Code, Codex or pi transcript from
@@ -188,10 +195,32 @@ type lineReader interface {
 // (Path, Offset, Index) names one event however the transcript is read. When
 // emit returns an error ReadFile stops and returns it, with the offset of
 // the line it stopped in, from which a read gives that line's events again.
+// ReadFileState is ReadFile without the pass over the lines before the
+// cursor.
 func ReadFile(path string, f digest.Format, from int64, emit func(Event) error) (int64, error) {
+	st, err := ReadFileState(path, f, State{Offset: from}, 0, emit)
+	return st.Offset, err
+}
+
+// ReadFileState is ReadFile from a State, returning the State after the last
+// line read. When from holds what the reader kept (State.Kept) and the
+// transcript's head is the one it was kept from, the read starts at from's
+// cursor: it costs only the lines after it, and gives the events ReadFile
+// gives from there. A bare cursor, or a transcript whose head changed (a
+// session shorter than 256 KiB when the State was saved, a file replaced),
+// is read as ReadFile reads it, with a pass over the lines before the
+// cursor. A State at the transcript's end is returned as it is, with no
+// read.
+//
+// limit > 0 stops the read at the end of the first line that ends at least
+// limit bytes past from's cursor, with what the reader kept, so a long
+// transcript can be read and saved in parts; 0 reads to the end. When emit
+// returns an error the read stops and returns it with a bare cursor at the
+// line it stopped in: a read from it gives that line's events again.
+func ReadFileState(path string, f digest.Format, from State, limit int64, emit func(Event) error) (State, error) {
 	plain := transcript.Plain(path)
-	if from < 0 {
-		return from, fmt.Errorf("%s: negative offset %d", plain, from)
+	if from.Offset < 0 {
+		return from, fmt.Errorf("%s: negative offset %d", plain, from.Offset)
 	}
 	if f != digest.Claude && f != digest.Codex && f != digest.Pi {
 		return from, fmt.Errorf("%s: not a transcript format (%d)", plain, f)
@@ -200,10 +229,10 @@ func ReadFile(path string, f digest.Format, from int64, emit func(Event) error) 
 	if err != nil {
 		return from, err
 	}
-	if from > size {
-		return from, fmt.Errorf("%s: %w (%d > %d)", plain, ErrPastEnd, from, size)
+	if from.Offset > size {
+		return from, fmt.Errorf("%s: %w (%d > %d)", plain, ErrPastEnd, from.Offset, size)
 	}
-	if from == size {
+	if from.Offset == size {
 		return from, nil
 	}
 	head := transcript.Head(path, headBytes)
@@ -223,39 +252,60 @@ func ReadFile(path string, f digest.Format, from int64, emit func(Event) error) 
 	default:
 		rd = newPi(plain, head, v, pastes)
 	}
-	fh, err := transcript.Open(path)
+	id := headID(head)
+	var start int64
+	if k := from.kept; k != nil && k.Format == f && k.Head == id {
+		// The lines that left another package's rules where they were, then
+		// the rest of what was kept over what they left.
+		for _, l := range k.Replay {
+			rd.line([]byte(l))
+		}
+		rd.restore(k)
+		start = from.Offset
+	}
+	fh, err := transcript.OpenAt(path, start)
 	if err != nil {
 		return from, err
 	}
 	defer fh.Close()
+	// at is the State after the lines read up to off: what the reader kept,
+	// unless the read ended before from's cursor (one inside a line).
+	at := func(off int64) State {
+		if off < from.Offset {
+			return State{Offset: from.Offset}
+		}
+		k := rd.keep()
+		k.Format, k.Head = f, id
+		return State{Offset: off, kept: k}
+	}
 	br := bufio.NewReaderSize(fh, 1<<20)
-	var off int64
+	off := start
 	for {
 		line, rerr := br.ReadBytes('\n')
 		if rerr != nil && rerr != io.EOF {
-			return max(off, from), rerr
+			return State{Offset: max(off, from.Offset)}, rerr
 		}
 		if len(line) == 0 {
-			return max(off, from), nil
+			return at(off), nil
 		}
 		body := bytes.TrimRight(line, "\r\n")
 		if rerr == io.EOF && !json.Valid(body) {
-			return max(off, from), nil // still being written
+			return at(off), nil // still being written
 		}
 		next := off + int64(len(line))
 		evs := rd.line(body)
-		if off >= from {
+		if off >= from.Offset {
 			for i := range evs {
 				e := &evs[i]
 				e.Path, e.Offset, e.Next, e.Index = plain, off, next, i
 				if err := emit(*e); err != nil {
-					return off, err
+					return State{Offset: off}, err
 				}
 			}
 		}
 		off = next
-		if rerr == io.EOF {
-			return max(off, from), nil
+		if rerr == io.EOF || limit > 0 && off-from.Offset >= limit {
+			return at(off), nil
 		}
 	}
 }

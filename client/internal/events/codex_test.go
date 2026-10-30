@@ -261,15 +261,21 @@ func TestCodexCurrentFormat(t *testing.T) {
 // harness notice) is cut from their words, and shown, not lost; a question
 // asked by a namespaced call still decides which answers are an offered
 // option.
-func TestCodexAnswersCutAndNamespacedQuestions(t *testing.T) {
-	home := t.TempDir()
+// codexAskSession is a Codex session whose agent asks the person questions
+// with a namespaced call, and their reply (TestCodexAnswersCutAndNamespacedQuestions).
+func codexAskSession() []string {
 	reply := `[{"answer":"memory","question":"Which backend?","questionItemId":"[\"request_user_input\",\"call_q2\",0]"},{"answer":"use 42 and keep it fixed","question":"Which seed?","questionItemId":"[\"request_user_input\",\"call_q2\",1]"},{"answer":"Continue the current task first, then the key","question":"Anything else?","questionItemId":"[\"request_user_input\",\"call_q2\",2]"}]`
 	ask, _ := json.Marshal(`{"questions":[{"title":"Which backend?","options":["redis","memory"]},{"title":"Which seed?","options":["7","42"]},{"title":"Anything else?","options":["no"]}]}`)
-	lines := []string{
+	return []string{
 		codexMeta("019c-ask", `"source":"cli","thread_source":"user",`),
 		cx(1, "response_item", `{"type":"function_call","id":"fc_q2","name":"request_user_input","namespace":"collaboration","arguments":`+string(ask)+`,"call_id":"call_q2"}`),
 		cxUser(2, "<send_user_message_question_reply>\n"+reply+"\n</send_user_message_question_reply>"),
 	}
+}
+
+func TestCodexAnswersCutAndNamespacedQuestions(t *testing.T) {
+	home := t.TempDir()
+	lines := codexAskSession()
 	path := write(t, filepath.Join(home, ".codex", "sessions", "2026", "10", "29", "rollout-2026-10-29T10-00-00-019c-ask.jsonl"), lines...)
 	evs, _ := readAll(t, path, digest.Codex, 0)
 	got := byLine(t, lines, evs)

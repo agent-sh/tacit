@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"strings"
 	"time"
@@ -33,8 +34,23 @@ const hermesPage = 4 << 20
 // Who wrote a row: a session of the owner's holds their words in its user
 // rows, cut out of the gateway's frames as the corpus reads them
 // (ownerwords.TurnReader.Hermes); every other session's user rows are an
-// agent's or the gateway's.
+// agent's or the gateway's. ReadHermesState is ReadHermes without the pass
+// over the rows before the cursor.
 func ReadHermes(ctx context.Context, db *hermes.DB, s hermes.Session, after int64, emit func(Event) error) (int64, error) {
+	st, err := ReadHermesState(ctx, db, s, State{Offset: after}, emit)
+	return st.Offset, err
+}
+
+// ReadHermesState is ReadHermes from a State, returning the State after the
+// last row read. When from holds what the reader kept for this store's
+// session (State.Kept), the read starts after from's message id: it reads
+// only the rows after it, and gives the events ReadHermes gives after it. A
+// bare cursor is read as ReadHermes reads it, with a pass over the rows
+// before it. A State at the session's last row is returned as it is. When
+// emit returns an error the read stops and returns it with a bare cursor at
+// the id before that row's.
+func ReadHermesState(ctx context.Context, db *hermes.DB, s hermes.Session, from State, emit func(Event) error) (State, error) {
+	after := from.Offset
 	r := &hermesReader{base: newBase("hermes", s.ID)}
 	r.parent, r.cwd, r.model = s.Parent, s.Cwd, s.Model
 	if r.cwd == "" {
@@ -45,31 +61,45 @@ func ReadHermes(ctx context.Context, db *hermes.DB, s hermes.Session, after int6
 	}
 	switch last, err := db.LastID(ctx, s.ID); {
 	case err != nil:
-		return after, err
+		return from, err
 	case last < after:
 		// The store went back (restored from a backup): the cursor names a
 		// row it no longer has.
-		return after, fmt.Errorf("hermes session %s: %w (%d > %d)", s.ID, ErrPastEnd, after, last)
+		return from, fmt.Errorf("hermes session %s: %w (%d > %d)", s.ID, ErrPastEnd, after, last)
 	case last == after:
-		return after, nil // nothing after the cursor: no pass over the session
+		return from, nil // nothing after the cursor: no pass over the session
 	}
 	r.verdict = digest.Verdict{Who: digest.Agent, Why: "hermes session from " + s.Source}
 	if s.Owner {
 		r.verdict = digest.Verdict{Who: digest.Owner, Why: "hermes owner session"}
 		ps, err := ownerPastes()
 		if err != nil {
-			return after, err
+			return from, err
 		}
 		r.turns.Pastes = ps
 	}
-	last, read := after, int64(0)
+	key := hermes.Key(db.Path, s.ID)
+	var read int64
+	if k := from.kept; k != nil && k.Format == digest.Hermes && k.Head == key {
+		// Only what a row leaves for the rows after it is kept: the session's
+		// own fields are its row's, read now as a read from the start reads
+		// them.
+		r.prior = k.Prior
+		r.calls = make(map[string]string, len(k.Calls))
+		maps.Copy(r.calls, k.Calls)
+		read = after
+	}
+	last := after
+	at := func() State {
+		return State{Offset: last, kept: &kept{Format: digest.Hermes, Head: key, Prior: r.prior, Calls: r.calls}}
+	}
 	for {
 		rows, err := db.Messages(ctx, s.ID, read, hermesPage)
 		if err != nil {
-			return last, err
+			return State{Offset: last}, err
 		}
 		if len(rows) == 0 {
-			return last, nil
+			return at(), nil
 		}
 		for _, m := range rows {
 			evs := r.row(m)
@@ -81,7 +111,7 @@ func ReadHermes(ctx context.Context, db *hermes.DB, s hermes.Session, after int6
 				e := &evs[i]
 				e.Path, e.Offset, e.Next, e.Index = db.Path, m.ID, m.ID, i
 				if err := emit(*e); err != nil {
-					return last, err
+					return State{Offset: last}, err
 				}
 			}
 			last = m.ID
