@@ -455,6 +455,7 @@ func TestGonePathsRules(t *testing.T) {
 	for _, d := range []string{"here", "here/my docs", "here/café/notes", "here/our"} {
 		os.MkdirAll(filepath.Join(home, filepath.FromSlash(d)), 0o755)
 	}
+	os.WriteFile(filepath.Join(home, "here", "run.sh"), nil, 0o755)
 	os.WriteFile(filepath.Join(home, "here", "main.go"), nil, 0o644)
 	g := newGoneProbe("rig", home+"/", []string{"rig", "wrx", "spark-b23d", "b23d"})
 	for _, c := range []struct {
@@ -513,6 +514,11 @@ func TestGonePathsRules(t *testing.T) {
 		{"Notes are in '~/here/my docs'", "machines/rig", "", ""},
 		{"Notes are in '~/here/our notes'", "machines/rig", "", "~/here/our notes"},
 		{"Notes are in `~/here/my docs`", "machines/rig", "", ""},
+		{"Notes are in `~/here/our notes`", "machines/rig", "", "~/here/our notes"},
+		{"Notes are in `~/gone/our notes`", "machines/rig", "", "~/gone/our notes"},
+		{"Run `~/here/run.sh weekly`", "machines/rig", "", ""},
+		{"Run `~/gone/run.sh weekly`", "machines/rig", "", "~/gone/run.sh"},
+		{"Run `~/gone/tool | tee x`", "machines/rig", "", "~/gone/tool"},
 		{"Notes are in “~/here/my docs”", "machines/rig", "", ""},
 		{"Run `~/gone/tool --flag`", "machines/rig", "", "~/gone/tool"},
 		{"Notes are in ~/here/café/notes", "machines/rig", "", ""},

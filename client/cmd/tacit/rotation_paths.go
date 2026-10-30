@@ -187,13 +187,12 @@ func (g *goneProbe) find(f *fact.Fact) []string {
 			continue // "eg, ~/x": the example marker ends the clause before
 		}
 		// A quoted path the regex cut short (at a space): the whole quote
-		// is the path, looked up and named as such. In a code span the
-		// whole span is a path only when it is there (it is most often a
-		// command line, its first word the path).
+		// is the path, looked up and named as such. A code span is that
+		// or a command line (spanPath).
 		if q, code, ok := quoted(text, start, end); ok {
 			if !code {
 				p = q
-			} else if !g.gone(q) {
+			} else if p, ok = g.spanPath(p, q); !ok {
 				continue
 			}
 		}
@@ -218,6 +217,38 @@ func (g *goneProbe) gone(p string) bool {
 	_, err := os.Stat(full)
 	return os.IsNotExist(err)
 }
+
+// spanPath is the path a code span names when the path regex stopped at a
+// space inside it (span: the whole span from the path on). A span whose
+// rest has a flag or a shell character is a command line: its path is the
+// first word. Otherwise, when the first word is an existing directory, the
+// span is a path with a space in it (`~/notes/our plans`); an existing file
+// is a command with arguments, and names nothing gone (ok false). When the
+// first word is gone, a file name (it has an extension) is the command's
+// program, anything else the whole span.
+func (g *goneProbe) spanPath(first, span string) (string, bool) {
+	if spanCommand.MatchString(span[len(first):]) {
+		return first, true
+	}
+	full := first
+	if strings.HasPrefix(first, "~/") {
+		full = filepath.Join(g.home, first[2:])
+	}
+	if fi, err := os.Stat(full); err == nil {
+		return span, fi.IsDir()
+	}
+	if spanFileExt.MatchString(first) {
+		return first, true
+	}
+	return span, true
+}
+
+// spanFileExt: a word that ends in a file extension (run.sh, check.py).
+var spanFileExt = regexp.MustCompile(`[^./]\.[a-z][a-z0-9]{0,4}$`)
+
+// spanCommand: the rest of a code span after its first word is a command's:
+// a flag, a pipe, a redirect, a separator, a substitution or an assignment.
+var spanCommand = regexp.MustCompile(`(?:^|\s)-|[|;&<>$=` + "`" + `(]`)
 
 // quoted is the text from the path at text[start:end] to the quote that
 // closes the one right before it, when the quote does not close at end;
