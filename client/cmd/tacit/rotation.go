@@ -67,9 +67,11 @@ type rotationOpts struct {
 type rotationStats struct {
 	Due, Checked, Still, Stale, Superseded, Fixed, Compressed, Unknown, Asked, Refused, Unanswered, Batches int
 	// Claims: the due facts that claim the owner's authority without their
-	// words (taken first); Reworded: of those, replaced by a fact in an
-	// agent's words.
+	// words; Reworded: of those, replaced by a fact in an agent's words.
 	Claims, Reworded int
+	// Gone: the due facts of this machine whose named path is gone (taken
+	// first).
+	Gone int
 	// Folders: the folders left for review the rotation found due (asked
 	// again with extra evidence), Settled: of those, decided otherwise.
 	Folders, Settled int
@@ -81,8 +83,8 @@ func (st rotationStats) String() string {
 	if st.Checked > 0 {
 		per = st.Cost / float64(st.Checked)
 	}
-	return fmt.Sprintf("%d due (%d claiming the owner's authority without their words, first), %d checked (%d still, %d stale, %d superseded, %d fixed, %d compressed, %d reworded as an agent's note, %d unknown, %d asked the owner, %d refused), %d unanswered, %d folder(s) left for review asked again (%d settled), $%.3f ($%.4f a fact)",
-		st.Due, st.Claims, st.Checked, st.Still, st.Stale, st.Superseded, st.Fixed, st.Compressed, st.Reworded, st.Unknown, st.Asked, st.Refused, st.Unanswered, st.Folders, st.Settled, st.Cost, per)
+	return fmt.Sprintf("%d due (%d of this machine naming a path that is gone, first; %d claiming the owner's authority without their words, next), %d checked (%d still, %d stale, %d superseded, %d fixed, %d compressed, %d reworded as an agent's note, %d unknown, %d asked the owner, %d refused), %d unanswered, %d folder(s) left for review asked again (%d settled), $%.3f ($%.4f a fact)",
+		st.Due, st.Gone, st.Claims, st.Checked, st.Still, st.Stale, st.Superseded, st.Fixed, st.Compressed, st.Reworded, st.Unknown, st.Asked, st.Refused, st.Unanswered, st.Folders, st.Settled, st.Cost, per)
 }
 
 func envInt(key string, def int) int {
@@ -160,6 +162,7 @@ type rotator struct {
 	ch          *check.Checker
 	open        map[string]bool     // facts with an open finding: the verifier's first
 	findings    map[string][]string // earlier stale findings of a fact, as lines
+	gone        *goneProbe          // this machine's facts whose named paths are gone
 }
 
 // rotationStep runs the rotation on the store, or on this machine's local
@@ -195,6 +198,11 @@ func rotationStep(ctx context.Context, s *store.Store, o rotationOpts, rep *cura
 	defer func() { _ = r.ch.Forge.Save() }()
 	due := r.due(o)
 	st.Due = len(due)
+	for _, f := range due {
+		if r.goneFirst(f) {
+			st.Gone++
+		}
+	}
 	size := o.batch
 	if size <= 0 {
 		size = rotationBatch
@@ -232,7 +240,13 @@ func rotationStep(ctx context.Context, s *store.Store, o rotationOpts, rep *cura
 		}
 		b := r.outcomes(items, vs, refused)
 		stamp := stamped(items, vs, refused)
-		r.logBatch(len(items), b, cost, o.model)
+		gone := 0
+		for _, f := range judged {
+			if r.goneFirst(f) {
+				gone++
+			}
+		}
+		r.logBatch(len(items), gone, b, cost, o.model)
 		if o.dry {
 			for _, it := range items {
 				if v, ok := vs[it.Name]; ok {
@@ -345,6 +359,7 @@ func newRotator(ctx context.Context, s *store.Store, local bool) (*rotator, erro
 		lf, _ := overlay.Load(overlay.Dir())
 		all = append(all, lf...)
 	}
+	r.gone = newGoneProbe(r.host, home, machineNames(all))
 	for _, f := range all {
 		r.taken[f.Meta.Name] = true
 		if f.InInbox() || overlay.IsInbox(f.Path) {
@@ -433,6 +448,8 @@ func claimsOwner(f *fact.Fact) bool {
 // "Questions"), then never checked, then the oldest check, then the oldest
 // created, then by name; a checked fact is due again after o.age days; at
 // most o.max when it is set.
+// Facts of this machine whose description names a path that is gone
+// (goneFirst) come before all of these.
 func (r *rotator) due(o rotationOpts) []*fact.Fact {
 	cut := time.Now().AddDate(0, 0, -o.age).Format("2006-01-02")
 	var out []*fact.Fact
@@ -450,12 +467,18 @@ func (r *rotator) due(o rotationOpts) []*fact.Fact {
 			out = append(out, f)
 		}
 	}
-	claims := map[*fact.Fact]bool{}
+	claims, gone := map[*fact.Fact]bool{}, map[*fact.Fact]bool{}
 	for _, f := range out {
 		claims[f] = claimsOwner(f)
+		gone[f] = r.goneFirst(f)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i].Meta, out[j].Meta
+		// A fact of this machine whose named path is gone is delivered
+		// meanwhile, and most such facts are stale: it goes first.
+		if gi, gj := gone[out[i]], gone[out[j]]; gi != gj {
+			return gi
+		}
 		if ci, cj := claims[out[i]], claims[out[j]]; ci != cj {
 			return ci
 		}
@@ -474,6 +497,21 @@ func (r *rotator) due(o rotationOpts) []*fact.Fact {
 		out = out[:o.max]
 	}
 	return out
+}
+
+// goneFirst reports a fact of this machine whose description names a path
+// that is gone and that was not checked since it last changed: once the
+// model has seen the missing paths and answered, the fact takes its turn
+// like any other.
+func (r *rotator) goneFirst(f *fact.Fact) bool {
+	if len(r.gone.paths(f)) == 0 {
+		return false
+	}
+	changed := f.Meta.Updated
+	if changed == "" {
+		changed = f.Meta.Created
+	}
+	return f.Meta.LastChecked == "" || f.Meta.LastChecked < changed
 }
 
 func clip(s string, n int) string {
@@ -552,15 +590,25 @@ func (r *rotator) item(ctx context.Context, f *fact.Fact) (rotation.Item, error)
 			}
 		}
 	}
-	// This machine's paths, when the fact is about this machine.
-	if f.Meta.Source.Host == r.host || f.Meta.Scope == "machines/"+strings.ToLower(r.host) {
+	// This machine's paths, when the fact is about this machine: first the
+	// ones its description names that are gone (what put it first), then
+	// up to 6 more it names.
+	if f.Meta.Source.Host == r.host || thisMachine(f, r.host) {
 		seen := map[string]bool{}
+		for _, p := range r.gone.paths(f) {
+			if !seen[p] {
+				seen[p] = true
+				add(rotation.Proof{Kind: "path", Text: fmt.Sprintf("%s does not exist on %s", p, r.host)})
+			}
+		}
+		n := 0
 		for _, m := range machinePathRx.FindAllStringSubmatch(f.Meta.Description+"\n"+f.Body, -1) {
 			p := strings.TrimRight(m[1], ".,;:)")
-			if seen[p] || len(seen) == 6 {
+			if seen[p] || n == 6 {
 				continue
 			}
 			seen[p] = true
+			n++
 			full := p
 			if strings.HasPrefix(p, "~/") {
 				full = filepath.Join(r.home, p[2:])
@@ -1103,7 +1151,7 @@ func (r *rotator) writeLocal(batch []*fact.Fact, items []rotation.Item, vs map[s
 
 // logBatch appends the batch's cost to the state directory's rotation log:
 // what a fact costs to check is measured, not assumed.
-func (r *rotator) logBatch(n int, b rotationStats, cost float64, model string) {
+func (r *rotator) logBatch(n, gone int, b rotationStats, cost float64, model string) {
 	p := filepath.Join(platform.StateDir(r.home), rotationLog)
 	os.MkdirAll(filepath.Dir(p), 0o700)
 	fh, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
@@ -1115,7 +1163,7 @@ func (r *rotator) logBatch(n int, b rotationStats, cost float64, model string) {
 	if n > 0 {
 		per = cost / float64(n)
 	}
-	line, _ := json.Marshal(map[string]any{"at": time.Now().Format(time.RFC3339), "model": model, "facts": n, "cost_usd": cost, "cost_per_fact": per, "local": r.local,
+	line, _ := json.Marshal(map[string]any{"at": time.Now().Format(time.RFC3339), "model": model, "facts": n, "gone": gone, "cost_usd": cost, "cost_per_fact": per, "local": r.local,
 		"still": b.Still, "stale": b.Stale, "superseded": b.Superseded, "fixed": b.Fixed, "compressed": b.Compressed, "reworded": b.Reworded, "claims": b.Claims, "unknown": b.Unknown, "asked": b.Asked, "refused": b.Refused, "unanswered": b.Unanswered})
 	fh.Write(append(line, '\n'))
 }
