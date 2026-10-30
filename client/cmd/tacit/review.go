@@ -106,7 +106,10 @@ type decision struct {
 	Evidence string `json:"evidence,omitempty"`
 	Question string `json:"question,omitempty"`
 	Proposed string `json:"proposed,omitempty"` // the fact an agent would have kept, when its mark became a question
-	Model    string `json:"model,omitempty"`    // the model that produced an agent's verdict
+	// Repointed is the finding on the live facts that took a moot one's place
+	// (mootMark: a fact of the pair was replaced by a third fact).
+	Repointed string `json:"repointed,omitempty"`
+	Model     string `json:"model,omitempty"` // the model that produced an agent's verdict
 	// OwnerOnly, label mode only: the owner says no source settles this
 	// pair and only the owner knows the answer, so a verifier is right to ask.
 	OwnerOnly bool `json:"owner_only,omitempty"`
@@ -751,6 +754,14 @@ func (rs *reviewServer) applyOp(o *op) (string, []string, error) {
 		return "", nil, fmt.Errorf("finding %s is about %s then %s, the verdict says %s then %s", o.ID, it.A.Name, it.B.Name, o.A, o.B)
 	}
 	o.A, o.B = it.A.Name, it.B.Name
+	if o.Mark == mootMark {
+		return rs.applyMoot(o, it)
+	}
+	if o.Mark == "reopen" && o.By == "curator" {
+		if err := rs.curatorMayReopen(it); err != nil {
+			return "", nil, err
+		}
+	}
 	mark := o.Mark
 	if o.By == "agent" && (mark == "wrong" || mark == "note" || o.Comment != "") {
 		return "", nil, errors.New("only the owner may say neither is true or leave a note")
@@ -850,6 +861,8 @@ func (rs *reviewServer) applyOp(o *op) (string, []string, error) {
 		prev := it.Decision
 		x, y := rs.facts[prev.A], rs.facts[prev.B]
 		switch {
+		case prev.Action == mootMark:
+			note = "Closing it changed no fact, so nothing was put back."
 		case prev.Before == nil:
 			note = "This mark is older than the review page's records, so the facts were left as they are."
 		case it.Stale:
