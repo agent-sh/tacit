@@ -210,11 +210,12 @@ func (r *codexReader) line(raw []byte) ([]Event, bool) {
 	case "event_msg":
 		// What decoded of a payload with a field of another type is taken,
 		// as before; the line is counted when the field is one its type
-		// reads.
+		// reads: a call id (codexEventReads), or what says the call failed
+		// (eventMsg).
 		var p codexEvent
 		err := json.Unmarshal(l.Payload, &p)
-		r.eventMsg(p)
-		return nil, err == nil || codexEventReads(l.Payload)
+		read := r.eventMsg(p)
+		return nil, (err == nil || codexEventReads(l.Payload)) && read
 	case "response_item":
 		var p codexPayload
 		if json.Unmarshal(l.Payload, &p) != nil && !codexItemReads(l.Payload) {
@@ -226,7 +227,18 @@ func (r *codexReader) line(raw []byte) ([]Event, bool) {
 	return nil, true
 }
 
-func (r *codexReader) eventMsg(p codexEvent) {
+// eventMsg takes what an event says of the turn and the calls, and reports
+// whether what it reads of the event decoded: the end of a patch, a command,
+// an MCP call or an item says whether its call failed (success, exit_code,
+// result, item), and one of another shape loses that, so its line counts. A
+// failure is marked only under a call id (an end whose id did not decode
+// marks nothing: an output with no id is no call of its).
+func (r *codexReader) eventMsg(p codexEvent) bool {
+	mark := func(id string, failed bool) {
+		if failed && id != "" {
+			r.failed[id] = true
+		}
+	}
 	switch p.Type {
 	case "task_started":
 		r.open, r.active = true, false
@@ -236,46 +248,67 @@ func (r *codexReader) eventMsg(p codexEvent) {
 	case "error", "stream_error", "context_compacted", "thread_rolled_back":
 		r.prior = p.Type
 	case "patch_apply_end":
-		if string(p.Success) == "false" {
-			r.failed[p.CallID] = true
+		mark(p.CallID, string(p.Success) == "false")
+		switch string(p.Success) {
+		case "", "null", "true", "false":
+			return true
 		}
+		return false
 	case "exec_command_end":
-		if n, err := strconv.ParseFloat(string(p.ExitCode), 64); err == nil && n != 0 {
-			r.failed[p.CallID] = true
-		}
+		code, ok := exitCode(p.ExitCode)
+		mark(p.CallID, code != 0)
+		return ok
 	case "mcp_tool_call_end":
-		if mcpFailed(p.Result) {
-			r.failed[p.CallID] = true
-		}
+		failed, ok := mcpFailed(p.Result)
+		mark(p.CallID, failed)
+		return ok
 	case "item_completed":
 		// Current Codex reports a call's end as the item it completed: a
 		// command, an MCP call or a file change with its status.
-		if id, ok := itemFailed(p.Item); ok {
-			r.failed[id] = true
-		}
+		id, failed, ok := itemFailed(p.Item)
+		mark(id, failed)
+		return ok
 	}
+	return true
 }
 
-// itemFailed is the id of a completed item that failed: its status is
-// "failed", its exit code is not 0, or it holds an error.
-func itemFailed(raw json.RawMessage) (string, bool) {
+// exitCode is an exit code as Codex records it: a number, 0 when there is
+// none, and false when it is of another type.
+func exitCode(raw json.RawMessage) (float64, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0, true
+	}
+	n, err := strconv.ParseFloat(string(raw), 64)
+	return n, err == nil
+}
+
+// itemFailed is the id of a completed item and whether it failed: its status
+// is "failed", its exit code is not 0, or it holds an error. ok is false for
+// an item of another shape (its status no string, its exit code no number).
+func itemFailed(raw json.RawMessage) (id string, failed, ok bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", false, true
+	}
 	var it struct {
 		ID       string          `json:"id"`
 		Status   string          `json:"status"`
 		ExitCode json.RawMessage `json:"exit_code"`
 		Error    json.RawMessage `json:"error"`
 	}
-	if len(raw) == 0 || json.Unmarshal(raw, &it) != nil || it.ID == "" {
-		return "", false
+	if json.Unmarshal(raw, &it) != nil {
+		return "", false, false
 	}
-	code, _ := strconv.ParseFloat(string(it.ExitCode), 64)
+	code, ok := exitCode(it.ExitCode)
 	errSet := len(it.Error) > 0 && string(it.Error) != "null" && string(it.Error) != `""`
-	return it.ID, it.Status == "failed" || code != 0 || errSet
+	return it.ID, it.Status == "failed" || code != 0 || errSet, ok
 }
 
 // mcpFailed reports an MCP call's result that failed: an Err, or an Ok the
-// server marked isError.
-func mcpFailed(raw json.RawMessage) bool {
+// server marked isError. ok is false for a result of another shape.
+func mcpFailed(raw json.RawMessage) (failed, ok bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return false, true
+	}
 	var res struct {
 		Ok *struct {
 			IsError bool `json:"isError"`
@@ -283,9 +316,9 @@ func mcpFailed(raw json.RawMessage) bool {
 		Err json.RawMessage `json:"Err"`
 	}
 	if json.Unmarshal(raw, &res) != nil {
-		return false
+		return false, false
 	}
-	return len(res.Err) > 0 && string(res.Err) != "null" || res.Ok != nil && res.Ok.IsError
+	return len(res.Err) > 0 && string(res.Err) != "null" || res.Ok != nil && res.Ok.IsError, true
 }
 
 func (r *codexReader) item(raw []byte, p codexPayload, at time.Time) []Event {

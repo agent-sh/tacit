@@ -360,8 +360,11 @@ func TestCountWhenTheReadFails(t *testing.T) {
 // The payload of a Codex record the reader reads that does not decode makes
 // its line count: an event_msg that is no object, an end event whose call id
 // is a number, a turn_context, and a compacted entry, which still marks its
-// compaction. A field the reader does not read, of another type, counts
-// nothing: the record is read as before.
+// compaction. So does an end event whose word on the call's failure is of
+// another type (success, exit_code, result, item), which loses that word. A
+// field the reader does not read, of another type, counts nothing: the record
+// is read as before. A counted end marks no failure under an id that did not
+// decode, so an output with no call id is not flagged by it.
 func TestCodexRecordsThatDoNotParseAreCounted(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -375,11 +378,21 @@ func TestCodexRecordsThatDoNotParseAreCounted(t *testing.T) {
 		/* n+4 */ cx(2, "event_msg", `{"type":"elicitation_request","id":7,"server_name":"docs"}`),
 		/* n+5 */ cx(2, "turn_context", `{"turn_id":"t2","cwd":"/home/u/projects/other","model":"gpt-6.1-luna","effort":7}`),
 		/* n+6 */ c.result,
-		/* n+7 */ c.turn)
+		/* n+7 */ c.turn,
+		/* n+8 */ cxCall(5, "exec_command", "call_x1", `{"cmd":"make"}`),
+		/* n+9 */ cx(5, "event_msg", `{"type":"exec_command_end","call_id":"call_x1","exit_code":"1"}`),
+		/* n+10 */ cxOutput(5, "call_x1", "FAIL"),
+		/* n+11 */ cx(5, "event_msg", `{"type":"patch_apply_end","call_id":"call_x2","success":"false"}`),
+		/* n+12 */ cx(5, "event_msg", `{"type":"mcp_tool_call_end","call_id":"call_x3","result":{"Ok":{"isError":"true","content":[]}}}`),
+		/* n+13 */ cx(5, "event_msg", `{"type":"item_completed","item":{"id":"call_x4","status":{"failed":true},"exit_code":1}}`),
+		/* n+14 */ cx(5, "event_msg", `{"type":"item_completed","item":{"id":"call_x5","status":"completed","exit_code":"0"}}`),
+		/* n+15 */ cx(5, "event_msg", `{"type":"exec_command_end","call_id":"call_x6","exit_code":null}`),
+		/* n+16 */ cx(5, "event_msg", `{"type":"patch_apply_end","call_id":"call_x7","success":true}`),
+		/* n+17 */ cx(6, "response_item", `{"type":"tool_search_output","tools":[]}`))
 	path := write(t, strings.Replace(c.path, ".jsonl", "-records.jsonl", 1), lines...)
 	evs, st := readState(t, path, digest.Codex, State{}, 0)
-	if st.Unparsed() != 4 {
-		t.Fatalf("%d lines that do not parse, want 4:\n%s", st.Unparsed(), dump(evs))
+	if st.Unparsed() != 9 {
+		t.Fatalf("%d lines that do not parse, want 9:\n%s", st.Unparsed(), dump(evs))
 	}
 	got := byLine(t, lines, evs)
 	check(t, n+3, got[n+3], want{Kind: KindCompaction, Who: digest.Harness, Why: "compacted"})
@@ -390,6 +403,11 @@ func TestCodexRecordsThatDoNotParseAreCounted(t *testing.T) {
 	if e := got[n+7][0]; e.Model != "gpt-6.1-luna" || e.Cwd != "/home/u/projects/other" {
 		t.Errorf("the turn's model and cwd: %q %q", e.Model, e.Cwd)
 	}
+	// The output after an end that did not say whether its call failed is not
+	// flagged; nor is an output with no call id after an end whose id did not
+	// decode (n+1).
+	check(t, n+10, got[n+10], want{Kind: KindToolResult, Who: digest.Harness, ToolID: "call_x1", ToolName: "exec_command"})
+	check(t, n+17, got[n+17], want{Kind: KindToolResult, Who: digest.Harness})
 }
 
 // An assistant row whose tool calls do not parse is counted: its text is
@@ -594,8 +612,11 @@ type stray struct{ dirty, clean string }
 // label), or one the line's kind does not read (an assistant reply's isMeta,
 // a system line's message, a function call's id, a message's name, a turn's
 // end with a call id, a model change's summary, a user message's exitCode),
-// counts nothing, and the line is read as it is without that field. A field
-// the line's kind reads, of another type, counts, and the line gives nothing.
+// counts nothing, and the line is read as it is without that field: an
+// attachment the reader passes over, a queued message's hook event, a hook's
+// command mode, a typed turn's subtype, a pi user message's entry id (only a
+// !command reads it). A field the line's kind reads, of another type, counts,
+// and the line gives nothing.
 func TestOnlyWhatAKindReadsIsChecked(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -607,6 +628,7 @@ func TestOnlyWhatAKindReadsIsChecked(t *testing.T) {
 		g       growing
 		lines   []stray
 		counted []string
+		texts   []string // what the stray lines of kinds the reader reads give
 	}{
 		{g[0], []stray{
 			{cl(1, `"type":"some-new-kind","uuid":"n1","message":"a string"`), cl(1, `"type":"some-new-kind","uuid":"n1"`)},
@@ -614,6 +636,15 @@ func TestOnlyWhatAKindReadsIsChecked(t *testing.T) {
 			{cl(1, `"type":"some-new-kind","uuid":"n3","isMeta":"yes"`), cl(1, `"type":"some-new-kind","uuid":"n3"`)},
 			{cl(1, `"type":"assistant","uuid":"a4","isMeta":"yes",`+reply), cl(1, `"type":"assistant","uuid":"a4",`+reply)},
 			{cl(1, `"type":"system","subtype":"turn_duration","uuid":"s5","message":"a string"`), cl(1, `"type":"system","subtype":"turn_duration","uuid":"s5"`)},
+			{cl(1, `"type":"attachment","uuid":"t12","attachment":{"type":"todo_reminder","toolUseID":5,"content":[],"itemCount":0}`), cl(1, `"type":"attachment","uuid":"t12","attachment":{"type":"todo_reminder","content":[],"itemCount":0}`)},
+			{cl(1, `"type":"attachment","uuid":"t13","attachment":{"type":"new_attachment_kind","hookEvent":{"n":1}}`), cl(1, `"type":"attachment","uuid":"t13","attachment":{"type":"new_attachment_kind"}`)},
+			{cl(1, `"type":"attachment","uuid":"t14","attachment":{"type":"skill_listing","commandMode":["a"]}`), cl(1, `"type":"attachment","uuid":"t14","attachment":{"type":"skill_listing"}`)},
+			{cl(1, `"type":"attachment","uuid":"q15","attachment":{"type":"queued_command","prompt":"and never purge the cache","commandMode":"prompt","origin":{"kind":"human"},"hookEvent":7}`),
+				cl(1, `"type":"attachment","uuid":"q15","attachment":{"type":"queued_command","prompt":"and never purge the cache","commandMode":"prompt","origin":{"kind":"human"}}`)},
+			{cl(1, `"type":"attachment","uuid":"h16","attachment":{"type":"hook_additional_context","content":["the cache key holds the lockfile hash"],"hookEvent":"PreToolUse","toolUseID":"toolu_77","commandMode":5}`),
+				cl(1, `"type":"attachment","uuid":"h16","attachment":{"type":"hook_additional_context","content":["the cache key holds the lockfile hash"],"hookEvent":"PreToolUse","toolUseID":"toolu_77"}`)},
+			{cl(2, `"type":"user","uuid":"u17","promptId":"p17",`+typedMarks+`,"subtype":5,"message":{"role":"user","content":"and keep the build cache"}`),
+				cl(2, `"type":"user","uuid":"u17","promptId":"p17",`+typedMarks+`,"message":{"role":"user","content":"and keep the build cache"}`)},
 		}, []string{
 			cl(1, `"type":"assistant","uuid":"a6","message":{"model":5,"role":"assistant","content":[{"type":"text","text":"Warming now."}]}`),
 			cl(1, `"type":"assistant","uuid":"a7","isApiErrorMessage":"yes",`+reply),
@@ -621,7 +652,9 @@ func TestOnlyWhatAKindReadsIsChecked(t *testing.T) {
 			cl(1, `"type":"attachment","uuid":"h9","attachment":{"type":"hook_success","hookEvent":7,"content":"ok"}`),
 			cl(1, `"type":"user","uuid":"u10","promptSource":7,"message":{"role":"user","content":"and the docs"}`),
 			cl(1, `"type":"some-new-kind","uuid":"n11","cwd":7`),
-		}},
+			cl(1, `"type":"attachment","uuid":"q18","attachment":{"type":"queued_command","prompt":"and the docs","commandMode":5,"origin":{"kind":"human"}}`),
+			cl(1, `"type":"attachment","uuid":"h19","attachment":{"type":"hook_success","toolUseID":["toolu_77"],"content":"ok"}`),
+		}, []string{"Warming now.", "and never purge the cache", "the cache key holds the lockfile hash", "and keep the build cache"}},
 		{g[1], []stray{
 			{cx(2, "response_item", `{"type":"reasoning","id":7,"summary":[]}`), cx(2, "response_item", `{"type":"reasoning","id":"rs_1","summary":[]}`)},
 			{cx(2, "event_msg", `{"type":"token_count","call_id":7}`), cx(2, "event_msg", `{"type":"token_count"}`)},
@@ -630,6 +663,8 @@ func TestOnlyWhatAKindReadsIsChecked(t *testing.T) {
 			{cx(2, "response_item", `{"type":"message","role":"assistant","name":5,"content":[{"type":"output_text","text":"Listing."}]}`),
 				cx(2, "response_item", `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Listing."}]}`)},
 			{cx(2, "event_msg", `{"type":"task_complete","turn_id":"t1","call_id":7}`), cx(2, "event_msg", `{"type":"task_complete","turn_id":"t1"}`)},
+			{cx(3, "response_item", `{"type":"message","role":"user","name":5,"content":[{"type":"input_text","text":"and keep the build cache"}]}`),
+				cx(3, "response_item", `{"type":"message","role":"user","content":[{"type":"input_text","text":"and keep the build cache"}]}`)},
 		}, []string{
 			cx(2, "response_item", `{"type":"function_call","name":"exec_command","arguments":"{}","call_id":5}`),
 			cx(2, "response_item", `{"type":"function_call","name":["exec_command"],"arguments":"{}","call_id":"call_s2"}`),
@@ -637,7 +672,7 @@ func TestOnlyWhatAKindReadsIsChecked(t *testing.T) {
 			cx(2, "response_item", `{"type":"web_search_call","id":5,"status":"completed","action":{"type":"search","query":"zstd"}}`),
 			cx(2, "event_msg", `{"type":"patch_apply_end","call_id":5,"success":false}`),
 			cx(2, "turn_context", `{"turn_id":"t2","cwd":5,"model":"gpt-6.1-luna"}`),
-		}},
+		}, []string{"Listing.", "and keep the build cache"}},
 		{g[2], []stray{
 			{piEntry(8, `"type":"label","id":"l1","label":"x","summary":{"n":1}`), piEntry(8, `"type":"label","id":"l1","label":"x"`)},
 			{piEntry(8, `"type":"model_change","id":"m2","provider":"p","modelId":"qwen3-coder","summary":5`), piEntry(8, `"type":"model_change","id":"m2","provider":"p","modelId":"qwen3-coder"`)},
@@ -645,14 +680,16 @@ func TestOnlyWhatAKindReadsIsChecked(t *testing.T) {
 				piMsg(9, "a3", map[string]any{"role": "assistant", "model": "qwen3-coder", "stopReason": "stop", "content": piText("Done.")})},
 			{piMsg(10, "u4", map[string]any{"role": "user", "exitCode": "x", "content": piText("and the docs")}),
 				piMsg(10, "u4", map[string]any{"role": "user", "content": piText("and the docs")})},
+			{piEntry(10, `"type":"message","id":7,"message":{"role":"user","content":[{"type":"text","text":"then add the target"}]}`),
+				piEntry(10, `"type":"message","id":"u5","message":{"role":"user","content":[{"type":"text","text":"then add the target"}]}`)},
 		}, []string{
 			piEntry(10, `"type":"model_change","id":"m5","provider":"p","modelId":5`),
 			piEntry(10, `"type":"compaction","id":"c6","summary":{"text":"the work"}`),
-			piEntry(10, `"type":"message","id":7,"message":{"role":"user","content":"and the docs"}`),
+			piEntry(10, `"type":"message","id":7,"message":{"role":"bashExecution","command":"ls","output":"x","exitCode":0}`),
 			piMsg(10, "a8", map[string]any{"role": "assistant", "model": "qwen3-coder", "stopReason": 5, "content": piText("Done.")}),
 			piMsg(10, "r9", map[string]any{"role": "toolResult", "toolCallId": 5, "content": piText("ok")}),
 			piMsg(10, "b10", map[string]any{"role": "bashExecution", "command": "ls", "output": "x", "exitCode": "zero"}),
-		}},
+		}, []string{"Done.", "and the docs", "then add the target"}},
 	} {
 		t.Run(c.g.name, func(t *testing.T) {
 			dirty := append(append([]string{}, c.g.first...), c.g.call)
@@ -669,16 +706,26 @@ func TestOnlyWhatAKindReadsIsChecked(t *testing.T) {
 			if st.Unparsed() != len(c.counted) || wst.Unparsed() != 0 || !reflect.DeepEqual(unplaced(got), unplaced(want)) {
 				t.Fatalf("%d lines counted, want %d:\n%s\nwant\n%s", st.Unparsed(), len(c.counted), dump(got), dump(want))
 			}
+			for _, text := range c.texts {
+				found := false
+				for _, e := range got {
+					found = found || e.Text == text
+				}
+				if !found {
+					t.Errorf("no event holds %q:\n%s", text, dump(got))
+				}
+			}
 		})
 	}
 }
 
 // A message whose content is neither a string nor a list (an object, a
-// number), or a pi reply's that is not a list, holds no text the reader can
-// take: the whole message would be gone, so its line is counted and gives no
-// events. A Codex compacted entry whose summary is of another shape still
-// marks its compaction. Content that is empty, null, a string or a list is
-// read as before.
+// number), a queued message's prompt of such a shape, or a pi reply's content
+// that is not a list, holds no text the reader can take: the whole message
+// would be gone, so its line is counted and gives no events of it. A Codex
+// compacted entry whose summary is of another shape still marks its
+// compaction, and a pi reply still gives its provider error. Content that is
+// empty, null, a string or a list is read as before.
 func TestMessageContentOfAnotherShapeIsCounted(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -690,16 +737,19 @@ func TestMessageContentOfAnotherShapeIsCounted(t *testing.T) {
 		g       growing
 		counted []string
 		read    []string // read as before, and not counted
-		marks   int      // events the counted lines still give: a compaction's
+		marks   int      // events the counted lines still give: a compaction, a provider error
 	}{
 		{g[0], []string{
 			cl(1, `"type":"assistant","uuid":"a7","message":{"model":"claude-opus-5-5","role":"assistant","content":`+obj+`}`),
 			cl(1, `"type":"user","uuid":"u8","promptId":"p8",`+typedMarks+`,"message":{"role":"user","content":`+obj+`}`),
 			cl(1, `"type":"attachment","uuid":"h9","attachment":{"type":"hook_additional_context","content":`+obj+`,"hookName":"PreToolUse:Read","toolUseID":"toolu_77","hookEvent":"PreToolUse"}`),
+			cl(1, `"type":"attachment","uuid":"q13","attachment":{"type":"queued_command","prompt":`+obj+`,"commandMode":"prompt","origin":{"kind":"human"}}`),
+			cl(1, `"type":"attachment","uuid":"q14","attachment":{"type":"queued_command","prompt":7,"commandMode":"prompt","origin":{"kind":"human"}}`),
 		}, []string{
 			cl(1, `"type":"assistant","uuid":"a10","message":{"model":"claude-opus-5-5","role":"assistant","content":[]}`),
 			cl(1, `"type":"attachment","uuid":"h11","attachment":{"type":"hook_success","hookName":"PostToolUse:Bash","toolUseID":"toolu_77","hookEvent":"PostToolUse","content":""}`),
 			cl(1, `"type":"assistant","uuid":"a12","message":{"model":"claude-opus-5-5","role":"assistant","content":"A reply as a string."}`),
+			cl(1, `"type":"attachment","uuid":"q15","attachment":{"type":"queued_command","prompt":"and never purge the cache","commandMode":"prompt","origin":{"kind":"human"}}`),
 		}, 0},
 		{g[1], []string{
 			cx(2, "response_item", `{"type":"message","role":"assistant","content":`+obj+`}`),
@@ -711,13 +761,13 @@ func TestMessageContentOfAnotherShapeIsCounted(t *testing.T) {
 		}, 1},
 		{g[2], []string{
 			piMsg(9, "u7", map[string]any{"role": "user", "content": map[string]string{"type": "text", "text": "an object"}}),
-			piMsg(9, "a8", map[string]any{"role": "assistant", "model": "qwen3-coder", "stopReason": "stop", "content": "a string, where pi writes a list"}),
+			piMsg(9, "a8", map[string]any{"role": "assistant", "model": "qwen3-coder", "stopReason": "error", "errorMessage": "overloaded", "content": "a string, where pi writes a list"}),
 			piMsg(9, "c9", map[string]any{"role": "custom", "content": map[string]int{"n": 1}}),
 			piEntry(9, `"type":"custom_message","id":"x10","customType":"plan","content":{"n":1},"display":true`),
 		}, []string{
 			piMsg(9, "a11", map[string]any{"role": "assistant", "model": "qwen3-coder", "stopReason": "error", "errorMessage": "overloaded", "content": []any{}}),
 			piEntry(9, `"type":"custom_message","id":"x12","customType":"plan","content":"Plan: 2. test it","display":true`),
-		}, 0},
+		}, 1},
 	} {
 		t.Run(c.g.name, func(t *testing.T) {
 			lines := append(append([]string{}, c.g.first...), c.g.call)
