@@ -31,7 +31,7 @@ out=""; while [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done
 cp "`+filepath.Join(s.bin, "faketacit")+`" "$out"`)
 	s.stub(t, "auth-answer", authAnswer)
 	s.stub(t, "launchctl", `[ "$1" = print ] && printf '\tstate = running\n'; exit 0`)
-	s.stub(t, "scrump", `sed 's/=.*/=************/'`)
+	s.stub(t, "scrump", recordsScrump)
 	cmd := exec.Command("bash", append([]string{macSetup, "--no-app", "--repo", repo, "--server", "http://100.64.0.10:7447"}, args...)...)
 	cmd.Env = []string{"PATH=" + s.bin + ":/usr/bin:/bin", "HOME=" + s.home, "LANG=C"}
 	var out bytes.Buffer

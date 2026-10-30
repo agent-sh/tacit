@@ -76,7 +76,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: avifenesh/scrump
-          ref: 17cd5abc9ce19d4fdec51588a35ef73a644e36bb
+          ref: b2b3178c412ee5d99aaf36233d3952c2d4e796ca
           path: .release-deps/scrump
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249
         with:
@@ -85,7 +85,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: .release-deps/scrump/target
-          key: scrump-text-${{ matrix.rust }}-17cd5abc-v1
+          key: scrump-text-${{ matrix.rust }}-b2b3178c-v1
       - name: Linux static C toolchain
         if: runner.os == 'Linux'
         run: sudo apt-get update -qq && sudo apt-get install -y musl-tools
