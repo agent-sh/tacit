@@ -870,3 +870,31 @@ new Function("document", "localStorage", "matchMedia", "fetch", "els", "calls", 
 		t.Errorf("sent %v", got.Sent)
 	}
 }
+
+// A LINK? line an older curator raised for a link to what the ruling
+// replaced (a rebuilt ruling's "Made by code from [[...]]") is no item: the
+// link is where the rule came from, and the ruling still holds it. The
+// fixture's real dead link stays open.
+func TestAppLeavesOutALinkLineForWhatTheRuleReplaced(t *testing.T) {
+	_, clone := ownerFixture(t)
+	rs := clone("one")
+	dir := rs.s.Dir
+	write := func(rel, body string) {
+		os.MkdirAll(filepath.Dir(filepath.Join(dir, filepath.FromSlash(rel))), 0o755)
+		os.WriteFile(filepath.Join(dir, filepath.FromSlash(rel)), []byte(body), 0o644)
+	}
+	write("projects/x/made-rule.md", ownerFactFile("made-rule", "projects/x", "user", "user_standard", "Keep the notes short.\nMade by code from [[said-once]]."))
+	write("projects/x/said-once.md", "---\nname: said-once\ndescription: \"fact said-once\"\ntype: user_standard\nscope: projects/x\nsuperseded_by: made-rule\nsource:\n  harness: curator\n  host: h\n  kind: observed\ncreated: 2026-10-01\n---\n\nKeep the notes short.\n")
+	write("review/2026-10-01.md", readRel(t, rs, "review/2026-10-01.md")+"- LINK? [[made-rule]] (projects/x) links to [[said-once]], and [[said-once]] is superseded by [[made-rule]], which is this fact; this is an owner ruling, so the curator left it; it would write plain text\n")
+	markAudited(t, dir)
+	git(t, dir, "add", "-A")
+	git(t, dir, "commit", "-q", "-m", "a rebuilt ruling")
+	rs.loadFacts()
+	var got []string
+	for _, it := range rs.linkItems(ctxT(t)) {
+		got = append(got, it.A.Name+" -> "+it.Link.Target+": "+it.State)
+	}
+	if strings.Join(got, ", ") != "rule -> gone-fact: open" {
+		t.Fatalf("link items: %v", got)
+	}
+}
