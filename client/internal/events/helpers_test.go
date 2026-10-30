@@ -15,6 +15,21 @@ import (
 // (Claude Code 2.1.30x, Codex 0.16x, pi 1.x, Hermes's state.db), the values
 // made up.
 
+// TestMain runs the tests with an empty home of their own: a reader of an
+// owner's session reads the prompt history under the home directory
+// (ClaudePastes), and a test reads none of the machine's.
+func TestMain(m *testing.M) {
+	home, err := os.MkdirTemp("", "events-home-")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("HOME", home)
+	os.Setenv("USERPROFILE", home) // the home directory on Windows
+	code := m.Run()
+	os.RemoveAll(home)
+	os.Exit(code)
+}
+
 // write writes lines as a transcript, one per line, and returns its path.
 func write(t *testing.T, path string, lines ...string) string {
 	t.Helper()

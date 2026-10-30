@@ -1,8 +1,6 @@
 package events
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -26,27 +24,12 @@ type claudeReader struct {
 	cmds  digest.ClaudeCommands
 }
 
-func newClaude(plain string, head []byte, from int64) *claudeReader {
+func newClaude(plain string, v digest.Verdict, pastes []string) *claudeReader {
 	r := &claudeReader{base: newBase("claude", transcript.Name(plain))}
-	r.verdict = digest.SessionWho(plain, head, digest.Claude)
+	r.verdict = v
+	r.turns.Pastes = pastes
 	if strings.Contains(filepath.ToSlash(plain), "/subagents/") {
 		r.subagent = strings.TrimPrefix(transcript.Name(plain), "agent-")
-	}
-	if from > 0 {
-		// Read from a cursor: the model and the place of the session as its
-		// first lines record them, until a line read says otherwise.
-		sc := bufio.NewScanner(bytes.NewReader(head))
-		sc.Buffer(make([]byte, 64<<10), len(head)+1)
-		for sc.Scan() {
-			var l claudeLine
-			if json.Unmarshal(sc.Bytes(), &l) != nil {
-				continue
-			}
-			r.note(l)
-			if l.Type == "assistant" && l.Message.Model != "" && l.Message.Model != synthetic {
-				r.model = l.Message.Model
-			}
-		}
 	}
 	return r
 }
@@ -72,10 +55,11 @@ type claudeLine struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
 	Attachment struct {
-		Type      string          `json:"type"`
-		HookEvent string          `json:"hookEvent"`
-		ToolUseID string          `json:"toolUseID"`
-		Content   json.RawMessage `json:"content"`
+		Type        string          `json:"type"`
+		HookEvent   string          `json:"hookEvent"`
+		ToolUseID   string          `json:"toolUseID"`
+		CommandMode string          `json:"commandMode"`
+		Content     json.RawMessage `json:"content"`
 	} `json:"attachment"`
 }
 
@@ -131,10 +115,10 @@ func (r *claudeReader) line(raw []byte) []Event {
 	case "attachment":
 		return r.attachment(raw, l, at)
 	case "system":
+		// A system line is a record of the harness's (a compaction's boundary
+		// among them; its summary is the compaction event): what came before
+		// the next turn.
 		r.prior = l.Subtype
-		if l.Subtype == "compact_boundary" {
-			return []Event{r.text(KindCompaction, "system", digest.Harness, "compaction boundary", rawText(l.Content), at)}
-		}
 	}
 	return nil
 }
@@ -231,14 +215,11 @@ func (r *claudeReader) turn(raw []byte, l claudeLine, texts []string, at time.Ti
 	_ = json.Unmarshal(raw, &o)
 	marks := digest.ClaudeMarksOf(o)
 	if typed, why := digest.ClaudeTyped(marks); !typed {
-		who, in := digest.Agent, InputKind("")
-		if marks.TranscriptOnly {
-			who = digest.Harness // no one's typing, the harness's record
-		}
+		in := InputKind("")
 		if marks.PromptSource == "suggestion_accepted" {
 			in = InputSuggestion
 		}
-		return r.untyped(digest.Claude, texts, who, why, at, in)
+		return r.untyped(digest.Claude, texts, digest.Agent, why, at, in)
 	}
 	return r.typed(texts, own, nil, at, claudeInput(l.PromptSource, texts))
 }
@@ -273,6 +254,10 @@ func (r *claudeReader) attachment(raw []byte, l claudeLine, at time.Time) []Even
 		switch {
 		case !r.verdict.Owner():
 			out = r.untyped(digest.Claude, texts, digest.Agent, r.verdict.Why, at, "")
+		case !typed && l.Attachment.CommandMode != "" && l.Attachment.CommandMode != "prompt":
+			// Not a message at all: the harness delivering its own (a task
+			// notification), as digest.ClaudeQueued holds.
+			out = r.untyped(digest.Claude, texts, digest.Harness, why, at, "")
 		case !typed:
 			out = r.untyped(digest.Claude, texts, digest.Agent, why, at, "")
 		default:

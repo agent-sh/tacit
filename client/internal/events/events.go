@@ -9,7 +9,8 @@
 // use, never a copy of them: per session digest.SessionWho (Hermes:
 // hermes.Session.Owner), per Claude Code line digest.ClaudeTyped and
 // digest.ClaudeQueued, per piece of a turn digest.TurnPieces, and for the
-// owner's own words ownerwords.TurnReader and ownerwords.HermesTurn.
+// owner's own words ownerwords.TurnReader (Parts, Hermes), with the pastes
+// the owner's prompt history records (ownerwords.ClaudePastes).
 //
 // Events hold the text as the harness recorded it, unredacted. A caller that
 // stores or sends them redacts them first (Redact), which fails closed.
@@ -29,6 +30,7 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/harnesses"
+	"github.com/agent-sh/tacit/client/internal/ownerwords"
 	"github.com/agent-sh/tacit/client/internal/transcript"
 )
 
@@ -139,17 +141,19 @@ type Event struct {
 	// Text is a text event's text or a compaction's summary.
 	Text string
 
-	// ToolID pairs a tool call with its result. ToolName is the tool;
-	// ToolInput the call's arguments as recorded (JSON, or a custom tool's
-	// raw input), ToolOutput the result as the agent got it.
+	// ToolID pairs a tool call with its result. ToolName is the tool (a
+	// Codex tool in a namespace <namespace>__<name>, as Claude Code names an
+	// MCP server's); ToolInput the call's arguments as recorded (JSON, or a
+	// custom tool's raw input), ToolOutput the result as the agent got it.
 	ToolID     string
 	ToolName   string
 	ToolInput  string
 	ToolOutput string
 	// IsError marks a result the harness recorded as failed (Claude Code's
-	// is_error, pi's isError and a !command's exit code, Codex's exit code,
-	// patch and MCP results, a Hermes tool row's error), and an error message
-	// the harness wrote in the agent's place.
+	// is_error; pi's isError and a !command's exit code; Codex's end of the
+	// call before its output, the exit code it writes above a command's
+	// output and the first line of its script tool's; a Hermes tool row's
+	// error), and an error message the harness wrote in the agent's place.
 	IsError bool
 }
 
@@ -172,20 +176,25 @@ type lineReader interface {
 // compressed copy's decompressed stream), calling emit for each in order. It
 // returns the offset after the last line read, where the next read resumes.
 // A last line without its newline is read once it holds whole JSON; until
-// then it is left for the next read. When emit returns an error ReadFile
-// stops and returns it, with the offset of the line it stopped in: a read
-// from there gives that line's events again, with the same Offset and Index.
-// A transcript the harness compressed since its path was recorded is read
-// from its compressed copy (transcript.Resolve).
+// then it is left for the next read. A transcript the harness compressed
+// since its path was recorded is read from its compressed copy
+// (transcript.Resolve).
 //
-// What a reader keeps across lines (the tool calls a result pairs with, the
-// options a Codex question offered, a local command's caveat) starts empty at
-// from; who wrote a turn is decided from the transcript's first bytes either
-// way.
+// A read from a cursor gives exactly the events a read from the start gives
+// from there: what a line's events depend on in the lines before it (the
+// call a result names, the options a Codex question offered, a local
+// command's caveat, a turn under way, the record before a turn, the model
+// and cwd) is rebuilt from those lines, whose events are not emitted. So
+// (Path, Offset, Index) names one event however the transcript is read. When
+// emit returns an error ReadFile stops and returns it, with the offset of
+// the line it stopped in, from which a read gives that line's events again.
 func ReadFile(path string, f digest.Format, from int64, emit func(Event) error) (int64, error) {
 	plain := transcript.Plain(path)
 	if from < 0 {
 		return from, fmt.Errorf("%s: negative offset %d", plain, from)
+	}
+	if f != digest.Claude && f != digest.Codex && f != digest.Pi {
+		return from, fmt.Errorf("%s: not a transcript format (%d)", plain, f)
 	}
 	_, size, err := transcript.Stat(path)
 	if err != nil {
@@ -194,57 +203,79 @@ func ReadFile(path string, f digest.Format, from int64, emit func(Event) error) 
 	if from > size {
 		return from, fmt.Errorf("%s: %w (%d > %d)", plain, ErrPastEnd, from, size)
 	}
+	if from == size {
+		return from, nil
+	}
 	head := transcript.Head(path, headBytes)
+	v := digest.SessionWho(plain, head, f)
+	var pastes []string
+	if v.Owner() {
+		if pastes, err = ownerPastes(); err != nil {
+			return from, err
+		}
+	}
 	var rd lineReader
 	switch f {
 	case digest.Claude:
-		rd = newClaude(plain, head, from)
+		rd = newClaude(plain, v, pastes)
 	case digest.Codex:
-		rd = newCodex(plain, head, from)
-	case digest.Pi:
-		rd = newPi(plain, head, from)
+		rd = newCodex(plain, head, v, pastes)
 	default:
-		return from, fmt.Errorf("%s: not a transcript format (%d)", plain, f)
+		rd = newPi(plain, head, v, pastes)
 	}
-	fh, err := transcript.OpenAt(path, from)
+	fh, err := transcript.Open(path)
 	if err != nil {
 		return from, err
 	}
 	defer fh.Close()
 	br := bufio.NewReaderSize(fh, 1<<20)
-	off := from
+	var off int64
 	for {
 		line, rerr := br.ReadBytes('\n')
 		if rerr != nil && rerr != io.EOF {
-			return off, rerr
+			return max(off, from), rerr
 		}
 		if len(line) == 0 {
-			return off, nil
+			return max(off, from), nil
 		}
 		body := bytes.TrimRight(line, "\r\n")
 		if rerr == io.EOF && !json.Valid(body) {
-			return off, nil // still being written
+			return max(off, from), nil // still being written
 		}
 		next := off + int64(len(line))
 		evs := rd.line(body)
-		for i := range evs {
-			e := &evs[i]
-			e.Path, e.Offset, e.Next, e.Index = plain, off, next, i
-			if err := emit(*e); err != nil {
-				return off, err
+		if off >= from {
+			for i := range evs {
+				e := &evs[i]
+				e.Path, e.Offset, e.Next, e.Index = plain, off, next, i
+				if err := emit(*e); err != nil {
+					return off, err
+				}
 			}
 		}
 		off = next
 		if rerr == io.EOF {
-			return off, nil
+			return max(off, from), nil
 		}
 	}
 }
 
-// Files lists a source's transcripts (transcript.Glob: one path per
-// session, the plain file when both it and a compressed copy are there),
-// sorted, regular files only. The Hermes store has none: its sessions are
-// rows (ReadHermes).
+// ownerPastes are the texts the owner pasted into their prompts
+// (ownerwords.ClaudePastes, the prompt history under the home directory),
+// which the corpus cuts from their words and so does the reader.
+func ownerPastes() ([]string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	return ownerwords.ClaudePastes(home)
+}
+
+// Files lists a source's transcripts by their plain paths
+// (transcript.Plain), one per session whichever file holds it, sorted: a
+// session Codex compresses between two reads keeps its path, which is
+// Event.Path, and ReadFile reads its compressed copy. Only regular files
+// count. The Hermes store has none: its sessions are rows (ReadHermes).
 func Files(src harnesses.Source) ([]string, error) {
 	if src.Glob == "" {
 		return nil, nil
@@ -253,13 +284,13 @@ func Files(src harnesses.Source) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	sort.Strings(files)
-	out := files[:0]
+	var out []string
 	for _, f := range files {
 		if fi, err := os.Lstat(f); err == nil && fi.Mode().IsRegular() {
-			out = append(out, f)
+			out = append(out, transcript.Plain(f))
 		}
 	}
+	sort.Strings(out)
 	return out, nil
 }
 
@@ -302,9 +333,9 @@ const (
 
 // untyped is the events of the texts of a user turn no person typed (an
 // agent's session, or a line its marks say a person did not type), whole, by
-// the digest's rule for such a turn: text a harness injected
-// (digest.HarnessText) is the harness's, the rest who's (an agent's, or
-// unknown in a session no rule decides).
+// the digest's rule for such a turn (digest.UntypedWho): text a harness
+// injected is the harness's, the rest who's (an agent's, or unknown in a
+// session no rule decides). who Harness makes all of it the harness's.
 func (b *base) untyped(f digest.Format, texts []string, who digest.Who, why string, at time.Time, in InputKind) []Event {
 	var out []Event
 	for _, t := range texts {
@@ -312,7 +343,7 @@ func (b *base) untyped(f digest.Format, texts []string, who digest.Who, why stri
 			continue
 		}
 		k, w := KindAgentText, who
-		if w == digest.Harness || digest.HarnessText(f, t) {
+		if w == digest.Harness || digest.UntypedWho(f, t) == digest.Harness {
 			k, w = KindHarnessText, digest.Harness
 		}
 		e := b.text(k, "user", w, why, t, at)
@@ -322,34 +353,41 @@ func (b *base) untyped(f digest.Format, texts []string, who digest.Who, why stri
 	return out
 }
 
+// whyOffered is why an answer to a Codex question is the harness's: it is one
+// of the options the question offered (digest.CodexAsked.Offered), the
+// model's words the person chose.
+const whyOffered = "an option the question offered"
+
 // typed is the events of the texts of a user turn a person typed: each piece
-// as digest.TurnPieces splits it (with a Codex answer that is an option its
-// question offered the harness's, asked), and the owner's words as the owner
-// corpus reads the turn (own: ownerwords.TurnReader.Parts or
-// ownerwords.HermesTurn) in the place of the first piece of theirs. What the
-// corpus left out of their pieces (a paste, agent text they relayed) is an
-// agent's, after it. A piece that answers a Codex question makes the turn an
-// answer.
+// as digest.TurnPieces splits it (an answer to a Codex question that is one
+// of the options it offered is the harness's, its text as recorded:
+// digest.CodexAsked.Offered), and the owner's words as the owner corpus
+// reads the turn (own: ownerwords.TurnReader) in the place of the first
+// piece of theirs. What the corpus left out of their pieces (a paste, agent
+// text they relayed) is an agent's, after it. A piece that answers a Codex
+// question makes the turn an answer.
 func (b *base) typed(texts, own []string, asked digest.CodexAsked, at time.Time, in InputKind) []Event {
 	var out []Event
 	var mine []string
 	slot := -1
 	for _, t := range texts {
-		for _, p := range asked.Chosen(digest.TurnPieces(t)) {
+		for _, p := range digest.TurnPieces(t) {
 			if strings.TrimSpace(p.Text) == "" {
 				continue
 			}
 			if p.Item != "" {
 				in = InputAnswer
 			}
-			switch p.Who {
-			case digest.Owner:
+			switch {
+			case p.Who == digest.Owner && p.Item != "" && asked.Offered(p.Item, p.Text):
+				out = append(out, b.text(KindHarnessText, "user", digest.Harness, whyOffered, p.Text, at))
+			case p.Who == digest.Owner:
 				mine = append(mine, p.Text)
 				if slot < 0 {
 					slot = len(out)
 					out = append(out, Event{})
 				}
-			case digest.Agent:
+			case p.Who == digest.Agent:
 				out = append(out, b.text(KindAgentText, "user", digest.Agent, whyAgentInTurn, p.Text, at))
 			default:
 				out = append(out, b.text(KindHarnessText, "user", digest.Harness, whyHarnessText, p.Text, at))

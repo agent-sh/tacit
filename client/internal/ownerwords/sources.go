@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/digest"
@@ -103,8 +104,17 @@ func (b *Builder) AddCodexHistory(path string) error {
 // their turns (Add). Pastes under 40 characters are kept: a short paste is
 // usually their own words.
 func (b *Builder) LoadPastes(path string) error {
+	ps, err := readPastes(path)
+	b.pastes = append(b.pastes, ps...)
+	return err
+}
+
+// readPastes reads the pastes of a Claude Code prompt history (LoadPastes),
+// each once, in order.
+func readPastes(path string) ([]string, error) {
 	seen := map[string]bool{}
-	return b.jsonLines(path, func(line []byte) {
+	var out []string
+	err := (&Builder{}).jsonLines(path, func(line []byte) {
 		var h struct {
 			Pasted map[string]struct {
 				Content string `json:"content"`
@@ -116,10 +126,52 @@ func (b *Builder) LoadPastes(path string) error {
 		for _, p := range h.Pasted {
 			if c := strings.TrimSpace(p.Content); len(c) >= 40 && !seen[c] {
 				seen[c] = true
-				b.pastes = append(b.pastes, c)
+				out = append(out, c)
 			}
 		}
 	})
+	return out, err
+}
+
+// ClaudePastes are the texts the owner pasted into Claude Code prompts, as the
+// corpus reads them (LoadPastes): those of home's ~/.claude/history.jsonl,
+// read again only when the file changes; none when there is no history. A
+// reader of the owner's turns (TurnReader.Pastes) cuts them from their words
+// as the corpus does.
+func ClaudePastes(home string) ([]string, error) {
+	path := filepath.Join(home, ".claude", "history.jsonl")
+	fi, err := os.Stat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	pasteCache.Lock()
+	defer pasteCache.Unlock()
+	if e, ok := pasteCache.byPath[path]; ok && e.size == fi.Size() && e.mod.Equal(fi.ModTime()) {
+		return e.pastes, nil
+	}
+	ps, err := readPastes(path)
+	if err != nil {
+		return nil, err
+	}
+	if pasteCache.byPath == nil {
+		pasteCache.byPath = map[string]pasteEntry{}
+	}
+	pasteCache.byPath[path] = pasteEntry{size: fi.Size(), mod: fi.ModTime(), pastes: ps}
+	return ps, nil
+}
+
+type pasteEntry struct {
+	size   int64
+	mod    time.Time
+	pastes []string
+}
+
+var pasteCache struct {
+	sync.Mutex
+	byPath map[string]pasteEntry
 }
 
 func (b *Builder) jsonLines(path string, fn func([]byte)) error {
@@ -189,7 +241,7 @@ func (b *Builder) AddHermes(path string) error {
 }
 
 // hermesRow is the text of a Hermes user row that can be the owner's, before
-// what in it a harness or another agent wrote is cut (Add, HermesTurn): the
+// what in it a harness or another agent wrote is cut (AddAt, TurnReader.Hermes): the
 // gateway's frames, notices and attached context cut (digest.HermesOwnerText).
 // injected reports a row with nothing of theirs, pasted a pasted table or log
 // (PastedBlob).

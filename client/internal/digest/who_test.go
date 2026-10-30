@@ -68,8 +68,10 @@ func TestSessionWhoClaudeAndPi(t *testing.T) {
 		{"pi subagent by path", "/home/u/.pi/agent/sessions/--home-u--/t_p1/tasks/t_p3.jsonl", piSession("2026-10-01T10:00:05.000Z"), Pi, Agent},
 		// $PI_CODING_AGENT_SESSION_DIR holds sessions directly, their tasks one
 		// level down: no sessions folder in the path.
-		{"pi subagent under the session dir", "/srv/pi/t_p1/tasks/t_p3.jsonl", piSession("2026-10-01T10:00:05.000Z"), Pi, Agent},
-		{"pi session under the session dir", "/srv/pi/t_p1.jsonl", piSession("2026-10-01T10:00:05.000Z"), Pi, Owner},
+		{"pi subagent under the session dir", "/srv/pi/2026-10-01T10-00-00-000Z_p1/tasks/2026-10-01T10-05-00-000Z_p3.jsonl", piSession("2026-10-01T10:00:05.000Z"), Pi, Agent},
+		{"pi session under the session dir", "/srv/pi/2026-10-01T10-00-00-000Z_p1.jsonl", piSession("2026-10-01T10:00:05.000Z"), Pi, Owner},
+		// A session dir that is itself named tasks: its sessions are no tasks.
+		{"pi session under a session dir named tasks", "/srv/tasks/2026-10-01T10-00-00-000Z_p1.jsonl", piSession("2026-10-01T10:00:05.000Z"), Pi, Owner},
 		{"pi subagent by header", "/home/u/.pi/agent/sessions/--home-u--/t_p4.jsonl", strings.Replace(piSession("2026-10-01T10:00:05.000Z"), `"cwd":`, `"parentSession":"/home/u/.pi/agent/sessions/--home-u--/t_p1.jsonl","cwd":`, 1), Pi, Agent},
 	} {
 		if got := SessionWho(c.path, []byte(c.head), c.f); got.Who != c.want {

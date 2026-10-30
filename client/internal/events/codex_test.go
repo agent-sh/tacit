@@ -65,7 +65,7 @@ func codexOwnerSession() []string {
 		/* 15 */ cxOutput(8, "call_e2", "Exit code: 0\nWall time: 0.4 seconds\nOutput:\nok  \tcache\n"),
 		/* 16 */ cx(9, "response_item", `{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Fixed: the key now holds the lockfile hash."}]}`),
 		/* 17 */ cx(9, "event_msg", `{"type":"task_complete","turn_id":"t1","last_agent_message":"Fixed."}`),
-		/* 18 */ cx(10, "event_msg", `{"type":"task_started","turn_id":"t2"}`),
+		/* 18 */ cx(10, "turn_context", `{"turn_id":"t2","cwd":"/home/u/projects/other","model":"gpt-6.1-luna","effort":"low","approval_policy":"never","summary":"auto"}`),
 		/* 19 */ cxUser(10, "pick the backend"),
 		/* 20 */ cxCall(11, "request_user_input", "call_q1", `{"questions":[{"title":"Which backend?","options":["redis","memory"]},{"title":"Which seed?","options":["7","42"]}]}`),
 		/* 21 */ cxUser(12, "<send_user_message_question_reply>\n"+reply+"\n</send_user_message_question_reply>"),
@@ -99,10 +99,12 @@ func TestCodexSessionEvents(t *testing.T) {
 	check(t, 9, got[9])
 	// The patch's end event, written before the output, says it failed.
 	check(t, 10, got[10], want{Kind: KindToolResult, Who: digest.Harness, ToolID: "call_p1", ToolName: "apply_patch", IsError: true})
-	check(t, 11, got[11], want{Kind: KindToolCall, Who: digest.Agent, ToolID: "call_m1", ToolName: "tacit_search"})
-	check(t, 13, got[13], want{Kind: KindToolResult, Who: digest.Harness, ToolID: "call_m1", ToolName: "tacit_search", IsError: true})
+	// A namespaced tool is named as Claude Code names an MCP server's.
+	check(t, 11, got[11], want{Kind: KindToolCall, Who: digest.Agent, ToolID: "call_m1", ToolName: "mcp__tacit__tacit_search"})
+	check(t, 13, got[13], want{Kind: KindToolResult, Who: digest.Harness, ToolID: "call_m1", ToolName: "mcp__tacit__tacit_search", IsError: true})
 	check(t, 14, got[14], want{Kind: KindToolCall, Who: digest.Agent, ToolID: "call_e2", ToolName: "exec_command"})
 	for _, i := range []int{2, 3, 12, 17, 18, 22} {
+		// (18 is the second turn's context: no event, a new model and cwd)
 		check(t, i, got[i]) // the turn's records: no event of their own
 	}
 	check(t, 15, got[15], want{Kind: KindToolResult, Who: digest.Harness, ToolID: "call_e2", ToolName: "exec_command"})
@@ -113,7 +115,7 @@ func TestCodexSessionEvents(t *testing.T) {
 	// typed answer theirs.
 	check(t, 21, got[21],
 		want{Kind: KindHarnessText, Who: digest.Harness, Text: "Which backend?", InputKind: InputAnswer},
-		want{Kind: KindHarnessText, Who: digest.Harness, Text: "the person chose the option offered: memory", InputKind: InputAnswer},
+		want{Kind: KindHarnessText, Who: digest.Harness, Why: whyOffered, Text: "memory", InputKind: InputAnswer},
 		want{Kind: KindHarnessText, Who: digest.Harness, Text: "Which seed?", InputKind: InputAnswer},
 		want{Kind: KindOwnerText, Who: digest.Owner, Text: "use 42 and keep it fixed", InputKind: InputAnswer})
 	check(t, 23, got[23], want{Kind: KindCompaction, Who: digest.Harness, Why: "compacted", Text: "Summary of the cache work so far."})
@@ -133,12 +135,15 @@ func TestCodexSessionEvents(t *testing.T) {
 		t.Errorf("output blocks: %q", out)
 	}
 	for _, e := range evs {
-		if e.Session != "019a-own" || e.Subagent != "" || e.Parent != "" || e.Cwd != "/home/u/projects/shop" {
+		if e.Session != "019a-own" || e.Subagent != "" || e.Parent != "" {
 			t.Fatalf("session fields: %+v", e)
 		}
 	}
-	if m := got[4][1].Model; m != "gpt-6.1-sol" {
-		t.Errorf("model from the turn's context: %q", m)
+	if e := got[4][1]; e.Model != "gpt-6.1-sol" || e.Cwd != "/home/u/projects/shop" {
+		t.Errorf("model and cwd from the first turn's context: %q %q", e.Model, e.Cwd)
+	}
+	if e := got[19][0]; e.Model != "gpt-6.1-luna" || e.Cwd != "/home/u/projects/other" {
+		t.Errorf("model and cwd from the second turn's context: %q %q", e.Model, e.Cwd)
 	}
 }
 
@@ -168,11 +173,8 @@ func TestCodexCompressedResume(t *testing.T) {
 	if next != end || len(rest) != len(whole)-at-1 {
 		t.Fatalf("resumed at %d: %d events, cursor %d; want %d, %d", cursor, len(rest), next, len(whole)-at-1, end)
 	}
-	for i, e := range rest {
-		w := whole[at+1+i]
-		if e.Offset != w.Offset || e.Index != w.Index || e.Kind != w.Kind || e.Text != w.Text || e.Who != w.Who || e.Model != "gpt-6.1-sol" || e.Cwd != w.Cwd {
-			t.Fatalf("resumed event %d: %+v\nwant %+v", i, e, w)
-		}
+	if !reflect.DeepEqual(rest, whole[at+1:]) {
+		t.Fatalf("resumed in the compressed copy:\n%s\nwant\n%s", dump(rest), dump(whole[at+1:]))
 	}
 	if _, err := ReadFile(packed, digest.Codex, end+1, func(Event) error { return nil }); err == nil {
 		t.Fatal("a cursor past the end was read")
@@ -197,5 +199,57 @@ func TestCodexSubagentThread(t *testing.T) {
 		if e.Session != "019a-sub" || e.Subagent != "019a-sub" || e.Parent != "019a-own" {
 			t.Fatalf("subagent thread fields: %+v", e)
 		}
+	}
+}
+
+// codexNowSession is a session as Codex 0.165 writes it: commands run in the
+// script tool exec (its output opens with "Script completed" or "Script
+// failed") or exec_command, and a call's end comes as the item it completed
+// (item_completed, its status), before the output.
+func codexNowSession() []string {
+	return []string{
+		/* 0 */ codexMeta("019b-now", `"source":"cli","thread_source":"user",`),
+		/* 1 */ cx(1, "event_msg", `{"type":"task_started","turn_id":"t1"}`),
+		/* 2 */ cx(1, "turn_context", `{"turn_id":"t1","cwd":"/home/u/projects/shop","model":"gpt-6.1-sol","effort":"high"}`),
+		/* 3 */ cxUser(1, "run the cache tests"),
+		/* 4 */ cx(2, "response_item", `{"type":"custom_tool_call","status":"completed","call_id":"call_x1","name":"exec","input":"await tools.exec_command({cmd: 'go test ./cache'})"}`),
+		/* 5 */ cx(3, "event_msg", `{"type":"item_completed","thread_id":"019b-now","turn_id":"t1","item":{"type":"CommandExecution","id":"item_9","command":"go test ./cache","status":"failed","exit_code":1,"aggregated_output":"FAIL"}}`),
+		/* 6 */ cx(3, "response_item", `{"type":"custom_tool_call_output","call_id":"call_x1","output":[{"type":"input_text","text":"Script failed\nWall time 0.4 seconds\nOutput:\nError: go test exited with code 1\n"}]}`),
+		/* 7 */ cx(4, "response_item", `{"type":"custom_tool_call","status":"completed","call_id":"call_x2","name":"exec","input":"await tools.exec_command({cmd: 'go vet ./cache'})"}`),
+		/* 8 */ cx(4, "response_item", `{"type":"custom_tool_call_output","call_id":"call_x2","output":[{"type":"input_text","text":"Script completed\nWall time 0.2 seconds\nOutput:\nScript failed earlier, fixed now\n"}]}`),
+		/* 9 */ cxCall(5, "exec_command", "call_e3", `{"cmd":"make lint"}`),
+		/* 10 */ cx(5, "event_msg", `{"type":"item_completed","thread_id":"019b-now","turn_id":"t1","item":{"type":"CommandExecution","id":"call_e3","command":"make lint","status":"failed","exit_code":2,"aggregated_output":"lint: 3 issues"}}`),
+		/* 11 */ cxOutput(5, "call_e3", "lint: 3 issues"),
+		/* 12 */ cx(6, "response_item", `{"type":"function_call","id":"fc_j1","name":"js","namespace":"mcp__cua_repl","arguments":"{\"code\":\"1+1\"}","call_id":"call_j1"}`),
+		/* 13 */ cx(6, "event_msg", `{"type":"item_completed","thread_id":"019b-now","turn_id":"t1","item":{"type":"McpToolCall","id":"call_j1","server":"cua_repl","tool":"js","status":"completed","result":{"content":[]}}}`),
+		/* 14 */ cxOutput(6, "call_j1", "2"),
+		/* 15 */ cx(7, "response_item", `{"type":"custom_tool_call","status":"completed","call_id":"call_x3","name":"exec","input":"await tools.exec_command({cmd: 'sleep 999'})"}`),
+		/* 16 */ cx(8, "response_item", `{"type":"custom_tool_call_output","call_id":"call_x3","output":[{"type":"input_text","text":"aborted by user after 4s"}]}`),
+		/* 17 */ cx(9, "event_msg", `{"type":"turn_aborted","turn_id":"t1","reason":"interrupted"}`),
+		/* 18 */ cxUser(10, "skip the slow test"),
+	}
+}
+
+func TestCodexCurrentFormat(t *testing.T) {
+	home := t.TempDir()
+	lines := codexNowSession()
+	path := write(t, filepath.Join(home, ".codex", "sessions", "2026", "10", "29", "rollout-2026-10-29T09-00-00-019b-now.jsonl"), lines...)
+	evs, _ := readAll(t, path, digest.Codex, 0)
+	got := byLine(t, lines, evs)
+	check(t, 4, got[4], want{Kind: KindToolCall, Who: digest.Agent, ToolID: "call_x1", ToolName: "exec"})
+	// The script failed, so its result is an error; a command inside it
+	// (item_9, no call of the agent's) flags nothing else.
+	check(t, 6, got[6], want{Kind: KindToolResult, Who: digest.Harness, ToolID: "call_x1", ToolName: "exec", IsError: true})
+	// "Script failed" in the command's own output is no failure of the script.
+	check(t, 8, got[8], want{Kind: KindToolResult, Who: digest.Harness, ToolID: "call_x2", ToolName: "exec"})
+	// The completed item of the call, before its output, says it failed.
+	check(t, 11, got[11], want{Kind: KindToolResult, Who: digest.Harness, ToolID: "call_e3", ToolName: "exec_command", IsError: true})
+	check(t, 12, got[12], want{Kind: KindToolCall, Who: digest.Agent, ToolID: "call_j1", ToolName: "mcp__cua_repl__js"})
+	check(t, 14, got[14], want{Kind: KindToolResult, Who: digest.Harness, ToolID: "call_j1", ToolName: "mcp__cua_repl__js"})
+	// Interrupted by the person: the harness records the script as aborted.
+	check(t, 16, got[16], want{Kind: KindToolResult, Who: digest.Harness, ToolID: "call_x3", ToolName: "exec", IsError: true})
+	check(t, 18, got[18], want{Kind: KindOwnerText, Who: digest.Owner, Text: "skip the slow test", InputKind: InputTyped, Prior: "turn_aborted"})
+	for _, i := range []int{0, 1, 2, 5, 10, 13, 17} {
+		check(t, i, got[i])
 	}
 }

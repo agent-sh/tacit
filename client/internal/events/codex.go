@@ -1,8 +1,6 @@
 package events
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
 	"regexp"
 	"strconv"
@@ -36,9 +34,10 @@ type codexReader struct {
 	open, active bool
 }
 
-func newCodex(plain string, head []byte, from int64) *codexReader {
+func newCodex(plain string, head []byte, v digest.Verdict, pastes []string) *codexReader {
 	r := &codexReader{base: newBase("codex", transcript.Name(plain)), asked: digest.CodexAsked{}, failed: map[string]bool{}}
-	r.verdict = digest.SessionWho(plain, head, digest.Codex)
+	r.verdict = v
+	r.turns.Pastes = pastes
 	if m, ok := digest.ReadCodexMeta(head); ok {
 		if m.ID != "" {
 			r.session = m.ID
@@ -46,22 +45,6 @@ func newCodex(plain string, head []byte, from int64) *codexReader {
 		r.cwd, r.parent = m.Cwd, m.Parent
 		if m.Parent != "" || m.Source == "subagent" || m.ThreadSource == "subagent" {
 			r.subagent = r.session
-		}
-	}
-	if from > 0 {
-		// Read from a cursor: the model and cwd of the session's first turn,
-		// until a turn_context read says otherwise.
-		sc := bufio.NewScanner(bytes.NewReader(head))
-		sc.Buffer(make([]byte, 64<<10), len(head)+1)
-		for sc.Scan() {
-			if !bytes.Contains(sc.Bytes(), []byte(`"turn_context"`)) {
-				continue
-			}
-			var l codexLine
-			if json.Unmarshal(sc.Bytes(), &l) == nil && l.Type == "turn_context" {
-				r.context(l.Payload)
-				break
-			}
 		}
 	}
 	return r
@@ -79,6 +62,7 @@ type codexPayload struct {
 	Type      string          `json:"type"`
 	Role      string          `json:"role"`
 	Name      string          `json:"name"`
+	Namespace string          `json:"namespace"`
 	CallID    string          `json:"call_id"`
 	ID        string          `json:"id"`
 	Arguments json.RawMessage `json:"arguments"`
@@ -91,6 +75,7 @@ type codexPayload struct {
 	Success   json.RawMessage `json:"success"`
 	ExitCode  json.RawMessage `json:"exit_code"`
 	Result    json.RawMessage `json:"result"`
+	Item      json.RawMessage `json:"item"`
 }
 
 func (r *codexReader) context(raw json.RawMessage) {
@@ -158,7 +143,30 @@ func (r *codexReader) eventMsg(p codexPayload) {
 		if mcpFailed(p.Result) {
 			r.failed[p.CallID] = true
 		}
+	case "item_completed":
+		// Current Codex reports a call's end as the item it completed: a
+		// command, an MCP call or a file change with its status.
+		if id, ok := itemFailed(p.Item); ok {
+			r.failed[id] = true
+		}
 	}
+}
+
+// itemFailed is the id of a completed item that failed: its status is
+// "failed", its exit code is not 0, or it holds an error.
+func itemFailed(raw json.RawMessage) (string, bool) {
+	var it struct {
+		ID       string          `json:"id"`
+		Status   string          `json:"status"`
+		ExitCode json.RawMessage `json:"exit_code"`
+		Error    json.RawMessage `json:"error"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &it) != nil || it.ID == "" {
+		return "", false
+	}
+	code, _ := strconv.ParseFloat(string(it.ExitCode), 64)
+	errSet := len(it.Error) > 0 && string(it.Error) != "null" && string(it.Error) != `""`
+	return it.ID, it.Status == "failed" || code != 0 || errSet
 }
 
 // mcpFailed reports an MCP call's result that failed: an Err, or an Ok the
@@ -252,6 +260,11 @@ func (r *codexReader) call(raw []byte, p codexPayload, at time.Time) Event {
 	case "tool_search_call":
 		name = "tool_search"
 	}
+	if p.Namespace != "" {
+		// A namespaced tool (an MCP server's, mcp__<server>) is named as
+		// Claude Code names one: mcp__<server>__<tool>.
+		name = p.Namespace + "__" + name
+	}
 	if strings.HasPrefix(name, "request_user_input") && r.verdict.Owner() {
 		// The options it offers decide the answers that follow, for the
 		// owner's words as for the pieces (TurnReader keeps its own).
@@ -275,7 +288,7 @@ func (r *codexReader) output(p codexPayload, at time.Time) Event {
 	if id == "" {
 		e.ToolName = p.Name
 	}
-	e.IsError = r.failed[id] || code != 0
+	e.IsError = r.failed[id] || code != 0 || scriptFailed(e.ToolName, text)
 	delete(r.failed, id)
 	r.active = r.open
 	return e
@@ -356,6 +369,20 @@ func codexOutput(raw json.RawMessage) (string, int) {
 		}
 	}
 	return s, headerExit(s)
+}
+
+// scriptFailed reports the output of Codex's script tool (exec, and wait for
+// a script left running) whose first line Codex wrote as a failure: "Script
+// failed", the person's interruption ("aborted by user after ..."), or a call
+// Codex refused ("unsupported custom tool call"). "Script completed" and
+// "Script running" are not.
+func scriptFailed(tool, out string) bool {
+	if tool != "exec" && tool != "wait" {
+		return false
+	}
+	first, _, _ := strings.Cut(strings.TrimSpace(out), "\n")
+	first = strings.TrimSpace(first)
+	return first == "Script failed" || strings.HasPrefix(first, "aborted by user") || strings.HasPrefix(first, "unsupported custom tool call")
 }
 
 var exitLine = regexp.MustCompile(`^(?:Exit code: |Process exited with code )(-?\d+)\s*$`)

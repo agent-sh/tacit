@@ -23,10 +23,10 @@ func piText(text string) []map[string]any {
 	return []map[string]any{{"type": "text", "text": text}}
 }
 
-func TestPiSessionEvents(t *testing.T) {
-	home := t.TempDir()
-	dir := filepath.Join(home, ".pi", "agent", "sessions", "--home-u-projects-shop--")
-	lines := []string{
+// piOwnerSession is a pi session a person types into, with what each line
+// should give (TestPiSessionEvents).
+func piOwnerSession() []string {
+	return []string{
 		/* 0 */ `{"type":"session","version":3,"id":"01pi","timestamp":"2026-10-22T08:00:00.000Z","cwd":"/home/u/projects/shop"}`,
 		/* 1 */ piEntry(0, `"type":"model_change","id":"m1","provider":"p","modelId":"qwen3-coder"`),
 		/* 2 */ piEntry(0, `"type":"thinking_level_change","id":"m2","thinkingLevel":"high"`),
@@ -44,6 +44,12 @@ func TestPiSessionEvents(t *testing.T) {
 		/* 14 */ piEntry(57, `"type":"branch_summary","id":"x14","fromId":"u12","summary":"Branch tried approach A."`),
 		/* 15 */ piMsg(58, "u15", map[string]any{"role": "user", "content": piText(`<file name="notes.md">the cache notes</file>`)}),
 	}
+}
+
+func TestPiSessionEvents(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".pi", "agent", "sessions", "--home-u-projects-shop--")
+	lines := piOwnerSession()
 	path := write(t, filepath.Join(dir, "2026-10-22T08-00-00-000Z_01pi.jsonl"), lines...)
 	evs, _ := readAll(t, path, digest.Pi, 0)
 	got := byLine(t, lines, evs)

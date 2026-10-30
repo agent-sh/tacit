@@ -36,6 +36,7 @@ func NewSessionID() string {
 }
 
 // Exclude appends session ids to the dreamer's exclude list (ExcludeFile).
+// An error means an id may not be on the list: a write or the close failed.
 func Exclude(ids ...string) error {
 	home, _ := os.UserHomeDir()
 	p := ExcludeFile(home)
@@ -44,11 +45,13 @@ func Exclude(ids ...string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	for _, id := range ids {
-		fmt.Fprintln(f, id)
+		if _, err := fmt.Fprintln(f, id); err != nil {
+			f.Close()
+			return err
+		}
 	}
-	return nil
+	return f.Close()
 }
 
 // Excluded is the dreamer's exclude list as a set; empty when there is none.

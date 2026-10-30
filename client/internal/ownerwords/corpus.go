@@ -111,17 +111,11 @@ func (b *Builder) Add(source, ref, text string) { b.AddAt(source, ref, text, tim
 // day a statement of theirs was said is that turn's (SaidAt), never the day
 // a step read it.
 func (b *Builder) AddAt(source, ref, text string, at time.Time) {
-	text, ok := OwnerPart(text)
+	text, dropped, ok := cutWords(text, b.pastes)
 	if !ok {
 		b.c.Stats.AgentTurns++
 		return
 	}
-	for _, p := range b.pastes {
-		if strings.Contains(text, p) {
-			text = strings.ReplaceAll(text, p, " ")
-		}
-	}
-	text, dropped := dropRelayed(text)
 	b.c.Stats.RelayedLines += dropped
 	n := Normalize(text)
 	if n == "" {
@@ -145,6 +139,25 @@ func (b *Builder) AddAt(source, ref, text string, at time.Time) {
 	b.c.at = append(b.c.at, sec)
 	b.buf.WriteString(n)
 	b.buf.WriteString(" ")
+}
+
+// cutWords is what of a text of a turn of theirs is their words, the one rule
+// the corpus (AddAt) and TurnReader keep it by: what a harness or another
+// agent wrote in it left out (OwnerPart), the texts they pasted cut (pastes,
+// from their prompt history), then the lines of agent text they relayed
+// (dropRelayed), which it counts. ok is false when none of it is theirs.
+func cutWords(text string, pastes []string) (string, int, bool) {
+	text, ok := OwnerPart(text)
+	if !ok {
+		return "", 0, false
+	}
+	for _, p := range pastes {
+		if strings.Contains(text, p) {
+			text = strings.ReplaceAll(text, p, " ")
+		}
+	}
+	text, dropped := dropRelayed(text)
+	return text, dropped, true
 }
 
 // Agent text the owner relayed inside their own turn, with no paste record (a lane's

@@ -37,6 +37,8 @@ func TestFacadeImportsNoDreamerOrStore(t *testing.T) {
 // are, then each transcript's events, with the owner's words told apart.
 func TestReadSessionsThroughTheFacade(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("HOME", home) // the reader reads the owner's prompt history here
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("PI_CODING_AGENT_DIR", "")
 	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
 	t.Setenv("TACIT_HERMES_DB", "off")

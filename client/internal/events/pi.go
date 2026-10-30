@@ -1,8 +1,6 @@
 package events
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -31,9 +29,10 @@ type piReader struct {
 	working bool
 }
 
-func newPi(plain string, head []byte, from int64) *piReader {
+func newPi(plain string, head []byte, v digest.Verdict, pastes []string) *piReader {
 	r := &piReader{base: newBase("pi", transcript.Name(plain))}
-	r.verdict = digest.SessionWho(plain, head, digest.Pi)
+	r.verdict = v
+	r.turns.Pastes = pastes
 	h, ok := digest.ReadPiHeader(head)
 	if ok {
 		if h.ID != "" {
@@ -51,29 +50,6 @@ func newPi(plain string, head []byte, from int64) *piReader {
 		r.subagent = r.session
 	} else if ok && h.ParentSession != "" {
 		r.subagent = r.session
-	}
-	if from > 0 {
-		// Read from a cursor: the model its first lines name, until a line
-		// read says otherwise.
-		sc := bufio.NewScanner(bytes.NewReader(head))
-		sc.Buffer(make([]byte, 64<<10), len(head)+1)
-		for sc.Scan() {
-			var l piLine
-			if json.Unmarshal(sc.Bytes(), &l) != nil {
-				continue
-			}
-			switch l.Type {
-			case "model_change":
-				if l.ModelID != "" {
-					r.model = l.ModelID
-				}
-			case "message":
-				var m piMessage
-				if json.Unmarshal(l.Message, &m) == nil && m.Role == "assistant" && m.Model != "" {
-					r.model = m.Model
-				}
-			}
-		}
 	}
 	return r
 }

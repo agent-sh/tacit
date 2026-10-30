@@ -22,7 +22,8 @@ func TestFilesFindSubagentsTasksAndCompressedRollouts(t *testing.T) {
 	top := write(t, filepath.Join(project, "s1.jsonl"), `{}`)
 	sub := write(t, filepath.Join(project, "s1", "subagents", "agent-a1.jsonl"), `{}`)
 	write(t, filepath.Join(project, "s1", "subagents", "agent-a1.meta.json"), `{}`)
-	rollout := compress(t, write(t, filepath.Join(home, ".codex", "sessions", "2026", "10", "21", "rollout-x.jsonl"), `{}`))
+	rollout := filepath.Join(home, ".codex", "sessions", "2026", "10", "21", "rollout-x.jsonl")
+	compress(t, write(t, rollout, `{}`)) // its plain path names it
 	archived := write(t, filepath.Join(home, ".codex", "archived_sessions", "rollout-y.jsonl"), `{}`)
 	piDir := filepath.Join(home, ".pi", "agent", "sessions", "--home-u--")
 	pi := write(t, filepath.Join(piDir, "t_p1.jsonl"), `{}`)

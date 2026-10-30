@@ -260,12 +260,20 @@ func codexWho(head []byte) Verdict {
 	return Verdict{Owner, "originator " + m.Originator}
 }
 
-// PiTask reports a pi subagent's session by its place: a file directly in a
-// tasks folder, <session>/tasks/<task>.jsonl, under pi's sessions directory
-// or $PI_CODING_AGENT_SESSION_DIR (harnesses.Sources reads both).
+// PiTask reports a pi subagent's session by its place: a file in a tasks
+// folder of a session, <session>/tasks/<task>.jsonl, where <session> is named
+// as pi names a session's file (<time>_<id>, piSessionName), under pi's
+// sessions directory or $PI_CODING_AGENT_SESSION_DIR (harnesses.Sources reads
+// both). A sessions directory that is itself named tasks holds no task.
 func PiTask(p string) bool {
-	return path.Base(path.Dir(filepath.ToSlash(p))) == "tasks"
+	dir := path.Dir(filepath.ToSlash(p))
+	return path.Base(dir) == "tasks" && piSessionName.MatchString(path.Base(path.Dir(dir)))
 }
+
+// piSessionName is how pi names a session's file, less its ending: the time
+// it started, as an ISO 8601 time with its colons and dot made dashes, and
+// the session's id (2026-10-22T08-00-00-000Z_<id>).
+var piSessionName = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z_.`)
 
 func piWho(path string, head []byte) Verdict {
 	if PiTask(path) || strings.Contains(path, "/tasks/") && strings.Contains(path, "/sessions/") {

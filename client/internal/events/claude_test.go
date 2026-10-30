@@ -19,9 +19,10 @@ func cl(m int, fields string) string {
 // typedMarks are the marks Claude Code puts on a turn a person typed.
 const typedMarks = `"promptSource":"typed","turnOrigin":"human","origin":{"kind":"human"}`
 
-func TestClaudeSessionEvents(t *testing.T) {
-	home := t.TempDir()
-	lines := []string{
+// claudeOwnerSession is a Claude Code session a person types into, with
+// what each line should give (TestClaudeSessionEvents).
+func claudeOwnerSession() []string {
+	return []string{
 		/* 0 */ cl(0, `"type":"user","uuid":"u0","promptId":"p0",`+typedMarks+`,"message":{"role":"user","content":"<system-reminder>\nthe background build finished\n</system-reminder>\nkeep the cache warm before a release"}`),
 		/* 1 */ cl(1, `"type":"assistant","uuid":"a1","message":{"model":"claude-opus-5-5","id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"Checking the cache settings."},{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"make cache-check"}}]}`),
 		/* 2 */ cl(2, `"type":"user","uuid":"u2","sourceToolAssistantUUID":"a1","message":{"role":"user","content":[{"tool_use_id":"toolu_01","type":"tool_result","content":"make: *** No rule to make target 'cache-check'.","is_error":true}]},"toolUseResult":"Error: make: *** No rule to make target"`),
@@ -50,6 +51,11 @@ func TestClaudeSessionEvents(t *testing.T) {
 		/* 25 */ cl(19, `"type":"attachment","uuid":"h25","attachment":{"type":"hook_success","hookName":"PostToolUse:Bash","toolUseID":"toolu_01","hookEvent":"PostToolUse","content":"","stdout":"ok\n","stderr":"","exitCode":0,"command":"true","durationMs":3}`),
 		/* 26 */ cl(20, `"type":"user","uuid":"u26","promptId":"p26",`+typedMarks+`,"message":{"role":"user","content":"carry on with the cache work"}`),
 	}
+}
+
+func TestClaudeSessionEvents(t *testing.T) {
+	home := t.TempDir()
+	lines := claudeOwnerSession()
 	path := write(t, filepath.Join(home, ".claude", "projects", "-home-u-projects-shop", claudeSession+".jsonl"), lines...)
 	evs, next := readAll(t, path, digest.Claude, 0)
 	var size int64
@@ -98,7 +104,7 @@ func TestClaudeSessionEvents(t *testing.T) {
 		want{Kind: KindAgentText, Who: digest.Agent, Why: whyAgentInTurn, Text: `<pasted_content id="1">panic: cache miss at key 7</pasted_content>`, InputKind: InputTyped},
 		want{Kind: KindOwnerText, Who: digest.Owner, Text: "this fails here   fix it", InputKind: InputTyped})
 	check(t, 21, got[21], want{Kind: KindHarnessText, Who: digest.Harness, Why: "api error", Text: "API Error: 529 overloaded", IsError: true})
-	check(t, 22, got[22], want{Kind: KindCompaction, Who: digest.Harness, Why: "compaction boundary", Text: "Conversation compacted"})
+	check(t, 22, got[22]) // the boundary is a record (Prior); its summary is the compaction
 	check(t, 23, got[23], want{Kind: KindCompaction, Who: digest.Harness, Why: "compaction summary", Text: "This session is being continued from a previous conversation that ran out of context. Summary: the cache work."})
 	check(t, 24, got[24], want{Kind: KindHarnessText, Who: digest.Harness, Why: "hook UserPromptSubmit", Text: "# tacit\n- RULE never purge the cache on main"})
 	check(t, 25, got[25])
@@ -160,4 +166,21 @@ func TestClaudeSubagentAndHeadlessSessions(t *testing.T) {
 		`{"type":"user","uuid":"l0","promptSource":"sdk","message":{"role":"user","content":"summarize the cache docs"},"timestamp":"2026-10-20T12:00:00.000Z","entrypoint":"sdk-cli","cwd":"/home/u/projects/shop","sessionId":"lane-1"}`)
 	evs, _ = readAll(t, lane, digest.Claude, 0)
 	check(t, 0, evs, want{Kind: KindAgentText, Who: digest.Agent, Why: "entrypoint sdk-cli", Text: "summarize the cache docs"})
+}
+
+// A paste the owner's prompt history records (Claude Code's CLI puts its
+// text inline in the turn) is not their words, as the corpus holds: the
+// owner_text is what they typed around it, the paste an agent's.
+func TestClaudePasteFromThePromptHistory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	paste := "panic: runtime error: index out of range [3] with length 3 in cache.go"
+	write(t, filepath.Join(home, ".claude", "history.jsonl"),
+		`{"display":"why does this fail [Pasted text #1 +1 lines]","pastedContents":{"1":{"id":1,"type":"text","content":"`+paste+`"}},"sessionId":"`+claudeSession+`","project":"/home/u/projects/shop"}`)
+	lines := []string{cl(0, `"type":"user","uuid":"u0",`+typedMarks+`,"message":{"role":"user","content":"why does this fail\n`+paste+`"}`)}
+	path := write(t, filepath.Join(home, ".claude", "projects", "-home-u-projects-shop", claudeSession+".jsonl"), lines...)
+	evs, _ := readAll(t, path, digest.Claude, 0)
+	check(t, 0, evs,
+		want{Kind: KindOwnerText, Who: digest.Owner, Text: "why does this fail\n ", InputKind: InputTyped},
+		want{Kind: KindAgentText, Who: digest.Agent, Why: whyLeftOut, Text: paste, InputKind: InputTyped})
 }

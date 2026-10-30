@@ -70,7 +70,8 @@ func ReadFile(path string, f Format, from int64, emit func(Event) error) (int64,
 
 // ReadHermes reads the events of a Hermes session after message id after,
 // calling emit for each in order, and returns the id to resume after
-// (events.ReadHermes).
+// (events.ReadHermes). s must be a row of db.Sessions: its Owner, decided
+// there, says whether its user rows can hold the owner's words.
 func ReadHermes(ctx context.Context, db *HermesDB, s HermesSession, after int64, emit func(Event) error) (int64, error) {
 	return events.ReadHermes(ctx, db, s, after, emit)
 }
@@ -161,7 +162,8 @@ type Piece = digest.Piece
 // ClaudeMarks are what a Claude Code line records about who wrote a user
 // turn; ClaudeCommands follows a transcript for the slash commands Claude
 // Code ran itself; CodexAsked is what a Codex agent's questions offered;
-// TurnReader reads a transcript's lines for what the owner typed.
+// TurnReader reads a transcript's lines (Parts) and Hermes rows (Hermes) for
+// what the owner typed, as tacit's corpus does with its Pastes set.
 type (
 	ClaudeMarks    = digest.ClaudeMarks
 	ClaudeCommands = digest.ClaudeCommands
@@ -197,11 +199,18 @@ func HermesOwnerText(content, displayKind string, summary bool) (string, bool) {
 	return digest.HermesOwnerText(content, displayKind, summary)
 }
 
-// HermesTurn is what the owner wrote in a Hermes user row, as tacit's owner
-// corpus reads it (ownerwords.HermesTurn).
-func HermesTurn(content, displayKind string, summary bool) (string, bool) {
-	return ownerwords.HermesTurn(content, displayKind, summary)
-}
+// UntypedWho is who wrote a user turn no person typed, whole: the harness
+// when it is harness text, else another agent (digest.UntypedWho).
+func UntypedWho(f Format, txt string) Who { return digest.UntypedWho(f, txt) }
+
+// PiTask reports a pi subagent's session by its place, <session>/tasks/
+// (digest.PiTask).
+func PiTask(path string) bool { return digest.PiTask(path) }
+
+// ClaudePastes are the texts the owner pasted into Claude Code prompts, from
+// home's prompt history, which tacit's corpus cuts from their words; set them
+// on a TurnReader to read a turn as the corpus does (ownerwords.ClaudePastes).
+func ClaudePastes(home string) ([]string, error) { return ownerwords.ClaudePastes(home) }
 
 // HarnessText reports text a harness injected into a user turn.
 func HarnessText(f Format, txt string) bool { return digest.HarnessText(f, txt) }
@@ -245,12 +254,22 @@ func HermesContinued(endReason string) bool { return hermes.Continued(endReason)
 
 // Repo is a repository as tacit names it; RepoCache resolves paths to
 // repositories with a cache; RepoResolver names the repositories texts
-// mention.
+// mention; RepoMains are this machine's main checkouts, which name a
+// separate clone (RepoResolver.WithMains, RepoCache.Mains).
 type (
 	Repo         = repoid.Repo
 	RepoCache    = repoid.Cache
 	RepoResolver = repoinfer.Resolver
+	RepoMains    = repoid.Mains
 )
+
+// ProjectsDir is the folder of checkouts for home: $TACIT_PROJECTS, else
+// home/projects (repoid.ProjectsDir).
+func ProjectsDir(home string) string { return repoid.ProjectsDir(home) }
+
+// LoadRepoMains scans projects ("" for none) for home's main checkouts
+// (repoid.LoadMains).
+func LoadRepoMains(home, projects string) *RepoMains { return repoid.LoadMains(home, projects) }
 
 // RepoOf is the repository a path is in (a real git root; a worktree is its
 // main repository), and false when there is none (repoid.Of).
@@ -300,11 +319,12 @@ func RedactionReady() error { return digest.RedactionReady() }
 // --- Model runs ---
 
 // Route is a runner, model, effort and profile; Result a run's answer and
-// its accounting; Trace collects the calls of a context.
+// its accounting; Trace collects the calls of a context, each a CallRecord.
 type (
-	Route  = modelrun.Route
-	Result = modelrun.Result
-	Trace  = modelrun.Trace
+	Route      = modelrun.Route
+	Result     = modelrun.Result
+	Trace      = modelrun.Trace
+	CallRecord = modelrun.CallRecord
 )
 
 // ErrInvalidResult is a model answer that does not parse.

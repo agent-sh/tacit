@@ -17,18 +17,22 @@ import (
 // rows are never all held at once.
 const hermesPage = 4 << 20
 
-// ReadHermes reads the events of a Hermes session, a row of db.Sessions, after
-// message id after (0: from its start), calling emit for each in order. It
-// returns the id of the last message read, where the next read resumes; the
-// Offset and Next of a row's events are its message id. When emit returns an
-// error ReadHermes stops and returns it, with the id before that row's.
-// Rows Hermes wrote again when it compacted a conversation
+// ReadHermes reads the events of a Hermes session after message id after (0:
+// from its start), calling emit for each in order. s must be a row of
+// db.Sessions, which decides whether it is the owner's (hermes.Session.Owner).
+// It returns the id of the last message read, where the next read resumes;
+// the Offset and Next of a row's events are its message id. As with ReadFile,
+// a read after an id gives exactly the events a read from the start gives
+// after it: the rows before it are read for what later rows depend on (the
+// call a result names, the reply before a turn), their events not emitted.
+// When emit returns an error ReadHermes stops and returns it, with the id
+// before that row's. Rows Hermes wrote again when it compacted a conversation
 // (hermes.Message.Copy) are passed over, as the dreamer passes them.
 //
-// Who wrote a row: a session of the owner's (hermes.Session.Owner) holds
-// their words in its user rows, cut out of the gateway's frames as the
-// corpus reads them (ownerwords.HermesTurn); every other session's user rows
-// are an agent's or the gateway's.
+// Who wrote a row: a session of the owner's holds their words in its user
+// rows, cut out of the gateway's frames as the corpus reads them
+// (ownerwords.TurnReader.Hermes); every other session's user rows are an
+// agent's or the gateway's.
 func ReadHermes(ctx context.Context, db *hermes.DB, s hermes.Session, after int64, emit func(Event) error) (int64, error) {
 	r := &hermesReader{base: newBase("hermes", s.ID)}
 	r.parent, r.cwd, r.model = s.Parent, s.Cwd, s.Model
@@ -41,10 +45,15 @@ func ReadHermes(ctx context.Context, db *hermes.DB, s hermes.Session, after int6
 	r.verdict = digest.Verdict{Who: digest.Agent, Why: "hermes session from " + s.Source}
 	if s.Owner {
 		r.verdict = digest.Verdict{Who: digest.Owner, Why: "hermes owner session"}
+		ps, err := ownerPastes()
+		if err != nil {
+			return after, err
+		}
+		r.turns.Pastes = ps
 	}
-	last := after
+	last, read := after, int64(0)
 	for {
-		rows, err := db.Messages(ctx, s.ID, last, hermesPage)
+		rows, err := db.Messages(ctx, s.ID, read, hermesPage)
 		if err != nil {
 			return last, err
 		}
@@ -53,6 +62,10 @@ func ReadHermes(ctx context.Context, db *hermes.DB, s hermes.Session, after int6
 		}
 		for _, m := range rows {
 			evs := r.row(m)
+			read = m.ID
+			if m.ID <= after {
+				continue
+			}
 			for i := range evs {
 				e := &evs[i]
 				e.Path, e.Offset, e.Next, e.Index = db.Path, m.ID, m.ID, i
@@ -67,6 +80,7 @@ func ReadHermes(ctx context.Context, db *hermes.DB, s hermes.Session, after int6
 
 type hermesReader struct {
 	base
+	turns ownerwords.TurnReader
 }
 
 func (r *hermesReader) row(m hermes.Message) []Event {
@@ -149,10 +163,17 @@ func (r *hermesReader) user(m hermes.Message, at time.Time) []Event {
 		in = InputQueued
 	}
 	// Their words as the corpus reads the row; the gateway's frames around
-	// them (a quoted reply, the origin data, attached context) are cut.
+	// them (a quoted reply, the origin data, attached context, a paste's
+	// reference) are the harness's, before them.
 	var own []string
-	if t, ok := ownerwords.HermesTurn(m.Content, m.DisplayKind, m.Summary); ok {
+	if t, ok := r.turns.Hermes(m.Content, m.DisplayKind, m.Summary); ok {
 		own = []string{t}
 	}
-	return r.typed([]string{text}, own, nil, at, in)
+	var out []Event
+	if frames := leftOut([]string{m.Content}, []string{text}); frames != "" {
+		e := r.text(KindHarnessText, "user", digest.Harness, "hermes frame", frames, at)
+		e.InputKind, e.Prior = in, r.prior
+		out = append(out, e)
+	}
+	return append(out, r.typed([]string{text}, own, nil, at, in)...)
 }

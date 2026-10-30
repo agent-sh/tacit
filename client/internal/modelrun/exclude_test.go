@@ -42,3 +42,22 @@ func TestExcludeList(t *testing.T) {
 		t.Fatalf("exclude file mode %v", fi.Mode())
 	}
 }
+
+// A list that cannot be written is an error, so a caller that must keep its
+// session out of the dreamer can stop: here the list is a full device.
+func TestExcludeReportsAFailedWrite(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("needs /dev/full")
+	}
+	if _, err := os.Stat("/dev/full"); err != nil {
+		t.Skip("no /dev/full")
+	}
+	state := t.TempDir()
+	t.Setenv("TACIT_STATE_DIR", state)
+	if err := os.Symlink("/dev/full", filepath.Join(state, "dream-exclude")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Exclude(NewSessionID()); err == nil {
+		t.Fatal("a write to a full device was reported as done")
+	}
+}

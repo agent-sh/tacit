@@ -102,23 +102,72 @@ func TestCorpusReadsPiAndHermesOwnerTurns(t *testing.T) {
 	}
 }
 
-// HermesTurn reads a row as the corpus does: their words out of the
-// gateway's frames, nothing of a notice, a pasted table or a tag-framed row.
-func TestHermesTurnReadsARowAsTheCorpusDoes(t *testing.T) {
-	for _, c := range []struct {
-		content, kind, want string
-	}{
+// TurnReader.Hermes reads a row as the corpus does (AddHermes): what it keeps
+// of each row is what the corpus holds, pastes from the prompt history cut
+// in both.
+func TestTurnReaderHermesIsTheCorpusReading(t *testing.T) {
+	paste := "the cache key is the lockfile hash and nothing else, measured"
+	rows := []struct{ content, kind, want string }{
 		{"[Replying to: \"Agent report: rotate the keys monthly\"]\n\nonly rotate the keys after a release", "", "only rotate the keys after a release"},
 		{"[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position]\nand keep the build cache\n[/OUT-OF-BAND USER MESSAGE]", "steer", "and keep the build cache"},
 		{"Background job finished.", "internal_notification", ""},
 		{"| host | disk |\n| a | 91% |\n| b | 40% |\n| c | 12% |\n| d | 77% |\n| e | 63% |", "", ""},
 		{"<file name=\"plan.md\">the agent works in the payments repo</file>", "", ""},
 		{"check the queue\n## Findings\n- **The queue is full.**", "", "check the queue"},
-	} {
-		got, ok := HermesTurn(c.content, c.kind, false)
-		if got != c.want || ok != (c.want != "") {
-			t.Errorf("HermesTurn(%.40q) = %q, %v; want %q", c.content, got, ok, c.want)
+		{"keep this in mind: " + paste, "", "keep this in mind:"},
+	}
+	db := filepath.Join(t.TempDir(), "state.db")
+	st := hermestest.Create(t, db, hermestest.Session{ID: "phone", Source: "mobile", StartedAt: 1})
+	for i, r := range rows {
+		st.Add(hermestest.Message{Session: "phone", Role: "user", Content: r.content, Kind: r.kind, Timestamp: float64(10 + i)})
+	}
+	b := NewBuilder()
+	b.pastes = []string{paste}
+	if err := b.AddHermes(db); err != nil {
+		t.Fatal(err)
+	}
+	c := b.Build()
+	tr := &TurnReader{Pastes: []string{paste}}
+	var kept []string
+	for _, r := range rows {
+		got, ok := tr.Hermes(r.content, r.kind, false)
+		if strings.TrimSpace(got) != r.want || ok != (r.want != "") {
+			t.Errorf("Hermes(%.40q) = %q, %v; want %q", r.content, got, ok, r.want)
 		}
+		if ok {
+			kept = append(kept, got)
+		}
+	}
+	if !reflect.DeepEqual(kept, c.raw) {
+		t.Fatalf("the reader keeps %q, the corpus %q", kept, c.raw)
+	}
+}
+
+// TurnReader with the prompt history's pastes keeps of a Claude Code turn
+// what the corpus keeps: a paste the CLI put inline in the turn is cut.
+func TestTurnReaderCutsPastesAsTheCorpusDoes(t *testing.T) {
+	home := t.TempDir()
+	paste := "panic: runtime error: index out of range [3] with length 3 in cache.go"
+	writeFile(t, filepath.Join(home, ".claude", "history.jsonl"), `{"display":"why does this fail [Pasted text #1 +1 lines]","pastedContents":{"1":{"id":1,"type":"text","content":"`+paste+`"}},"sessionId":"own","project":"/home/u/projects/shop"}`+"\n")
+	line := `{"type":"user","entrypoint":"cli","sessionId":"own","cwd":"/home/u/projects/shop","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"why does this fail ` + paste + `"}}`
+	writeFile(t, filepath.Join(home, ".claude", "projects", "-home-u-projects-shop", "own.jsonl"), line+"\n")
+	t.Setenv("TACIT_HERMES_DB", "off")
+	c, err := LoadAll(home, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps, err := ClaudePastes(home)
+	if err != nil || len(ps) != 1 || ps[0] != paste {
+		t.Fatalf("pastes %q %v", ps, err)
+	}
+	own, _ := (&TurnReader{Pastes: ps}).Parts(digest.Claude, []byte(line))
+	// The transcript's turn is the session's first in the corpus (the prompt
+	// history's copy of it comes after).
+	if len(own) != 1 || strings.Contains(own[0], "index out of range") || len(c.raw) == 0 || c.refs[0] != "claude:own" || own[0] != c.raw[0] {
+		t.Fatalf("reader %q, corpus %q %q", own, c.refs, c.raw)
+	}
+	if own, _ := (&TurnReader{}).Parts(digest.Claude, []byte(line)); len(own) != 1 || !strings.Contains(own[0], "index out of range") {
+		t.Fatalf("without the pastes: %q", own)
 	}
 }
 
