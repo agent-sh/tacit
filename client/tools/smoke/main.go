@@ -43,6 +43,7 @@ func main() {
 	root, err := os.MkdirTemp(parent, "smoke-")
 	check(err)
 	defer os.RemoveAll(root)
+	cleanup = append(cleanup, func() { os.RemoveAll(root) })
 	cfg := filepath.Join(root, "config.yaml")
 	// Quoted forward slashes work in YAML on Windows and Unix alike.
 	store := filepath.Join(root, "My Facts")
@@ -135,43 +136,54 @@ func main() {
 	app.Stderr = os.Stderr
 	check(app.Start())
 	defer func() { app.Process.Kill(); app.Wait() }()
-	urls := make(chan string, 1)
+	cleanup = append(cleanup, func() { app.Process.Kill(); app.Wait() })
+	lines := make(chan string, 1)
+	exited := make(chan struct{})
 	go func() {
+		defer close(exited)
 		s := bufio.NewScanner(out)
 		for s.Scan() {
-			line := s.Text()
-			if strings.HasPrefix(line, "tacit app: ") {
-				urls <- strings.Fields(line)[2]
-				return
+			if line := s.Text(); strings.HasPrefix(line, "tacit app: ") {
+				lines <- line
 			}
 		}
-		close(urls)
 	}()
-	var url string
+	var line string
 	select {
-	case url = <-urls:
+	case line = <-lines:
+	case <-exited:
+		check(fmt.Errorf("app exited before serving"))
 	case <-ctx.Done():
 		check(fmt.Errorf("app startup exceeded its deadline"))
 	}
-	if url == "" {
-		check(fmt.Errorf("app exited before serving"))
-	}
-	// The line names the address only: a pipe never sees the token.
-	if strings.Contains(url, "?") {
-		check(fmt.Errorf("app printed its page's token to a pipe: %s", url))
-	}
+	url := strings.Fields(line)[2]
 	var link string
 	for link == "" && ctx.Err() == nil {
 		if b, err := os.ReadFile(linkFile); err == nil && len(b) > 0 {
 			link = string(b)
 			break
 		}
-		time.Sleep(100 * time.Millisecond)
+		select {
+		case <-exited:
+			check(fmt.Errorf("app exited before its browser opener ran"))
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 	if !strings.HasPrefix(link, url+"?") {
 		check(fmt.Errorf("the browser opener got %q, want the page's link at %s", link, url))
 	}
+	// A pipe never sees the token: not on the line the app printed.
+	if token := link[strings.Index(link, "=")+1:]; token == "" || strings.Contains(line, token) {
+		check(fmt.Errorf("app printed its page's token to a pipe: %s", line))
+	}
 	client := &http.Client{Timeout: 30 * time.Second}
+	// Without the token the page refuses.
+	if resp, err := client.Get(url); err == nil {
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			check(fmt.Errorf("the page answered %d without its token", resp.StatusCode))
+		}
+	}
 	resp, err := client.Get(link)
 	check(err)
 	b, err := io.ReadAll(resp.Body)
@@ -221,9 +233,16 @@ func main() {
 	fmt.Println("PASS: local init, config path with spaces, sync, owner browser write, search, lint, no remote feed")
 }
 
+// cleanup runs before a failed check exits, newest first: os.Exit skips the
+// deferred calls, which would leave the app running and its directory behind.
+var cleanup []func()
+
 func check(err error) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "smoke:", err)
+		for i := len(cleanup) - 1; i >= 0; i-- {
+			cleanup[i]()
+		}
 		os.Exit(1)
 	}
 }
