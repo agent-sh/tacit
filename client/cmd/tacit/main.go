@@ -54,6 +54,9 @@ func usage() {
   tacit assess [--model M] [--max N] [--dry-run]   folders with no record (repositories, project folders) and records whose evidence changed -> the curator's model decides kind and status, code checks, records written (a step of curate)
   tacit reviewer [--dry-run] [--max N] [--backfill] [--retrim] [--note PATH]... [--json FILE] [--env-file F]   agents' notes (tacit add, tacit_add, Hermes memory writes, imported memories) -> the deciding model judges each against the session it came from: correct, uncertain or wrong (not curated); an uncertain note whose core holds is trimmed to its cited claims (a trusted note, or the owner's statement for a one-off remark of theirs), and only a doubted rule, decision or past mistake of an active project is a question; --retrim judges uncertain notes from before trims again; a step of every curate, on by default (TACIT_REVIEWER=off turns it off)
   tacit reviewer questions [--json]   the questions waiting for the owner
+  tacit questions [--json]   every question waiting for the owner: an agent's ask or query on a finding, the rotation's check?, the reviewer's questions
+  tacit questions close ID --harness H --answer A --proof git|file|config|words|gone --evidence E --reason R [--words W [--from REF]] [--dry-run]   an agent closes a question it can prove (never changing a ruling); the owner reopens it in tacit app
+  tacit questions moot [--dry-run] [ID...]   the curator closes the questions that went moot: a fact they are about retired, replaced or gone (also a step of tacit verify)
   tacit statements [--model M] [--dry-run]   the owner's statements (their words said once) -> the curator's model reads each new one once, code checks its dry claims and promotes: the same point in another session (decision; preference, then rule), or one statement a check agrees with (decision); a disagreeing check flags it (a step of curate, before assess)
   tacit folder create|status|alias|suppress|tools --folder F [--kind K] [--desc D] [--status S] [--why W] [--alias A] [--into F] [--tools a,b] [--commands c,d]   an agent's change to a folder record, as the curator (by opus; the owner's channel is tacit review)
   tacit migrate [--dry-run] [--max N] [--commits N]   the facts of suppressed folders -> copies in the folder that replaces each (or absorbed by a fact there), the old ones superseded; a ruling moves with its quote, held for the owner only with a reason (a step of curate; no model)
@@ -167,6 +170,8 @@ func main() {
 		os.Exit(runImport(os.Args[2:]))
 	case "reviewer":
 		os.Exit(runReviewer(os.Args[2:]))
+	case "questions":
+		os.Exit(runQuestions(os.Args[2:]))
 	case "keygen", "pubkey", "token", "credential":
 		os.Exit(runKey(os.Args[1], os.Args[2:]))
 	case "clone":

@@ -80,7 +80,11 @@ const KINDS = {
   "stale":              { label: "Maybe outdated", q: "Git says something this fact names was deleted. Is it still true?", qRule: "Git says something your rule names was deleted. Does your rule still hold?" },
   // One fact: the curator's regular check went against one of your facts, and changed nothing in it.
   "check":              { label: "Checked by the curator", q: "The curator checked this fact against what tacit knows now and reads it differently. Is it still true?", qRule: "The curator checked your rule against what tacit knows now and reads it differently. Does your rule still hold?", side: "What the curator found" },
+  // A question the reviewer had for you at your prompt, which an agent closed with its proof.
+  "question":           { label: "Questions an agent closed", q: "The reviewer had this question for you about an agent's note. An agent closed it." },
 };
+// How an agent proved the answer to a question it closed (SPEC.md, "Closing questions").
+const PROOF = { git: "git history", file: "the current files", config: "a configuration", words: "your own words", gone: "its subject is gone", moot: "a fact it asked about was retired or replaced" };
 const an = (w) => (/^[aeiou]/i.test(w) ? "an " : "a ") + w;
 // The day a fact speaks for, the one its card prints: the newest date in its
 // text that is not after the day it was written (as the timeline reads it),
@@ -150,8 +154,8 @@ function choiceHint(it, mark) {
 // What a choice did, for the slip and the record of an answer.
 function pastFor(it, mark) {
   const s = sides(it);
-  return { left: `Kept ${np(s.a)}`, right: `Kept ${np(s.b)}`, both: "Both are true", query: "Marked as conflicting", wrong: labelling ? "Neither is true" : "Neither is true, both retired", skip: "Skipped",
-    current: "Still true", retire: "Outdated, retired", fix: "A detail to fix" }[mark] || "Answered";
+  return { left: `Kept ${np(s.a)}`, right: `Kept ${np(s.b)}`, both: "Both are true", query: "Marked as conflicting", wrong: labelling ? "Neither is true" : it.kind === "question" ? "The note is wrong, its facts retired" : "Neither is true, both retired", skip: "Skipped",
+    current: "Still true", retire: "Outdated, retired", fix: "A detail to fix", holds: "The note holds", moot: "No longer a question" }[mark] || "Answered";
 }
 // The agent's evidence calls the two facts A and B. A standalone B is always a
 // fact (English has no bare B), and once the text uses B it uses the
@@ -326,9 +330,19 @@ function recordHTML(it) {
   const reopen = can(it, "reopen") ? btn("reopen", "undo", "Change this answer", "z") : "";
   // A pair whose fact a third fact replaced: closed by code. The plain words
   // say what became of it; its reason, with the facts' names, is in details.
+  // A question an agent left for you, closed: by an agent that proved the
+  // answer, or by the curator when a fact of it was retired or replaced.
+  const asked = it.ask && it.ask.question ? `<p class="evidence"><b>The question it closed:</b> ${esc(it.ask.question)}</p>` : "";
+  if (d.by === "agent" && d.proof) {
+    const how = PROOF[d.proof] || d.proof;
+    return `<div class="record"><p><b>An agent closed your question: ${esc(pastFor(it, it.mark || d.action))}</b>, proved by ${esc(how)}, ${esc(WHEN.format(new Date(d.at)))}.</p>${reopen}</div>${asked}`
+      + `<p class="evidence"><b>Why:</b> ${esc(d.reason || "")}</p><p class="evidence"><b>What it checked:</b> ${esc(plainEvidence(d.evidence, sides(it)))}</p>`
+      + (d.words ? `<p class="evidence"><b>Your words it rests on</b> (${esc(plainDate(d.words_on || ""))}): “${esc(d.words)}”</p>` : "");
+  }
   if (d.action === "moot") {
-    const what = d.repointed ? "The facts it asks about were replaced since, so it is asked again about the facts that replaced them." : "The facts it asks about were replaced since, and nothing is left to decide.";
-    return `<div class="record"><p><b>The curator closed this: no longer a question</b>, ${esc(WHEN.format(new Date(d.at)))}.</p>${reopen}</div><p class="evidence">${what}</p>${d.evidence ? `<details class="more"><summary>Details</summary><p>${esc(d.evidence)}</p></details>` : ""}`;
+    const what = d.closes ? "A fact it asks about was retired or replaced since, so nothing is left to ask you." + (d.repointed ? " The facts that replaced them are checked again." : "")
+      : d.repointed ? "The facts it asks about were replaced since, so it is asked again about the facts that replaced them." : "The facts it asks about were replaced since, and nothing is left to decide.";
+    return `<div class="record"><p><b>The curator closed this: no longer a question</b>, ${esc(WHEN.format(new Date(d.at)))}.</p>${reopen}</div>${asked}<p class="evidence">${what}</p>${d.evidence ? `<details class="more"><summary>Details</summary><p>${esc(d.evidence)}</p></details>` : ""}`;
   }
   return `<div class="record"><p><b>${who}: ${esc(pastFor(it, it.mark || d.action))}</b>${d.owner_only ? ", only you could know" : ""}, ${esc(WHEN.format(new Date(d.at)))}.</p>${reopen}</div>${d.comment ? `<p class="your-note"><b>Your note:</b> ${esc(d.comment)}</p>` : ""}${d.evidence && d.by === "agent" && !it.needs_owner ? `<p class="evidence">${esc(plainEvidence(d.evidence, sides(it)))}</p>` : ""}`;
 }
@@ -372,6 +386,7 @@ function sheet() {
   }
   const it = view[cur];
   if (it.link && typeof linkSheet === "function") { linkSheet(it); return; }
+  if (it.kind === "question") { questionSheet(it); return; }
   if (it.single) { staleSheet(it); return; }
   const K = KINDS[it.kind], s = sides(it), d = it.decision, made = standing(it);
   sideNouns = { A: s.a, B: s.b, "A,B": "both" };
@@ -430,6 +445,19 @@ function wire(it, made) {
   });
   const ro = $("reopen"); if (ro) ro.onclick = () => decide("reopen");
   const on = $("only"); if (on) on.onclick = toggleOnly;
+}
+// A question the reviewer had for you at your prompt, which an agent closed:
+// the question, the closure with its proof, and the note (or the fact made
+// from it). Change this answer reopens it, and it waits at your prompt again.
+function questionSheet(it) {
+  const inner = $("sheet-inner"), f = it.a;
+  sideNouns = { A: "the note", B: "the note", "A,B": "the note" };
+  inner.innerHTML = `
+    <h2 class="question">${esc(KINDS.question.q)}</h2>
+    ${it.question ? `<p class="suggest">${esc(it.question)}</p>` : ""}
+    ${recordHTML(it)}
+    <div class="pair">${card(f, "a", f.missing ? "The agent's note" : "What agents read of it")}</div>`;
+  wire(it, "");
 }
 // A stale check is about one fact: the card, and beside it what git shows.
 function staleSheet(it) {

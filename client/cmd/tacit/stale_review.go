@@ -266,8 +266,14 @@ func staleQuestion(name, mark string, it *staleItem) string {
 // Everything is prepared in memory first, so a refused mark writes nothing.
 func (rs *reviewServer) applyStaleOp(o *op, it *staleItem) (string, []string, error) {
 	name := it.A.Name
+	if o.Mark == mootMark {
+		return rs.applyStaleMoot(o, it) // an agent's question whose fact went moot
+	}
+	if o.By == "agent" && o.Proof != "" {
+		return rs.applyStaleClosure(o, it) // an agent closes the question it can prove
+	}
 	if o.By == "agent" && it.Kind == kindCheck {
-		return "", nil, errors.New("the rotation's question is the owner's to answer")
+		return "", nil, errors.New("the rotation's question is the owner's to answer, or an agent's closure with its proof")
 	}
 	if o.By == "agent" {
 		// An agent says one of four things. The guard below does not depend on a

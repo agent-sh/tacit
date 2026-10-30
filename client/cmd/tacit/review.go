@@ -119,6 +119,20 @@ type decision struct {
 	// Note is the in-place note an agent's fix wrote into the fact
 	// (fact.AppendNote); a fix with a note is applied.
 	Note string `json:"note,omitempty"`
+	// A closure (SPEC.md, "Closing questions"): an agent's answer to a
+	// question tacit left for the owner, or the curator's when the question
+	// went moot. Closes is what it closed (ask, query, check, question),
+	// Proof how it is proved (git, file, config, words, gone, moot), Reason
+	// why the evidence answers it, Session the agent's session that closed
+	// it. Words, WordsFrom and WordsOn are the owner's own words a words
+	// proof rests on, where code found them and the day they said them.
+	Closes    string `json:"closes,omitempty"`
+	Proof     string `json:"proof,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	Session   string `json:"session,omitempty"`
+	Words     string `json:"words,omitempty"`
+	WordsFrom string `json:"words_from,omitempty"`
+	WordsOn   string `json:"words_on,omitempty"`
 }
 
 type reviewItem struct {
@@ -596,6 +610,14 @@ type op struct {
 	// the fact holds FixWas word for word.
 	FixWas, FixNow string
 	proposed       string
+	// Proof makes an agent's mark a closure of the question the finding
+	// carries (SPEC.md, "Closing questions"), with Reason, Session and the
+	// owner's words a words proof rests on (Words, WordsFrom, WordsOn).
+	Proof, Reason, Session    string
+	Words, WordsFrom, WordsOn string
+	// wordsRetire names the facts holding words of theirs that the owner's
+	// own later words (a words proof) let the closure retire.
+	wordsRetire map[string]bool
 }
 
 // decide applies one mark for the page. See applyOps. In label mode the mark
@@ -731,6 +753,9 @@ func (e *ioFailure) Unwrap() error { return e.err }
 // mark writes nothing.
 func (rs *reviewServer) applyOp(o *op) (string, []string, error) {
 	rs.loadFacts()
+	if strings.HasPrefix(o.ID, "q-") {
+		return rs.applyQuestionOp(o) // a reviewer question an agent closed
+	}
 	if st := rs.staleByID(o.ID); st != nil {
 		return rs.applyStaleOp(o, st)
 	}
@@ -755,7 +780,13 @@ func (rs *reviewServer) applyOp(o *op) (string, []string, error) {
 	}
 	o.A, o.B = it.A.Name, it.B.Name
 	if o.Mark == mootMark {
+		if questionOf(*it) != "" {
+			return rs.applyQuestionMoot(o, it) // an agent's question that went moot
+		}
 		return rs.applyMoot(o, it)
+	}
+	if o.By == "agent" && o.Proof != "" {
+		return rs.applyClosure(o, it) // an agent closes the question it can prove
 	}
 	if o.Mark == "reopen" && o.By == "curator" {
 		if err := rs.curatorMayReopen(it); err != nil {

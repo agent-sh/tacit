@@ -38,6 +38,10 @@ const (
 	StateApplied  = "applied"  // their answer is in the ledger
 	StateSettled  = "settled"  // later evidence decided the note: not asked again
 	StateExpired  = "expired"  // unanswered past its time, its asks or the cap
+	// StateClosed: an agent proved the answer, or found the question moot,
+	// with a record in the store's decision log (SPEC.md, "Closing
+	// questions"); the owner's reopen puts it back.
+	StateClosed = "closed"
 )
 
 // Ask is one session the question was put in: the session, its transcript

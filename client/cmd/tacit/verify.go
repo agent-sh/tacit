@@ -505,6 +505,14 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 		fmt.Fprintln(os.Stderr, "verify: closing the findings whose facts were replaced:", err)
 		lastErr = err
 	}
+	// A question an agent left for the owner that went moot (a fact of it
+	// retired, replaced or gone) is closed too (SPEC.md, "Closing questions").
+	if n, err := closeMootQuestions(ctx, rs, owned, idSet(r.only), r.dry, func(l string) { fmt.Fprintln(os.Stderr, "verify: "+l) }); err != nil {
+		fmt.Fprintln(os.Stderr, "verify: closing the questions that went moot:", err)
+		lastErr = err
+	} else if n > 0 {
+		fmt.Fprintf(os.Stderr, "verify: %d question(s) went moot and were closed\n", n)
+	}
 	tries := r.attempts()
 	if !r.dry {
 		r.fails = r.failures()
