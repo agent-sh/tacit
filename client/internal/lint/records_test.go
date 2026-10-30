@@ -47,7 +47,11 @@ func TestRecordsCleanStorePasses(t *testing.T) {
 	old := rec("repo", "projects/widget-old")
 	old.SuppressedBy = "projects/widget"
 	write(t, root, "projects/widget-old/_record.md", recordFile(t, old))
-	write(t, root, "areas/ops/_record.md", recordFile(t, rec("area", "areas/ops")))
+	// An area that holds a harness's tool pattern from before the MCP-only
+	// rule: lint passes it (a write would refuse it as new).
+	ops := rec("area", "areas/ops")
+	ops.Tools = []string{"Bash"}
+	write(t, root, "areas/ops/_record.md", recordFile(t, ops))
 	write(t, root, "areas/ops/topics/q4/_record.md", recordFile(t, rec("topic", "areas/ops/topics/q4")))
 	write(t, root, "projects/widget/a.md", good("a", "projects/widget"))
 	write(t, root, "areas/ops/b.md", good("b", "areas/ops"))
