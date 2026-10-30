@@ -461,7 +461,7 @@ def compare(a):
         rows.append((count(rc, "R") - count(rb, "R"), count(rc, "N") - count(rb, "N"),
                      len(rc["names"]) - len(rb["names"]), sum(1 for n in rc["names"] if not grade_of(c, n, grades))))
     if not rows:
-        print("no case both arms ran")
+        print(f"no case both arms ran without a failure ({broken} left out: an arm failed)")
         return
     rnd = random.Random(7)
 

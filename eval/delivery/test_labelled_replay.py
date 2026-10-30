@@ -164,6 +164,12 @@ class LabelledReplay(unittest.TestCase):
         again = subprocess.run(replay + ["run", "--store", clone, "--cases", os.path.join(out, "cases.jsonl"), "--out", runs, "--arm", "base=" + shutil.which("true")],
                                capture_output=True, text=True, env=env)
         self.assertNotEqual(again.returncode, 0, "an arm name keeps its binary within one --out")
+        # An arm that fails every call is reported, not taken for one that prints less.
+        subprocess.run(replay + ["run", "--store", clone, "--cases", os.path.join(out, "cases.jsonl"), "--out", runs, "--arm", "broken=" + shutil.which("false"), "--workers", "1"],
+                       check=True, capture_output=True, env=env)
+        cmp = subprocess.run(replay + ["compare", "--cases", os.path.join(out, "cases.jsonl"), "--out", runs, "--arms", "base,broken"],
+                             check=True, capture_output=True, text=True).stdout
+        self.assertIn("(3 left out: an arm failed)", cmp)
         # A graded case the arm did not run is no useful line lost.
         extra = dict(cases[0], id="never-ran")
         with open(os.path.join(out, "cases.jsonl"), "a") as fh:
