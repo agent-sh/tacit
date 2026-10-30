@@ -65,8 +65,9 @@ type codexLine struct {
 
 // codexPayload is the fields read of a response_item's payload; ones whose
 // type varies are kept raw. Each record has its own (codexEvent, context,
-// compacted), so a field the reader does not read of a record never makes it
-// fail to decode.
+// compacted), and within a record only what a payload's type reads is checked
+// (codexItemReads, codexEventReads), so a field the reader does not read
+// counts nothing.
 type codexPayload struct {
 	Type      string          `json:"type"`
 	Role      string          `json:"role"`
@@ -92,6 +93,69 @@ type codexEvent struct {
 	Item     json.RawMessage `json:"item"`
 }
 
+// codexItemReads reports, for a response_item payload that did not decode
+// whole into codexPayload, whether what the reader reads of its type decodes:
+// a message's role, a call's name, namespace and call id (a web search's id),
+// an output's call id and name. A field of another type in a type the reader
+// passes over (reasoning), or one the type does not read, counts nothing: the
+// item is read from what decoded.
+func codexItemReads(raw json.RawMessage) bool {
+	var head struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(raw, &head) != nil {
+		return false
+	}
+	var kind any
+	switch head.Type {
+	case "message":
+		kind = &struct {
+			Role string `json:"role"`
+		}{}
+	case "function_call", "custom_tool_call", "tool_search_call", "local_shell_call":
+		kind = &struct {
+			Name      string `json:"name"`
+			Namespace string `json:"namespace"`
+			CallID    string `json:"call_id"`
+		}{}
+	case "web_search_call":
+		kind = &struct {
+			Name      string `json:"name"`
+			Namespace string `json:"namespace"`
+			CallID    string `json:"call_id"`
+			ID        string `json:"id"`
+		}{}
+	case "function_call_output", "custom_tool_call_output", "tool_search_output":
+		kind = &struct {
+			Name   string `json:"name"`
+			CallID string `json:"call_id"`
+		}{}
+	default:
+		return true
+	}
+	return json.Unmarshal(raw, kind) == nil
+}
+
+// codexEventReads reports, for an event_msg payload that did not decode whole
+// into codexEvent, whether what the reader reads of its type decodes: its
+// type, and the call id of the end of a patch, a command or an MCP call.
+func codexEventReads(raw json.RawMessage) bool {
+	var head struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(raw, &head) != nil {
+		return false
+	}
+	switch head.Type {
+	case "patch_apply_end", "exec_command_end", "mcp_tool_call_end":
+		var c struct {
+			CallID string `json:"call_id"`
+		}
+		return json.Unmarshal(raw, &c) == nil
+	}
+	return true
+}
+
 // context takes a turn_context's cwd and model, and reports whether its
 // payload decoded.
 func (r *codexReader) context(raw json.RawMessage) bool {
@@ -113,8 +177,10 @@ func (r *codexReader) context(raw json.RawMessage) bool {
 
 // line is a line's events, and false when the line does not parse: it is not
 // JSON, its JSON is not a rollout line (a list or a string where the object
-// goes, a field of another type), or the payload of a record the reader reads
-// (response_item, event_msg, turn_context, compacted) does not decode.
+// goes, a type that is no string), what the reader reads of a record's
+// payload (response_item, event_msg, turn_context, compacted) does not
+// decode, or a message's content or a compaction's summary is neither a
+// string nor a list (textShaped).
 func (r *codexReader) line(raw []byte) ([]Event, bool) {
 	var l codexLine
 	if json.Unmarshal(raw, &l) != nil {
@@ -133,27 +199,29 @@ func (r *codexReader) line(raw []byte) ([]Event, bool) {
 	case "turn_context":
 		return nil, r.context(l.Payload)
 	case "compacted":
-		// The entry marks its compaction even when its payload does not
-		// decode.
+		// The entry marks its compaction even when its payload, or its
+		// summary, does not decode.
 		var p struct {
 			Message json.RawMessage `json:"message"`
 		}
-		ok := json.Unmarshal(l.Payload, &p) == nil
+		ok := json.Unmarshal(l.Payload, &p) == nil && textShaped(p.Message)
 		r.prior = "compacted"
 		return []Event{r.text(KindCompaction, "system", digest.Harness, "compacted", rawText(p.Message), at)}, ok
 	case "event_msg":
 		// What decoded of a payload with a field of another type is taken,
-		// as before; the line is counted.
+		// as before; the line is counted when the field is one its type
+		// reads.
 		var p codexEvent
 		err := json.Unmarshal(l.Payload, &p)
 		r.eventMsg(p)
-		return nil, err == nil
+		return nil, err == nil || codexEventReads(l.Payload)
 	case "response_item":
 		var p codexPayload
-		if json.Unmarshal(l.Payload, &p) != nil {
+		if json.Unmarshal(l.Payload, &p) != nil && !codexItemReads(l.Payload) {
 			return nil, false
 		}
-		return r.item(raw, p, at), true
+		ok := p.Type != "message" && p.Type != "agent_message" || textShaped(p.Content)
+		return r.item(raw, p, at), ok
 	}
 	return nil, true
 }

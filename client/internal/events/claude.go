@@ -57,13 +57,65 @@ type claudeLine struct {
 		Model   string          `json:"model"`
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
-	Attachment struct {
-		Type        string          `json:"type"`
-		HookEvent   string          `json:"hookEvent"`
-		ToolUseID   string          `json:"toolUseID"`
-		CommandMode string          `json:"commandMode"`
-		Content     json.RawMessage `json:"content"`
-	} `json:"attachment"`
+	Attachment claudeAttachment `json:"attachment"`
+}
+
+type claudeAttachment struct {
+	Type        string          `json:"type"`
+	HookEvent   string          `json:"hookEvent"`
+	ToolUseID   string          `json:"toolUseID"`
+	CommandMode string          `json:"commandMode"`
+	Content     json.RawMessage `json:"content"`
+}
+
+// claudeReads reports, for a line that did not decode whole into claudeLine,
+// whether what the reader reads of the line's kind decodes: every line's
+// type, session id, agent id and cwd (note), and an assistant reply's model,
+// error mark and message, a user line's marks and message, an attachment, a
+// system line's subtype. A field of another type in a kind the reader passes
+// over, or in a field the line's kind does not read, counts nothing: the line
+// is read from what decoded, which claudeLine holds apart from that field.
+func claudeReads(raw []byte) bool {
+	var head struct {
+		Type      string `json:"type"`
+		SessionID string `json:"sessionId"`
+		AgentID   string `json:"agentId"`
+		Cwd       string `json:"cwd"`
+	}
+	if json.Unmarshal(raw, &head) != nil {
+		return false
+	}
+	var kind any
+	switch head.Type {
+	case "assistant":
+		kind = &struct {
+			IsAPIError bool `json:"isApiErrorMessage"`
+			Message    struct {
+				Model   string          `json:"model"`
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}{}
+	case "user":
+		kind = &struct {
+			IsMeta       bool   `json:"isMeta"`
+			IsCompact    bool   `json:"isCompactSummary"`
+			PromptSource string `json:"promptSource"`
+			Message      struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}{}
+	case "attachment":
+		kind = &struct {
+			Attachment claudeAttachment `json:"attachment"`
+		}{}
+	case "system":
+		kind = &struct {
+			Subtype string `json:"subtype"`
+		}{}
+	default:
+		return true
+	}
+	return json.Unmarshal(raw, kind) == nil
 }
 
 type claudeBlock struct {
@@ -104,22 +156,24 @@ func (r *claudeReader) note(l claudeLine) {
 }
 
 // line is a line's events, and false when the line does not parse: it is not
-// JSON, or its JSON is not a Claude Code line (a list or a string where the
-// object goes, a field the reader reads of another type).
+// JSON, what the reader reads of its kind does not decode (a list or a string
+// where the object goes, a field of another type: claudeReads), or the
+// content of its message, or of a hook's output, is neither a string nor a
+// list (textShaped).
 func (r *claudeReader) line(raw []byte) ([]Event, bool) {
 	var l claudeLine
-	if json.Unmarshal(raw, &l) != nil {
+	if json.Unmarshal(raw, &l) != nil && !claudeReads(raw) {
 		return nil, false
 	}
 	r.note(l)
 	at := ownerwords.JSONTime(l.Timestamp)
 	switch l.Type {
 	case "assistant":
-		return r.assistant(l, at), true
+		return r.assistant(l, at), textShaped(l.Message.Content)
 	case "user":
-		return r.user(raw, l, at), true
+		return r.user(raw, l, at), textShaped(l.Message.Content)
 	case "attachment":
-		return r.attachment(raw, l, at), true
+		return r.attachment(raw, l, at), !strings.HasPrefix(l.Attachment.Type, "hook_") || textShaped(l.Attachment.Content)
 	case "system":
 		// A system line is a record of the harness's (a compaction's boundary
 		// among them; its summary is the compaction event): what came before

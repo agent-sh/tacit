@@ -585,3 +585,168 @@ func TestHermesRowsWhoseCallsDoNotParseAreCounted(t *testing.T) {
 		t.Fatalf("ReadHermes at the last row: %d events, cursor %d", len(evs), last)
 	}
 }
+
+// stray is a line with a field of another type, and the same line without it.
+type stray struct{ dirty, clean string }
+
+// Only what a line's kind reads is checked. A field of another type in a kind
+// the reader passes over (a new kind, a reasoning item, a token count, a
+// label), or one the line's kind does not read (an assistant reply's isMeta,
+// a system line's message, a function call's id, a message's name, a turn's
+// end with a call id, a model change's summary, a user message's exitCode),
+// counts nothing, and the line is read as it is without that field. A field
+// the line's kind reads, of another type, counts, and the line gives nothing.
+func TestOnlyWhatAKindReadsIsChecked(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
+	g := growingSessions(home)
+	reply := `"message":{"model":"claude-opus-5-5","role":"assistant","content":[{"type":"text","text":"Warming now."}]}`
+	for _, c := range []struct {
+		g       growing
+		lines   []stray
+		counted []string
+	}{
+		{g[0], []stray{
+			{cl(1, `"type":"some-new-kind","uuid":"n1","message":"a string"`), cl(1, `"type":"some-new-kind","uuid":"n1"`)},
+			{cl(1, `"type":"some-new-kind","uuid":"n2","attachment":["a list"]`), cl(1, `"type":"some-new-kind","uuid":"n2"`)},
+			{cl(1, `"type":"some-new-kind","uuid":"n3","isMeta":"yes"`), cl(1, `"type":"some-new-kind","uuid":"n3"`)},
+			{cl(1, `"type":"assistant","uuid":"a4","isMeta":"yes",`+reply), cl(1, `"type":"assistant","uuid":"a4",`+reply)},
+			{cl(1, `"type":"system","subtype":"turn_duration","uuid":"s5","message":"a string"`), cl(1, `"type":"system","subtype":"turn_duration","uuid":"s5"`)},
+		}, []string{
+			cl(1, `"type":"assistant","uuid":"a6","message":{"model":5,"role":"assistant","content":[{"type":"text","text":"Warming now."}]}`),
+			cl(1, `"type":"assistant","uuid":"a7","isApiErrorMessage":"yes",`+reply),
+			cl(1, `"type":"system","subtype":5,"uuid":"s8"`),
+			cl(1, `"type":"attachment","uuid":"h9","attachment":{"type":"hook_success","hookEvent":7,"content":"ok"}`),
+			cl(1, `"type":"user","uuid":"u10","promptSource":7,"message":{"role":"user","content":"and the docs"}`),
+			cl(1, `"type":"some-new-kind","uuid":"n11","cwd":7`),
+		}},
+		{g[1], []stray{
+			{cx(2, "response_item", `{"type":"reasoning","id":7,"summary":[]}`), cx(2, "response_item", `{"type":"reasoning","id":"rs_1","summary":[]}`)},
+			{cx(2, "event_msg", `{"type":"token_count","call_id":7}`), cx(2, "event_msg", `{"type":"token_count"}`)},
+			{cx(2, "response_item", `{"type":"function_call","id":7,"name":"exec_command","arguments":"{\"cmd\":\"ls\"}","call_id":"call_s1"}`),
+				cx(2, "response_item", `{"type":"function_call","id":"fc_s1","name":"exec_command","arguments":"{\"cmd\":\"ls\"}","call_id":"call_s1"}`)},
+			{cx(2, "response_item", `{"type":"message","role":"assistant","name":5,"content":[{"type":"output_text","text":"Listing."}]}`),
+				cx(2, "response_item", `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Listing."}]}`)},
+			{cx(2, "event_msg", `{"type":"task_complete","turn_id":"t1","call_id":7}`), cx(2, "event_msg", `{"type":"task_complete","turn_id":"t1"}`)},
+		}, []string{
+			cx(2, "response_item", `{"type":"function_call","name":"exec_command","arguments":"{}","call_id":5}`),
+			cx(2, "response_item", `{"type":"function_call","name":["exec_command"],"arguments":"{}","call_id":"call_s2"}`),
+			cx(2, "response_item", `{"type":"function_call_output","call_id":5,"output":"ok"}`),
+			cx(2, "response_item", `{"type":"web_search_call","id":5,"status":"completed","action":{"type":"search","query":"zstd"}}`),
+			cx(2, "event_msg", `{"type":"patch_apply_end","call_id":5,"success":false}`),
+			cx(2, "turn_context", `{"turn_id":"t2","cwd":5,"model":"gpt-6.1-luna"}`),
+		}},
+		{g[2], []stray{
+			{piEntry(8, `"type":"label","id":"l1","label":"x","summary":{"n":1}`), piEntry(8, `"type":"label","id":"l1","label":"x"`)},
+			{piEntry(8, `"type":"model_change","id":"m2","provider":"p","modelId":"qwen3-coder","summary":5`), piEntry(8, `"type":"model_change","id":"m2","provider":"p","modelId":"qwen3-coder"`)},
+			{piMsg(9, "a3", map[string]any{"role": "assistant", "model": "qwen3-coder", "stopReason": "stop", "toolCallId": 5, "content": piText("Done.")}),
+				piMsg(9, "a3", map[string]any{"role": "assistant", "model": "qwen3-coder", "stopReason": "stop", "content": piText("Done.")})},
+			{piMsg(10, "u4", map[string]any{"role": "user", "exitCode": "x", "content": piText("and the docs")}),
+				piMsg(10, "u4", map[string]any{"role": "user", "content": piText("and the docs")})},
+		}, []string{
+			piEntry(10, `"type":"model_change","id":"m5","provider":"p","modelId":5`),
+			piEntry(10, `"type":"compaction","id":"c6","summary":{"text":"the work"}`),
+			piEntry(10, `"type":"message","id":7,"message":{"role":"user","content":"and the docs"}`),
+			piMsg(10, "a8", map[string]any{"role": "assistant", "model": "qwen3-coder", "stopReason": 5, "content": piText("Done.")}),
+			piMsg(10, "r9", map[string]any{"role": "toolResult", "toolCallId": 5, "content": piText("ok")}),
+			piMsg(10, "b10", map[string]any{"role": "bashExecution", "command": "ls", "output": "x", "exitCode": "zero"}),
+		}},
+	} {
+		t.Run(c.g.name, func(t *testing.T) {
+			dirty := append(append([]string{}, c.g.first...), c.g.call)
+			clean := append([]string{}, dirty...)
+			for _, s := range c.lines {
+				dirty, clean = append(dirty, s.dirty), append(clean, s.clean)
+			}
+			dirty = append(dirty, c.counted...)
+			dirty, clean = append(dirty, c.g.result, c.g.turn), append(clean, c.g.result, c.g.turn)
+			dpath := write(t, strings.Replace(c.g.path, ".jsonl", "-stray.jsonl", 1), dirty...)
+			cpath := write(t, strings.Replace(c.g.path, ".jsonl", "-nostray.jsonl", 1), clean...)
+			got, st := readState(t, dpath, c.g.f, State{}, 0)
+			want, wst := readState(t, cpath, c.g.f, State{}, 0)
+			if st.Unparsed() != len(c.counted) || wst.Unparsed() != 0 || !reflect.DeepEqual(unplaced(got), unplaced(want)) {
+				t.Fatalf("%d lines counted, want %d:\n%s\nwant\n%s", st.Unparsed(), len(c.counted), dump(got), dump(want))
+			}
+		})
+	}
+}
+
+// A message whose content is neither a string nor a list (an object, a
+// number), or a pi reply's that is not a list, holds no text the reader can
+// take: the whole message would be gone, so its line is counted and gives no
+// events. A Codex compacted entry whose summary is of another shape still
+// marks its compaction. Content that is empty, null, a string or a list is
+// read as before.
+func TestMessageContentOfAnotherShapeIsCounted(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
+	obj := `{"type":"text","text":"a block that is not in a list"}`
+	g := growingSessions(home)
+	for _, c := range []struct {
+		g       growing
+		counted []string
+		read    []string // read as before, and not counted
+		marks   int      // events the counted lines still give: a compaction's
+	}{
+		{g[0], []string{
+			cl(1, `"type":"assistant","uuid":"a7","message":{"model":"claude-opus-5-5","role":"assistant","content":`+obj+`}`),
+			cl(1, `"type":"user","uuid":"u8","promptId":"p8",`+typedMarks+`,"message":{"role":"user","content":`+obj+`}`),
+			cl(1, `"type":"attachment","uuid":"h9","attachment":{"type":"hook_additional_context","content":`+obj+`,"hookName":"PreToolUse:Read","toolUseID":"toolu_77","hookEvent":"PreToolUse"}`),
+		}, []string{
+			cl(1, `"type":"assistant","uuid":"a10","message":{"model":"claude-opus-5-5","role":"assistant","content":[]}`),
+			cl(1, `"type":"attachment","uuid":"h11","attachment":{"type":"hook_success","hookName":"PostToolUse:Bash","toolUseID":"toolu_77","hookEvent":"PostToolUse","content":""}`),
+			cl(1, `"type":"assistant","uuid":"a12","message":{"model":"claude-opus-5-5","role":"assistant","content":"A reply as a string."}`),
+		}, 0},
+		{g[1], []string{
+			cx(2, "response_item", `{"type":"message","role":"assistant","content":`+obj+`}`),
+			cx(2, "response_item", `{"type":"agent_message","author":"/root/ada","content":7}`),
+			cx(2, "compacted", `{"message":`+obj+`}`),
+		}, []string{
+			cx(2, "response_item", `{"type":"message","role":"assistant","content":"Listing as a string."}`),
+			cx(2, "compacted", `{"message":"The work so far."}`),
+		}, 1},
+		{g[2], []string{
+			piMsg(9, "u7", map[string]any{"role": "user", "content": map[string]string{"type": "text", "text": "an object"}}),
+			piMsg(9, "a8", map[string]any{"role": "assistant", "model": "qwen3-coder", "stopReason": "stop", "content": "a string, where pi writes a list"}),
+			piMsg(9, "c9", map[string]any{"role": "custom", "content": map[string]int{"n": 1}}),
+			piEntry(9, `"type":"custom_message","id":"x10","customType":"plan","content":{"n":1},"display":true`),
+		}, []string{
+			piMsg(9, "a11", map[string]any{"role": "assistant", "model": "qwen3-coder", "stopReason": "error", "errorMessage": "overloaded", "content": []any{}}),
+			piEntry(9, `"type":"custom_message","id":"x12","customType":"plan","content":"Plan: 2. test it","display":true`),
+		}, 0},
+	} {
+		t.Run(c.g.name, func(t *testing.T) {
+			lines := append(append([]string{}, c.g.first...), c.g.call)
+			counted := map[int]bool{}
+			for _, l := range c.counted {
+				counted[len(lines)] = true
+				lines = append(lines, l)
+			}
+			read := len(lines)
+			lines = append(append(lines, c.read...), c.g.result)
+			path := write(t, strings.Replace(c.g.path, ".jsonl", "-content.jsonl", 1), lines...)
+			evs, st := readState(t, path, c.g.f, State{}, 0)
+			if st.Unparsed() != len(c.counted) {
+				t.Fatalf("%d lines counted, want %d:\n%s", st.Unparsed(), len(c.counted), dump(evs))
+			}
+			got := byLine(t, lines, evs)
+			marks := 0
+			for i := range counted {
+				marks += len(got[i])
+			}
+			// The lines read as before give what they hold: text from the
+			// string contents, an error, a compaction, an extension's message.
+			readEvents := 0
+			for i := read; i < len(lines)-1; i++ {
+				readEvents += len(got[i])
+			}
+			if marks != c.marks || readEvents == 0 {
+				t.Fatalf("the counted lines give %d events (want %d), the others %d:\n%s", marks, c.marks, readEvents, dump(evs))
+			}
+		})
+	}
+}

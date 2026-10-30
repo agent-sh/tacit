@@ -174,7 +174,8 @@ const headBytes = 256 << 10
 // lineReader turns one transcript line into events, keeping what it needs
 // across lines; keep is what it kept as of the last line it read, restore
 // takes that back into a new reader (State). line reports false for a line
-// that does not parse (State.Unparsed), which gives no events.
+// that does not parse (State.Unparsed), which gives none of its record's
+// events.
 type lineReader interface {
 	line(raw []byte) ([]Event, bool)
 	keep() *kept
@@ -186,10 +187,10 @@ type lineReader interface {
 // compressed copy's decompressed stream), calling emit for each in order. It
 // returns the offset after the last line read, where the next read resumes.
 // A last line without its newline is read once it holds whole JSON; until
-// then it is left for the next read. A line that does not parse gives no
-// events; ReadFileState counts them (State.Unparsed). A transcript the
-// harness compressed since its path was recorded is read from its compressed
-// copy (transcript.Resolve).
+// then it is left for the next read. A line that does not parse gives none
+// of its record's events; ReadFileState counts them (State.Unparsed). A
+// transcript the harness compressed since its path was recorded is read from
+// its compressed copy (transcript.Resolve).
 //
 // A read from a cursor gives exactly the events a read from the start gives
 // from there: what a line's events depend on in the lines before it (the
@@ -376,6 +377,20 @@ func readFile(path string, f digest.Format, from State, limit int64, emit func(E
 			return at(off), nil
 		}
 	}
+}
+
+// textShaped reports a message's content of a shape the readers take text
+// from: none, null, a string or a list. Anything else (an object, a number)
+// holds no text they can take, so the whole message is gone (State.Unparsed).
+func textShaped(raw json.RawMessage) bool {
+	b := bytes.TrimSpace(raw)
+	return len(b) == 0 || b[0] == '"' || b[0] == '[' || string(b) == "null"
+}
+
+// listShaped is textShaped for content that is only ever a list.
+func listShaped(raw json.RawMessage) bool {
+	b := bytes.TrimSpace(raw)
+	return len(b) == 0 || b[0] == '[' || string(b) == "null"
 }
 
 // openAfter opens a transcript at the line before a kept cursor, reads that
