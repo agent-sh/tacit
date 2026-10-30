@@ -405,17 +405,33 @@ func promptHits(ctx context.Context, ix *search.Index, sit search.Situation, p s
 // useful ones; owner prompts lost nothing at 0.5 to 0.8.
 const echoShare = 0.7
 
-// withoutEchoes is hits less the lines that echo the request p. No
-// backfill: the line is dropped, not replaced by the next candidate.
+// echoMinTerms: a line of fewer distinct words is no echo, however many of
+// them the request holds: a short rule answers a request in its own words
+// ("never force push to main" for "can I force push to main?").
+const echoMinTerms = 5
+
+// echoNegation is a word that says no. A line that says no where the
+// request does not adds to it: the search drops these words (stop words,
+// or too short), so the share does not see them.
+var echoNegation = regexp.MustCompile(`(?i)\b(?:no|not|never|nor|none|don'?t|doesn'?t|won'?t|can'?t|cannot|avoid|without)\b`)
+
+// withoutEchoes is hits less the lines that echo the request p: every line
+// the prompt hook would print, whatever chose it. No backfill: the line is
+// dropped, not replaced by the next candidate.
 func withoutEchoes(hits []search.Hit, p string) []search.Hit {
 	words := map[string]bool{}
-	for _, t := range search.Terms(p) {
+	for _, t := range search.AllTerms(p) {
 		words[search.TermKey(t)] = true
+	}
+	said := map[string]bool{}
+	for _, w := range echoNegation.FindAllString(p, -1) {
+		said[strings.ToLower(strings.ReplaceAll(w, "'", ""))] = true
 	}
 	out := hits[:0:0]
 	for _, h := range hits {
+		text := h.Name + " " + h.Description
 		keys := map[string]bool{}
-		for _, t := range search.Terms(h.Name + " " + h.Description) {
+		for _, t := range search.AllTerms(text) {
 			keys[search.TermKey(t)] = true
 		}
 		in := 0
@@ -424,7 +440,11 @@ func withoutEchoes(hits []search.Hit, p string) []search.Hit {
 				in++
 			}
 		}
-		if len(keys) > 0 && float64(in) >= echoShare*float64(len(keys)) {
+		adds := false
+		for _, w := range echoNegation.FindAllString(strings.ReplaceAll(text, "-", " "), -1) {
+			adds = adds || !said[strings.ToLower(strings.ReplaceAll(w, "'", ""))]
+		}
+		if len(keys) >= echoMinTerms && float64(in) >= echoShare*float64(len(keys)) && !adds {
 			continue
 		}
 		out = append(out, h)
