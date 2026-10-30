@@ -526,11 +526,12 @@ func clip(s string, n int) string {
 // ~, or under one of these system roots. Rotation stats them and the
 // ancestor index reads folder names from them, so a route of an API
 // (/v1/messages) or of a forge (/repos/<owner>/<name>/pulls) must not count.
-// Where a path only names a repository, repoPaths reads every one.
+// Where a path only names a repository, repoPaths reads every one, these
+// places first.
 var machinePathRx = regexp.MustCompile(`(?:^|[\s(\x60"'])((?:~|/(?:Users|home|opt|etc|var|usr|srv|mnt|Library))/[A-Za-z0-9._\-/]+)`)
 
 // repoPathRx finds every ~ and absolute path in a text (repoPaths).
-var repoPathRx = regexp.MustCompile(`(?:^|[\s(\x60"'])((?:~/|/)[A-Za-z0-9._\-][A-Za-z0-9._\-/]*)`)
+var repoPathRx = regexp.MustCompile(`(?:^|[\s(\x60"'])((?:~/+|/)[A-Za-z0-9._\-][A-Za-z0-9._\-/]*)`)
 
 // pseudoPathRx is a path in a kernel's view (/proc, /sys, /dev), whose
 // links resolve to what the reading process has open (/proc/self/cwd,
@@ -543,7 +544,8 @@ var pseudoPathRx = regexp.MustCompile(`^/(?:proc|sys|dev|net)(?:/|$)`)
 // checkout outside machinePathRx's roots (/tmp, /data, /root, /workspace)
 // is found. The places machinePathRx reads come first and each path counts
 // once, so routes never crowd out a path the place reader takes. Paths in
-// pseudoPathRx are left out: they hold no checkout.
+// pseudoPathRx are left out: what they resolve to is the reading process's
+// or another host's, not the fact's.
 func repoPaths(text string, n int) []string {
 	var places, others []string
 	seen := map[string]bool{}

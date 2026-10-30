@@ -501,22 +501,43 @@ func (r *refiler) pick(set map[string]bool) string {
 	return ""
 }
 
-// projectsPathRx is a path under a projects directory, ~/projects or
-// /home/<user>/projects (/Users/<user>/projects): the checkouts every
-// machine's catalog lists by name live there, one or two levels down.
-var projectsPathRx = regexp.MustCompile(`(?:^|/)projects/([A-Za-z0-9._-]+)(?:/([A-Za-z0-9._-]+))?`)
+// projectsPathRx is a path under a home's projects directory, ~/projects,
+// /root/projects or /home/<user>/projects (/Users/<user>/projects): the
+// checkouts every machine's catalog lists by name live there, one or two
+// levels down. It starts the path, so a projects folder elsewhere (a tool's
+// ~/.claude/projects, a store's projects/<name>, a route's) is none.
+var projectsPathRx = regexp.MustCompile(`^(?:~|/root|/(?:home|Users)/[^/]+)/+projects/+([A-Za-z0-9._-]+)(?:/+([A-Za-z0-9._-]+))?`)
+
+// catalogTakes reports whether rp, a checkout on this machine, counts as a
+// repository (SPEC.md, "Scopes"): the catalog accepts it, or lists a
+// repository of its name whose remotes hold its origin, the same repository
+// by another path (a bind mount, or a clone whose origin two main
+// checkouts share, which Mains.Canonical leaves as it is).
+func catalogTakes(catalog *repoid.Catalog, rp repoid.Repo) bool {
+	if catalog.Accepted(rp) {
+		return true
+	}
+	known, ok := catalog.Repo(rp.Slug())
+	if !ok || rp.Origin == "" {
+		return false
+	}
+	for _, u := range known.URLs {
+		if u == rp.Origin {
+			return true
+		}
+	}
+	return false
+}
 
 // pointedRepos are the repositories f's own words point at (SPEC.md,
 // "Suppression", "Orgs"): the absolute and ~ paths it names (its text,
-// applies_to.paths and commands, repoPaths), each the repository repoid
-// makes of it on this machine when the catalog takes that checkout
-// (Catalog.Accepted, or a name the catalog lists, such as a clone repoid
-// names for its main checkout; a scratch clone in a temp directory names
-// nothing, whatever its path holds), or, for a path of another machine (no
-// checkout here, a place under ~ or a system root as machinePathRx reads
-// it, so never a route such as /api/projects/<name>), the checkout a projects
-// directory path names that some machine's catalog lists (by name or
-// another name of it), or a project folder whose record
+// applies_to.paths and commands, repoPaths). A path in a checkout on this
+// machine names the repository repoid makes of it when the catalog takes
+// that checkout (catalogTakes), and nothing otherwise (a task's scratch
+// clone). A path with no checkout here, another machine's, names the
+// checkout a home's projects directory path names (projectsPathRx) that
+// some machine's catalog lists (by name or another name of it), or a
+// project folder whose record
 // the path's name is (an old name the forge renamed, its folder suppressed
 // into the current one: a checked pointer code may follow); and the
 // repositories of the forge URLs it names (github.com/<owner>/<name>) that
@@ -547,13 +568,10 @@ func pointedRepos(cache *repoid.Cache, catalog *repoid.Catalog, recs map[string]
 		return path.Base(w)
 	}
 	for _, p := range repoPaths(text, 40) {
-		if rp, ok := cache.Of(p); ok && rp.Slug() != "" {
-			if catalog.Accepted(rp) || catalog.Has(rp.Slug()) {
-				set[rp.Slug()] = true
+		if rp, ok := cache.Of(p); ok {
+			if s := rp.Slug(); s != "" && catalogTakes(catalog, rp) {
+				set[s] = true
 			}
-			continue
-		}
-		if !machinePathRx.MatchString(p) {
 			continue
 		}
 		if pm := projectsPathRx.FindStringSubmatch(p); pm != nil {
