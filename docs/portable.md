@@ -196,13 +196,13 @@ Real task registration and default-browser launching require Windows. Generating
 
 ## Redaction
 
-Tacit release archives include scrump with its required `text` profile, built from pinned source [17cd5ab](https://github.com/avifenesh/scrump/commit/17cd5abc9ce19d4fdec51588a35ef73a644e36bb). The installers check a masking canary before installation. A compatible redactor is required for agent writes and model digests.
+Tacit release archives include scrump 0.2.0, with its required `text` profile and the records mode that keeps batched texts apart, built from pinned source [b2b3178](https://github.com/avifenesh/scrump/commit/b2b3178c412ee5d99aaf36233d3952c2d4e796ca), the `v0.2.0` tag. The installers check a masking canary before installation. A compatible redactor is required for agent writes and model digests.
 
 If building Tacit from source, build the same scrump source:
 
 ```sh
 cargo install --locked --root ~/.local --git https://github.com/avifenesh/scrump \
-  --rev 17cd5abc9ce19d4fdec51588a35ef73a644e36bb scrump-cli
+  --rev b2b3178c412ee5d99aaf36233d3952c2d4e796ca scrump-cli
 ```
 
 On Windows use those arguments on one PowerShell line with a Windows install root, then put that root's `bin` on PATH. Native Rust MSVC builds need the Windows C++ toolchain. The pinned source also builds for Windows GNU. A binary lacking the text profile is refused before an agent note is written. Owner app writes retain the token-shape commit check without requiring a model account.
@@ -231,7 +231,7 @@ Linux runs, the existing Go suite, local lifecycle tests, configuration and plat
 
 A disposable Windows 11 Enterprise Evaluation VM (build 26300) checks the native executable, Git for Windows, locks/liveness, the browser API, agent redaction, a configured local store and hook installation. Dream and curator tasks register under the logged-in account, run and finish with status 0. Edge opens the local app through the default-browser handler. The job inputs are synthetic and require no provider credentials; this checks scheduling and startup, not a model's output. Native testing found and fixed Task Scheduler's Unicode XML encoding conflict and PowerShell's BOM-prefixed env files.
 
-The amd64 binary also runs in a macOS 14.6.1 Recovery VM (build 23G93) with Apple Git 2.39.3 and the pinned scrump build. Native locks/liveness, the complete local-store/browser-API smoke, agent redaction and hook installation pass there. Both generated launchd agents register in Recovery's Aqua `gui/0` domain, run with synthetic inputs and finish with status 0. The fixture sets HOME and TMPDIR to writable test directories in the job env file.
+The amd64 binary also runs in a macOS 14.6.1 Recovery VM (build 23G93) with Apple Git 2.39.3 and the scrump build pinned then (17cd5ab, before 0.2.0). Native locks/liveness, the complete local-store/browser-API smoke, agent redaction and hook installation pass there. Both generated launchd agents register in Recovery's Aqua `gui/0` domain, run with synthetic inputs and finish with status 0. The fixture sets HOME and TMPDIR to writable test directories in the job env file.
 
 This is a Recovery environment, not a normal logged-in desktop. It has no `open` command, so default-browser launching is unverified. The full OS installer failed during VM setup. A normal user desktop remains the remaining macOS validation step. Both macOS architectures are cross-built; only amd64 has native VM execution evidence. Windows native evidence is also amd64, and the other client architectures are build checks.
 

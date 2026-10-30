@@ -33,9 +33,10 @@ server="${TACIT_SERVER:-}"
 # the server-side command for the operator to run there.
 enroll_ssh="${TACIT_ENROLL_SSH:-}"
 repo_url="https://github.com/agent-sh/tacit.git"
-# scrump at the commit that added its text profile (avifenesh/scrump#40); no
-# release has it yet. Bump deliberately, after checking redaction still holds.
-scrump_rev="17cd5abc9ce19d4fdec51588a35ef73a644e36bb"
+# scrump 0.2.0 (the v0.2.0 tag): the text profile (avifenesh/scrump#40) and the
+# records mode that keeps batched texts apart (#45). Bump deliberately, after
+# checking redaction still holds.
+scrump_rev="b2b3178c412ee5d99aaf36233d3952c2d4e796ca"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 repo="${TACIT_REPO:-$here}"
 ref="main"
@@ -152,19 +153,27 @@ esac
 # like any add.
 scrump_ok() {
   # Built from pieces, as in digest.RedactionReady, so no secret-shaped literal sits here.
-  local in out
+  local in out first second
   in="pass""word=""Zq7Vx9""Lm2Kp4"
   out=$(printf '%s' "$in" | PATH="$bin_dir:$PATH" scrump --profile text scrub - -o - 2>/dev/null) || return 1
-  [[ ${#out} -eq ${#in} && "$out" == *"****"* && "$out" != *Zq7Vx9* ]]
+  [[ ${#out} -eq ${#in} && "$out" == *"****"* && "$out" != *Zq7Vx9* ]] || return 1
+  # Records mode keeps batched texts apart (tacit#84): the issue's repro, the
+  # second record's password masked, the first record left as it is.
+  first="deploy token_url: 'https://auth.example.invalid/oauth/$(printf 'p%.0s' {1..80})"
+  second="pass""word: '""Zq7Vx9""Lm2Kp4""' and the rest"
+  out=$(printf '%s\036%s' "$first" "$second" | PATH="$bin_dir:$PATH" scrump --profile text --records scrub - -o - 2>/dev/null) || return 1
+  [[ "${out%%$'\036'*}" == "$first" && "${out#*$'\036'}" != *Zq7Vx9* && "${out#*$'\036'}" == *"****"* ]]
 }
 if scrump_ok; then
-  say "scrump with the text profile works"
+  say "scrump with the text profile and records mode works"
 else
-  command -v cargo >/dev/null 2>&1 || die "scrump (text profile) is missing and cargo is not installed: brew install rustup && rustup-init -y, open a new shell, then rerun (scrump's release predates the text profile, so it builds from the commit that added it)"
-  say "building scrump (text profile, pinned commit) into $bin_dir"
-  run cargo install --locked --root "$HOME/.local" --git https://github.com/avifenesh/scrump --rev "$scrump_rev" scrump-cli
+  command -v cargo >/dev/null 2>&1 || die "scrump is missing, or lacks the text profile or records mode, and cargo is not installed: brew install rustup && rustup-init -y, open a new shell, then rerun (it builds scrump at the pinned commit)"
+  say "building scrump (pinned commit) into $bin_dir"
+  # --force: a scrump the release installer copied in is no cargo install, and
+  # cargo would refuse to replace it.
+  run cargo install --force --locked --root "$HOME/.local" --git https://github.com/avifenesh/scrump --rev "$scrump_rev" scrump-cli
   if [[ $dry_run -eq 0 ]] && ! scrump_ok; then
-    die "scrump installed but its text profile did not mask the canary"
+    die "scrump installed but its text profile or records mode did not mask the canary"
   fi
 fi
 
