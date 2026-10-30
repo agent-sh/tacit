@@ -21,7 +21,7 @@ import (
 // sides, each side's superseded_by chain followed to its end, as a new
 // finding the verifier then judges; and closes it as moot, with the reason,
 // when a side has no live successor or both sides now lead to one fact
-// (SPEC.md, "Attempts").
+// (SPEC.md, "Replaced facts").
 
 // mootMark is the curator's record that closes such a finding. It changes no
 // fact; Repointed names the finding that took its place, if any.
@@ -35,10 +35,20 @@ func replacedSide(it reviewItem) bool {
 }
 
 // repointable is an open pair finding the verifier would send, with both
-// facts in the store and one replaced by a third fact.
+// facts in the store and one replaced by a third fact. A finding the owner
+// left a note on stays: their note is about these facts, a moved finding
+// would not carry it, and on this one a verdict becomes a question for them.
 func repointable(it reviewItem, owned map[string]bool) bool {
-	return it.Decision == nil && it.Ask == nil && !owned[it.ID] && !owned[it.A.Name] && !owned[it.B.Name] &&
+	return it.Decision == nil && it.Ask == nil && len(it.Notes) == 0 && !owned[it.ID] && !owned[it.A.Name] && !owned[it.B.Name] &&
 		!it.A.Missing && !it.B.Missing && replacedSide(it)
+}
+
+// repointedFile is the review file the step writes the moved findings to,
+// one per day. It is the step's own: the curator appends to review/<date>.md
+// without the store lock and commits later, so a commit of that file could
+// take its lines or, on a failed push, drop them.
+func repointedFile(now time.Time) string {
+	return "review/" + now.Format("2006-01-02") + "-repointed.md"
 }
 
 // liveEnd follows name's superseded_by chain to its end. It returns the live
@@ -183,7 +193,7 @@ func (rs *reviewServer) applyMoot(o *op, it *reviewItem) (string, []string, erro
 	p := rs.planRepoint(*it)
 	files := map[string][]byte{}
 	if p.Line != "" {
-		rel := "review/" + time.Now().Format("2006-01-02") + ".md"
+		rel := repointedFile(time.Now())
 		old, err := os.ReadFile(filepath.Join(rs.s.Dir, rel))
 		if err != nil && !os.IsNotExist(err) {
 			return "", nil, err
@@ -201,51 +211,64 @@ func (rs *reviewServer) applyMoot(o *op, it *reviewItem) (string, []string, erro
 	return writeFiles(rs.s.Dir, p.Why, files)
 }
 
+// repointChunk bounds the findings one commit closes: every op reads the
+// store again (applyOp plans on it as it is), so a first run over a backlog
+// goes in parts, each under its own deadline.
+const repointChunk = 20
+
 // repoint closes, as moot, every open pair finding with a fact replaced by a
-// third fact, and raises the finding on the live facts in its place, in one
-// commit before the run sends anything (SPEC.md, "Attempts"). A replay
-// (--ids) moves only the findings it names. A dry run prints the plan.
+// third fact, and raises the finding on the live facts in its place, in
+// commits of at most repointChunk findings, before the run sends anything
+// (SPEC.md, "Replaced facts"). A replay (--ids) moves only the findings it
+// names. A dry run prints the plan and writes nothing. What each finding
+// became is read back from the decision log, not from the notes.
 func (r *verifyRun) repoint(ctx context.Context, rs *reviewServer, owned map[string]bool) error {
 	named := map[string]bool{}
 	for _, id := range r.only {
 		named[id] = true
 	}
 	var ops []op
-	var plans []repointPlan
 	for _, it := range rs.items() {
 		if !repointable(it, owned) || (len(named) > 0 && !named[it.ID]) {
 			continue
 		}
 		ops = append(ops, op{ID: it.ID, Mark: mootMark, By: "curator", A: it.A.Name, B: it.B.Name})
-		plans = append(plans, rs.planRepoint(it))
-	}
-	if len(ops) == 0 {
-		return nil
-	}
-	if r.dry {
-		for i, o := range ops {
-			fmt.Printf("verify: would close %s (%s / %s): %s\n", o.ID, o.A, o.B, plans[i].Why)
+		if r.dry {
+			fmt.Printf("verify: would close %s (%s / %s): %s\n", it.ID, it.A.Name, it.B.Name, rs.planRepoint(it).Why)
 		}
+	}
+	if len(ops) == 0 || r.dry {
 		return nil
 	}
-	actx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-	defer cancel()
-	notes, errs, err := rs.applyOps(actx, ops)
+	var lastErr error
+	for start := 0; start < len(ops); start += repointChunk {
+		chunk := ops[start:min(start+repointChunk, len(ops))]
+		actx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+		_, _, err := rs.applyOps(actx, chunk)
+		cancel()
+		if err != nil {
+			lastErr = err
+		}
+	}
+	// A commit kept on this machine when its push failed still closed its
+	// findings here; a refused one closed nothing.
+	ds, _ := rs.decisions()
 	moved, moot := 0, 0
-	for i, o := range ops {
-		if errs[i] != nil {
-			fmt.Fprintf(os.Stderr, "verify: %s (%s / %s) not closed: %v\n", o.ID, o.A, o.B, errs[i])
+	for _, o := range ops {
+		d := ds[o.ID]
+		switch {
+		case d == nil || d.Action != mootMark:
+			fmt.Fprintf(os.Stderr, "verify: %s (%s / %s) not closed\n", o.ID, o.A, o.B)
 			continue
-		}
-		if strings.HasPrefix(notes[i], "re-pointed") {
+		case d.Repointed != "":
 			moved++
-		} else {
+		default:
 			moot++
 		}
-		fmt.Fprintf(os.Stderr, "verify: closed %s (%s / %s): %s\n", o.ID, o.A, o.B, notes[i])
+		fmt.Fprintf(os.Stderr, "verify: closed %s (%s / %s): %s\n", o.ID, o.A, o.B, d.Evidence)
 	}
 	if moved+moot > 0 {
 		fmt.Fprintf(os.Stderr, "verify: %d finding(s) with a fact replaced by a third one: %d re-pointed to the live facts, %d moot\n", moved+moot, moved, moot)
 	}
-	return err
+	return lastErr
 }

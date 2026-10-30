@@ -322,7 +322,7 @@ function agentWord(it, s) {
 // The record of an answer already made, with the way to change it.
 function recordHTML(it) {
   const d = it.decision; if (!d) return "";
-  const who = d.by === "agent" ? "An agent answered" : d.by === "curator" ? "The curator answered" : "You answered";
+  const who = d.by === "agent" ? "An agent answered" : "You answered";
   const reopen = can(it, "reopen") ? btn("reopen", "undo", "Change this answer", "z") : "";
   // A pair whose fact a third fact replaced: closed by code. The plain words
   // say what became of it; its reason, with the facts' names, is in details.
