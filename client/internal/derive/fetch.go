@@ -31,7 +31,8 @@ const maxFetchFailures = 3
 var fetchSettings = []string{
 	"-c", "gc.auto=0", "-c", "maintenance.auto=false", "-c", "fetch.writeCommitGraph=false",
 	"-c", "fetch.recurseSubmodules=false",
-	"-c", "http.connectTimeout=5", "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=10",
+	// Git has no connect timeout; FetchTimeout bounds a connect to a dead host.
+	"-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=10",
 }
 
 // fetcher counts consecutive failures across the repos of one run.

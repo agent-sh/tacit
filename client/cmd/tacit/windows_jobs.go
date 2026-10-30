@@ -65,6 +65,7 @@ func installWindowsJob(home, exe, target, envFile string) (string, error) {
 		return "", err
 	}
 	var trigger, args, then string
+	var limit time.Duration // ExecutionTimeLimit; the follower has none
 	boundary := time.Now().Format("2006-01-02") + "T05:30:00"
 	switch target {
 	case "follow":
@@ -73,19 +74,23 @@ func installWindowsJob(home, exe, target, envFile string) (string, error) {
 	case "dream":
 		trigger = "<TimeTrigger><Repetition><Interval>PT4H</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition><StartBoundary>" + boundary + "</StartBoundary><Enabled>true</Enabled></TimeTrigger>"
 		args = "dream --env-file " + psQuote(envFile)
+		limit = dreamJobLimit
 	case "dream-idle":
 		// The idle job (dreamIdleUnit): the quick curate after the dream,
 		// whatever its exit code.
 		trigger = "<TimeTrigger><Repetition><Interval>PT10M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition><StartBoundary>" + boundary + "</StartBoundary><Enabled>true</Enabled></TimeTrigger>"
 		args = strings.Join(idleArgs[0], " ") + " --env-file " + psQuote(envFile)
 		then = strings.Join(idleArgs[1], " ") + " --env-file " + psQuote(envFile)
+		limit = dreamIdleJobLimit
 	case "curate":
 		trigger = "<CalendarTrigger><StartBoundary>" + boundary + "</StartBoundary><Enabled>true</Enabled><ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay></CalendarTrigger>"
 		args = "maintain --env-file " + psQuote(envFile)
+		// no limit: verify has no overall budget (joblimits.go)
 	case localCurateJob:
 		// The local layer's daily curate: no verifier (local_install.go).
 		trigger = "<CalendarTrigger><StartBoundary>" + boundary + "</StartBoundary><Enabled>true</Enabled><ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay></CalendarTrigger>"
 		args = "curate --env-file " + psQuote(envFile)
+		limit = curateJobLimit
 	default:
 		return "", fmt.Errorf("unknown Windows job %q", target)
 	}
@@ -105,7 +110,7 @@ func installWindowsJob(home, exe, target, envFile string) (string, error) {
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
 <Triggers>` + trigger + `</Triggers>
 <Principals><Principal id="Owner"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
-<Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>
+<Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>` + windowsLimit(limit) + `</ExecutionTimeLimit></Settings>
 <Actions Context="Owner"><Exec><Command>powershell.exe</Command><Arguments>` + escape("-NoLogo -NoProfile -NonInteractive -EncodedCommand "+encodedPowerShell(script)) + `</Arguments></Exec></Actions></Task>
 `
 	path := filepath.Join(dir, "tacit-"+target+".xml")

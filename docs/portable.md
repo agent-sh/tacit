@@ -97,6 +97,10 @@ utility:
 
 The audit directory is optional. It contains private daily JSONL files with redacted task and summary text, scores, selected flags and fallback reasons. Keep it out of the store and source control. On Unix, the directory must be owned by the caller and private (0700); files use mode 0600, a best-effort 10 MiB daily cap, and eight-day retention. Symlinks, hard links and special files are refused. Private audit is currently disabled on non-Unix systems rather than claiming Unix permissions enforce Windows ACLs; scoring still works. Audit failure or a stalled filesystem does not block a prompt. See [the measured comparison](../eval/JEV.md) for limits and the threshold tradeoff.
 
+### Verifier
+
+`tacit verify --requeue all` (or finding ids, separated by commas) sends findings that reached the verifier's attempt limit again; it calls no model, and `--dry-run` only prints what it would clear.
+
 ### Environment variables
 
 | variable | default | what |
@@ -269,7 +273,7 @@ Changes to the release workflow, archive builder or installer scripts run native
 
 `stale_workers` in YAML or `TACIT_STALE_WORKERS` sets how many facts the curator's stale step checks at once (default 4). Each runs its own git commands against the checkouts, tens of thousands per run on a large store, so a machine that does other work sets 1.
 
-`dream_max_runtime` in YAML or `TACIT_DREAM_MAX_RUNTIME` controls the extraction/persistence phase of a batch. Its existing default is `45m`. `tacit dream --max-runtime 1h` overrides it for a run; `0` disables the batch limit while per-attempt deadlines still apply. Preparation and pending-note recovery retain their separate bounds.
+`dream_max_runtime` in YAML or `TACIT_DREAM_MAX_RUNTIME` controls the extraction/persistence phase of a batch. Its existing default is `45m`. `tacit dream --max-runtime 1h` overrides it for a run; `0` disables the batch limit while per-attempt deadlines still apply. Preparation and pending-note recovery retain their separate bounds. The installed units stop a run after 2h30min (`TimeoutStartSec=`; on Windows the task's `ExecutionTimeLimit`), above these limits at their defaults; raise it with them.
 
 `dream_agent_windows` in YAML or `TACIT_DREAM_AGENT_WINDOWS` decides what the dreamer does with a window that holds no turn of the owner's: `all` (the default) dreams it, `recent:<days>` only when it is that recent, `none` never. `tacit dream --agent-windows none` overrides it for a run. A passed-over window moves its transcript's cursor like a window with nothing to extract, and the run's summary counts it. Rules: SPEC.md "Owner windows and agent windows".
 

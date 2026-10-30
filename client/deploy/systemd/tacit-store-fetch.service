@@ -4,4 +4,8 @@ Description=Optional: keep a local mirror of the tacit store (create it once wit
 [Service]
 Type=oneshot
 Nice=19
-ExecStart=/usr/bin/git -C %h/.local/share/tacit/mirror remote update --prune
+# git has no limit of its own: a transfer under 1 KB/s for 5 s stops (the
+# client's own setting), and the unit stops a run that is still going after
+# 10 minutes, under the timer's 15. A healthy update takes seconds.
+ExecStart=/usr/bin/git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=5 -C %h/.local/share/tacit/mirror remote update --prune
+TimeoutStartSec=10min
