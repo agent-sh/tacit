@@ -62,6 +62,18 @@ var Reindex func(ctx context.Context, dir string, rels []string) ([]string, erro
 // masked: nothing was staged or committed.
 var ErrRedaction = errors.New("redaction could not run, so nothing was written")
 
+// canary rides with every batch the mask sends (digest.RedactionReady's
+// canary, built from pieces so no secret-shaped literal sits in the source):
+// a redactor that runs but masks nothing (a scrump older than 0.2.0, whose
+// records probe fails and whose joined fallback masks nothing) answers it
+// unmasked, and the write is refused. It costs no second scrump start.
+var canary = "pass" + "word=" + "Zq7Vx9" + "Lm2Kp4"
+
+// canaryMasked reports that the redactor masked the canary.
+func canaryMasked(red string) bool {
+	return len(red) == len(canary) && strings.Contains(red, "****") && !strings.Contains(red, "Zq7Vx9")
+}
+
 type ownerTextKey struct{}
 
 // WithOwnerText marks a write of the owner's own text from tacit app: it is
@@ -178,13 +190,17 @@ func (s *Store) maskAdded(ctx context.Context, rels []string) ([]string, error) 
 	if len(texts) == 0 {
 		return nil, nil
 	}
-	red, err := Redact(ctx, texts)
+	red, err := Redact(ctx, append(texts[:len(texts):len(texts)], canary))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrRedaction, err)
 	}
-	if len(red) != len(texts) {
-		return nil, fmt.Errorf("%w: the redactor answered %d texts for %d", ErrRedaction, len(red), len(texts))
+	if len(red) != len(texts)+1 {
+		return nil, fmt.Errorf("%w: the redactor answered %d texts for %d", ErrRedaction, len(red), len(texts)+1)
 	}
+	if !canaryMasked(red[len(texts)]) {
+		return nil, fmt.Errorf("%w: the redactor runs but did not mask its canary; install scrump 0.2.0 or later (docs/portable.md, Redaction)", ErrRedaction)
+	}
+	red = red[:len(texts)]
 	for i := range texts {
 		if len(red[i]) != len(texts[i]) {
 			return nil, fmt.Errorf("%w: the redactor changed the length of a text", ErrRedaction)

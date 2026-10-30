@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -31,12 +32,29 @@ func init() {
 
 // commitFacts is the facts as a commit of rels will hold them: a file the
 // commit names as it is in the clone, any other tracked fact as HEAD holds it
-// (a change the commit does not carry is not its), and no fact the clone does
-// not track that the commit does not name (a killed batch's leftover).
+// (a change the commit does not carry is not its: an edit, a file that no
+// longer parses, a deletion), and no fact the clone does not track that the
+// commit does not name (a killed batch's leftover).
 func commitFacts(ctx context.Context, dir string, rels []string) ([]*fact.Fact, error) {
 	all, _, err := fact.Walk(dir)
 	if err != nil {
 		return nil, err
+	}
+	st, err := fact.LoadState(dir)
+	if err != nil {
+		return nil, err
+	}
+	atHead := func(rel string) *fact.Fact {
+		blob, err := store.Git(ctx, dir, "cat-file", "blob", "HEAD:"+rel)
+		if err != nil {
+			return nil
+		}
+		h, err := fact.Parse(rel, []byte(blob))
+		if err != nil {
+			return nil
+		}
+		st.Apply(h)
+		return h
 	}
 	named := map[string]bool{}
 	for _, r := range rels {
@@ -64,24 +82,54 @@ func commitFacts(ctx context.Context, dir string, rels []string) ([]*fact.Fact, 
 		return nil, err
 	}
 	var out []*fact.Fact
+	walked := map[string]bool{}
 	for _, f := range all {
+		walked[f.Path] = true
 		switch {
 		case named[f.Path]:
 			out = append(out, f)
 		case untracked[f.Path]:
 		case changed[f.Path]:
-			blob, err := store.Git(ctx, dir, "cat-file", "blob", "HEAD:"+f.Path)
-			if err != nil {
-				continue
-			}
-			if h, err := fact.Parse(f.Path, []byte(blob)); err == nil {
+			if h := atHead(f.Path); h != nil {
 				out = append(out, h)
 			}
 		default:
 			out = append(out, f)
 		}
 	}
+	// A tracked fact the walk did not read (deleted in the clone, or no
+	// longer parsing there) and the commit does not name is in the commit's
+	// tree as HEAD holds it.
+	var gone []string
+	for rel := range changed {
+		if !walked[rel] && !named[rel] && walksAsFact(rel) {
+			gone = append(gone, rel)
+		}
+	}
+	sort.Strings(gone)
+	for _, rel := range gone {
+		if h := atHead(rel); h != nil {
+			out = append(out, h)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out, nil
+}
+
+// walksAsFact reports a store path fact.Walk reads as a fact: a .md file
+// that is no store file, not MEMORY.md or a root README.md, and in no dot
+// directory, keys/ or review/.
+func walksAsFact(rel string) bool {
+	if !strings.HasSuffix(rel, ".md") || rel == "MEMORY.md" || rel == "README.md" || fact.IsStoreFile(path.Base(rel)) {
+		return false
+	}
+	parts := strings.Split(rel, "/")
+	for _, d := range parts[:len(parts)-1] {
+		if strings.HasPrefix(d, ".") || d == "keys" || d == "review" {
+			return false
+		}
+	}
+	return true
 }
 
 // regenIndexes writes the store's generated indexes for facts into the clone:
