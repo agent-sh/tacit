@@ -119,10 +119,11 @@ func piTexts(raw json.RawMessage) []string {
 
 // piReads reports, for an entry that did not decode whole into piLine,
 // whether what the reader reads of its kind decodes: its type, a model
-// change's model, a compaction's or a branch summary's summary, a message
-// entry's id. A field of another type in a kind the reader passes over (a
-// label), or one its kind does not read, counts nothing: the entry is read
-// from what decoded.
+// change's model, a compaction's or a branch summary's summary, and the id of
+// a message entry that is a !command (the call's id; no other role reads it).
+// A field of another type in a kind the reader passes over (a label), or one
+// its kind does not read, counts nothing: the entry is read from what
+// decoded. A message's own fields are piMessageReads'.
 func piReads(raw []byte) bool {
 	var head struct {
 		Type string `json:"type"`
@@ -141,6 +142,14 @@ func piReads(raw []byte) bool {
 			Summary string `json:"summary"`
 		}{}
 	case "message":
+		var e struct {
+			Message struct {
+				Role string `json:"role"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(raw, &e) != nil || e.Message.Role != "bashExecution" {
+			return true
+		}
 		kind = &struct {
 			ID string `json:"id"`
 		}{}

@@ -60,21 +60,30 @@ type claudeLine struct {
 	Attachment claudeAttachment `json:"attachment"`
 }
 
+// claudeAttachment is what the reader reads of an attachment, by its type: a
+// queued message's command mode and prompt (digest.ClaudeQueued reads the
+// rest), a hook's event, tool use id and content.
 type claudeAttachment struct {
 	Type        string          `json:"type"`
 	HookEvent   string          `json:"hookEvent"`
 	ToolUseID   string          `json:"toolUseID"`
 	CommandMode string          `json:"commandMode"`
 	Content     json.RawMessage `json:"content"`
+	Prompt      json.RawMessage `json:"prompt"`
 }
+
+// queuedCommand is the attachment type of a message typed while the agent
+// worked (digest.ClaudeQueued).
+const queuedCommand = "queued_command"
 
 // claudeReads reports, for a line that did not decode whole into claudeLine,
 // whether what the reader reads of the line's kind decodes: every line's
 // type, session id, agent id and cwd (note), and an assistant reply's model,
-// error mark and message, a user line's marks and message, an attachment, a
-// system line's subtype. A field of another type in a kind the reader passes
-// over, or in a field the line's kind does not read, counts nothing: the line
-// is read from what decoded, which claudeLine holds apart from that field.
+// error mark and message, a user line's marks and message, an attachment's
+// type and what its type reads (claudeAttachment), a system line's subtype.
+// A field of another type in a kind the reader passes over, or in a field the
+// line's kind does not read, counts nothing: the line is read from what
+// decoded, which claudeLine holds apart from that field.
 func claudeReads(raw []byte) bool {
 	var head struct {
 		Type      string `json:"type"`
@@ -105,9 +114,33 @@ func claudeReads(raw []byte) bool {
 			} `json:"message"`
 		}{}
 	case "attachment":
-		kind = &struct {
-			Attachment claudeAttachment `json:"attachment"`
-		}{}
+		// By the attachment's type, as the reader reads it: the other types
+		// it passes over.
+		var a struct {
+			Attachment struct {
+				Type string `json:"type"`
+			} `json:"attachment"`
+		}
+		if json.Unmarshal(raw, &a) != nil {
+			return false
+		}
+		switch t := a.Attachment.Type; {
+		case t == queuedCommand:
+			kind = &struct {
+				Attachment struct {
+					CommandMode string `json:"commandMode"`
+				} `json:"attachment"`
+			}{}
+		case strings.HasPrefix(t, "hook_"):
+			kind = &struct {
+				Attachment struct {
+					HookEvent string `json:"hookEvent"`
+					ToolUseID string `json:"toolUseID"`
+				} `json:"attachment"`
+			}{}
+		default:
+			return true
+		}
 	case "system":
 		kind = &struct {
 			Subtype string `json:"subtype"`
@@ -158,8 +191,8 @@ func (r *claudeReader) note(l claudeLine) {
 // line is a line's events, and false when the line does not parse: it is not
 // JSON, what the reader reads of its kind does not decode (a list or a string
 // where the object goes, a field of another type: claudeReads), or the
-// content of its message, or of a hook's output, is neither a string nor a
-// list (textShaped).
+// content of its message, of a hook's output or a queued message's prompt is
+// neither a string nor a list (textShaped).
 func (r *claudeReader) line(raw []byte) ([]Event, bool) {
 	var l claudeLine
 	if json.Unmarshal(raw, &l) != nil && !claudeReads(raw) {
@@ -173,7 +206,14 @@ func (r *claudeReader) line(raw []byte) ([]Event, bool) {
 	case "user":
 		return r.user(raw, l, at), textShaped(l.Message.Content)
 	case "attachment":
-		return r.attachment(raw, l, at), !strings.HasPrefix(l.Attachment.Type, "hook_") || textShaped(l.Attachment.Content)
+		ok := true
+		switch t := l.Attachment.Type; {
+		case t == queuedCommand:
+			ok = textShaped(l.Attachment.Prompt) // the person's words
+		case strings.HasPrefix(t, "hook_"):
+			ok = textShaped(l.Attachment.Content)
+		}
+		return r.attachment(raw, l, at), ok
 	case "system":
 		// A system line is a record of the harness's (a compaction's boundary
 		// among them; its summary is the compaction event): what came before

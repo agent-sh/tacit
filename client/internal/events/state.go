@@ -65,13 +65,16 @@ func (s State) Kept() bool { return s.kept != nil }
 // take, so it gave none of the events they hold. A line is one when it is not
 // JSON (a line a crash cut short, which the next write joined), when what the
 // reader reads of its kind does not decode (not an object, a field its kind
-// reads of another type: a Codex payload's by its type, a pi message's by its
-// role), or when a message's content is neither a string nor a list. A field
+// reads of another type: a Claude Code attachment's by its type, a Codex
+// payload's by its type, an end event's word on its call's failure among
+// them, a pi message's by its role), or when a message's content (a queued
+// message's prompt, a hook's output) is neither a string nor a list. A field
 // of a kind the reader passes over, or one the line's kind does not read,
 // counts nothing. What a counted line left still holds: a Codex compacted
-// entry marks its compaction, what decoded of a Codex event_msg is taken, a
-// Codex question's options are noted (digest.CodexAsked), and a line whose
-// content is of another shape gives its session's fields. A line that holds
+// entry marks its compaction, what decoded of a Codex event_msg is taken (a
+// failure only under a call id that decoded), a Codex question's options are
+// noted (digest.CodexAsked), a line whose content is of another shape gives
+// its session's fields, and a pi reply its provider error. A line that holds
 // nothing (blank, or null) is not one, nor a last line still being written,
 // nor a part inside a message's content (a block, a tool's output). For a
 // Hermes session it is how many of the rows up to the cursor are assistant
