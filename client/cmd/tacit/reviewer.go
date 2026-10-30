@@ -107,6 +107,10 @@ type reviewOpts struct {
 	active       func(repo string) bool
 	ownerSettled func(note *fact.Fact) string
 	checkSettled func(note *fact.Fact) string
+	// closuresFrom is the clone whose decision log the queue follows (the
+	// closures are read from it in the queue's own lock section, after the
+	// model calls); "" in local mode.
+	closuresFrom string
 	// closed is the reviewer questions an agent closed, by id, with what the
 	// closure said, and reopened those the owner reopened, from the store's
 	// decision log (SPEC.md, "Closing questions"); nil: not read (the local
@@ -428,7 +432,11 @@ func reviewStep(ctx context.Context, facts []*fact.Fact, reviews *ledger.Reviews
 		}
 		// What agents closed, and what the owner reopened, in the store's
 		// decision log (SPEC.md, "Closing questions").
-		if c, r := syncQuestionClosures(q, o.closed, o.reopened, now); c+r > 0 {
+		closed, reopened := o.closed, o.reopened
+		if o.closuresFrom != "" {
+			closed, reopened = questionClosures(o.closuresFrom)
+		}
+		if c, r := syncQuestionClosures(q, closed, reopened, now); c+r > 0 {
 			rep.Closed, rep.Reopened, changed = rep.Closed+c, rep.Reopened+r, true
 		}
 		for i := range q.Items {
@@ -1086,6 +1094,6 @@ func gateOpts(ctx context.Context, o *reviewOpts, dir string, facts []*fact.Fact
 	o.ownerSettled = ownerSettles(facts)
 	o.checkSettled = checkSettles(ctx, dir, local)
 	if !local {
-		o.closed, o.reopened = questionClosures(dir)
+		o.closuresFrom = dir
 	}
 }
