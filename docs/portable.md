@@ -99,7 +99,7 @@ The audit directory is optional. It contains private daily JSONL files with reda
 
 ### Verifier
 
-`tacit verify --requeue all` (or finding ids, separated by commas) sends findings that reached the verifier's attempt limit again; it calls no model, and `--dry-run` only prints what it would clear.
+`tacit verify --requeue all` (or finding ids, separated by commas) sends findings that reached the verifier's attempt limit again; it calls no model, and `--dry-run` only prints what it would clear. `tacit verify --max 0` only moves the pair findings whose fact a third fact replaced to the live facts, or closes them as moot, and sends nothing; `--dry-run` prints what it would close.
 
 ### Environment variables
 
