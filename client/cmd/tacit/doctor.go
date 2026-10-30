@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -79,10 +80,25 @@ func doctorChecks(models bool, role string) ([]doctorCheck, bool) {
 	} else {
 		add("git", "ok", "version supports local stores")
 	}
-	if err := digest.RedactionReady(); err != nil {
-		add("scrump", "fail", "text profile is unavailable or failed its masking canary")
-	} else {
-		add("scrump", "ok", "text profile masked its canary")
+	switch {
+	case digest.RedactionReady() != nil:
+		add("scrump", "fail", "text profile is unavailable or failed its masking canary: install scrump 0.2.0 or later")
+	case digest.OpenValueReady() != nil:
+		// scrump before 0.2.0 leaves a quoted value a cut left open whole.
+		add("scrump", "fail", "text profile masked its canary but left a quoted value a cut left open: install scrump 0.2.0 or later")
+	default:
+		add("scrump", "ok", "text profile masked its canaries")
+	}
+	// Records mode keeps batched texts apart (#84). Without it they go joined
+	// by a boundary, which keeps them apart too; an answer that is neither
+	// fails every batched redaction, so it fails here.
+	switch err := digest.RecordsReady(); {
+	case err == nil:
+		add("scrump records", "ok", "records mode keeps batched texts apart")
+	case errors.Is(err, digest.ErrNoRecords):
+		add("scrump records", "warn", "no records mode (--records): batched texts go joined by a boundary instead; install scrump 0.2.0 or later")
+	default:
+		add("scrump records", "fail", "records mode answered wrong, so batched redaction fails: "+digest.Redact(err.Error()))
 	}
 	roles := []string{"dream", "curate", "judge", "verify"}
 	if role != "" {

@@ -148,15 +148,9 @@ func redactRecords(ctx context.Context, texts []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The separators lie in no record, so they come back where they were.
-	parts := strings.Split(out, "\x1e")
-	if len(parts) != len(in) {
-		return nil, fmt.Errorf("scrump --records returned %d records for %d", len(parts), len(in))
-	}
-	for i, p := range parts {
-		if len(p) != len(in[i]) {
-			return nil, fmt.Errorf("scrump --records changed the length of record %d", i)
-		}
+	parts, err := recordsAnswer(in, out)
+	if err != nil {
+		return nil, err
 	}
 	if mode == 0 {
 		if parts[0] != probe[0] || strings.Contains(parts[1], "Zq7Vx9") {
@@ -167,6 +161,23 @@ func redactRecords(ctx context.Context, texts []string) ([]string, error) {
 		parts = parts[2:]
 	}
 	recordsMode.Store(1)
+	return parts, nil
+}
+
+// recordsAnswer splits scrump's answer to in, sent as records, back into
+// records: as many as were sent, each of its text's length. The separators
+// lie in no record, so they come back where they were; any other answer is an
+// error, never a reason to fall back.
+func recordsAnswer(in []string, out string) ([]string, error) {
+	parts := strings.Split(out, "\x1e")
+	if len(parts) != len(in) {
+		return nil, fmt.Errorf("scrump --records returned %d records for %d", len(parts), len(in))
+	}
+	for i, p := range parts {
+		if len(p) != len(in[i]) {
+			return nil, fmt.Errorf("scrump --records changed the length of record %d", i)
+		}
+	}
 	return parts, nil
 }
 
@@ -291,7 +302,45 @@ func RedactionReady() error {
 		return err
 	}
 	if len(out) != len(in) || !strings.Contains(out, "****") || strings.Contains(out, "Zq7Vx9") {
-		return errors.New("scrump is installed but its text profile did not mask a canary; rebuild scrump from main")
+		return errors.New("scrump is installed but its text profile did not mask a canary; install scrump 0.2.0 or later (docs/portable.md, Redaction)")
+	}
+	return nil
+}
+
+// RecordsReady proves the installed scrump keeps texts apart in records mode
+// (`scrump --records`, scrump 0.2.0 and later): #84's repro, sent as two
+// records, comes back with the first as it was and the second's password
+// masked. ErrNoRecords: it has no such mode, or runs the records together,
+// and batched texts go joined by a boundary instead (RedactAllContext). It
+// asks scrump every time; the process's own records mode is not changed.
+func RecordsReady() error {
+	probe := recordsProbe()
+	out, err := scrub(context.Background(), probe[0]+"\x1e"+probe[1], true)
+	if err != nil {
+		return err
+	}
+	// A malformed answer fails here as it fails every batched redaction.
+	parts, err := recordsAnswer(probe[:], out)
+	if err != nil {
+		return err
+	}
+	if parts[0] != probe[0] || strings.Contains(parts[1], "Zq7Vx9") {
+		return ErrNoRecords
+	}
+	return nil
+}
+
+// OpenValueReady proves scrump masks a credential's quoted value that a cut
+// left open at the end of a text, as scrump 0.2.0 does; an older one needs
+// the closing quote and leaves such a value whole.
+func OpenValueReady() error {
+	in := "deploy with " + "pass" + "word: '" + "Zq7Vx9" + "Lm2Kp4"
+	out, err := redactWithScrump(in)
+	if err != nil {
+		return err
+	}
+	if strings.Contains(out, "Zq7Vx9") {
+		return errors.New("scrump leaves a quoted value a cut left open unmasked; install scrump 0.2.0 or later")
 	}
 	return nil
 }

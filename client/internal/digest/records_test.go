@@ -3,6 +3,9 @@ package digest
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -130,5 +133,41 @@ func TestFinishMasksEachLineAndAcrossLines(t *testing.T) {
 		if !strings.Contains(out[i], "pppp") && !strings.Contains(out[i], "qqqq") {
 			t.Errorf("line %d, a setting, was masked: %q", i, out[i])
 		}
+	}
+}
+
+// A scrump whose text profile does not mask the canary is told which scrump
+// to install: 0.2.0 or later, not "main". One that masks only a value with
+// its closing quote (before 0.2.0) fails OpenValueReady; one whose records
+// answer is malformed is an error of RecordsReady, never ErrNoRecords, as
+// it fails every batched redaction.
+func TestRedactionReadyNamesTheScrumpToInstall(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	stub := func(script string) {
+		bin := t.TempDir()
+		if err := os.WriteFile(filepath.Join(bin, "scrump"), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	}
+	stub("#!/bin/sh\nexec cat\n")
+	err := RedactionReady()
+	if err == nil || !strings.Contains(err.Error(), "install scrump 0.2.0 or later") || strings.Contains(err.Error(), "from main") {
+		t.Fatalf("RedactionReady = %v", err)
+	}
+	if err := RecordsReady(); !errors.Is(err, ErrNoRecords) {
+		t.Fatalf("a scrump that masks nothing keeps no records apart: %v", err)
+	}
+	if err := OpenValueReady(); err == nil || !strings.Contains(err.Error(), "0.2.0") {
+		t.Fatalf("OpenValueReady = %v", err)
+	}
+	stub("#!/bin/sh\nsed 's/Zq7Vx9/******/g' | tr '\\036' '*'\n")
+	if err := RecordsReady(); err == nil || errors.Is(err, ErrNoRecords) {
+		t.Fatalf("a malformed records answer: %v, want an error that is not ErrNoRecords", err)
+	}
+	if err := OpenValueReady(); err != nil {
+		t.Fatalf("a scrump that masks the open value: %v", err)
 	}
 }
