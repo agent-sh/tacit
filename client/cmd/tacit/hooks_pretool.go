@@ -168,7 +168,8 @@ func preTool(s *store.Store, in hookInput) {
 		if err != nil || ctx.Err() != nil {
 			return
 		}
-		hits = metaSelect(all, repoNames(sit), rel, command, "", seen, deliveryInt("META_CEILING", metaCeiling))
+		home, _ := os.UserHomeDir()
+		hits = metaSelect(all, repoNames(sit), rel, command, "", in.Cwd+" "+home, seen, deliveryInt("META_CEILING", metaCeiling))
 	}
 	var lines, pushed []string
 	if areas && len(recs) > 0 {

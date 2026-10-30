@@ -443,6 +443,13 @@ func Validate(old, rec *Record, by string, env Env) []Problem {
 			add("tools", "not a well-formed glob", fmt.Sprintf("got %q", t))
 			continue
 		}
+		if !strings.HasPrefix(t, "mcp__") && !(old != nil && contains(old.Tools, t)) {
+			// Delivery matches MCP tools only (MatchesTool): a harness's own
+			// tool (Bash, Edit) is every session's; shell commands go in
+			// commands.
+			add("tools", "not an MCP tool-name pattern (mcp__<server>__<tool>, globs allowed)", fmt.Sprintf("got %q; a shell program goes in commands", t))
+			continue
+		}
 		if env.ToolUsed != nil && !env.Static && by == ByOpus && !(old != nil && contains(old.Tools, t)) {
 			used := false
 			for _, s := range sessions {

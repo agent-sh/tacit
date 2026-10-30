@@ -238,6 +238,16 @@ func TestValidateAreasAndTopics(t *testing.T) {
 	expect(t, Validate(nil, tool, ByOpus, e), "not a tool-name pattern")
 	tool.Tools = []string{"*"}
 	expect(t, Validate(nil, tool, ByOpus, e), "not a tool-name pattern")
+	// A harness's own tool is every session's: not an area's, from anyone;
+	// a record that already holds one keeps it.
+	tool.Tools = []string{"Bash"}
+	expect(t, Validate(nil, tool, ByOpus, e), "not an MCP tool-name pattern")
+	expect(t, Validate(nil, tool, ByOwner, e), "not an MCP tool-name pattern")
+	held := areaRec("ops")
+	held.Tools = []string{"Bash"}
+	next := held.Clone()
+	next.Description = "ticketing, on-call and the pager"
+	expect(t, Validate(held, next, ByOwner, e), "")
 	tool.Tools, tool.Commands = nil, []string{" padded"}
 	expect(t, Validate(nil, tool, ByOpus, e), "not a command prefix")
 	// The owner needs no sessions.

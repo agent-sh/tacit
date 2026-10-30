@@ -822,11 +822,15 @@ func init() {
 
 // Terms turns free text into FTS query tokens: distinct, lowercase, no stop
 // words, split on . / - so paths and commands contribute their parts too.
-func Terms(text string) []string { return terms(text, 3) }
+func Terms(text string) []string { return terms(text, 3, 24) }
+
+// AllTerms is Terms with no cap on how many: for comparing a whole text's
+// words (a command line, a fact's description), not for building a query.
+func AllTerms(text string) []string { return terms(text, 3, 0) }
 
 // terms is Terms with words of minLen letters or more (non-ASCII words of
-// two letters always count).
-func terms(text string, minLen int) []string {
+// two letters always count), at most about limit of them (0: all).
+func terms(text string, minLen, limit int) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, t := range tokenRe.FindAllString(strings.ToLower(text), -1) {
@@ -837,7 +841,7 @@ func terms(text string, minLen int) []string {
 			seen[piece] = true
 			out = append(out, piece)
 		}
-		if len(out) >= 24 {
+		if limit > 0 && len(out) >= limit {
 			break
 		}
 	}
@@ -858,7 +862,7 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	if sit.ShortTerms {
 		minLen = 2
 	}
-	all := terms(strings.Join(append([]string{sit.Query, sit.Command}, sit.Paths...), " "), minLen)
+	all := terms(strings.Join(append([]string{sit.Query, sit.Command}, sit.Paths...), " "), minLen, 24)
 	terms := distinctStems(all)
 	if len(terms) == 0 || (sit.OnlyDerived && sit.Repo == "" && len(sit.Workspace) == 0) {
 		return nil, nil
