@@ -18,10 +18,11 @@ func TestPageShowsAClosedQuestionWithItsProof(t *testing.T) {
     ask: { action: "ask", by: "agent", question: "Retire both obsolete facts?" },
     decision: { action: "right", by: "agent", proof: "git", reason: "the repo dropped the old path", evidence: "demo@abc1234 removed it", closes: "ask", at: "2026-10-30T10:00:00Z" } };
   const moot = Object.assign({}, it, { decision: { action: "moot", by: "curator", closes: "ask", evidence: "moot: a is retired (2026-10-27)", at: "2026-10-30T10:00:00Z" } });
+  const query = Object.assign({}, it, { ask: null, mark: "both", decision: { action: "both", by: "agent", proof: "file", reason: "both hold, for two hosts", evidence: "hosts.md:4 lists both", closes: "query", question: "An agent marked these as conflicting and left the call to you: they name two ports", at: "2026-10-30T10:00:00Z" } });
   const q = { id: "q-abc123", kind: "question", single: true, a: f("n"), b: f("n"), question: "[tacit q-abc123] On 2026-10-24 an agent saved this. Right?", allowed: ["reopen"], mark: "moot", needs_owner: false,
     decision: { action: "moot", by: "agent", proof: "gone", reason: "the lab tree is gone", evidence: "ls: no such directory", closes: "question", at: "2026-10-30T10:00:00Z" } };
   items = [q]; view = [q]; cur = 0; sheet();
-  return JSON.stringify({ closure: recordHTML(it), moot: recordHTML(moot), question: els["sheet-inner"].innerHTML });
+  return JSON.stringify({ closure: recordHTML(it), moot: recordHTML(moot), query: recordHTML(query), question: els["sheet-inner"].innerHTML });
 `, &got)
 	for _, w := range []string{"An agent closed your question: Kept the second fact", "proved by git history", "the repo dropped the old path", "demo@abc1234 removed it", "Retire both obsolete facts?", "Change this answer"} {
 		if !strings.Contains(got["closure"], w) {
@@ -32,6 +33,9 @@ func TestPageShowsAClosedQuestionWithItsProof(t *testing.T) {
 		if !strings.Contains(got["moot"], w) {
 			t.Errorf("the moot closure does not show %q:\n%s", w, got["moot"])
 		}
+	}
+	if w := "they name two ports"; !strings.Contains(got["query"], w) {
+		t.Errorf("a closed query does not show what it asked (%q):\n%s", w, got["query"])
 	}
 	for _, w := range []string{"The reviewer had this question for you", "[tacit q-abc123]", "An agent closed your question: No longer a question", "proved by its subject is gone", "the lab tree is gone", "ls: no such directory", "Change this answer"} {
 		if !strings.Contains(got["question"], w) {

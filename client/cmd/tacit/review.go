@@ -265,6 +265,11 @@ type reviewServer struct {
 	snapMu sync.Mutex
 	snap   *factSnap
 
+	// walkErr is the last loadFacts' error reading the store, and unread the
+	// names of the fact files it could not parse.
+	walkErr error
+	unread  map[string]bool
+
 	// beforePush, in tests only, runs once before an owner write's first push.
 	beforePush func()
 	// freshNotes are the owner's inbox notes this write created on disk; a
@@ -285,7 +290,16 @@ func ownerQuoteOf(f *fact.Fact) string {
 func (rs *reviewServer) labelling() bool { return rs.labelFile != "" }
 
 func (rs *reviewServer) loadFacts() {
-	all, _, _ := fact.Walk(rs.s.Dir)
+	all, perrs, err := fact.Walk(rs.s.Dir)
+	// What could not be read is kept: a fact missing from rs.facts because
+	// its file did not parse, or the store not read at all, is no fact gone
+	// (closeMootQuestions).
+	rs.walkErr, rs.unread = err, map[string]bool{}
+	for _, pe := range perrs {
+		if name := unreadName(pe); name != "" {
+			rs.unread[name] = true
+		}
+	}
 	m, in := map[string]*fact.Fact{}, map[string]*fact.Fact{}
 	for _, f := range all {
 		if !f.InInbox() {
@@ -615,9 +629,19 @@ type op struct {
 	// owner's words a words proof rests on (Words, WordsFrom, WordsOn).
 	Proof, Reason, Session    string
 	Words, WordsFrom, WordsOn string
-	// wordsRetire names the facts holding words of theirs that the owner's
-	// own later words (a words proof) let the closure retire.
-	wordsRetire map[string]bool
+	// wordsRetire reports, for a fact that holds words of theirs, that the
+	// owner's own later words on its subject (a words proof) let the closure
+	// retire it. It reads the fact as the closure finds it, under the store's
+	// lock; nil lets no closure retire one.
+	wordsRetire func(*fact.Fact) bool
+	// dry checks a closure with every guard and writes nothing.
+	dry bool
+}
+
+// wordsLetRetire reports that a closure's words proof lets it retire f,
+// which holds words of the owner's (op.wordsRetire).
+func (o *op) wordsLetRetire(f *fact.Fact) bool {
+	return o.wordsRetire != nil && f != nil && o.wordsRetire(f)
 }
 
 // decide applies one mark for the page. See applyOps. In label mode the mark

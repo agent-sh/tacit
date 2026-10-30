@@ -332,7 +332,8 @@ function recordHTML(it) {
   // say what became of it; its reason, with the facts' names, is in details.
   // A question an agent left for you, closed: by an agent that proved the
   // answer, or by the curator when a fact of it was retired or replaced.
-  const asked = it.ask && it.ask.question ? `<p class="evidence"><b>The question it closed:</b> ${esc(it.ask.question)}</p>` : "";
+  const q = d.question || (it.ask && it.ask.question) || "";
+  const asked = q && it.kind !== "question" ? `<p class="evidence"><b>The question it closed:</b> ${esc(q)}</p>` : "";
   if (d.by === "agent" && d.proof) {
     const how = PROOF[d.proof] || d.proof;
     return `<div class="record"><p><b>An agent closed your question: ${esc(pastFor(it, it.mark || d.action))}</b>, proved by ${esc(how)}, ${esc(WHEN.format(new Date(d.at)))}.</p>${reopen}</div>${asked}`

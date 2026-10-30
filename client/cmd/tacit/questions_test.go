@@ -252,7 +252,7 @@ func TestAClosureLeavesRulingsTheOwnersWordsAndNotes(t *testing.T) {
 		t.Fatalf("r %+v o %+v", rs.facts["r"].Meta, rs.facts["o"].Meta)
 	}
 	// Their own later words let a closure retire the fact with their older words.
-	o := op{ID: wx, A: "w", B: "x", Mark: "right", Words: "the walrus driver moved to port 7790", WordsFrom: testOwnerSession, WordsOn: "2026-10-29", wordsRetire: map[string]bool{"w": true}}
+	o := op{ID: wx, A: "w", B: "x", Mark: "right", Words: "the walrus driver moved to port 7790", WordsFrom: testOwnerSession, WordsOn: "2026-10-29", wordsRetire: func(f *fact.Fact) bool { return f.Meta.Name == "w" }}
 	o.By, o.Proof, o.Evidence, o.Reason = "agent", "words", "their turn of 2026-10-29", "they moved it later"
 	if _, errs, err := rs.applyOps(ctx, []op{o}); err != nil || errs[0] != nil {
 		t.Fatalf("a words proof: %v %v", err, errs)
@@ -267,9 +267,9 @@ func TestAClosureLeavesRulingsTheOwnersWordsAndNotes(t *testing.T) {
 // never retires a ruling.
 func TestAnAgentClosesAOneFactQuestion(t *testing.T) {
 	stubScrump(t)
-	sj, sr := pairID(kindStale, "j", "abc1234"), pairID(kindStale, "rr", "abc1234")
-	rs := questionStore(t, map[string]string{"j": "", "rr": "ruling\n"},
-		"- stale? [[j]] (system) @abc1234 n=1 since=2026-10-01\n  2026-10-09 abc1234 demo: drop FOO - FOO (gone at HEAD)\n- stale? [[rr]] (system) @abc1234 n=1 since=2026-10-01\n  2026-10-09 abc1234 demo: drop FOO - FOO (gone at HEAD)\n",
+	sj, sr, cc := pairID(kindStale, "j", "abc1234"), pairID(kindStale, "rr", "abc1234"), pairID(kindCheck, "cc", "2026-10-21")
+	rs := questionStore(t, map[string]string{"j": "", "rr": "ruling\n", "cc": "ruling\n"},
+		"- stale? [[j]] (system) @abc1234 n=1 since=2026-10-01\n  2026-10-09 abc1234 demo: drop FOO - FOO (gone at HEAD)\n- stale? [[rr]] (system) @abc1234 n=1 since=2026-10-01\n  2026-10-09 abc1234 demo: drop FOO - FOO (gone at HEAD)\n- check? [[cc]] (system) outcome=stale on=2026-10-21\n  The curator reads it as: the path it names moved\n",
 		askOn(sj, "j", "abc1234", "Is it still true?"), askOn(sr, "rr", "abc1234", "Does your ruling still hold?"))
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -289,9 +289,20 @@ func TestAnAgentClosesAOneFactQuestion(t *testing.T) {
 	if err := c(sr, "current"); err != nil {
 		t.Fatalf("still true on a ruling: %v", err)
 	}
+	// The rotation's check? on the owner's fact: still true only.
+	if err := c(cc, "retire"); err == nil {
+		t.Fatal("a closure retired the owner's fact on the rotation's question")
+	}
+	if err := c(cc, "current"); err != nil {
+		t.Fatalf("still true on the rotation's question: %v", err)
+	}
 	rs.loadFacts()
-	if rs.facts["j"].Meta.Retired == "" || rs.facts["rr"].Meta.Retired != "" {
-		t.Fatalf("j %+v rr %+v", rs.facts["j"].Meta, rs.facts["rr"].Meta)
+	if rs.facts["j"].Meta.Retired == "" || rs.facts["rr"].Meta.Retired != "" || rs.facts["cc"].Meta.Retired != "" {
+		t.Fatalf("j %+v rr %+v cc %+v", rs.facts["j"].Meta, rs.facts["rr"].Meta, rs.facts["cc"].Meta)
+	}
+	checks := rs.checkItems()
+	if len(checks) != 1 || checks[0].NeedsOwner || checks[0].Decision == nil || checks[0].Decision.Closes != closesCheck || checks[0].Decision.Action != "current" {
+		t.Fatalf("the rotation's question: %+v", checks)
 	}
 	for _, it := range rs.staleItems() {
 		if it.NeedsOwner {
