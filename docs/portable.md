@@ -196,7 +196,7 @@ Real task registration and default-browser launching require Windows. Generating
 
 ## Redaction
 
-Tacit release archives include scrump 0.2.0, with its required `text` profile and the records mode that keeps batched texts apart, built from pinned source [b2b3178](https://github.com/avifenesh/scrump/commit/b2b3178c412ee5d99aaf36233d3952c2d4e796ca), the `v0.2.0` tag. The installers check a masking canary before installation. A compatible redactor is required for agent writes and model digests.
+Tacit release archives include scrump 0.2.0, with its required `text` profile and the records mode that keeps batched texts apart, built from pinned source [b2b3178](https://github.com/avifenesh/scrump/commit/b2b3178c412ee5d99aaf36233d3952c2d4e796ca), the `v0.2.0` tag. The installers check a masking canary before installation. A compatible redactor is required on every machine that writes: every write that adds text to the store is masked before it is staged and refused without one (SPEC "Every write is masked"), and model digests need it too.
 
 If building Tacit from source, build the same scrump source:
 
