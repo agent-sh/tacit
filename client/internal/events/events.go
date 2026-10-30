@@ -23,6 +23,8 @@ package events
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -217,8 +219,9 @@ func ReadFile(path string, f digest.Format, from int64, emit func(Event) error) 
 // transcript can be read and saved in parts; 0 reads to the end. Each part
 // of a compressed copy is decompressed from its start again. When emit
 // returns an error the read stops and returns it with the State a read from
-// gives that line's events again: from itself when the error came at the
-// first event from it, else a bare cursor at the line.
+// gives that line's events again: from itself when the read started at its
+// cursor and the error came at the first event, else a bare cursor at the
+// line.
 func ReadFileState(path string, f digest.Format, from State, limit int64, emit func(Event) error) (State, error) {
 	plain := transcript.Plain(path)
 	if from.Offset < 0 {
@@ -261,7 +264,7 @@ func ReadFileState(path string, f digest.Format, from State, limit int64, emit f
 	// A read from the start has nothing before it to keep; what the readers
 	// take from the first line (Codex's session_meta, pi's header) comes from
 	// the head, so a State kept there before that line was whole is not used.
-	if k := from.kept; k != nil && from.Offset > 0 && k.Format == f && k.HeadLen <= int64(len(head)) && hash(head[:k.HeadLen]) == k.Head {
+	if k := from.kept; k != nil && from.Offset > 0 && k.Format == f && k.HeadLen >= 0 && k.HeadLen <= int64(len(head)) && hash(head[:k.HeadLen]) == k.Head {
 		if fh, br, err = openAfter(path, k, from.Offset); err != nil {
 			return from, err
 		}
@@ -293,6 +296,12 @@ func ReadFileState(path string, f digest.Format, from State, limit int64, emit f
 		}
 		if off == 0 {
 			return State{} // the start: nothing to keep
+		}
+		if int64(len(head)) < min(off, headBytes) {
+			// The transcript grew past a short head during the read: what
+			// the readers took from the head may be of a first line not yet
+			// whole.
+			return State{Offset: off}
 		}
 		k := rd.keep()
 		k.Format = f
@@ -353,10 +362,10 @@ func openAfter(path string, k *kept, cursor int64) (io.ReadCloser, *bufio.Reader
 		return nil, nil, err
 	}
 	br := bufio.NewReaderSize(fh, 1<<20)
-	line := make([]byte, cursor-k.LastAt)
-	if _, err := io.ReadFull(br, line); err != nil || hash(line) != k.Last {
+	h := sha256.New()
+	if _, err := io.CopyN(h, br, cursor-k.LastAt); err != nil || hex.EncodeToString(h.Sum(nil)[:16]) != k.Last {
 		fh.Close()
-		if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		if err != nil && err != io.EOF {
 			return nil, nil, err
 		}
 		return nil, nil, nil

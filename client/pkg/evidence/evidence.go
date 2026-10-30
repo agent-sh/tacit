@@ -81,7 +81,7 @@ func ReadHermes(ctx context.Context, db *HermesDB, s HermesSession, after int64,
 // only what came after, while those items are the ones it was kept from
 // (events.State). The zero State is the start; MarshalBinary and
 // UnmarshalBinary save and load one, as do MarshalJSON and UnmarshalJSON. It
-// is as private as its transcript, and is never sent.
+// is as private as its transcript: never send it.
 type State = events.State
 
 // ReadFileState is ReadFile from a State, returning the State after the last

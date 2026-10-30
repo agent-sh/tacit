@@ -50,8 +50,9 @@ func ReadHermes(ctx context.Context, db *hermes.DB, s hermes.Session, after int6
 // replace them), is read as ReadHermes reads it, with a pass over the rows
 // before the cursor. A State at the session's last row is returned as it is.
 // When emit returns an error the read stops and returns it with the State a
-// read from gives that row's events again: from itself when the error came
-// at the first event from it, else a bare cursor at the id before the row's.
+// read from gives that row's events again: from itself when the read started
+// after its cursor and the error came at the first event, else a bare cursor
+// at the id before the row's.
 func ReadHermesState(ctx context.Context, db *hermes.DB, s hermes.Session, from State, emit func(Event) error) (State, error) {
 	after := from.Offset
 	r := &hermesReader{base: newBase("hermes", s.ID)}
@@ -89,7 +90,7 @@ func ReadHermesState(ctx context.Context, db *hermes.DB, s hermes.Session, from 
 		if err != nil {
 			return from, err
 		}
-		if len(rows) > 0 && rows[0].ID == after && rowID(rows[0]) == k.Last {
+		if len(rows) > 0 && rows[0].ID == after && k.Last != "" && rowID(rows[0]) == k.Last {
 			// Only what a row leaves for the rows after it is kept: the
 			// session's own fields are its row's, read now as a read from the
 			// start reads them.

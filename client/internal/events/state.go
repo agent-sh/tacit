@@ -27,15 +27,17 @@ import (
 // checks the transcript's bytes the State names (its first 256 KiB, or all
 // of it up to the cursor when shorter) and the line before the cursor, or
 // every field of the Hermes row at the cursor, and reads as from a bare
-// cursor when they changed. A change further inside the transcript is not
-// seen.
+// cursor when they changed. A change further inside the transcript, or to a
+// Hermes row before the one at the cursor, is not seen.
 //
 // The zero State is the start, and a read that ends there (a first line
 // still being written) returns it: what the readers take from a transcript's
-// first line comes from its head. State{Offset: n} is a bare cursor: a read
-// from it passes over the items before n to rebuild what they leave, as
-// ReadFile does. MarshalBinary and UnmarshalBinary save a State and load it back, as
-// do MarshalJSON and UnmarshalJSON inside a caller's JSON.
+// first line comes from its head. A read that ends past the head it began
+// with (the transcript grew during the read) returns a bare cursor, for the
+// same reason. State{Offset: n} is a bare cursor: a read from it passes over
+// the items before n to rebuild what they leave, as ReadFile does.
+// MarshalBinary and UnmarshalBinary save a State and load it back, as do
+// MarshalJSON and UnmarshalJSON inside a caller's JSON.
 //
 // A State is as private as its transcript: it holds whole lines of it
 // (Replay), the working directory and tool names, unredacted. Keep it where
@@ -65,7 +67,8 @@ type kept struct {
 	// Head names what the reader was made from. A transcript: a hash of its
 	// first HeadLen bytes, the cursor's offset or headBytes when that is
 	// less, so a State of a session shorter than headBytes names every byte
-	// before its cursor. Hermes: the session's cursor key (hermes.Key).
+	// before its cursor (a read that ends past the head it began with keeps
+	// nothing). Hermes: the session's cursor key (hermes.Key).
 	Head    string `json:"head"`
 	HeadLen int64  `json:"head_len,omitempty"`
 	// Last names the item before the cursor: a hash of the transcript's line
@@ -155,9 +158,13 @@ func hash(b []byte) string {
 
 // rowID names a Hermes row by every field the reader reads of it (kept.Last):
 // what it holds, and what it leaves for the rows after it (the finish reason
-// a turn's prior is, a summary's mark).
+// a turn's prior is, a summary's mark). A row that does not encode names
+// nothing, and no State is used after it.
 func rowID(m hermes.Message) string {
-	b, _ := json.Marshal(m)
+	b, err := json.Marshal(m)
+	if err != nil {
+		return ""
+	}
 	return hash(b)
 }
 

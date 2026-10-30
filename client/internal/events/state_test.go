@@ -388,6 +388,13 @@ func TestStateEdges(t *testing.T) {
 	if err := back.UnmarshalBinary([]byte("not a state")); err == nil {
 		t.Fatal("bytes that are no State loaded")
 	}
+	// A damaged State (a negative head length) loads, and is read as a cursor.
+	if err := back.UnmarshalBinary(bytes.Replace(b, []byte(`"head_len":`), []byte(`"head_len":-1,"x":`), 1)); err != nil || !back.Kept() {
+		t.Fatalf("a damaged State: %+v %v", back, err)
+	}
+	if rest, _ := readState(t, path, digest.Claude, back, 0); !reflect.DeepEqual(rest, func() []Event { w, _ := readAll(t, path, digest.Claude, mid.Offset); return w }()) || resumes(t, path, digest.Claude, back) {
+		t.Fatal("a damaged State was resumed")
+	}
 	type record struct {
 		Path  string
 		State State
@@ -593,10 +600,31 @@ func TestReadHermesFromItsSavedStateReadsOnlyNewRows(t *testing.T) {
 	// the next turn: from the start or after a row, they are read as a bare
 	// cursor.
 	st.Add(hermestest.Message{Session: "desk", Role: "assistant", Content: "Two now.", Finish: "stop", Timestamp: 203})
+	// From a kept State, a stop at the first event of a later row, after
+	// events were emitted, is a cursor at the row before it.
+	st.AddSession(hermestest.Session{ID: "tab", Source: "mobile", CreatedSource: "mobile", StartedAt: 300})
+	st.Add(hermestest.Message{Session: "tab", Role: "user", Content: "check the backups", Timestamp: 301},
+		hermestest.Message{Session: "tab", Role: "assistant", Content: "Checking.", Finish: "stop", Timestamp: 302})
+	_, tab := read("tab", State{})
+	st.Add(hermestest.Message{Session: "tab", Role: "user", Content: "and the restores", Timestamp: 303},
+		hermestest.Message{Session: "tab", Role: "assistant", Content: "Both fine.", Finish: "stop", Timestamp: 304})
+	after, _ := read("tab", tab)
+	emitted := 0
+	stopAt, err := ReadHermesState(ctx, db, session("tab"), tab, func(e Event) error {
+		if e.Offset > after[0].Offset {
+			return errStop
+		}
+		emitted++
+		return nil
+	})
+	if !errors.Is(err, errStop) || emitted == 0 || stopAt.Kept() || stopAt.Offset != after[0].Offset {
+		t.Fatalf("stopped at a later row: %+v %v, want a cursor at %d", stopAt, err, after[0].Offset)
+	}
+
 	// The session's own State moved to its start is the start.
 	moved := afterStop
 	moved.Offset = 0
-	if got, _ := read("phone", moved); !reflect.DeepEqual(got, followedTo(t, read, "phone")) {
+	if got, _ := read("phone", moved); !reflect.DeepEqual(got, func() []Event { evs, _ := read("phone", State{}); return evs }()) {
 		t.Fatalf("a State moved to the start:\n%s", dump(got))
 	}
 	for name, foreign := range map[string]State{"another session's": afterStop, "a transcript's": transcriptState(t)} {
@@ -612,13 +640,6 @@ func TestReadHermesFromItsSavedStateReadsOnlyNewRows(t *testing.T) {
 			}
 		}
 	}
-}
-
-// followedTo is a Hermes session read from its start.
-func followedTo(t *testing.T, read func(string, State) ([]Event, State), id string) []Event {
-	t.Helper()
-	evs, _ := read(id, State{})
-	return evs
 }
 
 // transcriptState is a Claude Code transcript's State after a turn's end
@@ -677,7 +698,123 @@ func TestStateCoversEveryField(t *testing.T) {
 			t.Errorf("%s has fields %v; this test places %v: place each new one, and bump keptVersion if it is kept or replayed", name, got, want)
 		}
 	}
+	if keptVersion != 1 {
+		t.Errorf("keptVersion is %d; this test places the fields of version 1: change the two together", keptVersion)
+	}
 	if k := reflect.TypeOf(digest.CodexAsked{}).Kind(); k != reflect.Map {
 		t.Errorf("digest.CodexAsked is a %s: the replay relies on Note only adding options by question", k)
+	}
+}
+
+func appendRaw(t *testing.T, path, text string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(text); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A follower's reads from a State. One that lands while the next line is half written keeps the State's
+// check, so the read after it still starts at the cursor. A stop at the first event of a later line, after
+// events were emitted, is a cursor at that line. What one read from a State adds (a call it read past the
+// cursor) is not the State's: once the call is gone from the file, a read from the same State names no tool.
+func TestFollowingFromAState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	c := growingSessions(home)[0]
+	path := write(t, c.path, append(append([]string{}, c.first...), c.call, c.reply)...)
+	_, st := readState(t, path, c.f, State{}, 0)
+
+	appendRaw(t, path, c.result[:len(c.result)/2])
+	evs, mid := readState(t, path, c.f, st, 0)
+	if len(evs) != 0 || mid.Offset != st.Offset || !mid.Kept() {
+		t.Fatalf("half a line after the cursor: %d events, %+v", len(evs), mid)
+	}
+	appendRaw(t, path, c.result[len(c.result)/2:]+"\n"+c.turn+"\n")
+	if !resumes(t, path, c.f, mid) {
+		t.Fatal("a State read while the next line was half written is read as a bare cursor")
+	}
+
+	emitted := 0
+	stop, err := ReadFileState(path, c.f, mid, 0, func(Event) error {
+		if emitted > 0 {
+			return errStop
+		}
+		emitted++
+		return nil
+	})
+	turnAt := mid.Offset + int64(len(c.result)) + 1
+	if !errors.Is(err, errStop) || stop.Kept() || stop.Offset != turnAt {
+		t.Fatalf("stopped at a later line: %+v %v, want a cursor at %d", stop, err, turnAt)
+	}
+	if rest, _ := readState(t, path, c.f, stop, 0); len(rest) != 1 || rest[0].Text != "then add the target" {
+		t.Fatalf("from the cursor of the stop: %s", dump(rest))
+	}
+
+	bare := strings.Replace(path, ".jsonl", "-nocall.jsonl", 1)
+	write(t, bare, append(append([]string{}, c.first...), c.reply)...)
+	_, before := readState(t, bare, c.f, State{}, 0)
+	appendLines(t, bare, c.call, c.result)
+	if got, _ := readState(t, bare, c.f, before, 0); len(got) != 2 || got[1].ToolName != "Bash" {
+		t.Fatalf("a call and its result after the cursor: %s", dump(got))
+	}
+	write(t, bare, append(append([]string{}, c.first...), c.reply, c.result)...)
+	got, _ := readState(t, bare, c.f, before, 0)
+	want, _ := readAll(t, bare, c.f, before.Offset)
+	if !reflect.DeepEqual(got, want) || got[0].ToolName != "" {
+		t.Fatalf("a result whose call is gone, read again from the same State:\n%s\nwant\n%s", dump(got), dump(want))
+	}
+}
+
+// While a reader reads a new transcript, its harness finishes the first line. No State a read returns keeps
+// what the reader took from the half line it began with: the file's name for the session, no parent.
+func TestNoStateKeepsAHalfFirstLine(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
+	for _, c := range growingSessions(home)[1:] {
+		session := map[digest.Format]string{digest.Codex: "019g-grow", digest.Pi: "01gr"}[c.f]
+		rest := strings.Join(append(append([]string{}, c.first[1:]...), c.call, c.reply), "\n") + "\n"
+		for i := range 100 {
+			path := strings.Replace(c.path, ".jsonl", fmt.Sprintf("-race%03d.jsonl", i), 1)
+			first := c.first[0]
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(first[:len(first)/2]), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error)
+			go func() {
+				f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+				if err == nil {
+					_, err = f.WriteString(first[len(first)/2:] + "\n" + rest)
+					f.Close()
+				}
+				done <- err
+			}()
+			_, st, err := func() ([]Event, State, error) {
+				var evs []Event
+				st, err := ReadFileState(path, c.f, State{}, 0, func(e Event) error {
+					evs = append(evs, e)
+					return nil
+				})
+				return evs, st, err
+			}()
+			if werr := <-done; werr != nil {
+				t.Fatal(werr)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if st.Kept() && st.kept.Session != session {
+				t.Fatalf("%s try %d: a State keeps session %q from a half first line, want %q", c.name, i, st.kept.Session, session)
+			}
+		}
 	}
 }
