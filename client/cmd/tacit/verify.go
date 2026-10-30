@@ -498,13 +498,20 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 	}
 	rs.loadFacts()
 	owned := rs.ownerTouched()
+	var lastErr error
+	// A pair whose fact a third fact replaced cannot take "keep the other":
+	// it moves to the live facts, or closes as moot, before anything is sent.
+	if err := r.repoint(ctx, rs, owned); err != nil {
+		fmt.Fprintln(os.Stderr, "verify: closing the findings whose facts were replaced:", err)
+		lastErr = err
+	}
 	tries := r.attempts()
 	if !r.dry {
 		r.fails = r.failures()
 	}
 	var open []reviewItem
 	for _, it := range rs.items() {
-		if it.Decision == nil && it.Ask == nil && !owned[it.ID] && !owned[it.A.Name] && !owned[it.B.Name] && tries[it.ID] < r.attemptsBefore {
+		if it.Decision == nil && it.Ask == nil && !owned[it.ID] && !owned[it.A.Name] && !owned[it.B.Name] && tries[it.ID] < r.attemptsBefore && !repointable(it, owned) {
 			open = append(open, it)
 		}
 	}
@@ -560,7 +567,6 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 		r.saveAttempts(tries) // also when no batch follows: every open finding may be at the limit
 	}
 	total, cost := 0, 0.0
-	var lastErr error
 	prefix := fmt.Sprintf(verifyPrompt, s.Dir, r.cwd, memDir, "")
 	batchNumber := 0
 	for i := 0; i < len(open); {

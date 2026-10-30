@@ -277,3 +277,33 @@ func TestPageNamesAgreeWithDatesAndVerdicts(t *testing.T) {
 		t.Errorf("evidence %s", ev)
 	}
 }
+
+// A pair the curator closed because its facts were replaced since says so in
+// plain words, with the reason (and the facts' names) in its details, and
+// offers the owner only to change it; before v0.9.16 there was no such record.
+func TestPageShowsAFindingTheCuratorClosedAsMoot(t *testing.T) {
+	var got map[string]string
+	runPage(t, `
+  await new Promise((r) => setTimeout(r, 30));
+  const f = (name, created) => ({ name, created, description: "d " + name, body: "", scope: "projects/memra", type: "design_decision", kind: "observed", path: "projects/memra/" + name + ".md" });
+  const out = {};
+  for (const [k, repointed, why] of [["moved", "c0ffee000001", "re-pointed to c / b, finding c0ffee000001: a is replaced by c; b stands"], ["moot", "", "moot: f is replaced by g, which is retired (2026-10-27), and no live fact replaces it"]]) {
+    const it = { id: k, kind: "contradiction", a: f("a", "2026-09-01"), b: f("b", "2026-09-19"), allowed: ["reopen"], needs_owner: false, decision: { action: "moot", by: "curator", at: "2026-10-30T06:00:00Z", evidence: why, repointed } };
+    items = [it]; view = [it]; cur = 0; sheet(); out[k] = els["sheet-inner"].innerHTML;
+  }
+  return JSON.stringify(out);
+`, &got)
+	tags := regexp.MustCompile(`<[^>]*>`)
+	for k, want := range map[string]string{"moved": "so it is asked again about the facts that replaced them.", "moot": "and nothing is left to decide."} {
+		html := got[k]
+		for _, s := range []string{"The curator closed this: no longer a question", want, "Change this answer", "<details class=\"more\"><summary>Details</summary>"} {
+			if !strings.Contains(html, s) {
+				t.Errorf("%s lacks %q:\n%s", k, s, html)
+			}
+		}
+		text := tags.ReplaceAllString(regexp.MustCompile(`(?s)<details class="more">.*?</details>`).ReplaceAllString(html, ""), " ")
+		if strings.Contains(text, "You answered") || strings.Contains(text, "re-pointed") || strings.Contains(text, "retired (2026") {
+			t.Errorf("%s reads as the owner's answer or shows the raw reason outside its details:\n%s", k, text)
+		}
+	}
+}

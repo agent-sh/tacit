@@ -34,7 +34,9 @@ func sandboxVerify(t *testing.T, store string) (state string, called func() bool
 // A finding that keeps failing stops being sent after three attempts. The
 // run that stops it names it, says what it is about and why its last attempt
 // failed, and `tacit verify --requeue` sends it again. v0.9.14 said only how
-// many there were.
+// many there were. A pair whose fact a third fact replaced, the cause of the
+// strandings v0.9.15 named, is no longer sent at all: it moves to the live
+// facts (TestVerifyRepointsPairsWhoseFactsWereReplaced), here to b / c.
 func TestVerifyNamesStrandedFindingsAndRequeuesThem(t *testing.T) {
 	stubScrump(t)
 	_, clone := reviewFixture(t)
@@ -42,14 +44,16 @@ func TestVerifyNamesStrandedFindingsAndRequeuesThem(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	state, called := sandboxVerify(t, rs.s.Dir)
-	// a is already retired in favour of c, so "keep b" on "b may replace a"
-	// cannot land: a has another successor.
+	// a is already retired in favour of c, so "b may replace a" moves to the
+	// finding on b and c; d is gone from the store, so its pair takes only
+	// "both": a "keep c" on d / c cannot land.
 	p := filepath.Join(rs.s.Dir, "system", "a.md")
 	b, _ := os.ReadFile(p)
 	os.WriteFile(p, []byte(strings.Replace(string(b), "created:", "superseded_by: c\ncreated:", 1)), 0o644)
-	git(t, rs.s.Dir, "commit", "-q", "-am", "a retired by c")
+	git(t, rs.s.Dir, "rm", "-q", "system/d.md")
+	git(t, rs.s.Dir, "commit", "-q", "-am", "a retired by c, d gone")
 	git(t, rs.s.Dir, "push", "-q", "origin", "HEAD:main")
-	ab, dc, bc := itemFor(t, rs, "a", "b"), itemFor(t, rs, "d", "c"), itemFor(t, rs, "b", "c")
+	ab, dc, bc, ca := itemFor(t, rs, "a", "b"), itemFor(t, rs, "d", "c"), itemFor(t, rs, "b", "c"), itemFor(t, rs, "c", "a")
 	// A verdict that keeps a name that is neither fact. It carries a plain
 	// marker and a token-shaped part, both built here; neither may reach the
 	// failure record or anything the run prints (the real redactor would
@@ -64,10 +68,10 @@ func TestVerifyNamesStrandedFindingsAndRequeuesThem(t *testing.T) {
 				continue
 			}
 			sent[it.ID]++
-			// a/b and b/c get a verdict; the others, d/c among them, none.
+			// d/c and b/c get a verdict; the others, c/a among them, none.
 			switch it.ID {
-			case ab.ID:
-				vs = append(vs, verifyVerdict{ID: it.ID, Mark: "keep", Keep: "b", Evidence: "b is current"})
+			case dc.ID:
+				vs = append(vs, verifyVerdict{ID: it.ID, Mark: "keep", Keep: "c", Evidence: "c is current"})
 			case bc.ID:
 				vs = append(vs, verifyVerdict{ID: it.ID, Mark: "keep", Keep: marker + token, Evidence: "x"})
 			}
@@ -85,13 +89,16 @@ func TestVerifyNamesStrandedFindingsAndRequeuesThem(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		run()
 	}
-	if sent[ab.ID] != 3 || sent[dc.ID] != 3 {
-		t.Fatalf("sent %v, want a/b and d/c 3 times each", sent)
+	if sent[dc.ID] != 3 || sent[ca.ID] != 3 || sent[ab.ID] != 0 {
+		t.Fatalf("sent %v, want d/c and c/a 3 times each and a/b never", sent)
+	}
+	if d := decisionsOf(t, rs)[ab.ID]; d.Action != mootMark || d.Repointed != bc.ID {
+		t.Fatalf("a/b: %+v, want it closed and moved to b/c", d)
 	}
 	for _, want := range []string{
-		"verify: 5 finding(s) reached 3 failed attempts and are no longer sent",
-		"verify: stranded " + ab.ID + ", supersede-proposed a / b: keep b: that mark is not possible for this finding now (",
-		"verify: stranded " + dc.ID + ", contradiction d / c: no verdict came back for it (",
+		"verify: 4 finding(s) reached 3 failed attempts and are no longer sent",
+		"verify: stranded " + dc.ID + ", contradiction d / c: keep c: that mark is not possible for this finding now (",
+		"verify: stranded " + ca.ID + ", supersede-proposed c / a: no verdict came back for it (",
 		"verify: stranded " + bc.ID + ", supersede-proposed b / c: the verdict keeps a fact that is neither of the two (",
 	} {
 		if !strings.Contains(last, want) {
@@ -108,10 +115,10 @@ func TestVerifyNamesStrandedFindingsAndRequeuesThem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if code := runVerify([]string{"--requeue", ab.ID}); code != 1 || r.attempts()[ab.ID] != 3 {
+	if code := runVerify([]string{"--requeue", dc.ID}); code != 1 || r.attempts()[dc.ID] != 3 {
 		t.Fatalf("requeue during a run: exit %d, attempts %v", code, r.attempts())
 	}
-	if code := runVerify([]string{"--dry-run", "--requeue", "all"}); code != 0 || r.attempts()[ab.ID] != 3 {
+	if code := runVerify([]string{"--dry-run", "--requeue", "all"}); code != 0 || r.attempts()[dc.ID] != 3 {
 		t.Fatalf("dry requeue during a run: exit %d, attempts %v", code, r.attempts())
 	}
 	held()
@@ -126,27 +133,27 @@ func TestVerifyNamesStrandedFindingsAndRequeuesThem(t *testing.T) {
 	}
 	// Every finding is at the limit, so the next run sends nothing; a finding
 	// the owner settles meanwhile still loses its count on disk.
-	if err := mark(ctx, rs, dc.ID, "both"); err != nil {
+	if err := mark(ctx, rs, ca.ID, "both"); err != nil {
 		t.Fatal(err)
 	}
 	before := len(sent)
 	run()
-	if r.attempts()[dc.ID] != 0 || strings.Contains(last, dc.ID) || len(sent) != before {
+	if r.attempts()[ca.ID] != 0 || strings.Contains(last, ca.ID) || len(sent) != before {
 		t.Fatalf("a settled finding is still counted: %v\n%s", r.attempts(), last)
 	}
 	// Requeue one by id (twice in the list): it is sent again, the others not.
-	if code := runVerify([]string{"--requeue", ab.ID + "," + ab.ID}); code != 0 {
+	if code := runVerify([]string{"--requeue", dc.ID + "," + dc.ID}); code != 0 {
 		t.Fatalf("requeue exit %d", code)
 	}
-	if n := r.attempts(); n[ab.ID] != 0 || n[bc.ID] != 3 {
-		t.Fatalf("attempts after requeueing a/b: %v", n)
+	if n := r.attempts(); n[dc.ID] != 0 || n[bc.ID] != 3 {
+		t.Fatalf("attempts after requeueing d/c: %v", n)
 	}
-	if f := r.failures(); f[ab.ID].Why != "" || f[bc.ID].Why == "" {
-		t.Fatalf("failures after requeueing a/b: %v", f)
+	if f := r.failures(); f[dc.ID].Why != "" || f[bc.ID].Why == "" {
+		t.Fatalf("failures after requeueing d/c: %v", f)
 	}
 	run()
-	if sent[ab.ID] != 4 || sent[bc.ID] != 3 {
-		t.Fatalf("after requeueing a/b: sent %v", sent)
+	if sent[dc.ID] != 4 || sent[bc.ID] != 3 {
+		t.Fatalf("after requeueing d/c: sent %v", sent)
 	}
 	// Requeue all: the rest are sent again.
 	if code := runVerify([]string{"--requeue", "all"}); code != 0 {
