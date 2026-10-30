@@ -173,9 +173,10 @@ const headBytes = 256 << 10
 
 // lineReader turns one transcript line into events, keeping what it needs
 // across lines; keep is what it kept as of the last line it read, restore
-// takes that back into a new reader (State).
+// takes that back into a new reader (State). line reports false for a line
+// that does not parse (State.Unparsed), which gives no events.
 type lineReader interface {
-	line(raw []byte) []Event
+	line(raw []byte) ([]Event, bool)
 	keep() *kept
 	restore(k *kept)
 }
@@ -185,9 +186,10 @@ type lineReader interface {
 // compressed copy's decompressed stream), calling emit for each in order. It
 // returns the offset after the last line read, where the next read resumes.
 // A last line without its newline is read once it holds whole JSON; until
-// then it is left for the next read. A transcript the harness compressed
-// since its path was recorded is read from its compressed copy
-// (transcript.Resolve).
+// then it is left for the next read. A line that does not parse gives no
+// events; ReadFileState counts them (State.Unparsed). A transcript the
+// harness compressed since its path was recorded is read from its compressed
+// copy (transcript.Resolve).
 //
 // A read from a cursor gives exactly the events a read from the start gives
 // from there: what a line's events depend on in the lines before it (the
@@ -212,7 +214,9 @@ func ReadFile(path string, f digest.Format, from int64, emit func(Event) error) 
 // there. A bare cursor, or a transcript whose bytes changed (a file replaced
 // or rewritten), is read as ReadFile reads it, with a pass over the lines
 // before the cursor. A State at the transcript's end is returned as it is,
-// with no read.
+// with no read. The State returned counts the lines before its cursor that
+// did not parse (State.Unparsed): from's count and the lines read after its
+// cursor when the read started there, else every line the read passed over.
 //
 // limit > 0 stops the read at the end of the first line that ends at least
 // limit bytes past from's cursor, with what the reader kept, so a long
@@ -261,10 +265,13 @@ func ReadFileState(path string, f digest.Format, from State, limit int64, emit f
 	var fh io.ReadCloser
 	var br *bufio.Reader
 	used := false
+	// unparsed is how many lines before off did not parse: from's count when
+	// the read starts at its cursor, else counted again in the pass.
+	unparsed := 0
 	// A read from the start has nothing before it to keep; what the readers
 	// take from the first line (Codex's session_meta, pi's header) comes from
 	// the head, so a State kept there before that line was whole is not used.
-	if k := from.kept; k != nil && from.Offset > 0 && k.Format == f && k.HeadLen >= 0 && k.HeadLen <= int64(len(head)) && hash(head[:k.HeadLen]) == k.Head {
+	if k := from.kept; k != nil && from.Offset > 0 && from.unparsed >= 0 && k.Format == f && k.HeadLen >= 0 && k.HeadLen <= int64(len(head)) && hash(head[:k.HeadLen]) == k.Head {
 		if fh, br, err = openAfter(path, k, from.Offset); err != nil {
 			return from, err
 		}
@@ -275,7 +282,7 @@ func ReadFileState(path string, f digest.Format, from State, limit int64, emit f
 				rd.line([]byte(l))
 			}
 			rd.restore(k)
-			start, used = from.Offset, true
+			start, used, unparsed = from.Offset, true, from.unparsed
 		}
 	}
 	if br == nil {
@@ -289,10 +296,13 @@ func ReadFileState(path string, f digest.Format, from State, limit int64, emit f
 	var last []byte
 	lastAt := int64(-1)
 	// at is the State after the lines read up to off: what the reader kept,
-	// unless the read ended before from's cursor (one inside a line).
+	// unless the read ended before from's cursor (one inside a line), and the
+	// count of lines that did not parse.
 	at := func(off int64) State {
 		if off < from.Offset {
-			return State{Offset: from.Offset}
+			// The cursor is inside the last line, still being written: every
+			// whole line before it was read and counted.
+			return State{Offset: from.Offset, unparsed: unparsed}
 		}
 		if off == 0 {
 			return State{} // the start: nothing to keep
@@ -301,7 +311,7 @@ func ReadFileState(path string, f digest.Format, from State, limit int64, emit f
 			// The transcript grew past a short head during the read: what
 			// the readers took from the head may be of a first line not yet
 			// whole.
-			return State{Offset: off}
+			return State{Offset: off, unparsed: unparsed}
 		}
 		k := rd.keep()
 		k.Format = f
@@ -313,13 +323,18 @@ func ReadFileState(path string, f digest.Format, from State, limit int64, emit f
 		case used && off == from.Offset:
 			k.Last, k.LastAt = from.kept.Last, from.kept.LastAt
 		}
-		return State{Offset: off, kept: k}
+		return State{Offset: off, kept: k, unparsed: unparsed}
 	}
 	off, emitted := start, 0
 	for {
 		line, rerr := br.ReadBytes('\n')
 		if rerr != nil && rerr != io.EOF {
-			return State{Offset: max(off, from.Offset)}, rerr
+			if off < from.Offset {
+				// The pass did not reach the cursor: the lines it did not
+				// read are from's to count.
+				return State{Offset: from.Offset, unparsed: from.unparsed}, rerr
+			}
+			return State{Offset: off, unparsed: unparsed}, rerr
 		}
 		if len(line) == 0 {
 			return at(off), nil
@@ -329,7 +344,7 @@ func ReadFileState(path string, f digest.Format, from State, limit int64, emit f
 			return at(off), nil // still being written
 		}
 		next := off + int64(len(line))
-		evs := rd.line(body)
+		evs, ok := rd.line(body)
 		if off >= from.Offset {
 			for i := range evs {
 				e := &evs[i]
@@ -338,10 +353,13 @@ func ReadFileState(path string, f digest.Format, from State, limit int64, emit f
 					if used && emitted == 0 {
 						return from, err
 					}
-					return State{Offset: off}, err
+					return State{Offset: off, unparsed: unparsed}, err
 				}
 				emitted++
 			}
+		}
+		if !ok && len(bytes.TrimSpace(body)) > 0 {
+			unparsed++ // a blank line holds nothing to parse
 		}
 		last, lastAt, off = line, off, next
 		if rerr == io.EOF || limit > 0 && off-from.Offset >= limit {

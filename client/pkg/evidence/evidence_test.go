@@ -34,7 +34,8 @@ func TestFacadeImportsNoDreamerOrStore(t *testing.T) {
 }
 
 // A program reads a machine's sessions through the facade alone: where they
-// are, then each transcript's events, with the owner's words told apart.
+// are, then each transcript's events, with the owner's words told apart, and
+// how many lines gave no events because they did not parse.
 func TestReadSessionsThroughTheFacade(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home) // the reader reads the owner's prompt history here
@@ -47,27 +48,35 @@ func TestReadSessionsThroughTheFacade(t *testing.T) {
 	os.WriteFile(path, []byte(strings.Join([]string{
 		`{"type":"user","uuid":"u0","promptSource":"typed","origin":{"kind":"human"},"message":{"role":"user","content":"keep the cache warm before a release"},"timestamp":"2026-10-20T10:00:00.000Z","entrypoint":"cli","cwd":"/home/u/projects/shop","sessionId":"s1"}`,
 		`{"type":"assistant","uuid":"a1","message":{"model":"claude-opus-5-5","role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"make warm"}}]},"timestamp":"2026-10-20T10:00:05.000Z","entrypoint":"cli","cwd":"/home/u/projects/shop","sessionId":"s1"}`,
+		// A line a crash cut short: no events, counted.
+		`{"type":"assistant","uuid":"a9","message":{"model":"claude-opus-5-5","role":"assistant","content":[{"type":"text","text":"Warming`,
 		`{"type":"user","uuid":"u2","message":{"role":"user","content":[{"tool_use_id":"toolu_01","type":"tool_result","content":"no target","is_error":true}]},"timestamp":"2026-10-20T10:00:06.000Z","entrypoint":"cli","cwd":"/home/u/projects/shop","sessionId":"s1"}`,
 	}, "\n")+"\n"), 0o600)
 
 	var got []evidence.Event
+	unparsed := 0
 	for _, src := range evidence.Sources(home) {
 		files, err := evidence.Files(src)
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, f := range files {
-			if _, err := evidence.ReadFile(f, src.Format, 0, func(e evidence.Event) error {
+			st, err := evidence.ReadFileState(f, src.Format, evidence.State{}, 0, func(e evidence.Event) error {
 				got = append(got, e)
 				return nil
-			}); err != nil {
+			})
+			if err != nil {
 				t.Fatal(err)
 			}
+			unparsed += st.Unparsed()
 		}
 	}
 	if len(got) != 3 || got[0].Kind != evidence.KindOwnerText || got[0].Who != evidence.Owner || got[0].InputKind != evidence.InputTyped ||
 		got[1].Kind != evidence.KindToolCall || got[2].Kind != evidence.KindToolResult || got[2].ToolID != got[1].ToolID || !got[2].IsError {
 		t.Fatalf("events: %+v", got)
+	}
+	if unparsed != 1 {
+		t.Fatalf("%d lines that did not parse, want 1", unparsed)
 	}
 	if v := evidence.SessionWho(path, evidence.Head(path, 256<<10), evidence.Claude); v.Who != evidence.Owner {
 		t.Fatalf("session: %+v", v)

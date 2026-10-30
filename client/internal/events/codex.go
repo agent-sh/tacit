@@ -100,10 +100,13 @@ func (r *codexReader) context(raw json.RawMessage) {
 	}
 }
 
-func (r *codexReader) line(raw []byte) []Event {
+// line is a line's events, and false when the line does not parse: it is not
+// JSON, not a JSON object of a rollout line's fields, or a response_item
+// whose payload does not decode.
+func (r *codexReader) line(raw []byte) ([]Event, bool) {
 	var l codexLine
 	if json.Unmarshal(raw, &l) != nil {
-		return nil
+		return nil, false
 	}
 	// A line the rule notes a question's options on is one to read again
 	// (State). Note only adds options by question, so they go to asked as
@@ -121,7 +124,7 @@ func (r *codexReader) line(raw []byte) []Event {
 		var p codexPayload
 		_ = json.Unmarshal(l.Payload, &p)
 		r.prior = "compacted"
-		return []Event{r.text(KindCompaction, "system", digest.Harness, "compacted", rawText(p.Message), at)}
+		return []Event{r.text(KindCompaction, "system", digest.Harness, "compacted", rawText(p.Message), at)}, true
 	case "event_msg":
 		var p codexPayload
 		_ = json.Unmarshal(l.Payload, &p)
@@ -129,11 +132,11 @@ func (r *codexReader) line(raw []byte) []Event {
 	case "response_item":
 		var p codexPayload
 		if json.Unmarshal(l.Payload, &p) != nil {
-			return nil
+			return nil, false
 		}
-		return r.item(raw, p, at)
+		return r.item(raw, p, at), true
 	}
-	return nil
+	return nil, true
 }
 
 func (r *codexReader) eventMsg(p codexPayload) {
