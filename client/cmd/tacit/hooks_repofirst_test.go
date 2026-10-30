@@ -11,6 +11,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
@@ -279,29 +280,60 @@ func TestCommandMatchThroughARunner(t *testing.T) {
 
 // A command of one word, a bare program, matches a shell command only with a
 // word of the fact's own in the command line too: not its key's, not the
-// repository's name, not the session folder's. A longer command matches as
-// before. Of the pushes keyed on a bare program in real sessions, 9% were
-// useful (eval/DELIVERY.md, "Pushes keyed on a bare program").
+// repository's name, not a word of the session's folder or home. Words are
+// compared by stem, among the command's first terms (a word deep in a
+// heredoc does not count). A longer command, or a script's path or file
+// name, matches as before. Of the
+// pushes keyed on a bare program in real sessions, 9% were useful
+// (eval/DELIVERY.md, "Pushes keyed on a bare program").
 func TestPreToolBareProgramNeedsASecondWord(t *testing.T) {
-	_, cwd := repoFirstRig(t,
-		fact.Meta{Name: "ssh-gpubox-batchmode", Description: "Reach the widget gpubox with ssh -o BatchMode=yes; a password prompt hangs the agent", Type: "past_mistake", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Commands: []string{"ssh"}}},
+	r, cwd := repoFirstRig(t,
+		fact.Meta{Name: "ssh-gpubox-batchmode", Description: "Reach the widget gpubox in projects from home with ssh and BatchMode; a password prompt hangs the agent", Type: "past_mistake", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Commands: []string{"ssh"}}},
+		fact.Meta{Name: "terraform-applies-lock", Description: "terraform applies need the state lock", Type: "past_mistake", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Commands: []string{"terraform"}}},
 		fact.Meta{Name: "widget-deploy-checks", Description: "A deploy runs the smoke checks first", Type: "design_decision", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Commands: []string{"make deploy"}}},
+		fact.Meta{Name: "widget-release-script", Description: "The release script tags and signs", Type: "design_decision", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Commands: []string{"scripts/release.sh"}}},
+		fact.Meta{Name: "rsync-long-note", Description: "Copies amber basil cedar dune ember fable garnet harbor ivory jasper kettle lantern meadow nectar orchid pebble quartz raven saffron timber umber velvet willow yarrow zephyr reach the mirrorbox", Type: "past_mistake", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Commands: []string{"rsync"}}},
 	)
 	t.Setenv("TACIT_DELIVERY_REPO_START", "off")
+	home := filepath.Join(r.root, "home")
+	// A worktree whose folder is not named for the repository.
+	wt := filepath.Join(r.root, "wt-x")
+	gitIn(t, cwd, "worktree", "add", "-q", "-b", "wt-x", wt)
 	push := func(session, command string) string {
 		t.Helper()
-		return preToolContext(t, hookOut(t, toolPayload(cwd, session, "Bash", map[string]any{"command": command}), "pre-tool"))
+		dir := cwd
+		if strings.HasPrefix(session, "wt") {
+			dir = wt
+		}
+		return preToolContext(t, hookOut(t, toolPayload(dir, session, "Bash", map[string]any{"command": command}), "pre-tool"))
 	}
-	if got := push("s1", "ssh -o BatchMode=yes gpubox nvidia-smi"); !strings.Contains(got, "ssh-gpubox-batchmode") {
-		t.Fatalf("the fact's own words in the command:\n%s", got)
+	for _, c := range []struct {
+		session, command, want string
+	}{
+		{"s1", "ssh gpubox nvidia-smi", "ssh-gpubox-batchmode"},
+		{"s2", "ssh build-host uptime", ""},
+		{"s3", "cd " + cwd + " && ssh build-host 'ls projects'", ""},
+		{"s4", "ls " + home + " && ssh build-host uptime", ""},
+		{"wt1", "ssh build-host 'ls widget'", ""},
+		{"s5", "ssh build-host one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive gpubox", ""},
+		{"s6", "terraform apply -auto-approve", "terraform-applies-lock"},
+		{"s7", "make deploy", "widget-deploy-checks"},
+		{"s8", "scripts/release.sh", "widget-release-script"},
+		{"s9", "rsync -a out mirrorbox:/srv", "rsync-long-note"},
+	} {
+		got := push(c.session, c.command)
+		if c.want == "" && got != "" || c.want != "" && !strings.Contains(got, c.want) {
+			t.Errorf("%s %q: want %q, got:\n%s", c.session, c.command, c.want, got)
+		}
 	}
-	if got := push("s2", "ssh build-host uptime"); got != "" {
-		t.Fatalf("a bare program alone pushed:\n%s", got)
-	}
-	if got := push("s3", "cd "+cwd+" && ssh build-host 'ls widget'"); got != "" {
-		t.Fatalf("the repository's name and folder tied the call:\n%s", got)
-	}
-	if got := push("s4", "make deploy"); !strings.Contains(got, "widget-deploy-checks") {
-		t.Fatalf("a command of two words:\n%s", got)
+}
+
+// Every word of the session's repository names and folders is left out of a
+// command's words, however many repositories the workspace has.
+func TestCommandWordsLeaveOutEveryFolderWord(t *testing.T) {
+	names := []string{"amber-anchor-atlas", "basil-beacon-bridge", "cedar-canyon-comet", "dune-delta-drift", "ember-echo-eagle", "fable-falcon-fjord", "garnet-glacier-grove", "harbor-heron-helix", "ivory-island-iris"}
+	got := commandWords("ssh build-host 'ls projects'", names, "/srv/projects/amber-anchor-atlas")
+	if got[search.TermKey("projects")] || !got[search.TermKey("build")] {
+		t.Fatalf("command words %v", got)
 	}
 }
