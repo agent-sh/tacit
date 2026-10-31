@@ -26,9 +26,12 @@ defmodule TacitServer.PublicTest do
     }
   end
 
-  # A distinct source per test, so the failure counter of one test does not
-  # reach another.
+  # Every test starts with no failure counted. A test's source is one of 250
+  # addresses, so two tests can draw the same one, and the failures one left
+  # would reach the other: a 429 where it expects a 401. The module is not
+  # async, so no other test counts failures meanwhile.
   setup do
+    Cache.clear_fails()
     %{src: "203.0.113.#{rem(System.unique_integer([:positive]), 250) + 1}"}
   end
 
