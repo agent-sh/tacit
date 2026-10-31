@@ -34,7 +34,10 @@ func quoteHome(t *testing.T, commitDays ...int) (string, *store.Store) {
 		cs = append(cs, [2]string{daysAgo(d), "cmd/run.go"})
 	}
 	datedRepo(t, home, "oldtool", cs...)
-	at := time.Now().AddDate(0, 0, -28).UTC()
+	// Noon of the local day 28 days back, so the second turn, 13 minutes
+	// on, is on that day too at any hour the test runs.
+	d := time.Now().AddDate(0, 0, -28)
+	at := time.Date(d.Year(), d.Month(), d.Day(), 12, 0, 0, 0, time.Local).UTC()
 	typed := func(ts time.Time, text string) string {
 		b, _ := json.Marshal(text)
 		return `{"parentUuid":"ca33","isSidechain":false,"promptSource":"typed","turnOrigin":"human","type":"user","message":{"role":"user","content":` + string(b) + `},"uuid":"4192","timestamp":"` + ts.Format(time.RFC3339) + `","userType":"external","entrypoint":"cli","cwd":"/home/u/projects/oldtool","sessionId":"s9","version":"2.1.302","origin":{"kind":"human"}}`
