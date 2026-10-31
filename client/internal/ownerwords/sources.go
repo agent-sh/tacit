@@ -85,8 +85,21 @@ func (b *Builder) AddClaudeHistory(path string) error {
 		if h.SessionID != "" {
 			ref = "claude:" + h.SessionID
 		}
-		b.AddAt("claude-history", ref, pasted.ReplaceAllString(h.Display, " "), JSONTime(h.Timestamp))
+		b.addTurn("claude-history", ref, pasted.ReplaceAllString(h.Display, " "), JSONTime(h.Timestamp), "", historyParts(h.Display))
 	})
+}
+
+// historyParts are a prompt history line's text, normalized, in the parts
+// between its pastes' placeholders: the transcript's turn holds them in
+// order, with a short paste kept between them (twoSessions).
+func historyParts(display string) []string {
+	var out []string
+	for _, part := range pasted.Split(display, -1) {
+		if n := Normalize(part); n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // AddCodexHistory adds the prompts the owner typed into Codex
@@ -110,7 +123,7 @@ func (b *Builder) AddCodexHistory(path string) error {
 		if h.SessionID != "" {
 			ref = "codex:" + h.SessionID
 		}
-		b.AddAt("codex-history", ref, h.Text, JSONTime(h.TS))
+		b.addTurn("codex-history", ref, h.Text, JSONTime(h.TS), "", historyParts(h.Text))
 	})
 }
 

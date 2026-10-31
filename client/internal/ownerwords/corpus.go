@@ -90,13 +90,15 @@ type Builder struct {
 	c     *Corpus
 	buf   bytes.Buffer
 	known map[string]bool
-	// ms, sources and uuids are each turn's time in milliseconds (0 when its
-	// source records none), its source and, for a Claude Code line, the
-	// line's uuid: what Build reads to tell a copy or a broadcast
-	// (twoSessions).
+	// ms, sources, uuids and parts are each turn's time in milliseconds (0
+	// when its source records none), its source, for a Claude Code line the
+	// line's uuid, and for a prompt history line the normalized parts of its
+	// text between pastes (nil for any other turn): what Build reads to tell
+	// a copy or a broadcast (twoSessions).
 	ms      []int64
 	sources []string
 	uuids   []string
+	parts   [][]string
 	// agentRefs are the sessions whose transcripts are an agent's: a prompt
 	// history line of one of them (a lane a program typed into) is not theirs.
 	agentRefs map[string]bool
@@ -124,11 +126,14 @@ func (b *Builder) Add(source, ref, text string) { b.AddAt(source, ref, text, tim
 // AddAt is Add for a turn whose source records when it was written: the
 // day a statement of theirs was said is that turn's (SaidAt), never the day
 // a step read it.
-func (b *Builder) AddAt(source, ref, text string, at time.Time) { b.addTurn(source, ref, text, at, "") }
+func (b *Builder) AddAt(source, ref, text string, at time.Time) {
+	b.addTurn(source, ref, text, at, "", nil)
+}
 
 // addTurn is AddAt for a turn whose line has an id of its own (a Claude Code
-// line's uuid), "" for none.
-func (b *Builder) addTurn(source, ref, text string, at time.Time, uuid string) {
+// line's uuid; "" for none) or, for a prompt history line, the normalized
+// parts of its text between pastes (nil for none).
+func (b *Builder) addTurn(source, ref, text string, at time.Time, uuid string, parts []string) {
 	text, _, dropped, ok := cutWords(text, b.pastes)
 	if !ok {
 		b.c.Stats.AgentTurns++
@@ -158,6 +163,7 @@ func (b *Builder) addTurn(source, ref, text string, at time.Time, uuid string) {
 	b.ms = append(b.ms, ms)
 	b.sources = append(b.sources, source)
 	b.uuids = append(b.uuids, uuid)
+	b.parts = append(b.parts, parts)
 	b.buf.WriteString(n)
 	b.buf.WriteString(" ")
 }
@@ -283,11 +289,11 @@ func near(x, y int64) bool {
 //     new transcript, carries its turns over with their time, and Claude
 //     Code with their uuid too: the transcript turns of one uuid, or of one
 //     text at one instant to the millisecond, are one turn. It stays in one
-//     session: the one whose prompt history has a line at that moment (the
-//     session the person typed it in, whatever the line's text: the history
-//     cuts a paste's placeholder out of it), else the first read. In the
-//     other sessions the turn's copies are left out, and so are their
-//     history lines at that moment and a digest's lines of the text.
+//     session: the one whose prompt history has the turn's line (the session
+//     the person typed it in: at that moment, its text less the pastes the
+//     history cuts out), else the first read. In the other sessions the
+//     turn's copies are left out, and so are their history lines of it and
+//     a digest's lines of the text.
 //   - casts: the same text in another session within BroadcastWindow, at a
 //     different instant. A person types a message into one session; the
 //     same words in several at once are a program's, which may type into a
@@ -350,9 +356,30 @@ func (b *Builder) copiesOf(idx []int, histories map[string][]int, copies map[int
 			byMS[b.ms[i]] = g
 		}
 	}
-	typedAt := func(ref string, at int64) bool {
+	// recorded is a prompt history line of the turn: at its moment (the
+	// history keeps the second only) and of its text, less the pastes the
+	// history cuts out of a prompt.
+	recorded := func(h, turn int) bool {
+		if !near(b.ms[h], b.ms[turn]) {
+			return false
+		}
+		parts := b.parts[h]
+		if len(parts) == 0 {
+			return Normalize(b.c.raw[h]) == Normalize(b.c.raw[turn])
+		}
+		rest := " " + Normalize(b.c.raw[turn]) + " "
+		for _, part := range parts {
+			i := strings.Index(rest, " "+part+" ")
+			if i < 0 {
+				return false
+			}
+			rest = rest[i+1+len(part):] // from the space after the part
+		}
+		return true
+	}
+	typedAt := func(ref string, turn int) bool {
 		for _, h := range histories[ref] {
-			if near(b.ms[h], at) {
+			if recorded(h, turn) {
 				return true
 			}
 		}
@@ -366,9 +393,9 @@ func (b *Builder) copiesOf(idx []int, histories map[string][]int, copies map[int
 		if len(refs) < 2 {
 			continue
 		}
-		at, keep := b.ms[g], b.c.refs[g]
+		keep := b.c.refs[g]
 		for _, m := range ms {
-			if typedAt(b.c.refs[m], at) {
+			if typedAt(b.c.refs[m], g) {
 				keep = b.c.refs[m]
 				break
 			}
@@ -383,7 +410,7 @@ func (b *Builder) copiesOf(idx []int, histories map[string][]int, copies map[int
 				continue
 			}
 			for _, h := range histories[r] {
-				if near(b.ms[h], at) {
+				if recorded(h, g) {
 					copies[h] = true
 				}
 			}
@@ -446,6 +473,7 @@ func (b *Builder) leaveOut(copies, casts map[int]bool) {
 	var buf bytes.Buffer
 	var ms []int64
 	var sources, uuids []string
+	var parts [][]string
 	for i, raw := range old.raw {
 		if copies[i] || casts[i] {
 			c.Stats.OwnerTurns--
@@ -468,11 +496,12 @@ func (b *Builder) leaveOut(copies, casts map[int]bool) {
 		ms = append(ms, b.ms[i])
 		sources = append(sources, b.sources[i])
 		uuids = append(uuids, b.uuids[i])
+		parts = append(parts, b.parts[i])
 		buf.WriteString(Normalize(raw))
 		buf.WriteString(" ")
 	}
 	c.Stats.OwnerSessions = len(c.turns)
-	b.c, b.ms, b.sources, b.uuids = c, ms, sources, uuids
+	b.c, b.ms, b.sources, b.uuids, b.parts = c, ms, sources, uuids, parts
 	b.buf.Reset()
 	b.buf.Write(buf.Bytes())
 }
@@ -1055,7 +1084,7 @@ func (b *Builder) addTranscript(path string, f digest.Format) error {
 			if len(turns) > 0 {
 				at, id := LineTime(line), claudeLineUUID(line)
 				for _, t := range turns {
-					b.addTurn("transcript", ref, t, at, id)
+					b.addTurn("transcript", ref, t, at, id, nil)
 				}
 			}
 			continue

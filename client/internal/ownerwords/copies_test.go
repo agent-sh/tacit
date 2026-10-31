@@ -119,6 +119,35 @@ func TestACopyStaysWhereItsHistorySaysItWasTyped(t *testing.T) {
 	}
 }
 
+// A copy's history line is found by its text as well as its moment: another
+// prompt the fork's session has in the history a second later is the fork's
+// own, and neither makes the fork the session the copy was typed in.
+func TestACopysHistoryLineIsItsOwnText(t *testing.T) {
+	home := t.TempDir()
+	proj := filepath.Join(home, ".claude", "projects", "-home-u-projects-shop")
+	turn := "move the weekly report to the new dashboard"
+	other := "stop the nightly job before the backup window"
+	// The fork sorts first, so the first read alone would keep the copy there.
+	writeFile(t, filepath.Join(proj, "a-fork.jsonl"), claudeTurn("a-fork", "v1", "2026-10-20T10:00:00.000Z", turn, `,"sessionKind":"bg"`)+"\n")
+	writeFile(t, filepath.Join(proj, "b-orig.jsonl"), claudeTurn("b-orig", "v1", "2026-10-20T10:00:00.000Z", turn, "")+"\n")
+	writeFile(t, filepath.Join(home, ".claude", "history.jsonl"), strings.Join([]string{
+		`{"display":"` + turn + `","timestamp":1792490400000,"project":"/home/u/projects/shop","sessionId":"b-orig"}`,
+		`{"display":"` + other + `","timestamp":1792490401000,"project":"/home/u/projects/shop","sessionId":"a-fork"}`,
+	}, "\n")+"\n")
+	c, err := LoadAll(home, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, from := range []string{"a-fork", "b-orig"} {
+		if m, _ := c.Find(turn, from, true); m.Ref != "claude:b-orig" {
+			t.Errorf("the copied turn from %s's note is in %q, want claude:b-orig", from, m.Ref)
+		}
+	}
+	if m, _ := c.Find(other, "", true); m.Ref != "claude:a-fork" {
+		t.Errorf("the fork's own prompt a second later: %+v", m)
+	}
+}
+
 // The same text in two sessions at most 2 s apart is a program's broadcast,
 // which may type into a person's sessions as it does into its own: no person
 // types one message into two sessions at once, so neither is theirs. Only a
