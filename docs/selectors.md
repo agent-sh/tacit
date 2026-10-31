@@ -6,7 +6,7 @@ Code decides first. Scope, repository, lifecycle and the per-session limits stay
 
 ## Recommendation
 
-Leave it off. No provider is the default, and the local selection is what we recommend: in live agent sessions on one owner's history, the same store scored no better with Jev than without a selector, and nearly every task tied (eval/VALUE.md, "The prompt selector in live sessions"). A model selector adds a network call of up to 2 s and a cost per prompt. If you want one anyway:
+Leave it off. No provider is the default, and the local selection is what we recommend: in live agent sessions on one owner's history, the same store scored no better with Jev than without a selector, and most tasks tied (eval/VALUE.md, "The prompt selector in live sessions"). A model selector adds a network call of up to 2 s and a cost per prompt. If you want one anyway:
 
 - **Jev** (TypeSafe, hosted). The most accurate and fastest model we measured for this.
 - **Amazon Nova Micro on Bedrock**, when the data should stay in your AWS account. It never selected a wrong fact in our runs, but it kept fewer useful ones than Jev on both the development prompts and the sealed test, and it was about 0.3 s slower. If 1.5-2 s per prompt is acceptable, Claude Sonnet 5.5 or Haiku 5.5 on Bedrock matched Jev on the development prompts (they were not run on the sealed test).
@@ -85,7 +85,7 @@ Sealed test prompts, with the thresholds frozen beforehand:
 | Selector | Useful | Wrong |
 |---|---|---|
 | Today's lexical selection | most | some |
-| **Jev** | **as many** | **none** |
+| **Jev** | **as many as lexical** | **none** |
 | **Amazon Nova Micro** | fewer | none |
 
 What this means:

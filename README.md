@@ -267,7 +267,7 @@ The initial evaluation uses one owner's private store and Claude Code/Codex sess
 
 Those measurements shaped the client: lexical retrieval beat the dense variants tested, splitting notes into individual facts improved delivery, and larger context blocks cost more without helping. The verifier remains limited: in the held-out sample it agreed with the owner on a minority of findings and missed most of the owner's retirements. Human review remains part of the method.
 
-[Full measurements](eval/VALUE.md) · [Grep baseline](eval/BASELINE.md) · [Run the synthetic sample](eval/README.md#run-the-sample)
+[Methods and decisions](eval/VALUE.md) · [Grep baseline](eval/BASELINE.md) · [Run the synthetic sample](eval/README.md#run-the-sample)
 
 The synthetic sample runs without a server or model account. It demonstrates the formats and scoring. Long-session outcomes and delivery in other harnesses have not been measured.
 
