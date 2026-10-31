@@ -8,17 +8,20 @@ This checks the shapes it came in as:
                 "(the owner, YYYY-MM-DD: ...)" or 'Owner YYYY-MM-DD: "..."'
   tailnet-ip    an address in Tailscale's ranges (100.64.0.0/10 and
                 fd7a:115c:a1e0::/48) other than the placeholders below
-  tailnet-name  a MagicDNS name, <host>.tail<hex>.ts.net, of a real tailnet
+  tailnet-name  a MagicDNS name of a real tailnet, <host>.<tailnet>.ts.net,
+                in either style (tail<hex> or two words)
   home-path     a home directory with a real user name: /home/<user>,
                 /Users/<user>, C:\\Users\\<user>, and Claude Code's encoded
-                project folder -home-<user>-; placeholder users are allowed
+                project folder -home-<user>; placeholder users are allowed
   denied        a word from the private deny list (host names, project
                 names): $TACIT_PRIVACY_DENY (one per line, or comma separated)
                 or --deny FILE. The list never enters the repository; CI
                 reads it from a secret, and without it this rule is skipped.
 
-A finding prints its file, line and rule, never the text it matched, so a CI
-log does not publish what it found. --show prints the text, for a local run.
+Tracked paths are checked as well as contents. A finding prints its file, line
+and rule, never the text it matched, so a CI log does not publish what it
+found; a path that is itself a finding is printed as its place in the list of
+tracked files. --show prints the text and the path, for a local run.
 A line that holds "privacy-lint: allow" is skipped: use it only for a
 synthetic fixture that needs one of these shapes.
 
@@ -46,7 +49,7 @@ PLACEHOLDER_IPS = {
     "fd7a:115c:a1e0::/48", "fd7a:115c:a1e0::2a", "fd7a:115c:a1e0::5",
     "fd7a:115c:a1e0:ffff:ffff:ffff:ffff:ffff",
 }
-PLACEHOLDER_TAILNETS = {"tail1234"}
+PLACEHOLDER_TAILNETS = {"example", "tail1234"}
 
 # Public names that hold a denied word: the redactor's repository.
 ALLOWED_SPANS = re.compile(r"(?:https://)?(?:github\.com/)?avifenesh/scrump\b", re.I)
@@ -57,15 +60,15 @@ OWNER_QUOTE = [
     re.compile(r"\(owner,? 20\d\d-\d\d-\d\d\b", re.I),
 ]
 TAILNET_IP = re.compile(
-    r"(?<![\w.])(100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?)(?![\w.])"
+    r"(?<![\w.])(100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?)(?!\w|\.\d)"
     r"|(?<![\w:])(fd7a:115c:a1e0:[0-9a-f:]*(?:/\d{1,3})?)(?![\w:])",  # privacy-lint: allow (the pattern itself)
     re.I,
 )
-TAILNET_NAME = re.compile(r"\b(tail[0-9a-f]{4,})\.ts\.net\b", re.I)
+TAILNET_NAME = re.compile(r"(?<![\w-])([a-z0-9][a-z0-9-]*)\.ts\.net\b", re.I)
 HOME_PATH = re.compile(
     r"(?<![\w.~-])/(?:home|Users)/([A-Za-z0-9][A-Za-z0-9_.-]*)"
     r"|(?i:\bC:\\{1,2}Users\\{1,2})([A-Za-z0-9][A-Za-z0-9_.-]*)"
-    r"|(?<![\w])-(?:home|Users)-([A-Za-z0-9][A-Za-z0-9_]*)-",
+    r"|(?<![\w])-(?:home|Users)-([A-Za-z0-9][A-Za-z0-9_]*)(?![A-Za-z0-9_])",
 )
 SKIP_EXT = {".png", ".jpg", ".jpeg", ".gif", ".icns", ".ico", ".woff", ".woff2", ".ttf", ".zst", ".gz", ".zip"}
 ALLOW_MARK = "privacy-lint: allow"
@@ -89,7 +92,7 @@ def load_deny(path):
     if not words:
         return None
     alts = "|".join(re.escape(w) for w in sorted(words, key=len, reverse=True))
-    return re.compile(r"(?<![A-Za-z0-9_-])(?:" + alts + r")(?![A-Za-z0-9_-])", re.I)
+    return re.compile(r"(?<![A-Za-z0-9])(?:" + alts + r")(?![A-Za-z0-9])", re.I)
 
 
 def findings(line, deny):
@@ -114,7 +117,12 @@ def findings(line, deny):
 
 def scan(root, paths, deny, show):
     found = 0
-    for rel in paths:
+    for i, rel in enumerate(paths, 1):
+        label = rel
+        for rule, what in findings(rel, deny):
+            found += 1
+            label = rel if show else f"<tracked path {i} withheld>"
+            print(f"{label}: {rule} in the path" + (f": {what}" if show else ""))
         if os.path.splitext(rel)[1].lower() in SKIP_EXT:
             continue
         full = os.path.join(root, rel)
@@ -131,7 +139,7 @@ def scan(root, paths, deny, show):
                 continue
             for rule, what in findings(line, deny):
                 found += 1
-                print(f"{rel}:{n}: {rule}" + (f": {what}" if show else ""))
+                print(f"{label}:{n}: {rule}" + (f": {what}" if show else ""))
     return found
 
 
