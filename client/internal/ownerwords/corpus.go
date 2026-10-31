@@ -281,11 +281,13 @@ func near(x, y int64) bool {
 //
 //   - copies: one turn in two sessions. A fork, or a session resumed into a
 //     new transcript, carries its turns over with their time, and Claude
-//     Code with their uuid too: the turns of one uuid, or of one instant to
-//     the millisecond, are one turn. It stays in one session, the one the
-//     prompt history says it was typed in, else the first read, and every
-//     line of the text in the other sessions at that moment is left out,
-//     the history's and a digest's too.
+//     Code with their uuid too: the transcript turns of one uuid, or of one
+//     text at one instant to the millisecond, are one turn. It stays in one
+//     session: the one whose prompt history has a line at that moment (the
+//     session the person typed it in, whatever the line's text: the history
+//     cuts a paste's placeholder out of it), else the first read. In the
+//     other sessions the turn's copies are left out, and so are their
+//     history lines at that moment and a digest's lines of the text.
 //   - casts: the same text in another session within BroadcastWindow, at a
 //     different instant. A person types a message into one session; the
 //     same words in several at once are a program's, which may type into a
@@ -297,24 +299,33 @@ func near(x, y int64) bool {
 func (b *Builder) twoSessions() (copies, casts map[int]bool) {
 	copies, casts = map[int]bool{}, map[int]bool{}
 	byText := map[string][]int{}
+	histories := map[string][]int{} // a session -> its prompt history lines
 	for i, raw := range b.c.raw {
 		n := Normalize(raw)
 		byText[n] = append(byText[n], i)
+		if b.history(i) && !strings.HasSuffix(b.c.refs[i], ":history") {
+			histories[b.c.refs[i]] = append(histories[b.c.refs[i]], i)
+		}
 	}
 	for _, idx := range byText {
 		if len(idx) > 1 {
-			b.copiesOf(idx, copies)
+			b.copiesOf(idx, histories, copies)
+		}
+	}
+	for _, idx := range byText {
+		if len(idx) > 1 {
 			b.castsOf(idx, copies, casts)
 		}
 	}
 	return copies, casts
 }
 
-// copiesOf marks the copies among idx, the turns of one text in the order
-// they were read (twoSessions).
-func (b *Builder) copiesOf(idx []int, copies map[int]bool) {
-	group := map[int]int{} // a turn -> the first turn of its group
+// copiesOf marks the copies of the turns in idx, the turns of one text in
+// the order they were read, given each session's prompt history lines
+// (twoSessions).
+func (b *Builder) copiesOf(idx []int, histories map[string][]int, copies map[int]bool) {
 	byUUID, byMS := map[string]int{}, map[int64]int{}
+	members := map[int][]int{} // a group's first turn -> its turns, in read order
 	for _, i := range idx {
 		if !b.timed(i) {
 			continue
@@ -329,7 +340,7 @@ func (b *Builder) copiesOf(idx []int, copies map[int]bool) {
 		if !ok {
 			g = i
 		}
-		group[i] = g
+		members[g] = append(members[g], i)
 		if id := b.uuids[i]; id != "" {
 			if _, seen := byUUID[id]; !seen {
 				byUUID[id] = g
@@ -339,29 +350,47 @@ func (b *Builder) copiesOf(idx []int, copies map[int]bool) {
 			byMS[b.ms[i]] = g
 		}
 	}
-	refs := map[int]map[string]bool{}
-	for _, i := range idx {
-		if g, ok := group[i]; ok {
-			if refs[g] == nil {
-				refs[g] = map[string]bool{}
+	typedAt := func(ref string, at int64) bool {
+		for _, h := range histories[ref] {
+			if near(b.ms[h], at) {
+				return true
 			}
-			refs[g][b.c.refs[i]] = true
 		}
+		return false
 	}
-	for g, rs := range refs {
-		if len(rs) < 2 {
+	for g, ms := range members {
+		refs := map[string]bool{}
+		for _, m := range ms {
+			refs[b.c.refs[m]] = true
+		}
+		if len(refs) < 2 {
 			continue
 		}
-		keep := b.c.refs[g]
-		for _, i := range idx {
-			if b.history(i) && rs[b.c.refs[i]] && near(b.ms[i], b.ms[g]) {
-				keep = b.c.refs[i] // the session the person typed it in
+		at, keep := b.ms[g], b.c.refs[g]
+		for _, m := range ms {
+			if typedAt(b.c.refs[m], at) {
+				keep = b.c.refs[m]
 				break
 			}
 		}
+		for _, m := range ms {
+			if b.c.refs[m] != keep {
+				copies[m] = true
+			}
+		}
+		for r := range refs {
+			if r == keep {
+				continue
+			}
+			for _, h := range histories[r] {
+				if near(b.ms[h], at) {
+					copies[h] = true
+				}
+			}
+		}
 		for _, i := range idx {
-			if r := b.c.refs[i]; r != keep && rs[r] && (b.ms[i] == 0 || near(b.ms[i], b.ms[g])) {
-				copies[i] = true
+			if r := b.c.refs[i]; b.ms[i] == 0 && r != keep && refs[r] {
+				copies[i] = true // a digest's line of the text
 			}
 		}
 	}

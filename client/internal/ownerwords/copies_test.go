@@ -88,6 +88,37 @@ func TestAForkedCopyOfATurnIsOneTurn(t *testing.T) {
 	}
 }
 
+// The prompt history's line of a copied turn can hold other text than the
+// turn: it cuts a paste's placeholder out, while the transcript keeps a short
+// paste in the turn. The turn still stays in the session the history says it
+// was typed in, and neither text is in a second session.
+func TestACopyStaysWhereItsHistorySaysItWasTyped(t *testing.T) {
+	home := t.TempDir()
+	proj := filepath.Join(home, ".claude", "projects", "-home-u-projects-shop")
+	said := "keep the build cache warm before every release"
+	turn := said + " and keep the workers quiet"
+	writeFile(t, filepath.Join(proj, "s-orig.jsonl"), claudeTurn("s-orig", "u1", "2026-10-20T10:00:00.000Z", turn, "")+"\n")
+	writeFile(t, filepath.Join(proj, "s-fork.jsonl"), strings.Join([]string{
+		`{"type":"history-suppression","sessionId":"s-fork","cause":"fork_inherit","ts":"2026-10-21T08:00:00.000Z"}`,
+		claudeTurn("s-fork", "u1", "2026-10-20T10:00:00.000Z", turn, `,"sessionKind":"bg"`),
+	}, "\n")+"\n")
+	writeFile(t, filepath.Join(home, ".claude", "history.jsonl"), `{"display":"`+said+` [Pasted text #1 +1 lines]","pastedContents":{"1":{"id":1,"type":"text","content":"and keep the workers quiet"}},"timestamp":1792490400000,"project":"/home/u/projects/shop","sessionId":"s-orig"}`+"\n")
+	c, err := LoadAll(home, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, words := range []string{said, turn} {
+		if got := c.SaidIn(words); len(got) != 1 || got[0] != "claude:s-orig" {
+			t.Errorf("SaidIn(%q) = %v, want claude:s-orig alone", words, got)
+		}
+		for _, from := range []string{"s-fork", "s-orig"} {
+			if m, _ := c.Find(words, from, true); m.Ref != "claude:s-orig" {
+				t.Errorf("%q from %s's note is in %q, want claude:s-orig", words, from, m.Ref)
+			}
+		}
+	}
+}
+
 // The same text in two sessions at most 2 s apart is a program's broadcast,
 // which may type into a person's sessions as it does into its own: no person
 // types one message into two sessions at once, so neither is theirs. Only a
@@ -112,6 +143,12 @@ func TestTheSameTextInTwoSessionsAtOnceIsNoTurnOfTheirs(t *testing.T) {
 		claudeTurn("r-a", "r3", "2026-10-20T13:00:03.000Z", again, ""),
 	}, "\n")+"\n")
 	writeFile(t, filepath.Join(proj, "r-b.jsonl"), claudeTurn("r-b", "r4", "2026-10-20T13:00:04.500Z", again, "")+"\n")
+	// A fork's copy of a turn, and then the same text typed into the fork
+	// 1.5 s after the original: the copy is a copy, the later turn a
+	// broadcast with the original.
+	forked := "pause the nightly sync until the move is done"
+	writeFile(t, filepath.Join(proj, "f-a.jsonl"), claudeTurn("f-a", "f1", "2026-10-20T14:00:00.000Z", forked, "")+"\n")
+	writeFile(t, filepath.Join(proj, "f-b.jsonl"), claudeTurn("f-b", "f1", "2026-10-20T14:00:00.000Z", forked, "")+"\n"+claudeTurn("f-b", "f2", "2026-10-20T14:00:01.500Z", forked, "")+"\n")
 	// The prompt history's own copy of a turn, with no session named.
 	writeFile(t, filepath.Join(home, ".claude", "history.jsonl"), `{"display":"`+alone+`","timestamp":1792497600400,"project":"/home/u/projects/shop"}`+"\n")
 	c, err := LoadAll(home, "")
@@ -130,7 +167,10 @@ func TestTheSameTextInTwoSessionsAtOnceIsNoTurnOfTheirs(t *testing.T) {
 	if !c.FindIn("claude:r-a", again) || c.FindIn("claude:r-b", again) {
 		t.Errorf("typed again in one session, then once in another 1.5 s after the last: the first two stay theirs, the other session's goes")
 	}
-	if st := statsJSON(t, c); st["broadcast_turns"] != 4.0 {
+	if c.FindIn("claude:f-a", forked) || c.FindIn("claude:f-b", forked) {
+		t.Errorf("a copy and then the same text in its session 1.5 s later: a broadcast, in neither session")
+	}
+	if st := statsJSON(t, c); st["broadcast_turns"] != 6.0 || st["copied_turns"] != 1.0 {
 		t.Errorf("counts: %v", st)
 	}
 }
