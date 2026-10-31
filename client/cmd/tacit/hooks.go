@@ -727,7 +727,7 @@ func runFact(args []string) int {
 	}
 	// The store's facts, then this machine's own notes (a read-only clone's
 	// local overlay); a replaced fact prints its successor first.
-	out, ok, err := factText(s.Dir, args[0])
+	out, shown, ok, err := factText(s.Dir, args[0])
 	if !ok {
 		fmt.Fprintln(os.Stderr, "fact: not found:", args[0])
 		return 1
@@ -735,7 +735,7 @@ func runFact(args []string) int {
 	if err != nil {
 		return 2
 	}
-	os.Stdout.WriteString(withProvenance(s, out))
+	os.Stdout.WriteString(withProvenance(s, out, shown))
 	return 0
 }
 

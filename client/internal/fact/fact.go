@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -426,6 +427,30 @@ func IsIndexFile(name string) bool { return name == IndexFile }
 // these over, whatever new kind of store file a later binary adds.
 func IsStoreFile(name string) bool { return strings.HasPrefix(name, "_") }
 
+// ParseError is a fact file Walk could not read as a fact: its path,
+// relative to the walk's root, and why.
+type ParseError struct {
+	Path string
+	Err  error
+}
+
+func (e *ParseError) Error() string { return e.Path + ": " + e.Err.Error() }
+func (e *ParseError) Unwrap() error { return e.Err }
+
+// UnreadNames are the names the files of errs hold by their stem: a file
+// that does not parse still takes its name, so a writer never names a new
+// fact after it and replaces it.
+func UnreadNames(errs []error) []string {
+	var out []string
+	for _, err := range errs {
+		var pe *ParseError
+		if errors.As(err, &pe) {
+			out = append(out, strings.TrimSuffix(path.Base(pe.Path), ".md"))
+		}
+	}
+	return out
+}
+
 // Walk loads every .md fact under root, in path order. Skipped: the
 // generated MEMORY.md, every store file (IsStoreFile: the folder indexes,
 // records and overviews, _index.md, _record.md, _overview.md), a root README.md,
@@ -458,7 +483,7 @@ func Walk(root string) (facts []*Fact, errs []error, err error) {
 		}
 		f, perr := Parse(rel, data)
 		if perr != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", rel, perr))
+			errs = append(errs, &ParseError{Path: rel, Err: perr})
 			return nil
 		}
 		facts = append(facts, f)

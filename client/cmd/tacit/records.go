@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -84,30 +83,34 @@ func suppressionNames(recs map[string]*record.Record, names []string) []string {
 // factText is what tacit_fact and `tacit fact` print for name: the file as
 // it is, or, for a fact something replaced (superseded_by, followed to the
 // live end of the chain), the newer fact first with a line naming the old
-// one, then the old one. ok is false when no fact has the name.
-func factText(storeDir, name string) (string, bool, error) {
-	p, ok := findFactOrLocal(storeDir, name)
-	if !ok {
-		return "", false, nil
+// one, then the old one. The file is the name's best (factFiles); when
+// other files hold the name too, a last line names them. shown are the
+// files the text shows, as the index names them, the newer first. ok is
+// false when no fact has the name.
+func factText(storeDir, name string) (text string, shown []string, ok bool, err error) {
+	files := factFiles(storeDir, overlay.Dir(), name)
+	if len(files) == 0 {
+		return "", nil, false, nil
 	}
-	b, err := os.ReadFile(p)
+	also := alsoNamed(name, files[1:])
+	b, err := os.ReadFile(files[0].path)
 	if err != nil {
-		return "", true, err
+		return "", nil, true, err
 	}
 	f, perr := fact.Parse(name+".md", b)
 	if perr != nil || f.Meta.SupersededBy == "" {
-		return string(b), true, nil
+		return string(b) + also, []string{files[0].rel}, true, nil
 	}
 	seen := map[string]bool{name: true}
-	cur, curBytes := f, b
+	cur, curBytes, curRel := f, b, files[0].rel
 	for cur.Meta.SupersededBy != "" && !seen[cur.Meta.SupersededBy] && len(seen) < 16 {
 		next := cur.Meta.SupersededBy
 		seen[next] = true
-		np, ok := findFactOrLocal(storeDir, next)
-		if !ok {
+		nfs := factFiles(storeDir, overlay.Dir(), next)
+		if len(nfs) == 0 {
 			break
 		}
-		nb, err := os.ReadFile(np)
+		nb, err := os.ReadFile(nfs[0].path)
 		if err != nil {
 			break
 		}
@@ -115,28 +118,22 @@ func factText(storeDir, name string) (string, bool, error) {
 		if err != nil {
 			break
 		}
-		cur, curBytes = nf, nb
+		cur, curBytes, curRel = nf, nb, nfs[0].rel
 	}
 	if cur == f {
-		return string(b), true, nil
+		return string(b) + also, []string{files[0].rel}, true, nil
 	}
-	return fmt.Sprintf("%s was superseded by %s; the newer fact first, then the old one.\n\n%s\n--- the old fact, %s ---\n%s", name, cur.Meta.Name, curBytes, name, b), true, nil
+	return fmt.Sprintf("%s was superseded by %s; the newer fact first, then the old one.\n\n%s\n--- the old fact, %s ---\n%s", name, cur.Meta.Name, curBytes, name, b) + also, []string{curRel, files[0].rel}, true, nil
 }
 
-// nameLineRx finds the name line of each fact a factText answer holds.
-var nameLineRx = regexp.MustCompile(`(?m)^name: *"?([a-z0-9][a-z0-9-]*)"?\s*$`)
-
 // withProvenance is what tacit_fact and `tacit fact` print: first, for each
-// fact text shows, whose it is (search.Hit.ProvenanceLabel, read from the
-// index's code-checked fields: an owner rule, their words, or an agent's
-// note, marked when it claims their authority without evidence), then the
-// text. The text alone when the index cannot say in time.
-func withProvenance(s *store.Store, text string) string {
-	var names []string
-	for _, m := range nameLineRx.FindAllStringSubmatch(text, -1) {
-		names = append(names, m[1])
-	}
-	if len(names) == 0 {
+// fact text shows (shown, factText's), whose it is (search.Hit.ProvenanceLabel,
+// read from the index's code-checked fields of that very file: an owner
+// rule, their words, or an agent's note, marked when it claims their
+// authority without evidence), then the text. The text alone when the index
+// cannot say in time.
+func withProvenance(s *store.Store, text string, shown []string) string {
+	if len(shown) == 0 {
 		return text
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -146,16 +143,16 @@ func withProvenance(s *store.Store, text string) string {
 		return text
 	}
 	defer ix.Close()
-	hs, err := ix.Named(ctx, names)
+	hs, err := ix.AtPaths(ctx, shown)
 	if err != nil {
 		return text
 	}
 	var b strings.Builder
 	seen := map[string]bool{}
-	for _, n := range names {
-		if h, ok := hs[n]; ok && !seen[n] {
-			seen[n] = true
-			fmt.Fprintf(&b, "# whose: %s is %s\n", n, h.ProvenanceLabel())
+	for _, p := range shown {
+		if h, ok := hs[p]; ok && !seen[p] {
+			seen[p] = true
+			fmt.Fprintf(&b, "# whose: %s is %s\n", h.Name, h.ProvenanceLabel())
 		}
 	}
 	if b.Len() == 0 {

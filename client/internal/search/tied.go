@@ -60,6 +60,27 @@ func (ix *Index) Named(ctx context.Context, names []string) (map[string]Hit, err
 	return out, nil
 }
 
+// AtPaths returns the facts of the index at paths (store-relative, or a
+// local note's local/ path), by path: what tacit_fact says of whose each
+// file it shows is.
+func (ix *Index) AtPaths(ctx context.Context, paths []string) (map[string]Hit, error) {
+	out := map[string]Hit{}
+	if len(paths) == 0 {
+		return out, nil
+	}
+	b, _ := json.Marshal(paths)
+	hits, err := ix.scan(ctx, `SELECT `+liveColumns+` FROM facts f WHERE f.path IN (SELECT value FROM json_each(:paths)) ORDER BY f.id`, map[string]any{"paths": string(b)})
+	if err != nil {
+		return nil, err
+	}
+	for _, h := range hits {
+		if _, have := out[h.Path]; !have {
+			out[h.Path] = h
+		}
+	}
+	return out, nil
+}
+
 // MetaFacts returns every live curated fact whose applies_to names paths or
 // commands, for matching against the paths and commands of a prompt or a
 // tool call. Derived facts, inbox notes, superseded or retired facts, the

@@ -202,6 +202,10 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 			known = append(known, f)
 		}
 	}
+	// A file that does not parse still takes its name (fact.UnreadNames).
+	for _, n := range append(fact.UnreadNames(perrs), fact.UnreadNames(lerrs)...) {
+		names[n] = true
+	}
 	curatedOrigins := map[string]bool{}
 	var notes []*fact.Fact
 	for _, f := range local {

@@ -101,14 +101,14 @@ func storeServer(s *store.Store, harness string) *mcp.Server {
 		Name string `json:"name" jsonschema:"fact name as shown by tacit_search"`
 	}
 	mcp.AddTool(server, &mcp.Tool{Name: "tacit_fact", Description: "Read one fact in full (body, source, applies_to) by the name tacit_search or tacit_tree showed."}, func(ctx context.Context, req *mcp.CallToolRequest, a factArgs) (*mcp.CallToolResult, any, error) {
-		out, ok, err := factText(s.Dir, a.Name)
+		out, shown, ok, err := factText(s.Dir, a.Name)
 		if !ok {
 			return text("not found: " + a.Name), nil, nil
 		}
 		if err != nil {
 			return nil, nil, err
 		}
-		return text(withProvenance(s, out)), nil, nil
+		return text(withProvenance(s, out, shown)), nil, nil
 	})
 
 	type addArgs struct {

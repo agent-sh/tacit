@@ -138,7 +138,7 @@ func Load(dir string) (facts []*fact.Fact, errs []error) {
 		}
 		f, perr := fact.Parse(Prefix+filepath.ToSlash(rel), data)
 		if perr != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", rel, perr))
+			errs = append(errs, &fact.ParseError{Path: filepath.ToSlash(rel), Err: perr})
 			return nil
 		}
 		facts = append(facts, f)
@@ -221,21 +221,36 @@ func Stamp(dir string) string {
 
 // Find returns the overlay file of the fact called name.
 func Find(dir, name string) (string, bool) {
-	if dir == "" || !fact.IsSlug(name) {
-		return "", false
+	if all := FindAll(dir, name); len(all) > 0 {
+		return all[0], true
 	}
-	var found string
+	return "", false
+}
+
+// FindAll is every file of the fact named name in the overlay at dir, in
+// the walk's order, passing over what Load does (dot directories, the
+// review directory, the layer's folders while it is off, symlinks).
+func FindAll(dir, name string) []string {
+	if dir == "" || !fact.IsSlug(name) {
+		return nil
+	}
+	var out []string
 	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err == nil && d.IsDir() && (isReviewDir(dir, p) || layerOff(dir, p)) {
-			return filepath.SkipDir
+		if err != nil {
+			return nil
 		}
-		if err == nil && !d.IsDir() && d.Name() == name+".md" && d.Type()&os.ModeSymlink == 0 {
-			found = p
-			return filepath.SkipAll
+		if d.IsDir() {
+			if p != dir && strings.HasPrefix(d.Name(), ".") || isReviewDir(dir, p) || layerOff(dir, p) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Name() == name+".md" && d.Type()&os.ModeSymlink == 0 {
+			out = append(out, p)
 		}
 		return nil
 	})
-	return found, found != ""
+	return out
 }
 
 // ErrInside is an overlay directory inside the clone: refused, since a

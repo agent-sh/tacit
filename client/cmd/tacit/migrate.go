@@ -320,13 +320,20 @@ func quoteLine(q ledger.Quote, name string) []byte {
 }
 
 // copyName is the copy's name: the old one with the winner's last part, a
-// short hash when that is taken too.
+// short hash when that is taken too, and a counter after the hash when the
+// hash's name is taken as well (a third fact of one name moved to one
+// folder).
 func copyName(old, to string, taken map[string]bool) string {
 	base := importer.Slug(old+"-"+path.Base(to), 80)
 	if !taken[base] {
 		return base
 	}
-	return importer.Slug(old, 70) + "-" + shortHash(old+"\x00"+to)
+	hashed := importer.Slug(old, 70) + "-" + shortHash(old+"\x00"+to)
+	name := hashed
+	for i := 2; taken[name]; i++ {
+		name = fmt.Sprintf("%s-%d", hashed, i)
+	}
+	return name
 }
 
 // renameRepos maps names of applies_to.repos (lower case) to the winner's,

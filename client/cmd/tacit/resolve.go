@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
@@ -43,13 +44,24 @@ func runResolve(args []string) int {
 		return 1
 	}
 	load := func(name string) (*fact.Fact, string, error) {
-		p, ok := findFact(s.Dir, name)
-		if !ok {
+		files := factFiles(s.Dir, "", name)
+		if len(files) == 0 {
 			return nil, "", fmt.Errorf("no fact named %s", name)
 		}
-		rel, _ := filepath.Rel(s.Dir, p)
-		rel = filepath.ToSlash(rel)
-		if len(rel) >= 6 && rel[:6] == "inbox/" {
+		// A name two curated files hold is not one fact to change: say
+		// which, and change neither.
+		var curated []string
+		for _, f := range files {
+			if f.rank <= rankRetired {
+				curated = append(curated, f.rel)
+			}
+		}
+		if len(curated) > 1 {
+			return nil, "", fmt.Errorf("%d curated files hold the name %s (%s); resolve changes neither", len(curated), name, strings.Join(curated, ", "))
+		}
+		p := files[0].path
+		rel := files[0].rel
+		if strings.HasPrefix(rel, "inbox/") {
 			return nil, "", fmt.Errorf("%s is an inbox note, not a curated fact", name)
 		}
 		b, err := os.ReadFile(p)

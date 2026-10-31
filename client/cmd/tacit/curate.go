@@ -285,6 +285,11 @@ func runCurate(args []string) int {
 			curatedOrigins[f.Meta.Origin] = true
 		}
 	}
+	// A file that does not parse still takes its name: a new fact named
+	// after it would replace it.
+	for _, n := range fact.UnreadNames(perrs) {
+		names[n] = true
+	}
 	env := curateEnv(s.Dir, false) // the metadata checks: this machine's checkouts, the store's folders and writers
 	statementsOK := statementsWrite(s.Dir)
 	var pending []*fact.Fact
