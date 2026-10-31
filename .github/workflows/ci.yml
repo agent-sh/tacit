@@ -24,6 +24,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Personal content never enters the repository (AGENTS.md). The private
+  # deny list of host and project names is a secret; a pull request from a
+  # fork has none, and the shape rules run alone.
+  privacy:
+    if: ${{ vars.CI_CPU_RUNNER != '' || (!github.event.repository.private && vars.CI_PUBLIC == '1') }}
+    runs-on: ${{ vars.CI_CPU_RUNNER != '' && (github.event.repository.private || !github.event.pull_request.head.repo.fork) && format('{0}-{1}', vars.CI_CPU_RUNNER, github.run_id) || 'ubuntu-24.04' }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: personal content
+        env:
+          TACIT_PRIVACY_DENY: ${{ secrets.TACIT_PRIVACY_DENY }}
+        run: python3 scripts/privacy-lint.py
+
   client:
     if: ${{ vars.CI_CPU_RUNNER != '' || (!github.event.repository.private && vars.CI_PUBLIC == '1') }}
     runs-on: ${{ vars.CI_CPU_RUNNER != '' && (github.event.repository.private || !github.event.pull_request.head.repo.fork) && format('{0}-{1}', vars.CI_CPU_RUNNER, github.run_id) || 'ubuntu-24.04' }}
