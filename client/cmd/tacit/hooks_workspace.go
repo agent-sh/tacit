@@ -1,7 +1,7 @@
 package main
 
 // A workspace is a folder that is in no repository but holds several: a
-// Brazil workspace (its packages under src/), a folder of checkouts. A
+// multi-package workspace (its packages under src/), a folder of checkouts. A
 // session started there works in all of them, so its repositories are all
 // of them (SPEC.md, Delivery, "Workspaces"): the SessionStart repo block,
 // the prompt hook's scopes, the PreToolUse push and tacit_tree/tacit_search
@@ -20,21 +20,21 @@ import (
 
 const (
 	// workspaceDepth is how deep under cwd a repository's root may be: 1 for
-	// a folder of checkouts (dir/<repo>), 2 for a Brazil workspace
+	// a folder of checkouts (dir/<repo>), 2 for a multi-package workspace
 	// (ws/src/<pkg>).
 	workspaceDepth = 2
 	// workspaceMaxRepos is the most distinct repositories a workspace holds;
 	// a folder with more is a general folder of projects, not one piece of
 	// work, and gets no repositories (as before workspaces). Measured on a
-	// real machine (eval/VALUE.md, "Workspaces"): Brazil workspaces and
-	// worktree folders hold a handful of distinct repositories, the general
-	// folders above them more than the cap.
+	// real machine (eval/VALUE.md, "Workspaces"): multi-package workspaces
+	// and worktree folders hold a handful of distinct repositories, the
+	// general folders above them more than the cap.
 	workspaceMaxRepos = 8
 	// workspaceMaxRoots bounds the git roots the scan resolves (each one a
 	// few file reads), and workspaceMaxEntries the directory entries it looks
 	// at, so a huge folder costs a bounded share of a hook's budget; past
-	// either the folder is not a workspace. A Brazil workspace holds a few
-	// git roots; in a folder of a few hundred task worktrees the PreToolUse
+	// either the folder is not a workspace. A multi-package workspace holds a
+	// few git roots; in a folder of a few hundred task worktrees the PreToolUse
 	// hook took 350 ms of its 400 ms without this cap, in a small one about
 	// what a repository costs.
 	workspaceMaxRoots   = 64

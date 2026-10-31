@@ -30,8 +30,8 @@ func gitInit(t *testing.T, dir string) string {
 }
 
 // A folder in no repository that holds repositories is a workspace: a
-// Brazil workspace's src/<pkg> (depth 2) and a folder of checkouts (depth
-// 1). A repository's linked worktree is that repository, once. Dot
+// multi-package workspace's src/<pkg> (depth 2) and a folder of checkouts
+// (depth 1). A repository's linked worktree is that repository, once. Dot
 // folders, node_modules, deeper roots and folders behind a symlink are not
 // looked into; a symlink that is itself a checkout counts.
 func TestWorkspaceReposAreTheGitRootsOfTheFolder(t *testing.T) {
@@ -47,7 +47,7 @@ func TestWorkspaceReposAreTheGitRootsOfTheFolder(t *testing.T) {
 	gitIn(t, beta, "add", "-A")
 	gitIn(t, beta, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "c")
 	gitIn(t, beta, "worktree", "add", "-q", "--detach", filepath.Join(ws, "src", "Beta-wt"))
-	os.WriteFile(filepath.Join(ws, "packageInfo"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(ws, "workspace.json"), []byte("x"), 0o644)
 	gitInit(t, filepath.Join(ws, "node_modules", "dep"))
 	gitInit(t, filepath.Join(ws, ".cache", "hidden"))
 	gitInit(t, filepath.Join(ws, "src", "deep", "er", "Gamma"))
@@ -141,9 +141,9 @@ func TestWorkspaceOverTheCapIsNone(t *testing.T) {
 	}
 }
 
-// workspaceRig is repoFirstRig's store with the facts given, and a Brazil
-// workspace ws/src/{widget,gadget} (two checkouts with src/scheduler and
-// lib), the session's cwd.
+// workspaceRig is repoFirstRig's store with the facts given, and a
+// multi-package workspace ws/src/{widget,gadget} (two checkouts with
+// src/scheduler and lib), the session's cwd.
 func workspaceRig(t *testing.T, facts ...fact.Meta) (*rig, string) {
 	t.Helper()
 	r, _ := repoFirstRig(t, facts...)
@@ -153,7 +153,7 @@ func workspaceRig(t *testing.T, facts ...fact.Meta) (*rig, string) {
 		os.MkdirAll(filepath.Join(d, "src", "scheduler"), 0o755)
 		os.WriteFile(filepath.Join(d, "src", "scheduler", "worker.go"), []byte("package scheduler\n"), 0o644)
 	}
-	os.WriteFile(filepath.Join(ws, "packageInfo"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(ws, "workspace.json"), []byte("x"), 0o644)
 	return r, ws
 }
 

@@ -151,7 +151,7 @@ Every YAML option is listed here:
 | (environment only) | `TACIT_DELIVERY_AREA_PUSH` | `on` (default): before an MCP tool call or shell command an area's tool patterns or commands match, the PreToolUse hook gives a few of the area's rules and decisions, once a session, in a repo or not |
 | (environment only) | `TACIT_DELIVERY_AREA_CEILING` | Most lines of one area push; default `3` |
 | (environment only) | `TACIT_DELIVERY_TOPICS` | `on` (default): a prompt that names a live topic searches its folder too |
-| (environment only) | `TACIT_DELIVERY_WORKSPACE` | `on` (default): a session started in a folder that is in no repository but holds several (a Brazil workspace, a folder of checkouts) reads all of them; at most 8 repositories, never home or above |
+| (environment only) | `TACIT_DELIVERY_WORKSPACE` | `on` (default): a session started in a folder that is in no repository but holds several (a multi-package workspace, a folder of checkouts) reads all of them; at most 8 repositories, never home or above |
 | (environment only) | `TACIT_DELIVERY_PROMPT_REPO_RANK` | `on` (default): at the prompt the session's repositories' rules and decisions weigh `TACIT_DELIVERY_PROMPT_REPO_BOOST` (1.5) times their score, another project's facts 1/`TACIT_DELIVERY_PROMPT_OTHER_PENALTY` (1.5); `TACIT_DELIVERY_PROMPT_PENALIZE_MACHINES=on` penalizes this machine's facts too |
 | (environment only) | `TACIT_ROTATION_MAX` | Facts one rotation run checks; default `0`, every fact that is due |
 | (environment only) | `TACIT_ROTATION_AGE_DAYS` | Days a checked fact rests before the rotation checks it again; default `30` |

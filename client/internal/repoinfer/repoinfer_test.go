@@ -38,8 +38,8 @@ func TestNameFindsTheRepoAPathIsIn(t *testing.T) {
 	mkRepo(t, filepath.Join(w, "widget"))
 	mkdir(t, filepath.Join(w, "widget", "pkg", "api"))
 	mkRepo(t, filepath.Join(w, "ws", "src", "OrderService"))
-	write(t, filepath.Join(w, "ws", "packageInfo"), "")   // a Brazil workspace: a folder, not a git root
-	write(t, filepath.Join(w, "gone", "src", "x.go"), "") // no workspace marker
+	write(t, filepath.Join(w, "ws", "workspace.json"), "") // a multi-package workspace: a folder, not a git root
+	write(t, filepath.Join(w, "gone", "src", "x.go"), "")  // no workspace marker
 	mkdir(t, filepath.Join(w, "notes"))
 	// A worktree whose .git is a file pointing at its repository.
 	mkRepo(t, filepath.Join(w, "api"))
@@ -63,7 +63,7 @@ func TestNameFindsTheRepoAPathIsIn(t *testing.T) {
 		filepath.Join(w, "widget", ".worktrees", "fix-1", "a"):            "widget",
 		filepath.Join(w, "ws", "src", "OrderService", "x"):                "OrderService",
 		filepath.Join(w, "ws", "src", "Billing", "src", "A.java"):         "", // removed from a live workspace: no git root
-		filepath.Join(w, "gone", "src", "Billing", "a.java"):              "", // no workspace: not a Brazil shape
+		filepath.Join(w, "gone", "src", "Billing", "a.java"):              "", // no workspace: not a multi-package shape
 		filepath.Join(w, "api-fix", "main.go"):                            "api",
 		filepath.Join(home, "projects", "atlas-worktrees", "TASK-1", "a"): "atlas",
 		filepath.Join(home, "projects", "atlas-worktrees", "TASK-2", "a"): "TASK-2",

@@ -742,10 +742,11 @@ type Situation struct {
 	// symlink checkout name). Hooks supply these; explicit search ignores them.
 	RepoAliases []string
 	// Workspace are the repositories of the session's workspace when cwd is
-	// in no repository but holds several (a Brazil workspace's src/<pkg>, a
-	// folder of checkouts), under every name delivery knows each by. Each is
-	// a delivery repository like Repo: its project scope, its applies_to
-	// name and its derived scope. Hooks and the MCP tools supply them.
+	// in no repository but holds several (a multi-package workspace's
+	// src/<pkg>, a folder of checkouts), under every name delivery knows each
+	// by. Each is a delivery repository like Repo: its project scope, its
+	// applies_to name and its derived scope. Hooks and the MCP tools supply
+	// them.
 	Workspace []string
 	Host      string
 	Query     string
