@@ -96,6 +96,14 @@ func (r *verifyRun) staleLine(ctx context.Context, rs *reviewServer, it staleIte
 	return string(b)
 }
 
+// stalePushError is a stale batch's marks that could not be written or
+// pushed. Like the pair batches' (run returns theirs at once), it is the
+// run's error whatever came before it.
+type stalePushError struct{ err error }
+
+func (e *stalePushError) Error() string { return e.err.Error() }
+func (e *stalePushError) Unwrap() error { return e.err }
+
 // runStale sends open stale findings to the verifier in batches and applies
 // what comes back. room is how many findings this run may still verify.
 func (r *verifyRun) runStale(ctx context.Context, s *store.Store, rs *reviewServer, call verifierRunner, room int, owned map[string]bool, tries map[string]int) (int, float64, error) {
@@ -215,9 +223,7 @@ func (r *verifyRun) runStale(ctx context.Context, s *store.Store, rs *reviewServ
 				lastErr = preferVerifyFailure(lastErr, err)
 				continue
 			}
-			// The run's error may be an earlier one; say this one here.
-			fmt.Fprintf(os.Stderr, "verify: stale batch %d: %v\n", batchNumber, err)
-			return total, cost, err
+			return total, cost, &stalePushError{err}
 		}
 		for k, e := range errs {
 			if e != nil {

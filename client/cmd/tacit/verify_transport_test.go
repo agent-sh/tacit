@@ -153,10 +153,10 @@ func TestVerifyAStreamDropLosesNothingSettled(t *testing.T) {
 }
 
 // These runs exit 1, with a drop or without: one that settled nothing, one
-// with another error after or before the drop, also in a pair batch before
-// a stale batch's drop and in a stale batch before another one's, and a dry
-// run. A stale batch's push the server refuses says so even when an earlier
-// error is the one the run ends with.
+// with another error after or before the drop, in the pair batches, the
+// stale ones or across the two, and a dry run. A stale batch's push the
+// server refuses is the run's error, as a pair batch's is, also after an
+// earlier error.
 func TestVerifyRunsThatStillFail(t *testing.T) {
 	for _, c := range []struct {
 		name       string
@@ -173,6 +173,8 @@ func TestVerifyRunsThatStillFail(t *testing.T) {
 		// five pair batches, then a stale batch for each stale finding
 		{name: "a pair batch's failure before a stale drop", stale: []string{"c"}, modes: fakeModes{bad: "1", drop: "6"}, staleCalls: []int{6}},
 		{name: "a stale batch's failure before a stale drop", stale: []string{"c", "d"}, modes: fakeModes{bad: "6", drop: "7"}, staleCalls: []int{6, 7}},
+		{name: "a stale batch's failure after a pair drop", stale: []string{"c"}, modes: fakeModes{drop: "1", bad: "6"}, staleCalls: []int{6}},
+		{name: "a stale batch's failure after a stale drop", stale: []string{"c", "d"}, modes: fakeModes{drop: "6", bad: "7"}, staleCalls: []int{6, 7}},
 		{name: "a stale push refused after a pair failure", stale: []string{"c"}, modes: fakeModes{bad: "1 2 3 4 5"}, refuse: true, staleCalls: []int{6}, say: "the server refused this mark"},
 		{name: "dry run", modes: fakeModes{drop: "1"}, args: []string{"--dry-run"}},
 	} {
@@ -185,8 +187,9 @@ func TestVerifyRunsThatStillFail(t *testing.T) {
 			}
 			var code int
 			errs := captureStderr(t, func() { captureStdout(t, func() { code = runVerify(append([]string{"--batch", "1"}, c.args...)) }) })
-			if code != 1 || !strings.Contains(errs, c.say) {
-				t.Fatalf("exit %d, want 1 and a line with %q:\n%s", code, c.say, errs)
+			lines := strings.Split(strings.TrimSpace(errs), "\n")
+			if code != 1 || c.say != "" && (strings.Count(errs, c.say) != 1 || !strings.Contains(lines[len(lines)-1], c.say)) {
+				t.Fatalf("exit %d, want 1 and %q once, as the run's error:\n%s", code, c.say, errs)
 			}
 			calls := sent()
 			for _, n := range c.staleCalls {

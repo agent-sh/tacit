@@ -444,7 +444,8 @@ func runVerify(args []string) int {
 // finishVerify is the run's outcome. A run whose only errors were runner
 // streams that dropped (modelrun.IsTransport), and that settled or asked a
 // finding, succeeds: each batch's marks land, pushed, as the batch ends, and
-// a push that does not land fails the run, so the drops lost nothing settled.
+// marks that cannot be written or pushed fail the run, so the drops lost
+// nothing settled.
 // The findings they left stay open for the next run. A finding left without
 // a verdict it can take, or with a mark the page refused, is no run error
 // (it counts against the finding), with a drop or without.
@@ -718,7 +719,10 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 	// Stale findings (one fact each) go in their own batches with their own prompt.
 	sn, sc, serr := r.runStale(ctx, s, rs, call, r.max-len(open), owned, tries)
 	total, cost = total+sn, cost+sc
-	if serr != nil {
+	var push *stalePushError
+	if errors.As(serr, &push) {
+		lastErr = serr // marks not written or pushed end the run, as a pair batch's do
+	} else if serr != nil {
 		lastErr = preferVerifyFailure(lastErr, serr)
 	}
 	r.reportStranded(rs, tries)
