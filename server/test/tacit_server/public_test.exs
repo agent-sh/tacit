@@ -257,8 +257,6 @@ defmodule TacitServer.PublicTest do
 
     test "the counter table is bounded: a new source past the bound is 429 on failure, 200 with a token",
          %{reader: reader, rpriv: rpriv} do
-      Cache.clear_fails()
-
       with_config(%{public_fail_sources: 2}, fn ->
         for s <- ["198.51.100.1", "198.51.100.2"] do
           assert {401, _} = req(public_port(), "GET", "/healthz", [{"X-Forwarded-For", s}])
