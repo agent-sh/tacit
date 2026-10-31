@@ -94,8 +94,8 @@ func deferUnknownRepos(pending []*fact.Fact, env validate.Env, cst *curatorState
 const maxNoteFailures = 3
 
 // systemicSplits is how many splits a run makes before any batch has a valid
-// answer: enough to bisect one full batch down to a single note (a batch of
-// up to 128 notes takes 7 levels), and then the run stops splitting,
+// answer: enough to bisect a typical batch down to a single note (a batch
+// of up to 128 notes takes 7 levels), and then the run stops splitting,
 // because a model that fails every half is failing the run, not a note.
 const systemicSplits = 8
 
@@ -363,7 +363,7 @@ func runCurate(args []string) int {
 		saveCuratorState(filepath.Join(stateDir, "curator.json"), cst)
 	}
 	// Notes that only restate a curated fact or an earlier note go before the
-	// split (no model): each one is a model call saved.
+	// split (no model): they never reach a split batch.
 	var curated []*fact.Fact
 	for _, f := range facts {
 		if !f.InInbox() {

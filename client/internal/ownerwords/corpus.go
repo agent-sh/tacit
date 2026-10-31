@@ -205,8 +205,8 @@ func cutWords(text string, pastes []string) (words string, cut []string, relayed
 }
 
 // Agent text the owner relayed inside their own turn, with no paste record (a lane's
-// report, a chat model's answer): a person types plain lines in a terminal,
-// an agent writes markdown. A line is left out of their turn when it
+// report, a chat model's answer): the filter assumes the owner types plain
+// lowercase lines in a terminal, and an agent writes markdown. A line is left out of their turn when it
 // is a markdown header, holds a backtick or "**", or is a bullet or numbered
 // item that opens with a capital, a backtick, "*" or "["; and so is every line
 // of a block of three or more capitalized prose lines (eight words or more,

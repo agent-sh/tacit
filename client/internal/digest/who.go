@@ -568,8 +568,8 @@ var wakePrompt = regexp.MustCompile(`^Automated (?:\S+ ){0,5}wake requested\b`)
 //     or one of InjectedNotices or a wake prompt (wakePrompt) is the
 //     harness's;
 //   - an orchestrator's role prompt ("You are lead-01 ...", "You are a
-//     worker for ..."): an agent's; a person typing to their agent does not
-//     open a turn that way;
+//     worker for ..."): an agent's; the filters assume the owner writes in
+//     lower case, so a turn of theirs does not open that way;
 //   - the rest is the person's.
 func TurnPieces(text string) []Piece {
 	var out []Piece

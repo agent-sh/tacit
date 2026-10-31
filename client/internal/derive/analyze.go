@@ -45,10 +45,10 @@ const (
 	// file f when they changed in the same commit at least 3 times and in at
 	// least half of f's commits. Backtest of the rule f -> g (learn on the
 	// window, test whether g is in the same commit as f over the next 150
-	// commits), at a changeset limit of 30: precision at 3 and 0.5 stayed
-	// around the stated "half of the time" out of sample on every repo
-	// measured. 5 changes instead of 3 raised precision a few points and cut
-	// many of the rules. At a confidence of 0.3 precision fell.
+	// commits), at a changeset limit of 30: precision at 3 and 0.5 roughly
+	// holds the stated "half of the time" out of sample. 5 changes instead
+	// of 3 raised precision a few points and cut many of the rules. At a
+	// confidence of 0.3 precision fell.
 	MinCoChanges  = 3
 	MinConfidence = 0.5
 
@@ -209,9 +209,10 @@ type dirNode struct {
 // code" says nothing, and a fixed rule such as "open the biggest" would open
 // the wrong thing in some repos: a research/ folder can hold thousands of
 // scripts next to a hundred times as many run outputs, so a directory is
-// opened only if at least half of its own files are code. Entries are sorted by path. If there
-// are more top-level directories than MaxMapEntries, the smallest (by code
-// files, then files) are dropped and counted in More.
+// opened only if at least half of its own files are code. Entries are
+// sorted by path. If there are more top-level directories than
+// MaxMapEntries, the smallest (by code files, then files) are dropped and
+// counted in More.
 func ModuleMap(tree []TreeFile, win []Commit) Map {
 	var entries []Entry
 	var rootFiles []string

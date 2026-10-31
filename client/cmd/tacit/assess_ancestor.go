@@ -4,8 +4,9 @@ package main
 // related to another belongs under its ancestor. Worktrees, clones, scratch
 // and task folders are almost always part of something else, so the
 // assessment presumes a folder that is clearly related to another belongs to
-// it, and the step's job is to find which. Code finds the ancestor where it can be found reliably, and
-// otherwise ranks the near evidence for the model:
+// it, and the step's job is to find which. Code finds the ancestor where it
+// can be found reliably, and otherwise ranks the near evidence for the
+// model:
 //
 //   - git: the folder's name is the directory of a linked worktree or a
 //     separate clone of a repository (the registry records git's metadata

@@ -22,8 +22,8 @@ import (
 // as the jobs batch their work, so once it is back the notes wait at most one
 // period more. Without it, a judge route down for a day had the quick curate
 // pay for the split again every 30 minutes and write nothing. On this
-// schedule the first failure is the only paid run; the rest are probes, a
-// few a day.
+// schedule the first failure is the only paid run; the rest are probes, at
+// most one per backoffCap, six a day once the wait is at the cap.
 const (
 	backoffBase = 30 * time.Minute
 	backoffCap  = 4 * time.Hour
