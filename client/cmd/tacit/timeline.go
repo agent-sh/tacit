@@ -39,6 +39,10 @@ func newTimelineBuilder(s *store.Store, asOf time.Time) *gitev.Builder {
 // split from.
 func (rs *reviewServer) timelineInput(it reviewItem) (gitev.Input, bool) {
 	a, b := rs.facts[it.A.Name], rs.facts[it.B.Name]
+	if it.Kind == kindName {
+		// Two files of one name: each side is its own file.
+		a, b = rs.byPath[it.A.Path], rs.byPath[it.B.Path]
+	}
 	if a == nil || b == nil {
 		return gitev.Input{}, false
 	}
@@ -69,6 +73,9 @@ func (rs *reviewServer) timelineFor(ctx context.Context, id string) (*gitev.Time
 			xx := x
 			it = &xx
 		}
+	}
+	if it == nil {
+		it = rs.nameItemByID(id)
 	}
 	var in gitev.Input
 	var key string
@@ -288,7 +295,7 @@ func runTimeline(args []string) int {
 	rs := &reviewServer{s: s, tl: newTimelineBuilder(s, at)}
 	rs.loadFacts()
 	byID := map[string]reviewItem{}
-	for _, it := range rs.items() {
+	for _, it := range append(rs.items(), rs.nameItems()...) {
 		byID[it.ID] = it
 	}
 	code := 0

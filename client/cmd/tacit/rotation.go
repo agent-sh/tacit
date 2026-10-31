@@ -402,6 +402,13 @@ func newRotator(ctx context.Context, s *store.Store, local bool) (*rotator, erro
 			r.open[it.A.Name] = true
 		}
 	}
+	// A name two files hold waits for its own answer: the rotation would
+	// read one of the files by the name.
+	for _, it := range r.rs.nameItems() {
+		if it.NeedsOwner {
+			r.open[it.A.Name] = true
+		}
+	}
 	return r, nil
 }
 

@@ -226,3 +226,39 @@ func TestDedupeNamesRaisesTheNamesAlone(t *testing.T) {
 		t.Errorf("the full run raised a name again:\n%s", page)
 	}
 }
+
+// The page asks for a finding's timeline: a name finding gets one built from
+// its two files, not "no such finding".
+func TestANameFindingHasATimelineOfItsTwoFiles(t *testing.T) {
+	r := nameFixture(t)
+	if code := runDedupe([]string{"--names"}); code != 0 {
+		t.Fatalf("dedupe --names exited %d", code)
+	}
+	it := nameItemFor(t, r, "lantern-proxy-port")
+	rs := &reviewServer{s: r.s, tl: newTimelineBuilder(r.s, time.Time{})}
+	rs.loadFacts()
+	tl, err := rs.timelineFor(context.Background(), it.ID)
+	if err != nil || tl == nil {
+		t.Fatalf("timeline: %v", err)
+	}
+	in, ok := rs.timelineInput(it)
+	if !ok || in.A.Fact == nil || in.B.Fact == nil || in.A.Fact.Path != it.A.Path || in.B.Fact.Path != it.B.Path {
+		t.Fatalf("the timeline reads %+v and %+v, want the finding's two files", in.A.Fact, in.B.Fact)
+	}
+}
+
+// The rotation reads a fact by its name, so an open name finding keeps that
+// name out of its picks until the finding is answered.
+func TestTheRotationLeavesANameTwoFilesHold(t *testing.T) {
+	r := nameFixture(t)
+	if code := runDedupe([]string{"--names"}); code != 0 {
+		t.Fatalf("dedupe --names exited %d", code)
+	}
+	rot, err := newRotator(context.Background(), r.s, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rot.open["lantern-proxy-port"] || !rot.open["deploy-by-tool"] {
+		t.Fatalf("open names %v", rot.open)
+	}
+}
