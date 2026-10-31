@@ -14,6 +14,11 @@ import (
 func TestLocalStoreAgentNoteOwnerRulingAndSearch(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "facts")
+	// root is the home: a checkout in one of the home's dot directories is
+	// never a repository (repoid), and Go's temp dir may be one (GOTMPDIR or
+	// TMPDIR under ~/.cache).
+	t.Setenv("HOME", root)
+	t.Setenv("USERPROFILE", root)
 	t.Setenv("TACIT_STORE", dir)
 	t.Setenv("TACIT_INDEX", filepath.Join(root, "index"))
 	t.Setenv("TACIT_LOCAL", filepath.Join(root, "overlay"))

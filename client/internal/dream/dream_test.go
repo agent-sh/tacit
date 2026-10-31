@@ -47,8 +47,15 @@ func TestWindowsCursorAndFreshStart(t *testing.T) {
 	if w.Repo != "api" {
 		t.Fatalf("repo %q", w.Repo)
 	}
+	// The checkout is in Go's temp dir. Where only agents start sessions
+	// (digest.AgentCwd: GOTMPDIR or TMPDIR under ~/.cache) the session is an
+	// agent's and its prompt a P: line; the cursors are the same either way.
+	prompt := "U: commit it"
+	if digest.AgentCwd(api) {
+		prompt = "P: commit it"
+	}
 	joined := strings.Join(w.Lines, "\n")
-	if !strings.Contains(joined, "U: commit it") || !strings.Contains(joined, "E: tools/hooks/pre-push: eslint: not found") || strings.Contains(joined, "old turn") || strings.Contains(joined, "unfinished") {
+	if !strings.Contains(joined, prompt) || !strings.Contains(joined, "E: tools/hooks/pre-push: eslint: not found") || strings.Contains(joined, "old turn") || strings.Contains(joined, "unfinished") {
 		t.Fatalf("window lines:\n%s", joined)
 	}
 	if w.End != int64(len(initial)+len(delta)) {

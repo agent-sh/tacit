@@ -118,6 +118,11 @@ func TestHookRepoIntentAndAliases(t *testing.T) {
 
 func TestHookRepoAliasesVerifiedCheckout(t *testing.T) {
 	root := t.TempDir()
+	// root is the home: a checkout in one of the home's dot directories is
+	// never a repository (repoid), and Go's temp dir may be one (GOTMPDIR or
+	// TMPDIR under ~/.cache).
+	t.Setenv("HOME", root)
+	t.Setenv("USERPROFILE", root)
 	real, link := filepath.Join(root, "canonical"), filepath.Join(root, "checkout-alias")
 	if err := os.MkdirAll(filepath.Join(real, "nested"), 0755); err != nil {
 		t.Fatal(err)
