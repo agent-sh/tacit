@@ -1,11 +1,12 @@
 package main
 
-// A workspace is a folder that is in no repository but holds several: a
-// multi-package workspace (its packages under src/), a folder of checkouts. A
-// session started there works in all of them, so its repositories are all
-// of them (SPEC.md, Delivery, "Workspaces"): the SessionStart repo block,
-// the prompt hook's scopes, the PreToolUse push and tacit_tree/tacit_search
-// read every one, and a file path under one of them narrows to that one.
+// A workspace is a folder that is in no repository but holds several: one
+// whose packages are each a checkout under src/ (a multi-package workspace),
+// a folder of checkouts. A session started there works in all of them, so
+// its repositories are all of them (SPEC.md, Delivery, "Workspaces"): the
+// SessionStart repo block, the prompt hook's scopes, the PreToolUse push and
+// tacit_tree/tacit_search read every one, and a file path under one of them
+// narrows to that one.
 import (
 	"os"
 	"path/filepath"

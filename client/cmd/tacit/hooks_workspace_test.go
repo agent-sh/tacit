@@ -47,7 +47,7 @@ func TestWorkspaceReposAreTheGitRootsOfTheFolder(t *testing.T) {
 	gitIn(t, beta, "add", "-A")
 	gitIn(t, beta, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "c")
 	gitIn(t, beta, "worktree", "add", "-q", "--detach", filepath.Join(ws, "src", "Beta-wt"))
-	os.WriteFile(filepath.Join(ws, "workspace.json"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(ws, "notes.txt"), []byte("x"), 0o644)
 	gitInit(t, filepath.Join(ws, "node_modules", "dep"))
 	gitInit(t, filepath.Join(ws, ".cache", "hidden"))
 	gitInit(t, filepath.Join(ws, "src", "deep", "er", "Gamma"))
@@ -153,7 +153,7 @@ func workspaceRig(t *testing.T, facts ...fact.Meta) (*rig, string) {
 		os.MkdirAll(filepath.Join(d, "src", "scheduler"), 0o755)
 		os.WriteFile(filepath.Join(d, "src", "scheduler", "worker.go"), []byte("package scheduler\n"), 0o644)
 	}
-	os.WriteFile(filepath.Join(ws, "workspace.json"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(ws, "notes.txt"), []byte("x"), 0o644)
 	return r, ws
 }
 

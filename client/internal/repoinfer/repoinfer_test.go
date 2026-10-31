@@ -38,8 +38,8 @@ func TestNameFindsTheRepoAPathIsIn(t *testing.T) {
 	mkRepo(t, filepath.Join(w, "widget"))
 	mkdir(t, filepath.Join(w, "widget", "pkg", "api"))
 	mkRepo(t, filepath.Join(w, "ws", "src", "OrderService"))
-	write(t, filepath.Join(w, "ws", "workspace.json"), "") // a multi-package workspace: a folder, not a git root
-	write(t, filepath.Join(w, "gone", "src", "x.go"), "")  // no workspace marker
+	write(t, filepath.Join(w, "ws", "notes.txt"), "")     // a multi-package workspace: a folder, not a git root
+	write(t, filepath.Join(w, "gone", "src", "x.go"), "") // a folder with no checkout in it
 	mkdir(t, filepath.Join(w, "notes"))
 	// A worktree whose .git is a file pointing at its repository.
 	mkRepo(t, filepath.Join(w, "api"))
