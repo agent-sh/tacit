@@ -19,7 +19,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/record"
 )
 
-// The Mac: a read-only clone with the local layer, against a server whose
+// A Mac: a read-only clone with the local layer, against a server whose
 // hook refuses every push and logs each attempt. Dream, curate (split,
 // assess, migrate), tacit assess, tacit migrate, and the writers of folder
 // records all run; the clone's HEAD, refs and working tree stay as they

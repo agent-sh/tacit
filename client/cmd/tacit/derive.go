@@ -92,7 +92,7 @@ func runDerive(args []string) int {
 		return 2
 	}
 	// Only a real run fetches. A dry run and --out read the refs the checkouts
-	// have: they must not move anything in 35 repos or use the network.
+	// have: they must not move anything in any checkout or use the network.
 	o.Projects, o.Only, o.Force, o.TakeOver, o.Fetch = *projects, only, *force, *takeOver, !*noFetch && !*dry && *out == ""
 
 	if *out != "" {

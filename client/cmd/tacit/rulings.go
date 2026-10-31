@@ -149,7 +149,7 @@ func disowningNote(f *fact.Fact) bool {
 }
 
 // appNoteRx reads the app's template around their words: the finding's facts and
-// their answer (owner_note.go noteFile). Notes written before 2026-10-11 say
+// their answer (owner_note.go noteFile). Notes written by older releases say
 // "His answer:", so both spellings are read.
 var (
 	appNoteAbout  = regexp.MustCompile(`on a review finding \(([a-z-]+)\) about (.+?)\. (?:His|The owner's) answer: ([^\n]*?)\.\n`)

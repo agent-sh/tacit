@@ -215,7 +215,7 @@ func TestAForkCarriesTurnsOverWhenTheOriginalIsGone(t *testing.T) {
 func TestTheSameTextInTwoSessionsAtOnceIsNoTurnOfTheirs(t *testing.T) {
 	home := t.TempDir()
 	proj := filepath.Join(home, ".claude", "projects", "-home-u-projects-shop")
-	cast := "the subscription login is restored and a live request passed"
+	cast := "the cache warmup is done and a sample query passed"
 	twice := "run the migration on the staging copy first"
 	alone := "drop the old feature flag after the release"
 	writeFile(t, filepath.Join(proj, "b-one.jsonl"), claudeTurn("b-one", "c1", "2026-10-20T10:00:00.000Z", cast, "")+"\n"+claudeTurn("b-one", "c3", "2026-10-20T11:00:00.000Z", twice, "")+"\n")
@@ -274,14 +274,14 @@ func TestAnAutomatedPromptInTheirSessionIsNotTheirs(t *testing.T) {
 	home := t.TempDir()
 	writeFile(t, filepath.Join(home, ".codex", "sessions", "2026", "10", "21", "rollout-2026-10-21T09-00-00-cx-own.jsonl"), strings.Join([]string{
 		`{"type":"session_meta","payload":{"id":"cx-own","cwd":"/home/u/projects/shop","originator":"codex-tui","source":"cli","thread_source":"user"}}`,
-		`{"type":"response_item","timestamp":"2026-10-21T09:00:05.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Automated nightly supervision wake requested by the scheduler. First write the ack file, then check the queue."}]}}`,
+		`{"type":"response_item","timestamp":"2026-10-21T09:00:05.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Automated nightly backup wake requested by the scheduler. First rotate the logs, then check the queue."}]}}`,
 		`{"type":"response_item","timestamp":"2026-10-21T09:10:00.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"stop the nightly job before the backup window"}]}}`,
 	}, "\n")+"\n")
 	c, err := LoadAll(home, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m, ok := c.Find("supervision wake requested by the scheduler", "", true); ok {
+	if m, ok := c.Find("backup wake requested by the scheduler", "", true); ok {
 		t.Errorf("the automated prompt is theirs: %+v", m)
 	}
 	if m, _ := c.Find("stop the nightly job before the backup window", "", true); m.Ref != "codex:cx-own" {

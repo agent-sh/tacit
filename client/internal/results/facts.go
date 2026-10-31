@@ -101,8 +101,8 @@ type rowText struct {
 }
 
 // cellToken is the shape of one part of a cell id: an optional key= prefix and
-// up to three alphanumeric words joined by - _ or . ("cell=26b-spec-d1736",
-// "frtrim27-mixed", "profile=balanced"). A hyphenated sentence is longer.
+// up to three alphanumeric words joined by - _ or . ("cell=12b-spec-d2048",
+// "trim14-mixed", "profile=steady"). A hyphenated sentence is longer.
 var cellToken = regexp.MustCompile(`^([a-z][a-z0-9_]{0,11}=)?[A-Za-z0-9]{1,16}([-_.][A-Za-z0-9]{1,16}){0,2}$`)
 
 // columnWord is the " / column" a table row's label may end with ("tok/s",
@@ -136,7 +136,7 @@ func identLike(s string) bool {
 }
 
 // metricToken is a metric name as the description may say it: one word of up
-// to four parts ("toks", "strict_shape_macro_percent").
+// to four parts ("toks", "exact_match_macro_percent").
 var metricToken = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]{0,15}([-_.][A-Za-z0-9]{1,16}){0,3}$`)
 
 // metricName: the metric as the description says it. A column header is free

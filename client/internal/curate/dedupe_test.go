@@ -45,7 +45,7 @@ func TestDuplicatesKeepsTheBestCopyAndRetiresTheRest(t *testing.T) {
 		cf("user", "plugin-a-off", "2026-10-01", "The remember@plugins-official plugin is disabled in settings.json enabledPlugins; do not re-enable it"),
 		cf("user", "plugin-b-off", "2026-10-02", "The security-guidance@plugins-official plugin is disabled in settings.json enabledPlugins; do not re-enable it"),
 		// Same words, another scope: both stay.
-		cf("projects/memra", "zebra-receipts", "2026-10-01", "zebra crossing tool writes its receipts under receipts/zebra in the repo root"),
+		cf("projects/webapi", "zebra-receipts", "2026-10-01", "zebra crossing tool writes its receipts under receipts/zebra in the repo root"),
 		cf("projects/other", "zebra-receipts-other", "2026-10-02", "zebra crossing tool writes its receipts under receipts/zebra in the repo root"),
 		// A negation in one description: both stay.
 		cf(ws, "warm-cache", "2026-10-01", "the api server needs the warm cache flag on host-a for the large index"),
@@ -117,7 +117,7 @@ func TestAbsorberAbsorbsARestatedFactNotARuling(t *testing.T) {
 	}{
 		{split("machines/ws", "Bash tool resets the cwd to /Users/u/work after each call, so start every command with cd"), false, "cwd-resets"},
 		// another scope
-		{split("projects/memra", "Bash tool resets the cwd to /Users/u/work after each call, so start every command with cd"), false, ""},
+		{split("projects/webapi", "Bash tool resets the cwd to /Users/u/work after each call, so start every command with cd"), false, ""},
 		// a new path
 		{split("machines/ws", "Bash tool resets the cwd to /Users/u/other after each call, so start every command with cd"), false, ""},
 		// an agent's restatement of a ruling is the ruling's

@@ -1,10 +1,9 @@
 // Package relevance is the gate on the owner's words (SPEC.md, "Relevance"):
-// not every sentence of theirs is a statement (the owner, 2026-10-25: "not
-// every sentence of me is statement. if it has some relevancy, great, if
-// not, drop it"). Wherever their words would become a statement or a ruling
-// (the dreamer's capture, the curator's split, the reviewer's trim to their
-// statement, `tacit rulings one-offs`), the deciding model judges whether the
-// remark would matter to future work and says why; code keeps it only with
+// not every sentence of theirs is a statement. Wherever their words would
+// become a statement or a ruling (the dreamer's capture, the curator's split,
+// the reviewer's trim to their statement, `tacit rulings one-offs`), the
+// deciding model judges whether the remark would matter to future work and
+// says why; code keeps it only with
 // one of the categories below and a reason, and still checks the words are
 // theirs. A remark dropped is not curated: it stays only in the history it
 // came from (the inbox note, the reviewer's ledger, the statements log), with

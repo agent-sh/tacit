@@ -517,7 +517,7 @@ var (
 
 // InjectedNotices open turns a harness or a front end wrote into a person's
 // session: Claude Code's summary of a compacted conversation, a front end's
-// status prompts, scheduled automations, and a Relay hand-off of a
+// status prompts, scheduled automations, and a front end's hand-off of a
 // conversation to another harness (which then holds the transcript as one
 // user message). An interruption mark is not one of them: it is harness text
 // in every session (HarnessText).
@@ -527,7 +527,7 @@ var InjectedNotices = []string{
 	"Status check so I can identify which conversation",
 	"Automation:",
 	// A wake loop's prompt, which a program types into a person's Codex
-	// session (310 in 30 days of the owner's turns, 2026-10-30).
+	// session.
 	"Wake nonce=",
 	"The app was quit while you were working",
 	"The user moved this existing Relay conversation to you",
@@ -567,9 +567,9 @@ var wakePrompt = regexp.MustCompile(`^Automated (?:\S+ ){0,5}wake requested\b`)
 //     person typed, so an interruption mark is the harness's in every turn)
 //     or one of InjectedNotices or a wake prompt (wakePrompt) is the
 //     harness's;
-//   - an orchestrator's role prompt ("You are manager-01 ...", "You are a
-//     worker for ..."): an agent's; the person writes in lower case, and no
-//     turn of theirs opens that way;
+//   - an orchestrator's role prompt ("You are lead-01 ...", "You are a
+//     worker for ..."): an agent's; a person typing to their agent does not
+//     open a turn that way;
 //   - the rest is the person's.
 func TurnPieces(text string) []Piece {
 	var out []Piece

@@ -20,10 +20,10 @@ import (
 // failure doubles it, up to backoffCap. The cap is the full dream's cadence
 // (and dream.FailureBackoff): a route down for hours is tried about as often
 // as the jobs batch their work, so once it is back the notes wait at most one
-// period more. On the rig's 2026-10-22/24 outage (the judge route failing
-// for 27 hours) the curate quick run paid the split again every 30 minutes:
-// 52 runs, $121, nothing written. On this schedule the first failure is the
-// only paid run; the rest are probes, 10 in those 27 hours.
+// period more. Without it, a judge route down for a day had the quick curate
+// pay for the split again every 30 minutes and write nothing. On this
+// schedule the first failure is the only paid run; the rest are probes, a
+// few a day.
 const (
 	backoffBase = 30 * time.Minute
 	backoffCap  = 4 * time.Hour

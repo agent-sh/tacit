@@ -16,7 +16,7 @@ import (
 func TestImportKeepsKindUserOnlyWithHisWords(t *testing.T) {
 	home := t.TempDir()
 	mem := filepath.Join(home, ".claude/projects/-home-u/memory")
-	write(t, filepath.Join(mem, "feedback_buy.md"), "---\nname: feedback_buy\ndescription: Renaming public endpoints needs approval\nmetadata:\n  type: feedback\n  originSessionId: s1\n---\n\nHe said \"never rename public endpoints without asking me first\". Ask before renting.\n")
+	write(t, filepath.Join(mem, "feedback_rename.md"), "---\nname: feedback_rename\ndescription: Renaming public endpoints needs approval\nmetadata:\n  type: feedback\n  originSessionId: s1\n---\n\nHe said \"never rename public endpoints without asking me first\". Ask before renaming.\n")
 	write(t, filepath.Join(mem, "feedback_guess.md"), "---\nname: feedback_guess\ndescription: The owner prefers small PRs\nmetadata:\n  type: feedback\n---\n\nThe agent concluded the owner likes \"small focused pull requests always\".\n")
 	write(t, filepath.Join(mem, "feedback_plain.md"), "---\nname: feedback_plain\ndescription: Keep answers short\nmetadata:\n  type: feedback\n---\n\nKeep answers short.\n")
 	cdir := filepath.Join(home, "codex")

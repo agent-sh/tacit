@@ -8,13 +8,12 @@ import (
 )
 
 // What counts as code. Hot spots answer "which code will I have to touch or
-// coordinate with", so data, logs, lockfiles and prose are left out. On the
-// memra checkout 200301 of 202009 tracked files are run output under
-// research/ (.log, .json, .txt, .csv), and 17 of the 40 most-touched files (any
-// type) in its last 1000 non-merge commits were under research/ (OWED.md,
-// STATE.md ledgers, run logs). An
-// allowlist keeps those out without naming any repo; the cost is that a
-// language missing from the list is invisible, so the list is broad.
+// coordinate with", so data, logs, lockfiles and prose are left out. In a
+// research repo nearly every tracked file can be run output under research/
+// (.log, .json, .txt, .csv), and many of its most-touched files (any type)
+// are ledgers and run logs there. An allowlist keeps those out without naming
+// any repo; the cost is that a language missing from the list is invisible,
+// so the list is broad.
 //
 // The same table drives two things: the pathspecs handed to `git log` (so
 // the commit window counts only commits that touched code) and IsCode (so

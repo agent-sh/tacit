@@ -22,8 +22,8 @@ const toolBudget = 400 * time.Millisecond
 // toolPushTools is the PreToolUse matcher `tacit install` writes: the edit
 // tools of Claude Code, Codex's apply_patch, the shell tool of both, and
 // every MCP tool (mcp__<server>__<tool>), whose calls an area's tool
-// patterns match (areaPush). The owner accepted a hook process on every MCP
-// call (phase 2, answer 3); its cost is measured (eval/VALUE.md).
+// patterns match (areaPush). A hook process runs on every MCP call by
+// design; its cost is measured (eval/VALUE.md).
 const toolPushTools = "Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch|mcp__.*"
 
 // legacyToolPushTools are matchers earlier releases wrote; install replaces

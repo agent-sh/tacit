@@ -11,7 +11,7 @@ import (
 // (launchd has no such key). Every git call of a run has a deadline of its
 // own, so a dead or stalled server fails the run in minutes; this bound is
 // for a run that hangs outside all of them, which would otherwise hold its
-// job for good (a plain git fetch with no limit once ran 13 hours). Each
+// job for good (a plain git fetch with no limit can run for hours). Each
 // value is above the sum of the run's own limits at their defaults, so the
 // unit never stops a run the binary allows; a limit raised by configuration
 // (TACIT_DREAM_TIMEOUT, dream_max_runtime, --budget) needs the bound raised

@@ -19,11 +19,11 @@ import (
 // the agent (a skill's, /goal's condition) has no caveat: its arguments are
 // the person's when they typed the turn (TurnPieces).
 //
-// Measured 2026-10-27 on one workstation's Claude Code transcripts (Claude
-// Code 2.1.280 to 2.1.296): 27 echoes with arguments; 14 are local commands,
-// each after its caveat (/plugin 6, /effort 3, /auto-mode-setup 3, /model,
-// /rules), 13 are not (/goal 10, a skill typed in the desktop app, a skill
-// run twice by `claude -p`). A skill's text, with the arguments filled in
+// Measured on real Claude Code transcripts (Claude Code 2.1.280 to 2.1.296):
+// the echoes with arguments split about evenly between local commands, each
+// after its caveat (/plugin, /effort, /auto-mode-setup, /model, /rules), and
+// commands that are not (/goal, a skill typed in the desktop app, a skill run
+// by `claude -p`). A skill's text, with the arguments filled in
 // ("ARGUMENTS: ..."), follows its echo as a meta line: the harness's.
 type ClaudeCommands struct {
 	caveat, prompt string // the last caveat line's uuid and promptId

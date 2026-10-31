@@ -52,7 +52,7 @@ func TestWindowsElsewhereWaitForWorkFromTwoSessions(t *testing.T) {
 	os.MkdirAll(home, 0o755)
 	t.Setenv("HOME", home)
 	t.Setenv("TACIT_PROJECTS", filepath.Join(home, "projects"))
-	scratch := filepath.Join(base, "srv", "memra")
+	scratch := filepath.Join(base, "srv", "engine")
 	os.MkdirAll(filepath.Join(scratch, ".git"), 0o755)
 	os.WriteFile(filepath.Join(scratch, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644)
 	dir := filepath.Join(home, "transcripts")
@@ -74,7 +74,7 @@ func TestWindowsElsewhereWaitForWorkFromTwoSessions(t *testing.T) {
 		t.Fatalf("%d windows", len(ws))
 	}
 	for _, w := range ws {
-		if w.Repo != "" || w.Pending.Name != "memra" {
+		if w.Repo != "" || w.Pending.Name != "engine" {
 			t.Fatalf("one session's work named the repo: %+v", w)
 		}
 		if (w.File == a) != (w.Work == "edit") {
@@ -86,7 +86,7 @@ func TestWindowsElsewhereWaitForWorkFromTwoSessions(t *testing.T) {
 	ws, _ = Windows(src, st, false)
 	AcceptPending(ws, map[string]map[string]bool{})
 	for _, w := range ws {
-		if w.Repo != "memra" || w.RepoRoot != scratch || w.Fallback != "" {
+		if w.Repo != "engine" || w.RepoRoot != scratch || w.Fallback != "" {
 			t.Fatalf("two sessions' work: %+v", w)
 		}
 	}

@@ -2,8 +2,8 @@ package main
 
 // A long-lived `tacit mcp` server inside an agent session keeps running the
 // binary it started with: after an upgrade it still reads the store with the
-// old code (on the rig, servers three days old ran a binary that misread the
-// store's new format). So the server checks, at each request the client
+// old code (a server days old can run a binary that misreads the store's new
+// format). So the server checks, at each request the client
 // sends, whether the binary on disk changed (a stat of the path it was
 // started from: file identity, size and modification time), and when it did
 // and the new binary answers `version`, it hands the connection to it in

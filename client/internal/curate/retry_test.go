@@ -11,7 +11,7 @@ import (
 )
 
 const goodAnswer = `[{"origin":"n1","name":"widget-port","description":"widget listens on port 7781","type":"machine_fact","scope":"projects/widget","kind":"observed","applies_to":{},"body":"widget listens on port 7781"}]`
-const badAnswer = `[{"origin":"n1","name":"widget-port","description":"widget listens on port 7781","type":"machine_fact","scope":"projects/kv-013-g1","kind":"observed","applies_to":{},"body":"widget listens on port 7781"}]`
+const badAnswer = `[{"origin":"n1","name":"widget-port","description":"widget listens on port 7781","type":"machine_fact","scope":"projects/exp-013-g1","kind":"observed","applies_to":{},"body":"widget listens on port 7781"}]`
 
 func scopeCheck(es []Entry) []Problem {
 	var out []Problem
@@ -42,14 +42,14 @@ func TestSplitCheckedSendsARefusalBackOnce(t *testing.T) {
 		t.Fatalf("first %v, %d prompts, cost %v", first, len(prompts), cost)
 	}
 	retry := prompts[1]
-	for _, s := range []string{"SPLIT THESE", badAnswer, "CODE REFUSED THAT ANSWER", "entry 1: scope: names no known repository (projects/kv-013-g1; use the note's own project)", "Return the whole JSON array again"} {
+	for _, s := range []string{"SPLIT THESE", badAnswer, "CODE REFUSED THAT ANSWER", "entry 1: scope: names no known repository (projects/exp-013-g1; use the note's own project)", "Return the whole JSON array again"} {
 		if !strings.Contains(retry, s) {
 			t.Errorf("retry prompt lacks %q:\n%s", s, retry)
 		}
 	}
 	// Logged problems never carry the value.
 	for _, p := range Problems(first) {
-		if strings.Contains(p.String(), "kv-013") {
+		if strings.Contains(p.String(), "exp-013") {
 			t.Errorf("logged problem holds the value: %s", p)
 		}
 	}

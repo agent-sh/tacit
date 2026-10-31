@@ -42,14 +42,13 @@ const dreamSessionLog = 1 << 20
 // windowBytes is the undreamed part of a transcript (its size less its
 // dream cursor) at which the prompt hook starts a dream, by the transcript's
 // format. A transcript holds far more bytes than its digest (tool output,
-// metadata, images), and how many depends on the harness. Measured on the
-// author's Mac, 2026-10-20, over consecutive deltas of its transcripts
-// (eval/VALUE.md, "Dreaming at a full window"): a 4 MiB Claude Code delta
-// digests to a median of 0.71 windows of 60,000 characters (p25 0.50, p75
-// 0.84; 72 deltas), and 4 MiB is also what a dream reads of a file per run
-// (maxReadBytes in internal/dream), so a larger threshold would only read a
-// part of it; a 1 MiB Codex delta digests to a median of 1.5 windows (77
-// deltas; a quarter of them, sessions of mostly tool output, under 0.03).
+// metadata, images), and how many depends on the harness. Measured over
+// consecutive deltas of real transcripts (eval/VALUE.md, "Dreaming at a full
+// window"): a 4 MiB Claude Code delta typically digests to less than one
+// window of 60,000 characters, and 4 MiB is also what a dream reads of a file
+// per run (maxReadBytes in internal/dream), so a larger threshold would only
+// read a part of it; a 1 MiB Codex delta typically digests to more than one
+// window (sessions of mostly tool output to far less).
 var windowBytes = map[digest.Format]int64{digest.Claude: 4 << 20, digest.Codex: 1 << 20}
 
 // windowHermesBytes is the same for a Hermes session: message content bytes

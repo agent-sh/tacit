@@ -39,7 +39,7 @@ func TestItemAround(t *testing.T) {
 		{"from an answer into the next question: no item", lines, "it does, every night at two which lantern file stands", ""},
 		{"answers split by semicolons only: no item", "which lantern proxy file stands; - keep the old one; which zebra nightly cron stands; - retire both of them", "retire both of them", ""},
 		{"a quote across two items: no item", oneLine, "every night. whether to keep both lantern", ""},
-		{"a dash inside a word is none", "the key-env notes for tower are done, retire both of them", "retire both of them", "the key-env notes for tower are done, retire both of them"},
+		{"a dash inside a word is none", "the api-key notes for lantern are done, retire both of them", "retire both of them", "the api-key notes for lantern are done, retire both of them"},
 		{"case, apostrophes and punctuation as Find reads them", "Don't keep the USER copy; it's noise", "dont keep the user copy its noise", "Don't keep the USER copy; it's noise"},
 		{"not in the turn", oneLine, "retire both of the lantern files", ""},
 		// The line above an answer line is its question, and only that line.

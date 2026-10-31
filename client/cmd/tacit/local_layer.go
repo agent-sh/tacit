@@ -519,8 +519,8 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 			}
 			env.RepoPaths(&f.Meta)
 			f.Path = overlay.Prefix + overlay.CuratedDir + "/" + f.Meta.Scope + "/" + f.Meta.Name + ".md"
-			// The Mac's statements stay in its overlay, whatever the store's
-			// format: no other machine reads it.
+			// This machine's statements stay in its overlay, whatever the
+			// store's format: no other machine reads it.
 			var q ledger.Quote
 			ruling, said := false, false
 			if e.Kind == curate.KindStatement && wordsMasked(e.OwnerQuote) {

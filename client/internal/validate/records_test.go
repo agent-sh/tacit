@@ -120,12 +120,12 @@ func TestOrgScopes(t *testing.T) {
 	store := filepath.Join(home, "store")
 	write(t, filepath.Join(store, filepath.FromSlash(ledger.FormatPath)), string(ledger.Format{Version: 1, At: "x"}.Encode()))
 	putRecord(t, store, newRec(record.KindOrg, "orgs/agent-sh"))
-	for _, n := range []string{"tower-crane", "agnix"} {
+	for _, n := range []string{"tacit", "agnix"} {
 		r := newRec(record.KindRepo, "projects/"+n)
 		r.Org = "agent-sh"
 		putRecord(t, store, r)
 	}
-	putRecord(t, store, newRec(record.KindRepo, "projects/pikadon"))
+	putRecord(t, store, newRec(record.KindRepo, "projects/storefront"))
 	cat := repoid.LoadCatalog(home, "", "")
 	if p := NewEnv(store, "", cat, "box").Scope("orgs/agent-sh"); p == nil || !strings.Contains(p.Rule, "format marker is 2") {
 		t.Fatalf("format 1: %v", p)
@@ -138,11 +138,11 @@ func TestOrgScopes(t *testing.T) {
 	if p := e.Scope("orgs/valkey-io"); p == nil {
 		t.Fatal("an org with no record")
 	}
-	if got := strings.Join(e.OrgMembers("agent-sh"), ","); got != "agnix,tower-crane" {
+	if got := strings.Join(e.OrgMembers("agent-sh"), ","); got != "agnix,tacit" {
 		t.Fatalf("members %s", got)
 	}
-	m := fact.Meta{Scope: "orgs/agent-sh", Description: "tower-crane builds with cargo", Type: "design_decision"}
-	if p := e.OrgFact(m, "Its CI runs on every push."); p == nil || !strings.Contains(p.Hint, "names 1 of agnix, tower-crane") {
+	m := fact.Meta{Scope: "orgs/agent-sh", Description: "tacit builds with go", Type: "design_decision"}
+	if p := e.OrgFact(m, "Its CI runs on every push."); p == nil || !strings.Contains(p.Hint, "names 1 of agnix, tacit") {
 		t.Fatalf("one repository's fact: %v", p)
 	}
 	m.AppliesTo.Repos = []string{"agnix"}
@@ -153,7 +153,7 @@ func TestOrgScopes(t *testing.T) {
 	if p := e.OrgFact(m, ""); p != nil {
 		t.Fatalf("the org itself: %v", p)
 	}
-	if ps := e.Meta(fact.Meta{Scope: "orgs/agent-sh", Description: "pikadon listens on 7781", Type: "machine_fact", Source: fact.Source{Kind: "observed"}}, "x", false, false); len(ps) == 0 {
+	if ps := e.Meta(fact.Meta{Scope: "orgs/agent-sh", Description: "storefront listens on 7781", Type: "machine_fact", Source: fact.Source{Kind: "observed"}}, "x", false, false); len(ps) == 0 {
 		t.Fatal("Meta lets a one-repository fact into the org")
 	}
 }

@@ -43,8 +43,8 @@ func rules(fs []Finding) []string {
 func TestCleanStorePasses(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, "machines/host-a/a.md", good("a", "machines/host-a"))
-	write(t, root, "projects/memra/b.md", strings.Replace(good("b", "projects/memra"), "body", "see [[a]]", 1))
-	write(t, root, "inbox/claude@host-a/c.md", strings.Replace(good("c", "projects/memra"), "type: machine_fact", "type: unclassified", 1))
+	write(t, root, "projects/widget/b.md", strings.Replace(good("b", "projects/widget"), "body", "see [[a]]", 1))
+	write(t, root, "inbox/claude@host-a/c.md", strings.Replace(good("c", "projects/widget"), "type: machine_fact", "type: unclassified", 1))
 	// A retired fact (a dated verdict that it is outdated) is clean and not indexed.
 	write(t, root, "machines/host-a/r.md", strings.Replace(good("r", "machines/host-a"), "created:", "retired: 2026-10-09\ncreated:", 1))
 	facts, _, _ := fact.Walk(root)
@@ -70,7 +70,7 @@ func TestEachRuleFires(t *testing.T) {
 	write(t, root, "machines/host-a/l3.md", strings.Replace(good("l3", "machines/host-a"), "machine_fact", "unclassified", 1))
 	write(t, root, "machines/host-a/l3b.md", strings.Replace(good("l3b", "machines/host-a"), "machine_fact", "rumor", 1))
 	// L4 dir != scope, invalid scope, bad inbox path
-	write(t, root, "machines/host-a/l4.md", good("l4", "projects/memra"))
+	write(t, root, "machines/host-a/l4.md", good("l4", "projects/widget"))
 	write(t, root, "machines/host-a/l4b.md", good("l4b", "projects"))
 	write(t, root, "inbox/l4c.md", good("l4c", "user"))
 	// L5 dates
@@ -81,7 +81,7 @@ func TestEachRuleFires(t *testing.T) {
 	// L8 web in system
 	write(t, root, "system/l8.md", strings.Replace(good("l8", "system"), "kind: observed", "kind: web", 1))
 	// L9 derived_from rules
-	write(t, root, "derived/memra/l9.md", good("l9", "derived/memra"))
+	write(t, root, "derived/widget/l9.md", good("l9", "derived/widget"))
 	write(t, root, "machines/host-a/l9b.md", strings.Replace(good("l9b", "machines/host-a"), "created:", "derived_from: abc\ncreated:", 1))
 	// L14 retired is a date, and not on an inbox fact
 	write(t, root, "machines/host-a/l14.md", strings.Replace(good("l14", "machines/host-a"), "created:", "retired: yesterday\ncreated:", 1))
@@ -127,7 +127,7 @@ func TestEachRuleFires(t *testing.T) {
 func TestFolderIndexesMatchTheFacts(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, "machines/host-a/a.md", good("a", "machines/host-a"))
-	write(t, root, "projects/memra/b.md", good("b", "projects/memra"))
+	write(t, root, "projects/widget/b.md", good("b", "projects/widget"))
 	facts, _, _ := fact.Walk(root)
 	write(t, root, "MEMORY.md", index.Generate(facts))
 	if fs, _ := Run(root); len(fs) != 0 {
@@ -140,7 +140,7 @@ func TestFolderIndexesMatchTheFacts(t *testing.T) {
 	if fs, _ := Run(root); len(fs) != 0 {
 		t.Fatalf("generated indexes: %v", fs)
 	}
-	write(t, root, "projects/memra/_index.md", "edited by hand\n")
+	write(t, root, "projects/widget/_index.md", "edited by hand\n")
 	os.Remove(filepath.Join(root, "machines", "_index.md"))
 	write(t, root, "projects/gone/_index.md", "stale\n")
 	fs, _ := Run(root)
@@ -152,7 +152,7 @@ func TestFolderIndexesMatchTheFacts(t *testing.T) {
 		got = append(got, f.Path)
 	}
 	sort.Strings(got)
-	if strings.Join(got, ",") != "machines/_index.md,projects/gone/_index.md,projects/memra/_index.md" {
+	if strings.Join(got, ",") != "machines/_index.md,projects/gone/_index.md,projects/widget/_index.md" {
 		t.Fatalf("L16 on %v", got)
 	}
 }

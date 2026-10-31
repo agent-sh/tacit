@@ -61,7 +61,7 @@ func TestPromptCoverageAndIdentifierRarity(t *testing.T) {
 
 func TestPromptDoesNotJoinIncidentalSummaryWords(t *testing.T) {
 	root := t.TempDir()
-	write(t, root, "system/company.md", "research-tool-company", "system", "Company pages are unreachable through the research tool; build company facts from official sources.", "", "")
+	write(t, root, "system/company.md", "research-tool-company", "system", "Vendor portals are blocked for the research crawler; take vendor facts from signed release notes.", "", "")
 	write(t, root, "system/kernel.md", "new-kernel", "system", "Driver API drift breaks builds. Refresh the source tree and add the new entry.", "", "")
 	write(t, root, "system/ingestion.md", "ingestion-facts", "system", "research facts ingestion", "", "")
 	write(t, root, "system/research.md", "research-notes", "system", "research facts", "", "")

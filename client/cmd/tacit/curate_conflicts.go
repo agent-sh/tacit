@@ -55,8 +55,8 @@ var openConflictIndex = func(ctx context.Context, storeDir, head string) (confli
 // same scope that share most of their terms.
 //
 // A failed index query opens the index again and asks once more; when that
-// fails too the error is returned and the caller writes nothing: the
-// 2026-10-11 run logged 509 failed queries and wrote 509 facts without their
+// fails too the error is returned and the caller writes nothing: a run that
+// only logged its failed queries wrote every one of those facts without its
 // check.
 func conflictPairs(ctx context.Context, s *store.Store, facts []*fact.Fact, host string, withinSet, withLocal bool, skip func(f *fact.Fact, h search.Hit) bool) ([]curate.Pair, []judgedPair, error) {
 	var ix conflictIndex
@@ -274,8 +274,8 @@ func uncheckedLine(nf *fact.Fact, pm judgedPair, facts []*fact.Fact) string {
 }
 
 // contradictionLine is the review line of a "contradicts" verdict. Review
-// only: a sampled judge precision of about 30 percent on "contradicts" is too
-// low to hide either fact at delivery; conflicts_with is set when the owner
+// only: in a sample the judge's "contradicts" was wrong far too often to
+// hide either fact at delivery; conflicts_with is set when the owner
 // confirms (tacit resolve). where, when set, says where the other fact is.
 func contradictionLine(nf *fact.Fact, pm judgedPair, facts []*fact.Fact, where string) string {
 	other, otherDesc := "", ""

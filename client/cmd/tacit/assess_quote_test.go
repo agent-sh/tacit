@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	stopWords  = "we are stoping development of oldtool. bank what you have in one branch, take down all servers"
-	pauseWords = "we are banking our work and releasing boxes, no more oldtool work for now"
+	stopWords  = "we are freezng work on oldtool. park what you have on one branch, shut down the test boxes"
+	pauseWords = "we are parking our work and freeing the test boxes, no more oldtool work for now"
 )
 
 // quoteHome is assessHome with oldtool, the owner's repository (commits on
@@ -76,7 +76,7 @@ func TestAssessQuoteStopIsDormant(t *testing.T) {
 	if rep.AssessRecords != 0 || rep.AssessRefused != 1 || len(fa.prompts) != 2 {
 		t.Fatalf("dead on a stop and on a pause: report %+v, %d prompts", rep, len(fa.prompts))
 	}
-	if !strings.Contains(fa.prompts[0], `owner's turn (claude:s9, `+daysAgo(28)+`): "we are banking our work and releasing boxes, no more oldtool work for now"`) {
+	if !strings.Contains(fa.prompts[0], `owner's turn (claude:s9, `+daysAgo(28)+`): "we are parking our work and freeing the test boxes, no more oldtool work for now"`) {
 		t.Errorf("the owner's words after the reminder, dated:\n%s", fa.prompts[0])
 	}
 	if !strings.Contains(fa.prompts[1], "owner_quote_final") || !strings.Contains(fa.prompts[1], "stopping, banking or pausing work is dormant") {

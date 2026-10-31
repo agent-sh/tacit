@@ -77,12 +77,12 @@ func TestMatchContextAndProof(t *testing.T) {
 	for q, want := range map[string]bool{
 		"which one would you start with":                    false,
 		"we dont need to rebuild the images on each commit": true,
-		"no release on docs":                                true, // most of its description
+		"no deploy on weekends":                             true, // most of its description
 	} {
-		desc := "Write no code until the owner says go"
+		desc := "Merge nothing until the review is done"
 		switch q {
-		case "no release on docs":
-			desc = "No release on docs."
+		case "no deploy on weekends":
+			desc = "No deploy on weekends."
 		case "we dont need to rebuild the images on each commit":
 			desc = "Rebuild the images only when a commit touches them."
 		}

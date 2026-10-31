@@ -33,10 +33,10 @@ defmodule TacitServer.Auth.KeyIdTest do
             "@host-a",
             "a@b@c",
             "Claude@host-a",
-            "claude@RIG",
+            "claude@HOST-A",
             "claude@host-a\n",
             "claude@host-a/../x",
-            "claude@ri.g",
+            "claude@host.a",
             nil,
             7,
             :claude

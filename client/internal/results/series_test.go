@@ -20,20 +20,20 @@ func snap(label, group string, v float64, raw string) Obs {
 // the commit that wrote it, and the previous value is the one it replaced.
 func TestSnapshotSeriesKeepsTheCommitOfEachChange(t *testing.T) {
 	vs := []Version{
-		{cm("aaaaaaaaaaaa", "2026-09-01"), []Obs{snap("q9 plain short", "g", 138.5, "138.5"), snap("q9 spec short", "g", 281, "281")}},
-		{cm("bbbbbbbbbbbb", "2026-09-05"), []Obs{snap("q9 plain short", "g", 138.5, "138.5"), snap("q9 spec short", "g", 281, "281")}},
-		{cm("cccccccccccc", "2026-09-10"), []Obs{snap("q9 plain short", "g", 161.3, "161.3"), snap("q9 spec short", "g", 281, "281")}},
+		{cm("aaaaaaaaaaaa", "2026-09-01"), []Obs{snap("m7 plain short", "g", 212.4, "212.4"), snap("m7 spec short", "g", 431, "431")}},
+		{cm("bbbbbbbbbbbb", "2026-09-05"), []Obs{snap("m7 plain short", "g", 212.4, "212.4"), snap("m7 spec short", "g", 431, "431")}},
+		{cm("cccccccccccc", "2026-09-10"), []Obs{snap("m7 plain short", "g", 247.4, "247.4"), snap("m7 spec short", "g", 431, "431")}},
 	}
 	ss := BuildSeries("r", "BENCH.md", vs, false)
 	if len(ss) != 2 {
 		t.Fatalf("%d series", len(ss))
 	}
 	plain := ss[0]
-	if len(plain.Points) != 2 || plain.Cur().Raw != "161.3" || plain.Cur().Commit != "cccccccccccc" || plain.Cur().Date != "2026-09-10" {
+	if len(plain.Points) != 2 || plain.Cur().Raw != "247.4" || plain.Cur().Commit != "cccccccccccc" || plain.Cur().Date != "2026-09-10" {
 		t.Fatalf("plain: %+v", plain.Points)
 	}
 	prev, ok := plain.Prev()
-	if !ok || prev.Raw != "138.5" || prev.Commit != "aaaaaaaaaaaa" {
+	if !ok || prev.Raw != "212.4" || prev.Commit != "aaaaaaaaaaaa" {
 		t.Fatalf("the replaced value stood since its first commit: %+v", prev)
 	}
 	if !plain.Recurs() || ss[1].Recurs() {
@@ -119,9 +119,9 @@ func matchSeries() []*Series {
 		return s
 	}
 	return []*Series{
-		mk("q9 plain short", 138.5, 161.3),
-		mk("q9 plain long", 120.4, 120.4),
-		mk("q9 spec short", 281.0, 301.2),
+		mk("m7 plain short", 212.4, 247.4),
+		mk("m7 plain long", 184.6, 184.6),
+		mk("m7 spec short", 431.0, 462.4),
 	}
 }
 
@@ -132,32 +132,32 @@ func matchSeries() []*Series {
 func TestMatchFindsFactsThatQuoteAReplacedValue(t *testing.T) {
 	ix := NewIndex(matchSeries())
 	facts := []*fact.Fact{
-		fx("stale-quote", "projects/r", "observed", "2026-09-03", "The q9 plain short decode ran 138.5 tok/s on the host-a."),
-		fx("current-quote", "projects/r", "observed", "2026-09-12", "q9 plain short decode is 161.3 tok/s now."),
-		fx("other-setup", "projects/r", "observed", "2026-09-06", "The q9 spec long case ran 138.5 tok/s."),
-		fx("two-digits", "projects/r", "observed", "2026-09-06", "q9 plain short ran 14 tok/s once."),
-		fx("wrong-unit", "projects/r", "observed", "2026-09-06", "q9 plain short took 138.5 ms."),
-		fx("before-the-value", "projects/r", "observed", "2026-08-01", "q9 plain short decode ran 138.5 tok/s."),
-		fx("ruling", "user", "user", "2026-09-06", "Owner: q9 plain short decodes 138.5 tok/s on the host-a."),
-		fx("floor-ruling", "user", "user", "2026-09-06", "Owner: q9 plain short must stay above 138.5 tok/s."),
-		fx("target", "projects/r", "observed", "2026-09-06", "The target for q9 plain short is 138.5 tok/s."),
-		fx("floor-after", "projects/r", "observed", "2026-09-06", "q9 plain short 138.5 tok/s floor in the gate."),
-		fx("less-than", "projects/r", "observed", "2026-09-06", "alert when q9 plain short < 138.5 tok/s."),
-		fx("from-to", "projects/r", "observed", "2026-09-06", "q9 plain short went from 138.5 to 161.3 tok/s."),
-		fx("was-is", "projects/r", "observed", "2026-09-06", "q9 plain short was 138.5 tok/s, and is now 161.3 tok/s."),
-		fx("now-was", "projects/r", "observed", "2026-09-06", "q9 plain short 161.3 tok/s now (was 138.5 tok/s)."),
-		fxt("history-note", "history", "projects/r", "observed", "2026-09-06", "q9 plain short ran 138.5 tok/s."),
-		fxt("mistake-note", "past_mistake", "projects/r", "observed", "2026-09-06", "q9 plain short ran 138.5 tok/s."),
-		fxt("change-note", "code_change", "projects/r", "observed", "2026-09-06", "q9 plain short ran 138.5 tok/s."),
-		fx("dated-record", "projects/r", "observed", "2026-09-07", "On 2026-09-02 the q9 plain short decode was 138.5 tok/s; the number is the first one published."),
-		fx("round-figure", "projects/r", "observed", "2026-09-06", "q9 plain short decode is about 139 tok/s"),
+		fx("stale-quote", "projects/r", "observed", "2026-09-03", "The m7 plain short decode ran 212.4 tok/s on the host-a."),
+		fx("current-quote", "projects/r", "observed", "2026-09-12", "m7 plain short decode is 247.4 tok/s now."),
+		fx("other-setup", "projects/r", "observed", "2026-09-06", "The m7 spec long case ran 212.4 tok/s."),
+		fx("two-digits", "projects/r", "observed", "2026-09-06", "m7 plain short ran 14 tok/s once."),
+		fx("wrong-unit", "projects/r", "observed", "2026-09-06", "m7 plain short took 212.4 ms."),
+		fx("before-the-value", "projects/r", "observed", "2026-08-01", "m7 plain short decode ran 212.4 tok/s."),
+		fx("ruling", "user", "user", "2026-09-06", "Owner: m7 plain short decodes 212.4 tok/s on the host-a."),
+		fx("floor-ruling", "user", "user", "2026-09-06", "Owner: m7 plain short must stay above 212.4 tok/s."),
+		fx("target", "projects/r", "observed", "2026-09-06", "The target for m7 plain short is 212.4 tok/s."),
+		fx("floor-after", "projects/r", "observed", "2026-09-06", "m7 plain short 212.4 tok/s floor in the gate."),
+		fx("less-than", "projects/r", "observed", "2026-09-06", "alert when m7 plain short < 212.4 tok/s."),
+		fx("from-to", "projects/r", "observed", "2026-09-06", "m7 plain short went from 212.4 to 247.4 tok/s."),
+		fx("was-is", "projects/r", "observed", "2026-09-06", "m7 plain short was 212.4 tok/s, and is now 247.4 tok/s."),
+		fx("now-was", "projects/r", "observed", "2026-09-06", "m7 plain short 247.4 tok/s now (was 212.4 tok/s)."),
+		fxt("history-note", "history", "projects/r", "observed", "2026-09-06", "m7 plain short ran 212.4 tok/s."),
+		fxt("mistake-note", "past_mistake", "projects/r", "observed", "2026-09-06", "m7 plain short ran 212.4 tok/s."),
+		fxt("change-note", "code_change", "projects/r", "observed", "2026-09-06", "m7 plain short ran 212.4 tok/s."),
+		fx("dated-record", "projects/r", "observed", "2026-09-07", "On 2026-09-02 the m7 plain short decode was 212.4 tok/s; the number is the first one published."),
+		fx("round-figure", "projects/r", "observed", "2026-09-06", "m7 plain short decode is about 212 tok/s"),
 	}
 	hits := ix.Match(facts)
 	got := map[string]Hit{}
 	for _, h := range hits {
 		got[h.Fact.Meta.Name] = h
 	}
-	if h, ok := got["stale-quote"]; !ok || h.Named || h.Old.Raw != "138.5" || h.S.Cur().Raw != "161.3" {
+	if h, ok := got["stale-quote"]; !ok || h.Named || h.Old.Raw != "212.4" || h.S.Cur().Raw != "247.4" {
 		t.Fatalf("stale-quote: %+v", h)
 	}
 	if h, ok := got["current-quote"]; !ok || !h.Named {
@@ -178,24 +178,24 @@ func TestMatchFindsFactsThatQuoteAReplacedValue(t *testing.T) {
 			t.Fatalf("%s states the current value too, so it names the row and is not stale: %+v", n, h)
 		}
 	}
-	if r := got["stale-quote"].Repl; r.Raw != "161.3" || r.Date != "2026-09-06" {
+	if r := got["stale-quote"].Repl; r.Raw != "247.4" || r.Date != "2026-09-06" {
 		t.Fatalf("the quoted value was replaced by the second point: %+v", r)
 	}
 }
 
 func TestMatchIgnoresDifferencesInsideTheNoise(t *testing.T) {
 	// eight re-measurements between 160.0 and 162.0; a note quoting 160.0 is the same measurement
-	s := &Series{Repo: "r", File: "perf.jsonl", Group: "toks", Key: "k", Label: "cell=q9 plain short", Metric: "toks", Unit: "tok/s", Terms: tokens("cell=q9 plain short"), Log: true}
+	s := &Series{Repo: "r", File: "perf.jsonl", Group: "toks", Key: "k", Label: "cell=m7 plain short", Metric: "toks", Unit: "tok/s", Terms: tokens("cell=m7 plain short"), Log: true}
 	for i, v := range []float64{160.0, 161.2, 160.5, 162.0, 161.0, 160.8, 161.7, 161.3} {
 		s.Points = append(s.Points, Point{Value: v, Raw: num(v), Dec: 1, Commit: fmt.Sprintf("c%011d", i), Date: "2026-09-01", N: 1})
 	}
-	other := &Series{Repo: "r", File: "perf.jsonl", Group: "toks", Key: "k2", Label: "cell=q9 spec long", Metric: "toks", Unit: "tok/s", Terms: tokens("cell=q9 spec long"), Points: []Point{{Value: 300, Raw: "300", Commit: "x", Date: "2026-09-01", N: 1}}}
+	other := &Series{Repo: "r", File: "perf.jsonl", Group: "toks", Key: "k2", Label: "cell=m7 spec long", Metric: "toks", Unit: "tok/s", Terms: tokens("cell=m7 spec long"), Points: []Point{{Value: 300, Raw: "300", Commit: "x", Date: "2026-09-01", N: 1}}}
 	ix := NewIndex([]*Series{s, other})
-	hits := ix.Match([]*fact.Fact{fx("near", "projects/r", "observed", "2026-09-06", "q9 plain short ran 160.0 tok/s")})
+	hits := ix.Match([]*fact.Fact{fx("near", "projects/r", "observed", "2026-09-06", "m7 plain short ran 160.0 tok/s")})
 	if len(hits) != 0 {
 		t.Fatalf("160.0 is an older value of the row but inside its noise, so it is neither stale nor the current value: %+v", hits)
 	}
-	far := ix.Match([]*fact.Fact{fx("far", "projects/r", "observed", "2026-09-06", "q9 plain short ran 140.0 tok/s")})
+	far := ix.Match([]*fact.Fact{fx("far", "projects/r", "observed", "2026-09-06", "m7 plain short ran 140.0 tok/s")})
 	if len(far) != 0 {
 		t.Fatalf("140.0 is no recorded value: %+v", far)
 	}
@@ -206,20 +206,20 @@ func TestMatchIgnoresDifferencesInsideTheNoise(t *testing.T) {
 // not out of date against 103.5. Two points that differ by 20 percent are.
 func TestNoiseBandHoldsWithFewPoints(t *testing.T) {
 	mk := func(vals ...float64) *Series {
-		s := &Series{Repo: "r", File: "perf.jsonl", Group: "toks", Key: "k", Label: "cell=q9 plain short", Metric: "toks", Unit: "tok/s", Terms: tokens("cell=q9 plain short"), Log: true}
+		s := &Series{Repo: "r", File: "perf.jsonl", Group: "toks", Key: "k", Label: "cell=m7 plain short", Metric: "toks", Unit: "tok/s", Terms: tokens("cell=m7 plain short"), Log: true}
 		for i, v := range vals {
 			s.Points = append(s.Points, Point{Value: v, Raw: fmt.Sprintf("%.1f", v), Dec: 1, Commit: fmt.Sprintf("c%011d", i), Date: "2026-09-01", N: 1})
 		}
 		return s
 	}
-	other := &Series{Repo: "r", File: "perf.jsonl", Group: "toks", Key: "k2", Label: "cell=q9 spec long", Metric: "toks", Unit: "tok/s", Terms: tokens("cell=q9 spec long"), Points: []Point{{Value: 300, Raw: "300", Commit: "x", Date: "2026-09-01", N: 1}}}
-	note := fx("n", "projects/r", "observed", "2026-09-06", "q9 plain short ran 100.0 tok/s")
+	other := &Series{Repo: "r", File: "perf.jsonl", Group: "toks", Key: "k2", Label: "cell=m7 spec long", Metric: "toks", Unit: "tok/s", Terms: tokens("cell=m7 spec long"), Points: []Point{{Value: 300, Raw: "300", Commit: "x", Date: "2026-09-01", N: 1}}}
+	note := fx("n", "projects/r", "observed", "2026-09-06", "m7 plain short ran 100.0 tok/s")
 	if four := NewIndex([]*Series{mk(100.0, 102.0, 99.0, 103.5), other}).Match([]*fact.Fact{note}); len(four) != 0 {
 		t.Fatalf("four points inside 5 percent are noise: %+v", four)
 	}
-	// one or two points after the change are not a sample: perf-ci's laptop
-	// cells move 2 to 5 percent between runs of the same code, so 3.5 percent
-	// is not shown to be a change
+	// one or two points after the change are not a sample: benchmark cells
+	// on a laptop move a few percent between runs of the same code, so 3.5
+	// percent is not shown to be a change
 	if one := NewIndex([]*Series{mk(100.0, 103.5), other}).Match([]*fact.Fact{note}); len(one) != 0 {
 		t.Fatalf("a 3.5 percent difference to one later row is inside the 5 percent that stands in for a sample: %+v", one)
 	}
@@ -234,11 +234,11 @@ func TestNoiseBandHoldsWithFewPoints(t *testing.T) {
 // value is not current.
 func TestASeriesTheNewestVersionLacksIsDropped(t *testing.T) {
 	vs := []Version{
-		{cm("aaaaaaaaaaaa", "2026-09-01"), []Obs{snap("q9 plain short", "g", 138.5, "138.5"), snap("q9 spec short", "g", 281, "281")}},
-		{cm("bbbbbbbbbbbb", "2026-09-05"), []Obs{snap("q9 spec short", "g", 301.2, "301.2")}},
+		{cm("aaaaaaaaaaaa", "2026-09-01"), []Obs{snap("m7 plain short", "g", 212.4, "212.4"), snap("m7 spec short", "g", 431, "431")}},
+		{cm("bbbbbbbbbbbb", "2026-09-05"), []Obs{snap("m7 spec short", "g", 462.4, "462.4")}},
 	}
 	ss := BuildSeries("r", "BENCH.md", vs, false)
-	if len(ss) != 1 || ss[0].Label != "q9 spec short" || ss[0].Cur().Raw != "301.2" {
+	if len(ss) != 1 || ss[0].Label != "m7 spec short" || ss[0].Cur().Raw != "462.4" {
 		t.Fatalf("%+v", ss)
 	}
 	// a log: a row the newest version dropped is no longer a point
@@ -330,14 +330,14 @@ func TestPerfLogWithAUniqueColumnIsStillASeries(t *testing.T) {
 // key, so the heading breaks it.
 func TestMatchOrderIsDeterministic(t *testing.T) {
 	mk := func(group string) []*Series {
-		s := &Series{Repo: "r", File: "RESULTS.md", Group: group, Key: "q9 plain short|tok/s", Label: "q9 plain short", Metric: "tok/s", Unit: "tok/s", Terms: tokens("q9 plain short")}
-		s.Points = []Point{{Value: 138.5, Raw: "138.5", Dec: 1, Commit: "c00000000001", Date: "2026-09-01", N: 1}, {Value: 161.3, Raw: "161.3", Dec: 1, Commit: "c00000000002", Date: "2026-09-10", N: 1}}
+		s := &Series{Repo: "r", File: "RESULTS.md", Group: group, Key: "m7 plain short|tok/s", Label: "m7 plain short", Metric: "tok/s", Unit: "tok/s", Terms: tokens("m7 plain short")}
+		s.Points = []Point{{Value: 212.4, Raw: "212.4", Dec: 1, Commit: "c00000000001", Date: "2026-09-01", N: 1}, {Value: 247.4, Raw: "247.4", Dec: 1, Commit: "c00000000002", Date: "2026-09-10", N: 1}}
 		s.N = 2
-		other := &Series{Repo: "r", File: "RESULTS.md", Group: group, Key: "q9 spec long|tok/s", Label: "q9 spec long", Metric: "tok/s", Unit: "tok/s", Terms: tokens("q9 spec long"), Points: []Point{{Value: 300, Raw: "300", Commit: "x", Date: "2026-09-01", N: 1}}}
+		other := &Series{Repo: "r", File: "RESULTS.md", Group: group, Key: "m7 spec long|tok/s", Label: "m7 spec long", Metric: "tok/s", Unit: "tok/s", Terms: tokens("m7 spec long"), Points: []Point{{Value: 300, Raw: "300", Commit: "x", Date: "2026-09-01", N: 1}}}
 		return []*Series{s, other}
 	}
 	all := append(mk("Heading B"), mk("Heading A")...)
-	note := fx("n", "projects/r", "observed", "2026-09-12", "q9 plain short ran 138.5 tok/s")
+	note := fx("n", "projects/r", "observed", "2026-09-12", "m7 plain short ran 212.4 tok/s")
 	for i := 0; i < 80; i++ {
 		hits := NewIndex(all).Match([]*fact.Fact{note})
 		if len(hits) != 2 {

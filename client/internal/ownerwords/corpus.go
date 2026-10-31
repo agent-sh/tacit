@@ -205,14 +205,14 @@ func cutWords(text string, pastes []string) (words string, cut []string, relayed
 }
 
 // Agent text the owner relayed inside their own turn, with no paste record (a lane's
-// report, a chat model's answer): the owner types plain lowercase lines in a
-// terminal, an agent writes markdown. A line is left out of their turn when it
+// report, a chat model's answer): a person types plain lines in a terminal,
+// an agent writes markdown. A line is left out of their turn when it
 // is a markdown header, holds a backtick or "**", or is a bullet or numbered
 // item that opens with a capital, a backtick, "*" or "["; and so is every line
 // of a block of three or more capitalized prose lines (eight words or more,
-// ending in ".", ":" or ";"). Measured on the author's 17,241 turns (2026-10-11): it
-// drops 982 distinct lines (5,302 in all) from 214 turns, and each of a random
-// sample of 20 is an agent's.
+// ending in ".", ":" or ";"). On a real store's turns it drops lines from a
+// small share of the turns, and every line of a random sample of what it
+// drops is an agent's.
 var (
 	mdHeader   = regexp.MustCompile(`^\s*#{1,6}\s+\S`)
 	mdBullet   = regexp.MustCompile("^\\s*([-*•]|\\d+[.)])\\s+[A-Z`*\\[]")
@@ -440,8 +440,8 @@ func (c *Corpus) Latest(quote, session string) (Match, time.Time, bool) {
 // sorted. A prompt history line with no session (claude:history,
 // codex:history) names no session and is not counted, and neither is a
 // turn word for word the same as one already counted (a resumed, forked or
-// imported copy of the session: on the rig, Codex forks and Hermes
-// continuations repeat the owner's turns under new ids). Code counts sessions
+// imported copy of the session: Codex forks and Hermes continuations
+// repeat the owner's turns under new ids). Code counts sessions
 // with it (SPEC.md, "One-offs"): words said in one session are a statement,
 // never a rule.
 func (c *Corpus) SaidIn(quote string) []string {
@@ -726,8 +726,8 @@ func (c *Corpus) matchTurn(i int, segs []string, near bool) (Match, bool) {
 	}
 	m := Match{Ref: c.refs[i], TurnHash: ledger.TurnHash(Normalize(c.raw[i])), Near: near}
 	// A question: the sentence the words are in ends with a question mark and
-	// asks (opens with a question word, or the words open it): "what would you
-	// build?" is one, "please never rent without asking me, ok?" is not.
+	// asks (opens with a question word, or the words open it): "which port
+	// does it use?" is one, "please never deploy on a friday, ok?" is not.
 	first := start
 	for first > 0 && !toks[first-1].endS && !toks[first-1].endQ {
 		first--
@@ -1392,7 +1392,7 @@ type Mention struct {
 }
 
 // Mentions are up to max of their turns that hold name as words (name
-// normalized: "valkey-review-bot" is the words valkey review bot), the
+// normalized: "billing-report-bot" is the words billing report bot), the
 // newest first; turns whose source records no time come last, in corpus
 // order. What they said last about a thing is what decides it, so the
 // newest are the ones shown.

@@ -292,7 +292,7 @@ func ForgeLabel(url string) string {
 
 // Display is the folder's name as every reader shows it: the intended name
 // (the folder's), and the current forge name when it differs, so an agent
-// uses the right URL: "pikadon (GitHub: ginza)".
+// uses the right URL: "storefront (GitHub: shop-v2)".
 func (r *Record) Display() string {
 	if r == nil {
 		return ""

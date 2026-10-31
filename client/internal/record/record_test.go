@@ -160,7 +160,7 @@ func TestValidateHistoryIsAppendOnlyAndOwnerStatusKept(t *testing.T) {
 	quoted.Was[0].Quote, quoted.Was[0].QuoteFrom = "we are stopping widget for now", "claude:s1"
 	dates := quoted.Clone()
 	dates.Status = StatusActive
-	dates.Was = append([]Entry{{Status: StatusActive, Date: today, By: ByOpus, Why: "code: active from its dates: the owner's last activity is ... Owner activity after the 2026-09-28 words (claude:s1 ...), so the dates stand"}}, dates.Was...)
+	dates.Was = append([]Entry{{Status: StatusActive, Date: today, By: ByOpus, Why: "code: active from its dates: the owner's last activity is ... Owner activity after the 2026-09-18 words (claude:s1 ...), so the dates stand"}}, dates.Was...)
 	ce := env(quoted)
 	ce.CodeStatus = func(string) string { return StatusActive }
 	expect(t, Validate(quoted, dates, ByOpus, ce), "")
@@ -334,7 +334,7 @@ func TestCites(t *testing.T) {
 	if strings.Join(got, ",") != "claude:abc-1,codex:d2,note:n1" {
 		t.Fatalf("cites %v", got)
 	}
-	if !WholeWord("the real name of valkey-reviewer is", "valkey-reviewer") || WholeWord("valkey-reviewers", "valkey-reviewer") || WholeWord("x-valkey", "valkey") {
+	if !WholeWord("the real name of billing-reporter is", "billing-reporter") || WholeWord("billing-reporters", "billing-reporter") || WholeWord("x-billing", "billing") {
 		t.Fatal("WholeWord")
 	}
 }
@@ -371,22 +371,22 @@ func TestValidateAliasOfAFolderWithFacts(t *testing.T) {
 // A dead project's successor is another live project with a record; the
 // owner's words an entry rests on go together, dated no later than it.
 func TestValidateSuccessorAndWords(t *testing.T) {
-	succ := repoRec("crane")
-	gone := repoRec("gishra")
-	gone.SuppressedBy = "projects/crane"
+	succ := repoRec("storefront")
+	gone := repoRec("webshop")
+	gone.SuppressedBy = "projects/storefront"
 	dead := func(s string) *Record {
 		r := repoRec("oldtool")
 		r.Status, r.Was[0].Status, r.Successor = StatusDead, StatusDead, s
-		r.Was[0].Why = "code: dead on the owner's words of 2026-10-06, note:n1"
-		r.Was[0].Words, r.Was[0].WordsFrom, r.Was[0].WordsOn = "to delete the plugins oldtool", "note:n1", "2026-10-06"
+		r.Was[0].Why = "code: dead on the owner's words of 2026-10-04, note:n1"
+		r.Was[0].Words, r.Was[0].WordsFrom, r.Was[0].WordsOn = "to delete the plugins oldtool", "note:n1", "2026-10-04"
 		return r
 	}
-	expect(t, Validate(nil, dead("projects/crane"), ByOpus, env(succ, gone)), "")
-	expect(t, Validate(nil, dead("projects/gishra"), ByOpus, env(succ, gone)), "successor: names a folder that is suppressed")
+	expect(t, Validate(nil, dead("projects/storefront"), ByOpus, env(succ, gone)), "")
+	expect(t, Validate(nil, dead("projects/webshop"), ByOpus, env(succ, gone)), "successor: names a folder that is suppressed")
 	expect(t, Validate(nil, dead("projects/nothing"), ByOpus, env(succ, gone)), "successor: names a folder with no record")
 	expect(t, Validate(nil, dead("projects/oldtool"), ByOpus, env(succ)), "successor: points at the folder itself")
 	expect(t, Validate(nil, dead("areas/ops"), ByOpus, env(succ)), "successor: is no project folder")
-	active := dead("projects/crane")
+	active := dead("projects/storefront")
 	active.Status, active.Was[0].Status = StatusActive, StatusActive
 	expect(t, Validate(nil, active, ByOpus, env(succ)), "successor: only a dead project has a successor")
 	w := dead("")
@@ -398,18 +398,18 @@ func TestValidateSuccessorAndWords(t *testing.T) {
 	w = dead("")
 	w.Was[0].WordsFrom = "note:unknown"
 	expect(t, Validate(nil, w, ByOpus, env(succ)), "words_from: names no note or quote code can find")
-	if day, ok := dead("").Was[0].RestsOnWords(); !ok || day != "2026-10-06" {
+	if day, ok := dead("").Was[0].RestsOnWords(); !ok || day != "2026-10-04" {
 		t.Fatalf("rests on words: %v %s", ok, day)
 	}
 	// The local layer's status takes its successor with it.
-	l := dead("projects/crane")
+	l := dead("projects/storefront")
 	m := MergeLocal(map[string]*Record{"projects/oldtool": repoRec("oldtool")}, map[string]*Record{"projects/oldtool": l})
-	if m["projects/oldtool"].Successor != "projects/crane" || !m["projects/oldtool"].LocalStatus {
+	if m["projects/oldtool"].Successor != "projects/storefront" || !m["projects/oldtool"].LocalStatus {
 		t.Fatalf("merge %+v", m["projects/oldtool"])
 	}
-	b, _ := dead("projects/crane").Encode()
+	b, _ := dead("projects/storefront").Encode()
 	r, err := Parse("projects/oldtool", b)
-	if err != nil || r.Successor != "projects/crane" || r.Was[0].WordsOn != "2026-10-06" {
+	if err != nil || r.Successor != "projects/storefront" || r.Was[0].WordsOn != "2026-10-04" {
 		t.Fatalf("round trip %v %+v", err, r)
 	}
 }

@@ -1,11 +1,10 @@
 package main
 
-// Find the ancestor (the owner, 2026-10-23: "when building an index of
-// content each piece that clearly related to another should tried to find
-// it ancestor"). Worktrees, clones, scratch and task folders are almost
-// always part of something else, so the assessment presumes a folder that is
-// clearly related to another belongs to it, and the step's job is to find
-// which. Code finds the ancestor where it can be found reliably, and
+// Find the ancestor: in an index of content, each piece that is clearly
+// related to another belongs under its ancestor. Worktrees, clones, scratch
+// and task folders are almost always part of something else, so the
+// assessment presumes a folder that is clearly related to another belongs to
+// it, and the step's job is to find which. Code finds the ancestor where it can be found reliably, and
 // otherwise ranks the near evidence for the model:
 //
 //   - git: the folder's name is the directory of a linked worktree or a
@@ -412,7 +411,7 @@ func (a *assessor) directAncestors(c *assess.Candidate) {
 	}
 	// A name that holds another's, unless that name is a family's: two or
 	// more other names that hold it are repositories of their own
-	// (valkey-glide, valkey-grove hold valkey), so holding it says nothing.
+	// (widget-cli, widget-web hold widget), so holding it says nothing.
 	var family []string
 	for _, p := range a.ancestorNamePool() {
 		if p != name && len(p) >= 4 && tokensContain(name, p) {
@@ -466,7 +465,7 @@ func (a *assessor) directAncestors(c *assess.Candidate) {
 	}
 	// Where the store talks about it: the project folder that holds most of
 	// the facts of other project folders that name it, more than it holds
-	// itself (negeig's work is written down in darklanes).
+	// itself (a library's work written down in the product that uses it).
 	if w, n, total := a.mentionedIn(c.Folder, name); w != "" && n > len(live) {
 		add(path.Base(w), assess.SourceMentions, fmt.Sprintf("%d of the %d fact(s) in other project folders that name %s are %s's, more than its own %d live fact(s) and far more than its share of the store's facts", n, total, name, path.Base(w), len(live)), 5*min(n, 10))
 	}

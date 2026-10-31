@@ -79,10 +79,10 @@ func withFlakyIndex(t *testing.T, fails int) (opens *int) {
 	return opens
 }
 
-// The 2026-10-11 failure: a query fails on an open index. One failure opens
-// the index again and the check goes on; a second stops it with an error, so
-// the curator writes nothing (before, it logged the error and wrote the
-// fact unchecked, 509 times).
+// A query fails on an open index. One failure opens the index again and the
+// check goes on; a second stops it with an error, so the curator writes
+// nothing (before, it logged the error and wrote the fact unchecked, once
+// for every failed query).
 func TestConflictPairsReopensOnceThenFailsLoud(t *testing.T) {
 	s := conflictFixture(t, func(clone string) {
 		curatedFact(t, clone, "old-quokka", "quokka scheduler zebra runs on port 7781 behind the lantern proxy", "2026-10-01", "n0")

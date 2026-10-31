@@ -111,8 +111,8 @@ var unitLook = regexp.MustCompile(`(?i)(?:^|[^a-z])(tokens/sec|tokens/s|tok/sec|
 
 // unitWindow is the text after a number that can name its unit: up to 40
 // characters, ending at a line end, a semicolon, a bracket, a comma or a
-// full stop that is not part of a number. "130.9 -> 446.5 tok/s" gives both
-// numbers the unit; "5.18 (16 lanes, p95 784 ms)" gives 5.18 none.
+// full stop that is not part of a number. "120.7 -> 391.2 tok/s" gives both
+// numbers the unit; "4.07 (12 lanes, p95 652 ms)" gives 4.07 none.
 func unitWindow(rest string) string {
 	for i := 0; i < len(rest) && i < 40; i++ {
 		switch rest[i] {
@@ -155,7 +155,7 @@ type literal struct {
 }
 
 // literals reads the numbers a text states, with the unit that follows each.
-// A number inside a name (qwen3.5, 9b, #387), a date, a range or a list item
+// A number inside a name (llama3.1, 8b, #412), a date, a range or a list item
 // is not a measurement and is skipped.
 func literals(text string) []literal {
 	var out []literal
@@ -208,7 +208,7 @@ func (ix *Index) Match(facts []*fact.Fact) []Hit {
 		}
 		// All the fact's numbers for a row are weighed together: a fact that
 		// states the current value is about the current value, whatever else
-		// it says ("went from 138.5 to 161.3", "161.3 now (was 138.5)").
+		// it says ("went from 212.4 to 247.4", "247.4 now (was 212.4)").
 		current := map[*Series]Hit{}
 		stale := map[*Series]Hit{}
 		for _, l := range lits {
@@ -265,8 +265,8 @@ func (ix *Index) Match(facts []*fact.Fact) []Hit {
 }
 
 // recordType: facts that tell what happened. They state numbers as of a past
-// day, and "it ran 138.5 tok/s" in a history note stays true when the next
-// run reads 161.3.
+// day, and "it ran 212.4 tok/s" in a history note stays true when the next
+// run reads 247.4.
 var recordType = map[string]bool{"history": true, "past_mistake": true, "code_change": true}
 
 var (
@@ -275,7 +275,7 @@ var (
 )
 
 // threshold: the number sits in a bound, not in a measurement. "must stay
-// above 138.5 tok/s", "target 200", "a 1000 ms p95 bar", "at least 40".
+// above 212.4 tok/s", "target 200", "a 1000 ms p95 bar", "at least 40".
 func threshold(text string, l literal) bool {
 	lo := l.pos - 36
 	if lo < 0 {
@@ -363,8 +363,8 @@ func (ix *Index) setupMatches(s *Series, toks map[string]bool, l literal) bool {
 //     half the observed range (a deviation from three points is one point's);
 //     from five it is three times the median absolute deviation;
 //   - fewer than three: there is no sample, the change is the only evidence,
-//     and 5 percent stands in for it. perf-ci's GPU cells move 2 to 5
-//     percent between runs of the same code, so a smaller difference between
+//     and 5 percent stands in for it. GPU benchmark cells can move that
+//     much between runs of the same code, so a smaller difference between
 //     a quoted value and one or two later rows is not shown to be a change.
 func material(s *Series, old Point, newState []Point) bool {
 	cur := s.Cur().Value
@@ -426,7 +426,7 @@ var dateRe = regexp.MustCompile(`\b(\d{4}-\d{2}-\d{2})\b`)
 
 // datedBefore: the sentence around the number carries a date on or before the
 // day the value was replaced. A fact that dates its number ("on 2026-09-11 it
-// was published at 81") is a record of that day, which stays true; it is not a
+// was published at 74") is a record of that day, which stays true; it is not a
 // claim about now.
 func datedBefore(text string, pos int, replaced string) bool {
 	lo, hi := pos, pos

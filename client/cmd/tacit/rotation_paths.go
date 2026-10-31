@@ -12,9 +12,9 @@ import (
 )
 
 // A fact of this machine whose description names a path that is not here
-// any more is most often stale: on the author's machine, 27 of a fresh
-// sample of 30 such facts were (eval/VALUE.md, "Machine facts whose paths
-// are gone"). The rotation takes them first and shows the model the paths.
+// any more is most often stale: in a fresh sample of such facts on a real
+// machine, nearly all were (eval/VALUE.md, "Machine facts whose paths are
+// gone"). The rotation takes them first and shows the model the paths.
 // The rules below were each written for a kind of false flag the samples
 // showed; no model is called.
 var (

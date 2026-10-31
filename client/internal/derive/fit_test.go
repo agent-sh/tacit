@@ -10,9 +10,9 @@ import (
 func TestFitListKeepsWholeItems(t *testing.T) {
 	var items []string
 	for i := 0; i < 30; i++ {
-		items = append(items, fmt.Sprintf("crates/memra-engine/src/module_%02d.rs %d", i, 30-i))
+		items = append(items, fmt.Sprintf("crates/core-engine/src/module_%02d.rs %d", i, 30-i))
 	}
-	d := fitList("Hot spots in memra (path, commits): ", items)
+	d := fitList("Hot spots in engine (path, commits): ", items)
 	if len([]rune(d)) > 200 {
 		t.Fatalf("description is %d characters", len([]rune(d)))
 	}

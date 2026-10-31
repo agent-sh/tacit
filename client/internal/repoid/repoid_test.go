@@ -65,15 +65,15 @@ func TestOfNamesARepoOnlyThroughARealGitRoot(t *testing.T) {
 	mkRepo(t, filepath.Join(p, "org", "tool"), "")
 	mkdir(t, filepath.Join(p, "notes", "draft")) // a folder, no git
 	mkWorktree(t, filepath.Join(p, "widget"), filepath.Join(p, "widget-worktrees", "fix-1"))
-	mkWorktree(t, filepath.Join(p, "widget"), filepath.Join(p, "wt-textflip")) // a worktree named like a task
+	mkWorktree(t, filepath.Join(p, "widget"), filepath.Join(p, "wt-hotfix")) // a worktree named like a task
 	mkWorktree(t, filepath.Join(p, "widget"), filepath.Join(p, "widget", ".claude", "worktrees", "agent-1"))
 	mkWorktree(t, filepath.Join(p, "widget"), filepath.Join(home, ".codex", "worktrees", "ab12", "widget"))
 	mkRepo(t, filepath.Join(home, ".cache", "scratch"), "") // tool state
 	mkRepo(t, filepath.Join(home, ".config"), "")           // a dotfiles checkout
 	mkdir(t, filepath.Join(home, "tmpwork", "tune"))        // a scratch folder outside any repo
 	outside := realTemp(t)
-	mkRepo(t, filepath.Join(outside, "srv", "memra"), "")
-	mkdir(t, filepath.Join(outside, "tmp", "negeig", "tune"))
+	mkRepo(t, filepath.Join(outside, "srv", "engine"), "")
+	mkdir(t, filepath.Join(outside, "tmp", "probe", "tune"))
 
 	for path, want := range map[string]string{
 		filepath.Join(p, "widget"):                                         "widget",
@@ -81,7 +81,7 @@ func TestOfNamesARepoOnlyThroughARealGitRoot(t *testing.T) {
 		filepath.Join(p, "widget", "gone", "deleted.go"):                   "widget", // a path that no longer exists
 		"~/projects/widget/README.md":                                      "widget",
 		filepath.Join(p, "widget-worktrees", "fix-1", "a.go"):              "widget",
-		filepath.Join(p, "wt-textflip"):                                    "widget",
+		filepath.Join(p, "wt-hotfix"):                                      "widget",
 		filepath.Join(p, "widget", ".claude", "worktrees", "agent-1", "x"): "widget",
 		filepath.Join(home, ".codex", "worktrees", "ab12", "widget"):       "widget", // a worktree in a dot dir is its repo's
 		filepath.Join(p, "org", "tool", "src"):                             "tool",
@@ -92,16 +92,16 @@ func TestOfNamesARepoOnlyThroughARealGitRoot(t *testing.T) {
 		filepath.Join(home, ".cache", "scratch", "run"):                    "", // agent and tool state
 		filepath.Join(home, ".config", "nvim"):                             "",
 		filepath.Join(home, "tmpwork", "tune"):                             "",
-		filepath.Join(outside, "srv", "memra", "lib"):                      "memra", // a real git root outside home
-		filepath.Join(outside, "tmp", "negeig", "tune"):                    "",      // its basename is no repo
+		filepath.Join(outside, "srv", "engine", "lib"):                     "engine", // a real git root outside home
+		filepath.Join(outside, "tmp", "probe", "tune"):                     "",       // its basename is no repo
 		"relative/path":                                                    "",
 	} {
 		if got := Name(path, home); got != want {
 			t.Errorf("Name(%s) = %q, want %q", path, got, want)
 		}
 	}
-	r, ok := Of(filepath.Join(p, "wt-textflip"), home)
-	if !ok || r.Root != filepath.Join(p, "widget") || r.Worktree != filepath.Join(p, "wt-textflip") {
+	r, ok := Of(filepath.Join(p, "wt-hotfix"), home)
+	if !ok || r.Root != filepath.Join(p, "widget") || r.Worktree != filepath.Join(p, "wt-hotfix") {
 		t.Fatalf("worktree: %+v", r)
 	}
 	if len(r.Aliases) != 1 || r.Aliases[0] != "widget-svc" {
@@ -115,23 +115,23 @@ func TestOfResolvesSymlinksToTheRealCheckout(t *testing.T) {
 	}
 	home := realTemp(t)
 	p := filepath.Join(home, "projects")
-	mkRepo(t, filepath.Join(p, "pikadon"), "https://github.com/acme/ginza")
-	if err := os.Symlink("pikadon", filepath.Join(p, "ginza")); err != nil {
+	mkRepo(t, filepath.Join(p, "storefront"), "https://github.com/acme/shop")
+	if err := os.Symlink("storefront", filepath.Join(p, "shop")); err != nil {
 		t.Fatal(err)
 	}
-	r, ok := Of(filepath.Join(p, "ginza", "src"), home)
-	if !ok || r.Name != "pikadon" {
+	r, ok := Of(filepath.Join(p, "shop", "src"), home)
+	if !ok || r.Name != "storefront" {
 		t.Fatalf("symlinked checkout: %+v", r)
 	}
-	if len(r.Aliases) != 1 || r.Aliases[0] != "ginza" {
-		t.Fatalf("aliases %v, want the lexical and remote name ginza once", r.Aliases)
+	if len(r.Aliases) != 1 || r.Aliases[0] != "shop" {
+		t.Fatalf("aliases %v, want the lexical and remote name shop once", r.Aliases)
 	}
 	// A symlinked home: paths under the home as given are the real home's.
 	link := filepath.Join(realTemp(t), "home")
 	if err := os.Symlink(home, link); err != nil {
 		t.Fatal(err)
 	}
-	if got := Name(filepath.Join(link, "projects", "pikadon"), link); got != "pikadon" {
+	if got := Name(filepath.Join(link, "projects", "storefront"), link); got != "storefront" {
 		t.Fatalf("symlinked home: %q", got)
 	}
 }
@@ -209,9 +209,9 @@ func TestCatalogKnowsOnlyRealCheckouts(t *testing.T) {
 	}
 	home := realTemp(t)
 	p := filepath.Join(home, "projects")
-	mkRepo(t, filepath.Join(p, "pikadon"), "git@github.com:acme/ginza.git")
+	mkRepo(t, filepath.Join(p, "storefront"), "git@github.com:acme/shop.git")
 	mkRepo(t, filepath.Join(p, "org", "tool"), "")
-	mkdir(t, filepath.Join(p, "park-predictor")) // no git
+	mkdir(t, filepath.Join(p, "trip-planner")) // no git
 	elsewhere := filepath.Join(home, "work", "deep", "lib")
 	mkRepo(t, elsewhere, "")
 	gone := filepath.Join(home, "work", "gone")
@@ -227,15 +227,15 @@ func TestCatalogKnowsOnlyRealCheckouts(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := LoadCatalog(home, reg, p)
-	for name, want := range map[string]bool{"pikadon": true, "tool": true, "lib": true, "gone": false, "park-predictor": false, "org": false, "ginza": false} {
+	for name, want := range map[string]bool{"storefront": true, "tool": true, "lib": true, "gone": false, "trip-planner": false, "org": false, "shop": false} {
 		if got := c.Has(name); got != want {
 			t.Errorf("Has(%s) = %v, want %v", name, got, want)
 		}
 	}
-	if got := c.AliasOf("ginza"); got != "pikadon" {
-		t.Errorf("AliasOf(ginza) = %q", got)
+	if got := c.AliasOf("shop"); got != "storefront" {
+		t.Errorf("AliasOf(shop) = %q", got)
 	}
-	if got := c.AliasOf("pikadon"); got != "" {
+	if got := c.AliasOf("storefront"); got != "" {
 		t.Errorf("a repo's own name is no alias: %q", got)
 	}
 }
@@ -268,27 +268,27 @@ func TestSeparateCloneIsItsMainCheckout(t *testing.T) {
 	home := realTemp(t)
 	p := filepath.Join(home, "projects")
 	t.Setenv("TACIT_PROJECTS", p)
-	mkRepo(t, filepath.Join(p, "pikadon"), "git@github.com:acme/ginza.git")
-	mkRepo(t, filepath.Join(home, "tasks", "t1", "ginza"), "https://github.com/Acme/ginza")
-	mkWorktree(t, filepath.Join(home, "tasks", "t1", "ginza"), filepath.Join(home, "tasks", "t1", "ginza-wt"))
+	mkRepo(t, filepath.Join(p, "storefront"), "git@github.com:acme/shop.git")
+	mkRepo(t, filepath.Join(home, "tasks", "t1", "shop"), "https://github.com/Acme/shop")
+	mkWorktree(t, filepath.Join(home, "tasks", "t1", "shop"), filepath.Join(home, "tasks", "t1", "shop-wt"))
 	mkRepo(t, filepath.Join(home, "tasks", "t2", "other"), "git@github.com:acme/other.git")
-	mkRepo(t, filepath.Join(home, "tasks", "t3", "local"), "/srv/git/pikadon.git") // a file system remote matches nothing
+	mkRepo(t, filepath.Join(home, "tasks", "t3", "local"), "/srv/git/storefront.git") // a file system remote matches nothing
 	mkRepo(t, filepath.Join(p, "twin-a"), "git@github.com:acme/twin.git")
 	mkRepo(t, filepath.Join(p, "twin-b"), "git@github.com:acme/twin.git")
 	mkRepo(t, filepath.Join(home, "tasks", "t4", "twin"), "git@github.com:acme/twin.git")
 
-	r, ok := OfMachine(filepath.Join(home, "tasks", "t1", "ginza", "src"), home)
-	if !ok || r.Name != "pikadon" || r.Root != filepath.Join(p, "pikadon") || r.Clone != filepath.Join(home, "tasks", "t1", "ginza") || r.Worktree != filepath.Join(home, "tasks", "t1", "ginza") {
+	r, ok := OfMachine(filepath.Join(home, "tasks", "t1", "shop", "src"), home)
+	if !ok || r.Name != "storefront" || r.Root != filepath.Join(p, "storefront") || r.Clone != filepath.Join(home, "tasks", "t1", "shop") || r.Worktree != filepath.Join(home, "tasks", "t1", "shop") {
 		t.Fatalf("clone: %+v", r)
 	}
-	if len(r.Aliases) != 1 || r.Aliases[0] != "ginza" || r.Origin != "github.com/acme/ginza" {
+	if len(r.Aliases) != 1 || r.Aliases[0] != "shop" || r.Origin != "github.com/acme/shop" {
 		t.Fatalf("clone aliases %v origin %q", r.Aliases, r.Origin)
 	}
-	if r, _ := OfMachine(filepath.Join(home, "tasks", "t1", "ginza-wt"), home); r.Name != "pikadon" || r.Worktree != filepath.Join(home, "tasks", "t1", "ginza-wt") {
+	if r, _ := OfMachine(filepath.Join(home, "tasks", "t1", "shop-wt"), home); r.Name != "storefront" || r.Worktree != filepath.Join(home, "tasks", "t1", "shop-wt") {
 		t.Fatalf("a worktree of the clone: %+v", r)
 	}
 	for path, want := range map[string]string{
-		filepath.Join(p, "pikadon"):                 "pikadon",
+		filepath.Join(p, "storefront"):              "storefront",
 		filepath.Join(home, "tasks", "t2", "other"): "other",
 		filepath.Join(home, "tasks", "t3", "local"): "local",
 		filepath.Join(home, "tasks", "t4", "twin"):  "twin", // two main checkouts: no guess
@@ -299,16 +299,16 @@ func TestSeparateCloneIsItsMainCheckout(t *testing.T) {
 		}
 	}
 	// Of alone reads no projects directory.
-	if got := Name(filepath.Join(home, "tasks", "t1", "ginza"), home); got != "ginza" {
+	if got := Name(filepath.Join(home, "tasks", "t1", "shop"), home); got != "shop" {
 		t.Errorf("Of named the clone %q", got)
 	}
 	// The catalog names the clone for its main checkout too.
 	c := LoadCatalog(home, "", p)
-	if r, ok := c.Of(filepath.Join(home, "tasks", "t1", "ginza")); !ok || r.Name != "pikadon" {
+	if r, ok := c.Of(filepath.Join(home, "tasks", "t1", "shop")); !ok || r.Name != "storefront" {
 		t.Errorf("catalog Of: %+v", r)
 	}
-	if !c.Has("pikadon") || c.Has("ginza") || c.AliasOf("ginza") != "pikadon" {
-		t.Errorf("catalog: %v, alias %q", c.Names(), c.AliasOf("ginza"))
+	if !c.Has("storefront") || c.Has("shop") || c.AliasOf("shop") != "storefront" {
+		t.Errorf("catalog: %v, alias %q", c.Names(), c.AliasOf("shop"))
 	}
 }
 
@@ -329,7 +329,7 @@ func TestElsewhere(t *testing.T) {
 	for root, want := range map[string]bool{
 		filepath.Join(home, "w", "tool"):       false,
 		filepath.Join(tmp, "scratch", "clone"): true,
-		filepath.Join(base, "srv", "memra"):    true,
+		filepath.Join(base, "srv", "engine"):   true,
 		filepath.Join(projects, "widget"):      false,
 		"":                                     false,
 	} {
@@ -352,24 +352,24 @@ func TestCatalogNeedsWorkForACheckoutElsewhere(t *testing.T) {
 	base := realTemp(t)
 	home := filepath.Join(base, "home")
 	mkdir(t, home)
-	scratch := filepath.Join(base, "scratch", "kv-tool")
+	scratch := filepath.Join(base, "scratch", "exp-tool")
 	mkRepo(t, scratch, "")
 	reg := filepath.Join(home, "state", RegistryFile)
 	r, _ := Of(scratch, home)
 	if err := Record(reg, r); err != nil {
 		t.Fatal(err)
 	}
-	if c := LoadCatalog(home, reg, ""); c.Has("kv-tool") {
+	if c := LoadCatalog(home, reg, ""); c.Has("exp-tool") {
 		t.Fatal("a checkout elsewhere with no work counted")
 	}
 	RecordWork(reg, scratch, "s1", "edit")
 	RecordWork(reg, scratch, "s1", "commit")
-	if c := LoadCatalog(home, reg, ""); c.Has("kv-tool") || len(WorkFor(reg, scratch)) != 1 {
+	if c := LoadCatalog(home, reg, ""); c.Has("exp-tool") || len(WorkFor(reg, scratch)) != 1 {
 		t.Fatalf("one session counted: %v", WorkFor(reg, scratch))
 	}
 	RecordWork(reg, scratch, "s2", "commit")
 	c := LoadCatalog(home, reg, "")
-	if !c.Has("kv-tool") || !c.Accepted(r) || WorkSessions(c.Work(scratch)) != 2 {
+	if !c.Has("exp-tool") || !c.Accepted(r) || WorkSessions(c.Work(scratch)) != 2 {
 		t.Fatalf("two sessions: %v", c.Names())
 	}
 }
@@ -384,9 +384,9 @@ func TestSharedCatalogCarriesNamesNotPaths(t *testing.T) {
 	}
 	homeA := filepath.Join(realTemp(t), "alice")
 	p := filepath.Join(homeA, "projects")
-	mkRepo(t, filepath.Join(p, "pikadon"), "https://alice:s3cretTok@github.com/Acme/ginza.git")
+	mkRepo(t, filepath.Join(p, "storefront"), "https://alice:s3cretTok@github.com/Acme/shop.git")
 	mkRepo(t, filepath.Join(p, "localonly"), filepath.Join(homeA, "srv", "localonly.git"))
-	os.Symlink("pikadon", filepath.Join(p, "kadon"))
+	os.Symlink("storefront", filepath.Join(p, "front"))
 	a := LoadCatalog(homeA, "", p)
 	b := a.Shared()
 	if string(b) != string(LoadCatalog(homeA, "", p).Shared()) {
@@ -397,27 +397,27 @@ func TestSharedCatalogCarriesNamesNotPaths(t *testing.T) {
 			t.Errorf("the shared catalog holds %q:\n%s", leak, b)
 		}
 	}
-	if !strings.Contains(string(b), `"github.com/acme/ginza"`) || !strings.Contains(string(b), `"ginza"`) {
+	if !strings.Contains(string(b), `"github.com/acme/shop"`) || !strings.Contains(string(b), `"shop"`) {
 		t.Errorf("the shared catalog lacks the URL or alias:\n%s", b)
 	}
 
 	homeB := realTemp(t)
 	mkRepo(t, filepath.Join(homeB, "projects", "localonly"), "")
 	c := LoadCatalog(homeB, "", filepath.Join(homeB, "projects"))
-	if c.Has("pikadon") {
-		t.Fatal("machine B knows pikadon before reading A's catalog")
+	if c.Has("storefront") {
+		t.Fatal("machine B knows storefront before reading A's catalog")
 	}
 	if !c.AddShared(b) || c.AddShared([]byte("not json")) {
 		t.Fatal("AddShared parse result")
 	}
-	if !c.Has("pikadon") || c.AliasOf("ginza") != "pikadon" || c.AliasOf("kadon") != "pikadon" || !c.Has("localonly") {
+	if !c.Has("storefront") || c.AliasOf("shop") != "storefront" || c.AliasOf("front") != "storefront" || !c.Has("localonly") {
 		t.Errorf("B after A's catalog: %v", c.Names())
 	}
 	if r := c.repos["localonly"]; r.Root == "" {
 		t.Error("B's own checkout lost its entry")
 	}
 	// B's own shared catalog re-exports only its checkouts.
-	if s := string(c.Shared()); strings.Contains(s, "pikadon") || !strings.Contains(s, "localonly") {
+	if s := string(c.Shared()); strings.Contains(s, "storefront") || !strings.Contains(s, "localonly") {
 		t.Errorf("B's shared catalog:\n%s", s)
 	}
 	// The store holds every machine's catalog in its writer's inbox folder.
@@ -425,7 +425,7 @@ func TestSharedCatalogCarriesNamesNotPaths(t *testing.T) {
 	write(t, filepath.Join(store, "inbox", "dreamer@alice-box", CatalogFile), string(b))
 	d := LoadCatalog(realTemp(t), "", "")
 	d.AddStoreCatalogs(store)
-	if !d.Has("pikadon") {
+	if !d.Has("storefront") {
 		t.Errorf("AddStoreCatalogs: %v", d.Names())
 	}
 }

@@ -6,32 +6,31 @@ import (
 	"strings"
 )
 
-// Every number below was picked from measurements on the owner's own
-// repositories (memra, eigen, sglang and one more) with eval/derived/backtest.py;
-// the output is in eval/VALUE.md. Change a number by re-running that script,
-// not by feel.
+// Every number below was picked from backtests on real repositories with
+// eval/derived/backtest.py; the output is in eval/VALUE.md. Change a number by
+// re-running that script, not by feel.
 const (
 	// Window is how many of the most recent code-touching, non-merge commits
 	// are read. A count of commits, not days, so it follows the repo's pace
 	// and stays a function of the commit: 400 code commits are about a week of
-	// memra (55 a day) and the whole history of a small repo.
+	// a busy repo and the whole history of a small one.
 	//
 	// Backtest: take the K commits before a split point, rank files by touch
 	// count, and see how many of the top 10 are touched again in the next 100
-	// commits (17 split points per repo, mean over the four repos): K=50 0.69,
-	// K=100 0.68, K=200 0.68, K=400 0.70. The window barely matters across that
-	// range. 400 has the best mean, is the largest that all four repos can
-	// still be tested at, and keeps the list full on a wide repo: sglang gets
-	// 4.6 files from K=50, so its 0.88 there is a score over fewer files.
+	// commits (mean over split points and repos), for K of 50, 100, 200 and
+	// 400. The window barely matters across that range. 400 has the best mean,
+	// is the largest that every repo in the backtest can still be tested at,
+	// and keeps the list full on a wide repo: there K=50 finds only a few
+	// files, so its higher score is a score over fewer files.
 	Window = 400
 
 	// MaxChangeset: a commit that touches more code files than this is a mass
 	// edit (rename, format sweep, vendor drop), not work on a file, and is left
-	// out of every count. 30 is the 99th percentile of code files per commit
-	// on memra (30) and eigen (27), about the 97th on the monorepo and sglang;
-	// 0.6 to 3.2 percent of commits are over it. At 60, memra's co-change rule
-	// applications grew 7.9 times (654 to 5190) and their precision swung from
-	// 0.46 to 0.83: a few bulk commits were deciding the result.
+	// out of every count. 30 is about the 99th percentile of code files per
+	// commit on the repos measured (the 97th on the widest), so a few percent
+	// of commits are over it. At 60, the co-change rule applications grew
+	// several times and their precision swung widely: a few bulk commits were
+	// deciding the result.
 	MaxChangeset = 30
 
 	// MinTouches: a hot spot needs 3 commits in the window. Two commits are
@@ -46,26 +45,24 @@ const (
 	// file f when they changed in the same commit at least 3 times and in at
 	// least half of f's commits. Backtest of the rule f -> g (learn on the
 	// window, test whether g is in the same commit as f over the next 150
-	// commits), at a changeset limit of 30: precision at 3 and 0.5 was 0.46
-	// (memra), 0.52 (the monorepo), 0.42 (eigen), 0.35 (sglang), so the stated
-	// "half of the time" roughly holds out of sample. 5 changes instead of 3
-	// raised precision about 4 points and cut the rules to between a sixth and
-	// two thirds. At a confidence of 0.3 it fell to 0.30 to 0.41.
+	// commits), at a changeset limit of 30: precision at 3 and 0.5 stayed
+	// around the stated "half of the time" out of sample on every repo
+	// measured. 5 changes instead of 3 raised precision a few points and cut
+	// many of the rules. At a confidence of 0.3 precision fell.
 	MinCoChanges  = 3
 	MinConfidence = 0.5
 
-	// PartnersPerFile caps the partner list of one hot file at three. Over the
-	// 271 hot-spot lines measured, 199 had partners: 75 one, 60 two, 64 hit
-	// the cap. Three keeps a line under about 300 characters.
+	// PartnersPerFile caps the partner list of one hot file at three. Most
+	// hot-spot lines in the backtest had partners, spread about evenly over
+	// one, two and the cap. Three keeps a line under about 300 characters.
 	PartnersPerFile = 3
 
-	// MaxMapEntries caps the module map. The largest map measured
-	// is 3.9 KB (memra, which fills all 30 entries), about what one fact costs in
-	// an MCP search result.
+	// MaxMapEntries caps the module map. A map that fills all 30 entries is
+	// about 4 KB, about what one fact costs in an MCP search result.
 	MaxMapEntries = 30
 
 	// MaxMapDepth: the module map opens a directory only above this depth, so
-	// entries go three levels down at most (crates/memra-engine/src/).
+	// entries go three levels down at most (crates/core-engine/src/).
 	MaxMapDepth = 3
 )
 
@@ -210,9 +207,9 @@ type dirNode struct {
 // a repo whose whole tree sits under one folder), again and again, until the
 // next opening would pass MaxMapEntries or MaxMapDepth. One line for "all the
 // code" says nothing, and a fixed rule such as "open the biggest" would open
-// the wrong thing in some repos: memra's research/ holds 3000 scripts next to
-// 197000 run outputs (1.5 percent code), so a directory is opened only if at
-// least half of its own files are code. Entries are sorted by path. If there
+// the wrong thing in some repos: a research/ folder can hold thousands of
+// scripts next to a hundred times as many run outputs, so a directory is
+// opened only if at least half of its own files are code. Entries are sorted by path. If there
 // are more top-level directories than MaxMapEntries, the smallest (by code
 // files, then files) are dropped and counted in More.
 func ModuleMap(tree []TreeFile, win []Commit) Map {
@@ -308,7 +305,7 @@ func ModuleMap(tree []TreeFile, win []Commit) Map {
 	// directory with the most code files into its subdirectories until the
 	// map would pass MaxMapEntries. A directory is opened only if it is
 	// mostly code itself, most of that code sits in its subdirectories (tools/
-	// with 375 scripts of its own and a few fixture folders stays one line),
+	// with hundreds of scripts of its own and a few fixture folders stays one line),
 	// it has two or more subdirectories and it is above MaxMapDepth.
 	type slot struct {
 		dir string

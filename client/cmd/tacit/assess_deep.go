@@ -1,10 +1,10 @@
 package main
 
-// needs-review is not a parking state (the owner, 2026-10-22: "Need review
-// is not something that will surely happen, its what better happen, but
-// nobody promise, the agents need to still try to fix it"). A folder left
-// for review, or refused on the same evidence, comes back to the model with
-// more evidence than it had, gathered by code and wider on each attempt:
+// needs-review is not a parking state: a review by the owner had better
+// happen, but nothing promises it, so the agents keep trying to settle the
+// folder themselves. A folder left for review, or refused on the same
+// evidence, comes back to the model with more evidence than it had,
+// gathered by code and wider on each attempt:
 // facts in other folders that name it, the sessions behind them, the
 // decisions on folders alike and the owner's turns that name it (the
 // forge's record, a dry fact every run reads alike, is gathered before the
@@ -35,7 +35,7 @@ const (
 	// reviewRetryDays is the slow cadence: a folder whose wider search found
 	// nothing new is asked again after a week. The forge's answers on a
 	// repository's name are kept 7 days (check.DefaultHitTTL), so each retry
-	// reads them fresh; in the Mac shadow runs a re-ask on unchanged evidence
+	// reads them fresh; in shadow runs a re-ask on unchanged evidence
 	// gave the same answer (assessHoldRuns), so a daily retry would pay for
 	// the same answer six days in seven.
 	reviewRetryDays = 7

@@ -511,8 +511,8 @@ func TestVerifyDryRunBurnsNoAttempts(t *testing.T) {
 
 // A standard the curator filed as observed is the agents' reading of their
 // preference, not their ruling: an agent with evidence may retire it like any
-// fact (before 2026-10-11 the type alone made it a ruling and the mark a
-// question).
+// fact (before the rulings audit the type alone made it a ruling and the
+// mark a question).
 func TestAgentMayRetireAnAgentsStandard(t *testing.T) {
 	_, clone := reviewFixture(t)
 	rs := clone("one")

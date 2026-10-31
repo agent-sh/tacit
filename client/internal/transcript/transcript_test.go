@@ -16,10 +16,10 @@ import (
 // then user and assistant messages, varied enough to fill many zstd blocks.
 func rollout(n int) []byte {
 	var b bytes.Buffer
-	b.WriteString(`{"timestamp":"2026-10-12T21:00:32.366Z","type":"session_meta","payload":{"id":"01a131ea-c641-7a43-9ec9-a2dbedef807b","cwd":"/home/u/projects","originator":"codex-tui","source":"cli"}}` + "\n")
+	b.WriteString(`{"timestamp":"2026-10-02T09:15:07.120Z","type":"session_meta","payload":{"id":"0c5e7a19-3b2d-4f6e-8a1c-9d0b2e4f6a8c","cwd":"/home/u/projects","originator":"codex-tui","source":"cli"}}` + "\n")
 	for i := 0; b.Len() < n; i++ {
-		fmt.Fprintf(&b, `{"timestamp":"2026-10-12T21:%02d:%02d.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"turn %d: keep the cache warm %x"}]}}`+"\n", i/60%60, i%60, i, i*2654435761)
-		fmt.Fprintf(&b, `{"timestamp":"2026-10-12T21:%02d:%02d.500Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done %d %x"}]}}`+"\n", i/60%60, i%60, i, i*40503)
+		fmt.Fprintf(&b, `{"timestamp":"2026-10-02T09:%02d:%02d.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"turn %d: keep the cache warm %x"}]}}`+"\n", i/60%60, i%60, i, i*2654435761)
+		fmt.Fprintf(&b, `{"timestamp":"2026-10-02T09:%02d:%02d.500Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done %d %x"}]}}`+"\n", i/60%60, i%60, i, i*40503)
 	}
 	return b.Bytes()
 }
@@ -85,7 +85,7 @@ func TestSizeAndReadsOfCompressedCopies(t *testing.T) {
 	}
 	for name, packed := range cases {
 		t.Run(name, func(t *testing.T) {
-			path := filepath.Join(dir, name, "rollout-2026-10-13T00-00-32-01a131ea.jsonl.zst")
+			path := filepath.Join(dir, name, "rollout-2026-10-02T09-15-07-0c5e7a19.jsonl.zst")
 			write(t, path, packed)
 			n, err := Size(path)
 			if err != nil || n != int64(len(plain)) {

@@ -1,8 +1,8 @@
 // Package results turns measured results committed to a repo into facts.
 //
-// Where results live was surveyed on the repos the store has scopes for
+// Where results live was surveyed on the repos a real store has scopes for
 // (eval/VALUE.md, "Results from git"): row logs (a jsonl or csv that appends
-// one row per run: memra's perf-ci.jsonl), boards (a json or table that is
+// one row per run: a CI perf log), boards (a json or table that is
 // rewritten as results change: a published-numbers file, a BENCHMARKS.md) and
 // per-experiment receipt folders written once. The step reads the first two
 // kinds deterministically, with no model: a number, the setup it was measured

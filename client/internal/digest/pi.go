@@ -54,9 +54,9 @@ var piHarness = regexp.MustCompile(`^\s*<[A-Za-z][\w:-]*[\s>/]`) // an attached 
 // arrives when a program sent it. pi records no mode: `pi -p`, an RPC or SDK
 // driver and an interactive session write the same file. A program sends its
 // prompt as soon as the session is set up; a person reads the screen and
-// types. Measured 2026-10-20 on 131 sessions (32 on a Mac, 99 on a Linux
-// workstation): 84 headless first turns came at most 0.18 s after pi's last
-// startup entry, 47 typed ones 1.3 s and more (the fastest a two-letter "hi").
+// types. Measured on real pi sessions, on macOS and Linux: the headless first
+// turns came at most 0.18 s after pi's last startup entry, the typed ones
+// 1.3 s and more (the fastest a two-letter "hi").
 const PiHeadlessGap = time.Second
 
 // piStartup are the entries pi itself writes when it sets a session up: the

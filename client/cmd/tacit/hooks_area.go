@@ -144,7 +144,7 @@ func hookRecords(ctx context.Context, ix *search.Index) map[string]*record.Recor
 }
 
 // withOrgs is the situation with its repository's display name (the
-// record's: "pikadon (GitHub: ginza)") and the org folders of its forge
+// record's: "storefront (GitHub: shop-v2)") and the org folders of its forge
 // organization (the records' org, tree.Session.Orgs).
 func withOrgs(sit search.Situation, recs map[string]*record.Record) search.Situation {
 	if len(recs) == 0 || len(repoNames(sit)) == 0 {

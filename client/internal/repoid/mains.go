@@ -15,8 +15,8 @@ import (
 // A separate full clone elsewhere (its own .git directory, in a task folder,
 // a scratch directory) is the same repository as the main checkout whose
 // origin has the same normalized URL (NormURL), and Canonical names it so: a
-// clone ~/tasks/t1/ginza of the repository checked out as ~/projects/pikadon
-// is pikadon, and ginza becomes one of its aliases. Nothing else is guessed:
+// clone ~/tasks/t1/shop of the repository checked out as ~/projects/storefront
+// is storefront, and shop becomes one of its aliases. Nothing else is guessed:
 // a clone whose origin matches no main checkout, or more than one, keeps its
 // own name, and two clones outside the projects directory are never merged
 // with each other, since neither is known to be the main one.

@@ -168,7 +168,7 @@ const (
 	// the ancestor's tree (or its worktrees directory).
 	SourcePath = "path"
 	// SourceName: the folder's name contains the ancestor's name as whole
-	// words (wt-portfolio-rework-20261004 holds portfolio).
+	// words (wt-widget-rework-20261004 holds widget).
 	SourceName = "name"
 	// SourceSessions: the sessions that filed the folder's facts filed facts
 	// in the ancestor too, and the folder's facts point at it by their own
@@ -367,7 +367,7 @@ For each folder decide:
 - roots: kind folder only, optional: [{"host": ..., "path": ...}] where it lives.
 - tools, commands: an area only: MCP tool-name patterns (globs on mcp__ names such as "mcp__*__Ticketing*"; a harness's own tools such as Bash or Edit are every session's, never an area's) and command prefixes its sessions used, only ones the evidence lists.
 - repos: a topic only, optional: repositories it is tied to.
-- owner_quote, owner_quote_from: only when the owner's own words shown below state the decision for THIS folder (its name or alias in them): copy their words exactly and the ref they came from. Words that only mention the folder are evidence for your why, not a quote here. Read what the words say of its status as the owner meant it: stopping work, banking it, pausing it or putting it off ("stop", "bank what you have", "pause", "for now", "not now") is dormant, not dead: the owner can take it up again. Dead needs permanence: words of theirs that end it (drop it, kill it, delete it, replace it with another) or evidence code shows (the forge has the repository deleted or archived). Code dates the words by when the owner said them (the turn's day, not today) and lets the folder's dates stand when the owner really worked on it after that day.
+- owner_quote, owner_quote_from: only when the owner's own words shown below state the decision for THIS folder (its name or alias in them): copy their words exactly and the ref they came from. Words that only mention the folder are evidence for your why, not a quote here. Read what the words say of its status as the owner meant it: stopping work, banking it, pausing it or putting it off ("stop", "keep what you have", "pause", "for now", "not now") is dormant, not dead: the owner can take it up again. Dead needs permanence: words of theirs that end it (drop it, kill it, delete it, replace it with another) or evidence code shows (the forge has the repository deleted or archived). Code dates the words by when the owner said them (the turn's day, not today) and lets the folder's dates stand when the owner really worked on it after that day.
 - owner_quote_temporal: with owner_quote, the words of it, copied exactly, that limit it in time ("for now", "until the release", "this week"), when it has any; "" when nothing in it does. Code refuses dead on words you flag here.
 - owner_quote_final: with owner_quote and status dead, the words of it, copied exactly, that make an end of the folder (drop, kill, delete, remove, replace with another), unless the forge shows the repository deleted or archived. Code refuses dead on owner_quote without them.
 - reject (true) or fold_into ("<existing folder>"): a proposed area or topic only, when it should not be made, with why.
@@ -384,7 +384,7 @@ Dry claims are checked by code, not judged. Whether a repository of a name exist
 - Names code proved are one repository (another name of a checkout, a symlink's or the origin remote's; clones with one origin) get one live folder: the others set suppressed_by to it, or answer needs-review. They come in one batch, so decide them together. Which name it goes by is code's when a line "check: the canonical name of this repository is X" says so (the owner's decision first, then the main checkout's directory, then the forge's name): X is the live folder and the other names fold into it; code refuses the other direction. Without such a line it is yours to decide from the evidence. The forge's current name is kept on the record and shown beside the folder's name, so a repository whose GitHub name differs needs no folder of that name.
 Code checked the forge for each folder's repository before asking ("forge (checked)" lines: last push, archived, latest release, the newest commits with their authors' accounts). Commits the forge lists by the owner's forge account (code says which) are the folder's own commits: cite them as commit:<sha>, as for a checkout's. An archived repository was archived by its owner, and a deleted one is gone: dormant, shipped or dead by the rest of the evidence, never active.
 A folder left for review comes back on later runs with "extra evidence" code gathered for it, wider each time: facts in other folders that name it, the sessions behind them, the decisions on folders alike (near names, the same forge owner) and the owner's turns that name it. needs-review is not a place to park a folder: nobody promises the owner will review it. Decide from that evidence whenever it settles the folder; answer needs-review again only when even it does not, and then say in why what evidence would settle it. A session listed there filed a fact naming the folder and may be cited for it.
-Folders whose names follow one pattern (kv-013-g1, kv-140-g2) come together, with the decisions already made on folders like them: decide alike folders alike, and when one differs say in why what in its evidence differs.
+Folders whose names follow one pattern (exp-013-g1, exp-140-g2) come together, with the decisions already made on folders like them: decide alike folders alike, and when one differs say in why what in its evidence differs.
 
 Output ONLY a JSON array, one object per folder, no prose, no code fence:
   {"folder": "...", "kind": "...", "status": "...", "why": "...", "description": "...", "body": "...", "aliases": [], "suppressed_by": "", "roots": [], "tools": [], "commands": [], "repos": [], "owner_quote": "", "owner_quote_from": "", "owner_quote_temporal": "", "owner_quote_final": "", "reject": false, "fold_into": "", "independent": [], "owner_status": []}
@@ -766,7 +766,7 @@ func SortCandidates(cands []Candidate, aliasOf func(folder string) string) {
 			count[c.Pattern]++
 		}
 	}
-	// Pattern keys are per root (projects/kv-#-g#).
+	// Pattern keys are per root (projects/exp-#-g#).
 	key := func(c Candidate) string {
 		if c.Group != "" {
 			return c.Folder[:strings.LastIndex(c.Folder, "/")+1] + c.Group

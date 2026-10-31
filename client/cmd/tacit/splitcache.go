@@ -21,7 +21,7 @@ const splitCacheDays = 14
 // directory): the split's entries per note, and the rulings pass's once it
 // answered. A batch that failed in its rulings pass or conflict judge used
 // to be split again, and paid again, in every run until the route came back
-// (the rig's 2026-10-22/24 quick runs, about $0.80 each). Now the next run
+// (every quick run paid for the whole split). Now the next run
 // takes the answers it already has, checks them again (the checks' world may
 // have moved; an entry they refuse sends the batch to the split again), and
 // pays only for the step that failed. A note's answers go when its batch

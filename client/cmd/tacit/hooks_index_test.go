@@ -15,9 +15,9 @@ import (
 
 // The prompt hook after a change of this machine's overlay: it answers from
 // the index of the older overlay, builds nothing itself, and starts one
-// background build; the index after that build holds the new note. The
-// 2026-10-21 prompt hook built 16k facts for every overlay change and timed
-// out three times in a row.
+// background build; the index after that build holds the new note. Before,
+// the prompt hook built the whole store's index for every overlay change
+// and timed out.
 func TestPromptHookReadsTheOlderIndexAndStartsTheBuild(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "facts")

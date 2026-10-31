@@ -132,7 +132,7 @@ func rulingsRig(t *testing.T) (*rig, *ownerwords.Corpus) {
 	w("asked-not-ruled", "user_standard", user, "Write no code until the owner says go", "Owner: \"which one would you start with first\".")
 	w("negated", "user_standard", user, "Pin the old parser for this release", "Owner: \"pin the old parser for this release\".")
 	w("forged-claim", "user_standard", user, "Always use the slow lane for evals", "Owner: \"always use the slow lane for every eval run\".")
-	w("not-a-standard", "machine_fact", fact.Source{}, "The workstation has 60 GB of memory", "The workstation has 60 GB of memory.")
+	w("not-a-standard", "machine_fact", fact.Source{}, "The build box has 32 GB of memory", "The build box has 32 GB of memory.")
 	// An agent reworded the tail of their sentence: a run of their words remains.
 	w("reworded-tail", "user_standard", fact.Source{}, "Fresh data means the query runs again", "Owner: \"stale reply is not fresh data, it should be the same query run again\".")
 	writeFactFile(t, r.clone, &fact.Fact{Path: "user/owners-own-rule.md", Meta: fact.Meta{Name: "owners-own-rule", Description: "No em dashes in public text", Type: "user_standard", Scope: "user",
@@ -661,7 +661,7 @@ func TestCuratorDemotesFactsHisNoteDisowns(t *testing.T) {
 // and every note stays pending.
 func TestCuratorRefusesWithoutHisWords(t *testing.T) {
 	r := newRig(t, rigOpts{})
-	writeFactFile(t, r.clone, &fact.Fact{Path: "inbox/claude@host-a/n1.md", Meta: fact.Meta{Name: "n1", Description: "The owner said never rent", Type: "unclassified", Scope: "projects/x",
+	writeFactFile(t, r.clone, &fact.Fact{Path: "inbox/claude@host-a/n1.md", Meta: fact.Meta{Name: "n1", Description: "The owner said never rename endpoints", Type: "unclassified", Scope: "projects/x",
 		Source: fact.Source{Harness: "claude", Host: "host-a", Kind: "user"}, Created: "2026-10-11"}, Body: "Owner: \"never rename public endpoints without asking me\".\n"})
 	r.commitIndex(r.clone, "note")
 	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
@@ -797,7 +797,7 @@ func TestAppSeparatesHisRulesFromWhatAgentsBelieve(t *testing.T) {
 	}
 	// Edit the quoted ruling so the phrase is gone: still theirs, on the edit.
 	dr := draftOf(t, rs, "quoted-ruling")
-	dr.Body = "Ask before renting any box."
+	dr.Body = "Ask before renaming any endpoint."
 	if res, err := rs.editFact(ctx, "quoted-ruling", dr); err != nil || !res.Saved || len(res.Lint) != 0 {
 		t.Fatalf("edit: %v %+v", err, res)
 	}
@@ -907,7 +907,7 @@ func TestPageSaysYourRuleOnlyForHisRulings(t *testing.T) {
 	var got map[string]any
 	runPage(t, `
   await new Promise((r) => setTimeout(r, 30));
-  const f = (more) => Object.assign({ name: "x", created: "2026-10-08", description: "Workers retry three times.", body: "", scope: "projects/memra", type: "user_standard", kind: "user" }, more);
+  const f = (more) => Object.assign({ name: "x", created: "2026-10-08", description: "Workers retry three times.", body: "", scope: "projects/web-app", type: "user_standard", kind: "user" }, more);
   const st = (a) => ({ kind: "stale", single: true, a, allowed: ["current", "retire"] });
   return JSON.stringify({ agents: isRule(f({})), theirs: isRule(f({ ruling: true })), q: choiceHint(st(f({})), "retire"), qr: choiceHint(st(f({ ruling: true })), "retire"), words: Object.prototype.hasOwnProperty.call(KINDS, "words") });
 `, &got)

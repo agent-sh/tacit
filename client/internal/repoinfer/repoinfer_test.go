@@ -51,11 +51,11 @@ func TestNameFindsTheRepoAPathIsIn(t *testing.T) {
 	// clone there, which is its own repository (its folder's name is not
 	// read).
 	mkRepo(t, filepath.Join(home, "projects", "atlas"))
-	atlasAdmin := filepath.Join(home, "projects", "atlas", ".git", "worktrees", "KV-1")
-	write(t, filepath.Join(atlasAdmin, "HEAD"), "ref: refs/heads/kv\n")
+	atlasAdmin := filepath.Join(home, "projects", "atlas", ".git", "worktrees", "TASK-1")
+	write(t, filepath.Join(atlasAdmin, "HEAD"), "ref: refs/heads/task-1\n")
 	write(t, filepath.Join(atlasAdmin, "commondir"), "../..\n")
-	write(t, filepath.Join(home, "projects", "atlas-worktrees", "KV-1", ".git"), "gitdir: "+atlasAdmin+"\n")
-	mkRepo(t, filepath.Join(home, "projects", "atlas-worktrees", "KV-2"))
+	write(t, filepath.Join(home, "projects", "atlas-worktrees", "TASK-1", ".git"), "gitdir: "+atlasAdmin+"\n")
+	mkRepo(t, filepath.Join(home, "projects", "atlas-worktrees", "TASK-2"))
 	for path, want := range map[string]string{
 		filepath.Join(w, "widget", "pkg", "api", "server.go"):             "widget",
 		filepath.Join(w, "widget"):                                        "widget",
@@ -65,8 +65,8 @@ func TestNameFindsTheRepoAPathIsIn(t *testing.T) {
 		filepath.Join(w, "ws", "src", "Billing", "src", "A.java"):         "", // removed from a live workspace: no git root
 		filepath.Join(w, "gone", "src", "Billing", "a.java"):              "", // no workspace: not a Brazil shape
 		filepath.Join(w, "api-fix", "main.go"):                            "api",
-		filepath.Join(home, "projects", "atlas-worktrees", "KV-1", "a"):   "atlas",
-		filepath.Join(home, "projects", "atlas-worktrees", "KV-2", "a"):   "KV-2",
+		filepath.Join(home, "projects", "atlas-worktrees", "TASK-1", "a"): "atlas",
+		filepath.Join(home, "projects", "atlas-worktrees", "TASK-2", "a"): "TASK-2",
 		filepath.Join(w, "notes", "todo.md"):                              "", // a folder, not a repo
 		w:                                                                 "",
 		home:                                                              "",

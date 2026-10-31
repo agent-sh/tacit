@@ -6,7 +6,7 @@ package main
 //   - A project folder named for a forge organization (projects/agent-sh,
 //     the forge says agent-sh is an Organization whose repositories the
 //     catalogs' remotes hold), and no machine's checkout or remote of that
-//     name (helicone/helicone is a repository), becomes that org's folder:
+//     name (widget/widget is a repository), becomes that org's folder:
 //     orgs/<name> gets a record of kind org, and the project folder is
 //     folded into it, so the migration moves each fact to the one
 //     repository its own paths name, or keeps it in the org.
@@ -92,7 +92,7 @@ func (a *assessor) orgFolders(only map[string]bool) []decided {
 			continue
 		}
 		// A checkout or a remote of this name makes it a repository's folder
-		// (helicone/helicone): only a name no machine holds as a repository
+		// (widget/widget): only a name no machine holds as a repository
 		// is the org's.
 		if rc := a.checker.Repo(a.ctx, name); rc.Checkout != "" || (len(rc.Results) > 1 && rc.Results[1].Verdict == check.Holds) {
 			continue

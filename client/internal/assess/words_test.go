@@ -25,7 +25,7 @@ func TestMaintenancePaths(t *testing.T) {
 	if !BotAuthor("dependabot[bot]") || !BotAuthor("", "renovate") || !BotAuthor("github-actions") || !BotAuthor("x", "41898282+github-actions[bot]@users.noreply.github.com") {
 		t.Error("a bot was not recognised")
 	}
-	if BotAuthor("avifenesh", "Avi Fenesh", "a@example.com") || BotAuthor("robotics") {
+	if BotAuthor("dana-dev", "Dana Owner", "a@example.com") || BotAuthor("robotics") {
 		t.Error("a person was taken for a bot")
 	}
 	if fs := RealFiles([]string{"go.mod", "go.sum"}); len(fs) != 0 {
@@ -39,9 +39,9 @@ func TestMaintenancePaths(t *testing.T) {
 func wordsCand(cs string) Candidate {
 	c := Candidate{Folder: "projects/oldtool", Notes: []Note{
 		{Name: "plugins-to-delete", Scope: "user", Type: "design_decision", Created: "2026-10-08", Tier: TierDecision,
-			Description: "Owner decided on 2026-10-06 to delete the plugins oldtool and gadget.", Body: "Tower Crane replaces oldtool and gadget. As of 2026-10-08 both still exist."},
+			Description: "Owner decided on 2026-10-04 to delete the plugins oldtool and gadget.", Body: "Field Kit replaces oldtool and gadget. As of 2026-10-08 both still exist."},
 		{Name: "removed-plugins", Scope: "user", Type: "design_decision", Created: "2026-10-08", Tier: TierDecision,
-			Description: "Removed for good (2026-09-23): oldtool, gadget.", Body: "They were unused."},
+			Description: "Retired for good (2026-09-21): oldtool, gadget.", Body: "Nobody ran them."},
 		{Name: "oldtool-howto", Scope: "projects/other", Type: "history", Created: "2026-10-01", Tier: TierOther,
 			Description: "oldtool runs with --fast.", Body: ""},
 	}, NotesTotal: 3}
@@ -55,8 +55,8 @@ func TestOwnerWordsChecked(t *testing.T) {
 	c := wordsCand(record.StatusActive)
 	var d Decision
 	if err := json.Unmarshal([]byte(`{"folder":"projects/oldtool","kind":"repo","status":"dead","why":"a plugin repository","owner_status":[
-		{"says":"dead","words":"Removed for good (2026-09-23): oldtool","from":"note:removed-plugins"},
-		{"says":"dead","words":"Tower Crane replaces oldtool","from":"note:plugins-to-delete","successor":"tower-crane"}]}`), &d); err != nil {
+		{"says":"dead","words":"Retired for good (2026-09-21): oldtool","from":"note:removed-plugins"},
+		{"says":"dead","words":"Field Kit replaces oldtool","from":"note:plugins-to-delete","successor":"field-kit"}]}`), &d); err != nil {
 		t.Fatal(err)
 	}
 	said, ps := CheckOwnerWords(c, d)
@@ -64,7 +64,7 @@ func TestOwnerWordsChecked(t *testing.T) {
 		t.Fatalf("said %+v problems %v", said, ps)
 	}
 	// The newest words first (they supersede the older), their day code's.
-	if said[0].Note.Name != "plugins-to-delete" || said[0].Day != "2026-10-06" || said[0].Successor != "tower-crane" || said[1].Day != "2026-09-23" {
+	if said[0].Note.Name != "plugins-to-delete" || said[0].Day != "2026-10-04" || said[0].Successor != "field-kit" || said[1].Day != "2026-09-21" {
 		t.Fatalf("order and days: %+v", said)
 	}
 	// An object reads as one item; words not in the note, a note of no
@@ -79,13 +79,13 @@ func TestOwnerWordsChecked(t *testing.T) {
 		{Says: "dead", Words: "oldtool is gone forever", From: "note:plugins-to-delete"},
 		{Says: "dead", Words: "oldtool runs with", From: "note:oldtool-howto"},
 		{Says: "dead", Words: "to delete the plugins", From: "note:elsewhere"},
-		{Says: "dead", Words: "to delete the plugins", From: "note:plugins-to-delete", Successor: "pikadon"},
-		// The note names tower-crane, but not in the words cited.
-		{Says: "dead", Words: "decided on 2026-10-06 to delete the plugins oldtool", From: "note:plugins-to-delete", Successor: "tower-crane"},
-		// The words name tower-crane but not this folder: whichever sentence
+		{Says: "dead", Words: "to delete the plugins", From: "note:plugins-to-delete", Successor: "beacon"},
+		// The note names field-kit, but not in the words cited.
+		{Says: "dead", Words: "decided on 2026-10-04 to delete the plugins oldtool", From: "note:plugins-to-delete", Successor: "field-kit"},
+		// The words name field-kit but not this folder: whichever sentence
 		// is cited, the successor needs words that name both.
-		{Says: "dead", Words: "Tower Crane replaces", From: "note:plugins-to-delete", Successor: "tower-crane"},
-		{Says: "dormant", Words: "to delete the plugins", From: "note:plugins-to-delete", Successor: "tower-crane"},
+		{Says: "dead", Words: "Field Kit replaces", From: "note:plugins-to-delete", Successor: "field-kit"},
+		{Says: "dormant", Words: "to delete the plugins", From: "note:plugins-to-delete", Successor: "field-kit"},
 		{Says: "active", Words: "to delete the plugins", From: "note:plugins-to-delete"},
 	} {
 		if said, ps := CheckOwnerWords(c, Decision{OwnerStatus: OwnerWordsList{bad}}); len(said) != 0 || len(ps) != 1 {
@@ -97,23 +97,23 @@ func TestOwnerWordsChecked(t *testing.T) {
 func TestWordsOutcome(t *testing.T) {
 	c := wordsCand(record.StatusActive)
 	d := Decision{Folder: c.Folder, Kind: "repo", Status: "active", Why: "the owner's plugin repository",
-		OwnerStatus: OwnerWordsList{{Says: "dead", Words: "Tower Crane replaces oldtool", From: "note:plugins-to-delete", Successor: "tower-crane"}}}
+		OwnerStatus: OwnerWordsList{{Says: "dead", Words: "Field Kit replaces oldtool", From: "note:plugins-to-delete", Successor: "field-kit"}}}
 	said, _ := CheckOwnerWords(c, d)
 	// No real work after the words: dead, replaced by the successor, the words kept.
 	maint := Changes{Maintenance: []Work{{Day: "2026-10-09", Kind: "commit", Cite: "commit:abc1234", Why: "a bot's commit (dependabot[bot])"}}}
-	nd, stood := WordsOutcome(c, d, said[0], "projects/tower-crane", maint)
-	if !stood || nd.Status != record.StatusDead || nd.Successor != "projects/tower-crane" || nd.Words == nil || nd.Words.WordsOn != "2026-10-06" || nd.Words.WordsFrom != "note:plugins-to-delete" {
+	nd, stood := WordsOutcome(c, d, said[0], "projects/field-kit", maint)
+	if !stood || nd.Status != record.StatusDead || nd.Successor != "projects/field-kit" || nd.Words == nil || nd.Words.WordsOn != "2026-10-04" || nd.Words.WordsFrom != "note:plugins-to-delete" {
 		t.Fatalf("stood %v: %+v", stood, nd)
 	}
-	for _, want := range []string{"code: dead on the owner's words of 2026-10-06", "note:plugins-to-delete", "replaced by projects/tower-crane", "maintenance only: 2026-10-09 commit commit:abc1234", "its dates alone say active", "What it is: the owner's plugin repository"} {
+	for _, want := range []string{"code: dead on the owner's words of 2026-10-04", "note:plugins-to-delete", "replaced by projects/field-kit", "maintenance only: 2026-10-09 commit commit:abc1234", "its dates alone say active", "What it is: the owner's plugin repository"} {
 		if !strings.Contains(nd.Why, want) {
 			t.Errorf("why lacks %q: %s", want, nd.Why)
 		}
 	}
 	// Real work after the words: the dates stand, the words cited.
 	real := Changes{Real: []Work{{Day: "2026-10-12", Kind: "commit", Cite: "commit:def5678", Why: "changes main.go", Real: true}}}
-	nd, stood = WordsOutcome(c, d, said[0], "projects/tower-crane", real)
-	if stood || nd.Status != record.StatusActive || nd.Successor != "" || nd.Words != nil || !strings.Contains(nd.Why, "Owner activity after the 2026-10-06 statement") || !strings.Contains(nd.Why, "real work: 2026-10-12 commit commit:def5678 (changes main.go)") {
+	nd, stood = WordsOutcome(c, d, said[0], "projects/field-kit", real)
+	if stood || nd.Status != record.StatusActive || nd.Successor != "" || nd.Words != nil || !strings.Contains(nd.Why, "Owner activity after the 2026-10-04 statement") || !strings.Contains(nd.Why, "real work: 2026-10-12 commit commit:def5678 (changes main.go)") {
 		t.Fatalf("stood %v: %+v", stood, nd)
 	}
 	// No dates at all: the words stand.
@@ -134,7 +134,7 @@ func TestDeadOnANoteAndLaterWork(t *testing.T) {
 		t.Fatal("a dead answer on a shown note was overridden with no work after it")
 	}
 	c.RealWork = func(after string) Changes {
-		if after != "2026-09-23" {
+		if after != "2026-09-21" {
 			t.Errorf("after %s", after)
 		}
 		return Changes{Real: []Work{{Day: "2026-10-05", Kind: "commit", Real: true}}}
@@ -153,7 +153,7 @@ func TestNotesRenderOwnersFirst(t *testing.T) {
 	}
 	c := wordsCand(record.StatusActive)
 	out := Render([]Candidate{c})
-	if !strings.Contains(out, "notes in other folders that name it") || !strings.Contains(out, "[[plugins-to-delete]] (user, design_decision, 2026-10-08; a decision): Owner decided on 2026-10-06") {
+	if !strings.Contains(out, "notes in other folders that name it") || !strings.Contains(out, "[[plugins-to-delete]] (user, design_decision, 2026-10-08; a decision): Owner decided on 2026-10-04") {
 		t.Fatalf("render:\n%s", out)
 	}
 	f1 := Fingerprint(c)
@@ -167,34 +167,34 @@ func TestNotesRenderOwnersFirst(t *testing.T) {
 // words retire together with the folder (a plan that folds both into one
 // new tool names no successor): dead with no successor is what they say.
 func TestSuccessorOnlyFromTheCitedWords(t *testing.T) {
-	c := Candidate{Folder: "projects/sync-docs", Notes: []Note{
-		{Name: "single-lint-first-cleanup-tool", Scope: "user", Type: "design_decision", Created: "2026-10-08", Tier: TierDecision,
-			Description: "deslop, sync-docs, drift-detect, simplification and logic dedupe fold into one lint-first cleanup tool, rebuilt from the deslop repo", Body: "Owner 2026-10-06: deslop should use a small agent."},
-		{Name: "sync-docs-dead", Scope: "user", Type: "statement", Created: "2026-10-24", Said: "2026-10-24", Tier: TierStatement,
-			Description: "sync-docs status", Body: "You said once (2026-10-24): \"sync-docs is dead, no successor\""},
+	c := Candidate{Folder: "projects/docs-check", Notes: []Note{
+		{Name: "one-cleanup-tool", Scope: "user", Type: "design_decision", Created: "2026-10-08", Tier: TierDecision,
+			Description: "fmtkit, docs-check, link-watch, simplification and logic dedupe fold into one cleanup tool, rebuilt from the fmtkit repo", Body: "The fmtkit repo is the base."},
+		{Name: "docs-check-dead", Scope: "user", Type: "statement", Created: "2026-10-24", Said: "2026-10-24", Tier: TierStatement,
+			Description: "docs-check status", Body: "You said once (2026-10-24): \"docs-check is dead, no successor\""},
 	}, NotesTotal: 2}
-	words := "deslop, sync-docs, drift-detect, simplification and logic dedupe fold into one lint-first cleanup tool, rebuilt from the deslop repo"
-	if said, ps := CheckOwnerWords(c, Decision{OwnerStatus: OwnerWordsList{{Says: "dead", Words: words, From: "note:single-lint-first-cleanup-tool", Successor: "deslop"}}}); len(said) != 0 || len(ps) != 1 || !strings.Contains(ps[0], "no successor") {
+	words := "fmtkit, docs-check, link-watch, simplification and logic dedupe fold into one cleanup tool, rebuilt from the fmtkit repo"
+	if said, ps := CheckOwnerWords(c, Decision{OwnerStatus: OwnerWordsList{{Says: "dead", Words: words, From: "note:one-cleanup-tool", Successor: "fmtkit"}}}); len(said) != 0 || len(ps) != 1 || !strings.Contains(ps[0], "no successor") {
 		t.Fatalf("a successor the words retire with the folder: said %+v problems %v", said, ps)
 	}
 	// The same words with no successor: dead, none.
-	said, ps := CheckOwnerWords(c, Decision{OwnerStatus: OwnerWordsList{{Says: "dead", Words: words, From: "note:single-lint-first-cleanup-tool"}}})
+	said, ps := CheckOwnerWords(c, Decision{OwnerStatus: OwnerWordsList{{Says: "dead", Words: words, From: "note:one-cleanup-tool"}}})
 	if len(ps) != 0 || len(said) != 1 || said[0].Successor != "" {
 		t.Fatalf("dead with no successor: said %+v problems %v", said, ps)
 	}
 	// The owner's newer words, dead with no successor, supersede an older
 	// item; nothing carries a successor over from it.
 	said, ps = CheckOwnerWords(c, Decision{OwnerStatus: OwnerWordsList{
-		{Says: "dead", Words: words, From: "note:single-lint-first-cleanup-tool"},
-		{Says: "dead", Words: "sync-docs is dead, no successor", From: "note:sync-docs-dead"}}})
-	if len(ps) != 0 || len(said) != 2 || said[0].Note.Name != "sync-docs-dead" || said[0].Successor != "" {
+		{Says: "dead", Words: words, From: "note:one-cleanup-tool"},
+		{Says: "dead", Words: "docs-check is dead, no successor", From: "note:docs-check-dead"}}})
+	if len(ps) != 0 || len(said) != 2 || said[0].Note.Name != "docs-check-dead" || said[0].Successor != "" {
 		t.Fatalf("newest: said %+v problems %v", said, ps)
 	}
 	nd, _ := WordsOutcome(c, Decision{Folder: c.Folder, Kind: "repo"}, said[0], "", Changes{})
 	if nd.Status != "dead" || nd.Successor != "" || strings.Contains(nd.Why, "replaced by") {
 		t.Fatalf("outcome %+v", nd)
 	}
-	if !coListed("delete the plugins next-task, prepare-delivery and audit-project", "audit-project", "next-task") || coListed("next-task is obsolete. Tower Crane replaces them.", "next-task", "tower-crane") {
+	if !coListed("delete the plugins task-runner, ship-prep and review-audit", "review-audit", "task-runner") || coListed("task-runner is obsolete. Field Kit replaces them.", "task-runner", "field-kit") {
 		t.Error("coListed")
 	}
 }
@@ -203,24 +203,24 @@ func TestSuccessorOnlyFromTheCitedWords(t *testing.T) {
 // (its name or another name of it) and the successor: the same answer
 // whichever sentence of the note the model cites.
 func TestSuccessorNeedsWordsNamingTheFolder(t *testing.T) {
-	c := Candidate{Folder: "projects/audit-project", Names: []string{"auditor"}, Notes: []Note{
+	c := Candidate{Folder: "projects/review-audit", Names: []string{"auditor"}, Notes: []Note{
 		{Name: "pipeline-obsolete", Scope: "user", Type: "design_decision", Created: "2026-10-08", Tier: TierDecision,
-			Description: "audit-project and the per-ticket pipeline are obsolete (owner 2026-10-06).", Body: "These were part of the obsolete next-task pipeline that Tower Crane replaces. The auditor goes too; Tower Crane replaces the auditor."},
+			Description: "review-audit and the nightly batch are obsolete (owner 2026-10-04).", Body: "These were part of the old task-runner flow that Field Kit replaces. The auditor goes too; Field Kit replaces the auditor."}, // privacy-lint: allow (synthetic dated note)
 	}, NotesTotal: 1}
 	check := func(words string) ([]Said, []string) {
-		return CheckOwnerWords(c, Decision{OwnerStatus: OwnerWordsList{{Says: "dead", Words: words, From: "note:pipeline-obsolete", Successor: "tower-crane"}}})
+		return CheckOwnerWords(c, Decision{OwnerStatus: OwnerWordsList{{Says: "dead", Words: words, From: "note:pipeline-obsolete", Successor: "field-kit"}}})
 	}
-	if said, ps := check("These were part of the obsolete next-task pipeline that Tower Crane replaces."); len(said) != 0 || len(ps) != 1 || !strings.Contains(ps[0], "do not name this folder") {
+	if said, ps := check("These were part of the old task-runner flow that Field Kit replaces."); len(said) != 0 || len(ps) != 1 || !strings.Contains(ps[0], "do not name this folder") {
 		t.Fatalf("words naming only the successor: said %+v problems %v", said, ps)
 	}
-	if said, ps := check("Tower Crane replaces the auditor"); len(ps) != 0 || len(said) != 1 || said[0].Successor != "tower-crane" {
+	if said, ps := check("Field Kit replaces the auditor"); len(ps) != 0 || len(said) != 1 || said[0].Successor != "field-kit" {
 		t.Fatalf("an alias and the successor: said %+v problems %v", said, ps)
 	}
-	if said, ps := check("audit-project and the per-ticket pipeline are obsolete (owner 2026-10-06). These were part of the obsolete next-task pipeline that Tower Crane replaces."); len(ps) != 0 || len(said) != 1 {
+	if said, ps := check("review-audit and the nightly batch are obsolete (owner 2026-10-04). These were part of the old task-runner flow that Field Kit replaces."); len(ps) != 0 || len(said) != 1 { // privacy-lint: allow (synthetic dated note)
 		t.Fatalf("the folder and the successor: said %+v problems %v", said, ps)
 	}
 	// With no successor the description's words alone say dead, none.
-	said, ps := CheckOwnerWords(c, Decision{OwnerStatus: OwnerWordsList{{Says: "dead", Words: "audit-project and the per-ticket pipeline are obsolete", From: "note:pipeline-obsolete"}}})
+	said, ps := CheckOwnerWords(c, Decision{OwnerStatus: OwnerWordsList{{Says: "dead", Words: "review-audit and the nightly batch are obsolete", From: "note:pipeline-obsolete"}}})
 	if len(ps) != 0 || len(said) != 1 || said[0].Successor != "" {
 		t.Fatalf("no successor: said %+v problems %v", said, ps)
 	}
@@ -257,8 +257,8 @@ func TestClaimNoteIsNoOwnerWord(t *testing.T) {
 // a pause is dormant. Flagged words must be the note's.
 func TestOwnerWordsPauseIsNotDead(t *testing.T) {
 	c := wordsCand(record.StatusActive)
-	c.Notes = append(c.Notes, Note{Name: "oldtool-paused", Scope: "user", Type: "design_decision", Created: "2026-10-08", Tier: TierStatement, Said: "2026-09-28",
-		Description: "The owner stopped oldtool: \"bank what you have, no more oldtool work for now\"."})
+	c.Notes = append(c.Notes, Note{Name: "oldtool-paused", Scope: "user", Type: "design_decision", Created: "2026-10-08", Tier: TierStatement, Said: "2026-09-18",
+		Description: "The owner paused oldtool: \"keep what works, no more oldtool work for now\"."})
 	for _, c2 := range []struct {
 		item string
 		ok   bool
@@ -276,7 +276,7 @@ func TestOwnerWordsPauseIsNotDead(t *testing.T) {
 		if (len(said) == 1) != c2.ok || (!c2.ok && (len(ps) != 1 || !strings.Contains(ps[0], c2.want))) {
 			t.Errorf("%s: said %+v problems %q", c2.item, said, ps)
 		}
-		if c2.ok && said[0].Day != "2026-09-28" {
+		if c2.ok && said[0].Day != "2026-09-18" {
 			t.Errorf("dated by the day said: %+v", said[0])
 		}
 	}
@@ -287,7 +287,7 @@ func TestOwnerWordsPauseIsNotDead(t *testing.T) {
 // unless the owner worked on it after.
 func TestQuoteOutcome(t *testing.T) {
 	c := wordsCand(record.StatusActive)
-	d := Decision{Folder: "projects/oldtool", Kind: "repo", Status: "dead", Why: "the owner's tool", OwnerQuote: "we are stopping development of oldtool, bank it", OwnerQuoteFrom: "claude:s9"}
+	d := Decision{Folder: "projects/oldtool", Kind: "repo", Status: "dead", Why: "the owner's tool", OwnerQuote: "we are stopping work on oldtool, park it", OwnerQuoteFrom: "claude:s9"}
 	if ps := CheckQuoteStatus(c, d); len(ps) != 1 || !strings.Contains(ps[0], "owner_quote_final") {
 		t.Errorf("dead without words that end it: %q", ps)
 	}
@@ -301,12 +301,12 @@ func TestQuoteOutcome(t *testing.T) {
 		t.Errorf("final words not in the quote: %q", ps)
 	}
 	d.Status, d.OwnerQuoteFinal = "dormant", ""
-	nd, stood := QuoteOutcome(c, d, "2026-09-28", Changes{})
-	if !stood || nd.Status != "dormant" || nd.OwnerQuote == "" || !strings.HasPrefix(nd.Why, "code: dormant on the owner's words of 2026-09-28, claude:s9") || !strings.Contains(nd.Why, "its dates alone say active") {
+	nd, stood := QuoteOutcome(c, d, "2026-09-18", Changes{})
+	if !stood || nd.Status != "dormant" || nd.OwnerQuote == "" || !strings.HasPrefix(nd.Why, "code: dormant on the owner's words of 2026-09-18, claude:s9") || !strings.Contains(nd.Why, "its dates alone say active") {
 		t.Errorf("words stand: %+v", nd)
 	}
-	nd, stood = QuoteOutcome(c, d, "2026-09-28", Changes{Real: []Work{{Day: "2026-10-06", Kind: "commit", Cite: "commit:abc1234", Real: true}}})
-	if stood || nd.Status != "active" || nd.OwnerQuote != "" || !strings.Contains(nd.Why, "Owner activity after the 2026-09-28 words") {
+	nd, stood = QuoteOutcome(c, d, "2026-09-18", Changes{Real: []Work{{Day: "2026-10-06", Kind: "commit", Cite: "commit:abc1234", Real: true}}})
+	if stood || nd.Status != "active" || nd.OwnerQuote != "" || !strings.Contains(nd.Why, "Owner activity after the 2026-09-18 words") {
 		t.Errorf("dates stand: %+v", nd)
 	}
 	// Work after the words, then the forge deleted the repository: no commit
@@ -315,14 +315,14 @@ func TestQuoteOutcome(t *testing.T) {
 	dd := d
 	dd.Status = "dead"
 	work := Changes{Real: []Work{{Day: "2026-10-06", Kind: "commit", Cite: "commit:abc1234", Real: true}}}
-	if nd, stood := QuoteOutcome(gone, dd, "2026-09-28", work); !stood || nd.Status != "dead" || !strings.Contains(nd.Why, "the forge has the repository deleted or archived since") {
+	if nd, stood := QuoteOutcome(gone, dd, "2026-09-18", work); !stood || nd.Status != "dead" || !strings.Contains(nd.Why, "the forge has the repository deleted or archived since") {
 		t.Errorf("dead on a deleted repository: %+v", nd)
 	}
-	if nd, stood := QuoteOutcome(gone, d, "2026-09-28", work); stood || nd.Status != "dormant" || nd.OwnerQuote != "" {
+	if nd, stood := QuoteOutcome(gone, d, "2026-09-18", work); stood || nd.Status != "dormant" || nd.OwnerQuote != "" {
 		t.Errorf("dormant words, work after, the dates stand: %+v", nd)
 	}
 	d.Status = "active"
-	if nd, stood := QuoteOutcome(c, d, "2026-09-28", Changes{}); !stood || nd.Why != d.Why {
+	if nd, stood := QuoteOutcome(c, d, "2026-09-18", Changes{}); !stood || nd.Why != d.Why {
 		t.Errorf("active on their words stands as given: %+v", nd)
 	}
 }

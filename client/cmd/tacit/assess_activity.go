@@ -204,8 +204,8 @@ func sortedKeysStr(m map[string]string) []string {
 }
 
 // prefetchWorkers is how many repositories the prefetch asks the forge
-// about at once: three calls each, about a second a call through gh, and
-// 111 repositories on the Mac's shadow store took 20 minutes one at a time.
+// about at once: three calls each, about a second a call through gh, so a
+// store with a hundred repositories takes many minutes one at a time.
 const prefetchWorkers = 8
 
 // prefetchActivity asks the forge, a few at a time, for the activity of the

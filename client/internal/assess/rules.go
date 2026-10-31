@@ -215,7 +215,7 @@ func contains(xs []string, x string) bool {
 var digitsRx = regexp.MustCompile(`[0-9]+`)
 
 // NamePattern is a folder name with every run of digits as "#": the folders
-// one tool or task makes (kv-013-g1, kv-140-g2: kv-#-g#) share it. A name
+// one tool or task makes (exp-013-g1, exp-140-g2: exp-#-g#) share it. A name
 // with no digit is its own pattern.
 func NamePattern(name string) string {
 	return digitsRx.ReplaceAllString(strings.ToLower(name), "#")

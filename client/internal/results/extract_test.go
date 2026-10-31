@@ -16,12 +16,12 @@ func obsByKey(obs []Obs) map[string]Obs {
 // A row log: metric columns by name, setup columns by shape, the time and
 // code columns by role, a row the file marks unclean is not a result.
 func TestExtractRowLog(t *testing.T) {
-	data := `{"ts":"2026-07-15T05:56:31Z","git":"c4556e2","cell":"31b-plain-short","toks":39.15,"profile":"balanced","load":1.12,"window_clean":true}
-{"ts":"2026-07-15T05:56:31Z","git":"c4556e2","cell":"31b-spec-short","toks":95.6,"accept":0.817,"tok_round":3.2,"profile":"balanced","load":1.12,"window_clean":true}
-{"ts":"2026-07-16T05:56:31Z","git":"d111111","cell":"31b-plain-short","toks":2.5,"profile":"balanced","load":40,"window_clean":false}
-{"ts":"2026-07-17T05:56:31Z","git":"d222222","cell":"31b-plain-short","toks":40.02,"profile":"balanced","load":1.0,"window_clean":true}
+	data := `{"ts":"2026-07-15T05:56:31Z","git":"a1b2c3d","cell":"8b-plain-short","toks":47.32,"profile":"steady","load":1.12,"window_clean":true}
+{"ts":"2026-07-15T05:56:31Z","git":"a1b2c3d","cell":"8b-spec-short","toks":112.4,"accept":0.764,"tok_round":3.2,"profile":"steady","load":1.12,"window_clean":true}
+{"ts":"2026-07-16T05:56:31Z","git":"d111111","cell":"8b-plain-short","toks":2.5,"profile":"steady","load":40,"window_clean":false}
+{"ts":"2026-07-17T05:56:31Z","git":"d222222","cell":"8b-plain-short","toks":48.11,"profile":"steady","load":1.0,"window_clean":true}
 <<<<<<< HEAD
-{"ts":"2026-07-18T05:56:31Z","git":"d333333","cell":"31b-plain-short","toks":40.5,"profile":"balanced","window_clean":true}
+{"ts":"2026-07-18T05:56:31Z","git":"d333333","cell":"8b-plain-short","toks":48.9,"profile":"steady","window_clean":true}
 `
 	obs, roles := Extract("perf-ci.jsonl", []byte(data), nil)
 	if roles == nil || roles.Time != "ts" || roles.Code != "git" {
@@ -31,16 +31,16 @@ func TestExtractRowLog(t *testing.T) {
 		t.Fatalf("metrics %v setup %v", roles.Metrics, roles.Setup)
 	}
 	m := obsByKey(obs)
-	o, ok := m["cell=31b-spec-short profile=balanced|accept"]
-	if !ok || o.Value != 0.817 || o.Unit != "" {
+	o, ok := m["cell=8b-spec-short profile=steady|accept"]
+	if !ok || o.Value != 0.764 || o.Unit != "" {
 		t.Fatalf("accept row: %+v", o)
 	}
-	if _, ok := m["cell=31b-spec-short profile=balanced|tok_round"]; ok {
+	if _, ok := m["cell=8b-spec-short profile=steady|tok_round"]; ok {
 		t.Fatal("tok_round is not a metric")
 	}
 	plain := 0
 	for _, o := range obs {
-		if o.Key == "cell=31b-plain-short profile=balanced|toks" {
+		if o.Key == "cell=8b-plain-short profile=steady|toks" {
 			plain++
 			if o.Value == 2.5 {
 				t.Fatal("a row with window_clean false is not a result")
@@ -73,9 +73,9 @@ func TestExtractDropsUnsafeText(t *testing.T) {
 func TestExtractMarkdownTables(t *testing.T) {
 	data := "# Benchmarks\n\n## Results, localhost\n\n" +
 		"| Scenario | Ours | C (ref) | Ours / C |\n|---|---:|---:|---:|\n" +
-		"| SET 100B conc=1 | 6,821 r/s | 8,775 r/s | 78 % |\n" +
-		"| GET 100B conc=10 | 60,010 r/s | 59,382 r/s | **101 %** |\n" +
-		"| MIX 100B conc=10 | 55,784 r/s | - | n/a |\n" +
+		"| SET 64B conc=1 | 7,412 r/s | 9,130 r/s | 81 % |\n" +
+		"| GET 64B conc=10 | 63,250 r/s | 61,904 r/s | **102 %** |\n" +
+		"| MIX 64B conc=10 | 57,316 r/s | - | n/a |\n" +
 		"| Range row | 104-109 r/s | 5 -> 7 r/s | 1.8-2.7x |\n\n" +
 		"## Files\n\n| Name | Lines |\n|---|---|\n| a.go | 120 |\n| b.go | 80 |\n\n" +
 		"## Dup\n\n| Row | tok/s |\n|---|---|\n| same | 10.5 |\n| same | 11.5 |\n| other | 12.5 tok/s |\n"
@@ -93,14 +93,14 @@ func TestExtractMarkdownTables(t *testing.T) {
 		return o
 	}
 	g := "Results, localhost / Scenario"
-	o := get(g, "SET 100B conc=1|Ours")
-	if o.Value != 6821 || o.Unit != "req/s" || o.Raw != "6821" || o.Line == 0 {
+	o := get(g, "SET 64B conc=1|Ours")
+	if o.Value != 7412 || o.Unit != "req/s" || o.Raw != "7412" || o.Line == 0 {
 		t.Fatalf("%+v", o)
 	}
-	if o := get(g, "GET 100B conc=10|Ours / C"); o.Value != 101 || o.Unit != "%" {
+	if o := get(g, "GET 64B conc=10|Ours / C"); o.Value != 102 || o.Unit != "%" {
 		t.Fatalf("%+v", o)
 	}
-	if _, ok := m[g+"|MIX 100B conc=10|C (ref)"]; ok {
+	if _, ok := m[g+"|MIX 64B conc=10|C (ref)"]; ok {
 		t.Fatal("a dash is not a number")
 	}
 	for k := range m {
@@ -145,22 +145,22 @@ func TestExtractJSONBoard(t *testing.T) {
 }
 
 func TestLiteralsSkipNamesDatesAndRanges(t *testing.T) {
-	text := "On 2026-09-18 Qwen3.5-9B with k=3 ran 41.3 tok/s (PR #387), 104-109 ms, 6,821 r/s, 81.7% accept, 1.8x, 3d."
+	text := "On 2026-09-18 Llama3.1-8B with k=3 ran 52.7 tok/s (PR #412), 104-109 ms, 7,412 r/s, 81.7% accept, 1.8x, 3d."
 	var got []string
 	for _, l := range literals(text) {
 		got = append(got, l.raw+" "+l.unit)
 	}
 	// the date, the model name, the PR number, the range and "3d" are not measurements
-	want := "3 tok/s|41.3 tok/s|6,821 req/s|81.7 %|1.8 x"
+	want := "3 tok/s|52.7 tok/s|7,412 req/s|81.7 %|1.8 x"
 	if strings.Join(got, "|") != want {
 		t.Fatalf("got %q, want %q", strings.Join(got, "|"), want)
 	}
 	// a unit is read only as far as the sentence goes
 	for text, unit := range map[string]string{
-		"5.18 (16 lanes, p95 784 ms)":   "",
-		"130.9 -> 446.5 tok/s":          "tok/s",
-		"it ran 41.3, then 12 ms later": "",
-		"1,792 GB/s of bandwidth":       "GB/s",
+		"4.07 (12 lanes, p95 652 ms)":   "",
+		"120.7 -> 391.2 tok/s":          "tok/s",
+		"it ran 52.7, then 12 ms later": "",
+		"2,039 GB/s of bandwidth":       "GB/s",
 		"a 2.4x gain, 30 s later":       "x",
 	} {
 		ls := literals(text)
@@ -173,8 +173,8 @@ func TestLiteralsSkipNamesDatesAndRanges(t *testing.T) {
 // Statistics of an estimate, per-item records, CI baselines and elements of
 // number arrays are not results of a run.
 func TestJSONDropsStatisticsItemsBaselinesAndArrayElements(t *testing.T) {
-	data := `{"candidates":[{"id":"m1","macro":{"strict_shape_score":{"point":61.5,"ci95":[1.5,9.5],"one_sided_95_lower":-3.2,"delta_points":5.6,"stderr":0.4,"p_value":0.03}},"strict_shape_macro_percent":58.25}],
-	  "items":[{"id":"x1","strict_shape_score":0.0}],
+	data := `{"candidates":[{"id":"m1","macro":{"exact_match_score":{"point":61.5,"ci95":[1.5,9.5],"one_sided_95_lower":-3.2,"delta_points":5.6,"stderr":0.4,"p_value":0.03}},"exact_match_macro_percent":58.25}],
+	  "items":[{"id":"x1","exact_match_score":0.0}],
 	  "per_task_type":{"drafting":{"primary_percent":58.3},"summary":{"primary_percent":41.2}},
 	  "stages_ms":{"DecodingStage":12.5,"DenoisingStage":900.1},
 	  "headline_score":88.1}`
@@ -190,7 +190,7 @@ func TestJSONDropsStatisticsItemsBaselinesAndArrayElements(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"candidates.[m1].macro.strict_shape_score.point", "candidates.[m1].strict_shape_macro_percent", "headline_score"} {
+	for _, want := range []string{"candidates.[m1].macro.exact_match_score.point", "candidates.[m1].exact_match_macro_percent", "headline_score"} {
 		if !got[want] {
 			t.Fatalf("%s should be read; got %v", want, got)
 		}
@@ -198,7 +198,7 @@ func TestJSONDropsStatisticsItemsBaselinesAndArrayElements(t *testing.T) {
 	if o := extractJSON("python/test/perf_baselines/h100.json", []byte(`{"scenarios":{"a":{"expected_e2e_ms":5}}}`)); len(o) != 0 {
 		t.Fatalf("a baselines file holds thresholds: %+v", o)
 	}
-	if o := extractJSON("research/stage5-transcribe-parity.json", []byte(`{"wer_percent":0.07}`)); len(o) != 0 {
+	if o := extractJSON("research/stage2-decode-parity.json", []byte(`{"wer_percent":0.07}`)); len(o) != 0 {
 		t.Fatalf("a parity receipt is the record of one check: %+v", o)
 	}
 }

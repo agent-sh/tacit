@@ -1,9 +1,8 @@
 // Package transcript finds and reads the harnesses' JSONL transcripts, plain
 // or compressed. Codex rolls an old session into a compressed copy of it,
-// rollout-<time>-<id>.jsonl.zst, and removes the .jsonl (on one workstation,
-// 2026-10-27: 2,935 of 3,066 Codex sessions, 7 GB, every one a single zstd
-// frame with its size recorded). No harness on that machine writes a gzip
-// copy.
+// rollout-<time>-<id>.jsonl.zst, and removes the .jsonl (on a machine with a
+// long Codex history, nearly every session was such a copy, each a single
+// zstd frame with its size recorded). No harness there writes a gzip copy.
 //
 // A transcript is one session whichever file holds it: its identity is its
 // plain path (Plain), and every offset is a position in its JSONL bytes (the

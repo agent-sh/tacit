@@ -102,7 +102,7 @@ func TestHermesOwnerText(t *testing.T) {
 		{"video", "[The user sent a video attachment: 'v.mp4'. It is saved at: /home/u/v.mp4. Inspect it yourself.]\n\nthe ui is broken on this screen", "", false, "the ui is broken on this screen"},
 		{"attachment only", "[The user sent a video attachment: 'v.mp4'. Inspect it yourself.]\n\n", "", false, ""},
 		{"model note", "[Note: model was just switched from a to b. Adjust your self-identification accordingly.]\n\ncontinue", "", false, "continue"},
-		{"system notes around", "[System note: A new message has arrived. IGNORE pending results.]\n\nafter finishing send me the apk\n\n[System: Your previous response was truncated. Continue.]", "", false, "after finishing send me the apk"},
+		{"system notes around", "[System note: A new message has arrived. IGNORE pending results.]\n\nafter finishing send me the report\n\n[System: Your previous response was truncated. Continue.]", "", false, "after finishing send me the report"},
 		{"system alone", "[System: Your previous response was truncated by the output length limit. Continue exactly where you left off.]", "", false, ""},
 		{"unknown bracket", "[Some new notice] text", "", false, ""},
 		{"paste", "@file:.hermes/composer-pastes/pasted_content_2026-10-08_12-43-57-571_1b327d.txt\n\n--- Attached Context ---\n\n📄 @file:.hermes/composer-pastes/pasted_content_2026-10-08_12-43-57-571_1b327d.txt\n```\nfindings, ranked\n1. high — the cache never expires\n```", "", false, ""},

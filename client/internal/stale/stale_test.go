@@ -120,8 +120,8 @@ func TestAnUntouchedFactIsNotFlagged(t *testing.T) {
 }
 
 // A changed value with its name standing is not a deletion: the commit rewrites
-// the line, HEAD still holds the name, and the fact may well still be true. On
-// the first hand-checked sample none of 16 such flags was stale.
+// the line, HEAD still holds the name, and the fact may well still be true. In
+// a hand-checked sample from a real store no such flag was stale.
 func TestAChangedValueWithItsNameStandingIsNotFlagged(t *testing.T) {
 	projects, repo := repoX(t)
 	commit(t, repo, "2026-10-05", "engine: retry five times", map[string]string{"src/engine.rs": strings.Replace(engine, "= 3;", "= 5;", 1)})

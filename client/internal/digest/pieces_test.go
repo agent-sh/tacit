@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// Real-shaped lines, as Claude Code 2.1.30x and Codex 0.16x write them on
-// the author's workstation (2026-10), texts synthetic.
+// Real-shaped lines, as Claude Code 2.1.30x and Codex 0.16x write them
+// (2026-10), texts synthetic.
 
 // claudeTyped is a user line a person typed in a terminal session.
 func claudeTyped(text string) string {
@@ -24,16 +24,16 @@ func claudeQueuedTyped(text string) string {
 // A note a side agent offers, as Claude Code delivers it: the header, the
 // body quoted line by line, and what the person typed in reply below it.
 const sideNoteBody = "Here is a note offered by a side agent:\n\n" +
-	"> Heads up · A landing script keeps starting a new review every few minutes, so one leftover title fix triggered about 25 reviews.\n" +
+	"> Heads up · A deploy script keeps restarting the build every few minutes, so one stale lock file triggered about 25 builds.\n" +
 	">\n" +
-	"> **The review loop restarts on a title change**\n" +
-	"> - The landing script asks for a new review on every push.\n" +
-	"> - **Consider capping review rounds per change.**"
+	"> **The build loop restarts on a lock change**\n" +
+	"> - The deploy script asks for a new build on every push.\n" +
+	"> - **Consider capping build retries per change.**"
 
 func TestTurnPiecesSideAgentNote(t *testing.T) {
-	reply := "theres should be a way for the agents to escalate to you when they cant fix something, and a pr title is not a reason to re-review"
+	reply := "theres no need to rebuild on every lock change, and the agents should tell you when the deploy cant finish"
 	ps := TurnPieces(sideNoteBody + "\n\n" + reply)
-	if len(ps) != 2 || ps[0].Who != Agent || !strings.HasPrefix(ps[0].Text, "Here is a note") || !strings.Contains(ps[0].Text, "capping review rounds") || ps[1].Who != Owner || ps[1].Text != reply {
+	if len(ps) != 2 || ps[0].Who != Agent || !strings.HasPrefix(ps[0].Text, "Here is a note") || !strings.Contains(ps[0].Text, "capping build retries") || ps[1].Who != Owner || ps[1].Text != reply {
 		t.Fatalf("note with a reply: %+v", ps)
 	}
 	if own := OwnerPieces(TurnPieces(sideNoteBody)); own != nil {
@@ -41,7 +41,7 @@ func TestTurnPiecesSideAgentNote(t *testing.T) {
 	}
 	// A copy the person pasted from the terminal: the prompt mark and the
 	// quote's indent.
-	pasted := "❯ Here is a note offered by a side agent:\n\n  > Heads up · The main agent merged T74 without the clean script.\n  >\n  > T74 merged without the clean script\n  > - Consider adding it to the land script."
+	pasted := "❯ Here is a note offered by a side agent:\n\n  > Heads up · The main agent shipped build 74 without the lint step.\n  >\n  > Build 74 shipped without the lint step\n  > - Consider adding it to the deploy script."
 	if ps := TurnPieces(pasted); len(ps) != 1 || ps[0].Who != Agent {
 		t.Errorf("pasted note: %+v", ps)
 	}
@@ -59,9 +59,9 @@ func TestTurnPiecesSideAgentNote(t *testing.T) {
 func TestTurnPiecesHarnessBlocks(t *testing.T) {
 	// A message typed while the agent worked, after the reminder Claude Code
 	// put in front of it.
-	q := "<system-reminder>\nThe user started your suggested background task task_c187 (\"Fix the render\") in a separate cloud session. It is running independently.\n</system-reminder>\n\nwe are banking our work and releasing boxes, no more shop work for now"
+	q := "<system-reminder>\nThe user started your suggested background task task_c187 (\"Fix the render\") in a separate cloud session. It is running independently.\n</system-reminder>\n\nwe are done with the migration for today, no more schema work until monday"
 	ps := TurnPieces(q)
-	if len(ps) != 2 || ps[0].Who != Harness || ps[1].Who != Owner || ps[1].Text != "we are banking our work and releasing boxes, no more shop work for now" {
+	if len(ps) != 2 || ps[0].Who != Harness || ps[1].Who != Owner || ps[1].Text != "we are done with the migration for today, no more schema work until monday" {
 		t.Errorf("leading reminder: %+v", ps)
 	}
 	// A reminder after their words, and one alone.
@@ -76,8 +76,8 @@ func TestTurnPiecesHarnessBlocks(t *testing.T) {
 		t.Errorf("open reminder: %q", own)
 	}
 	// A slash command's echo: its arguments are theirs.
-	ps = TurnPieces("<command-message>goal</command-message>\n<command-name>/goal</command-name>\n<command-args>dont stay idle, push the measurement</command-args>")
-	if own := OwnerPieces(ps); len(own) != 1 || own[0] != "dont stay idle, push the measurement" || ps[0].Who != Harness || strings.Contains(ps[0].Text, "dont stay idle") {
+	ps = TurnPieces("<command-message>goal</command-message>\n<command-name>/goal</command-name>\n<command-args>keep going and finish the table</command-args>")
+	if own := OwnerPieces(ps); len(own) != 1 || own[0] != "keep going and finish the table" || ps[0].Who != Harness || strings.Contains(ps[0].Text, "keep going") {
 		t.Errorf("command echo: %+v", ps)
 	}
 	for _, s := range []string{
@@ -87,7 +87,7 @@ func TestTurnPiecesHarnessBlocks(t *testing.T) {
 		"This session is being continued from a previous conversation that ran out of context.",
 		"The user moved this existing Relay conversation to you. Continue its task with the same intent.",
 		"[Request interrupted by user for tool use]",
-		"You are manager-01 of the fleet",
+		"You are lead-01 of the team",
 	} {
 		if own := OwnerPieces(TurnPieces(s)); own != nil {
 			t.Errorf("%.40q: %q", s, own)
@@ -110,15 +110,15 @@ func codexAsk(call, args string) string {
 func TestCodexQuestionReplies(t *testing.T) {
 	asked := CodexAsked{}
 	var o map[string]any
-	_ = json.Unmarshal([]byte(codexAsk("call_7c2e", `{"questions":[{"title":"Which machine were you using around 24 March?","options":["This Linux machine","A Mac"]},{"title":"Is the old instance still up?","options":["Yes","No"]}]}`)), &o)
+	_ = json.Unmarshal([]byte(codexAsk("call_7c2e", `{"questions":[{"title":"Which branch did you cut the release from?","options":["main","release/1.x"]},{"title":"Is the old build still deployed?","options":["Yes","No"]}]}`)), &o)
 	asked.Note(o)
-	reply := `[{"answer":"maybe the mac, i dont remember","question":"Which machine were you using around 24 March?","questionItemId":"[\"request_user_input_async\",\"call_7c2e\",0]"},{"answer":"No","question":"Is the old instance still up?","questionItemId":"[\"request_user_input_async\",\"call_7c2e\",1]"}]`
+	reply := `[{"answer":"maybe the release branch, i dont remember","question":"Which branch did you cut the release from?","questionItemId":"[\"request_user_input_async\",\"call_7c2e\",0]"},{"answer":"No","question":"Is the old build still deployed?","questionItemId":"[\"request_user_input_async\",\"call_7c2e\",1]"}]`
 	var text string
 	var line map[string]any
 	_ = json.Unmarshal([]byte(codexReply(reply)), &line)
 	text = line["payload"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
 	ps := asked.Chosen(TurnPieces(text))
-	if own := OwnerPieces(ps); len(own) != 1 || own[0] != "maybe the mac, i dont remember" {
+	if own := OwnerPieces(ps); len(own) != 1 || own[0] != "maybe the release branch, i dont remember" {
 		t.Errorf("typed answer theirs, offered option not: %+v", ps)
 	}
 	// Without the question (a window that starts after it) the option counts as their answer.
@@ -126,12 +126,12 @@ func TestCodexQuestionReplies(t *testing.T) {
 		t.Errorf("no question seen: %q", own)
 	}
 	// The digest of the Codex session: the answers, the frames and the
-	// notices of a conversation Relay moved here from Claude Code.
+	// notices of a conversation a front end moved here from Claude Code.
 	in := codexMeta("Codex Desktop", `"vscode"`, "user", "") + strings.Join([]string{
 		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"The user moved this existing Relay conversation to you. Continue its task with the same intent.\n\nUSER: fix it"}]}}`,
 		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<task-notification>\n<task-id>b3</task-id>\n<status>completed</status>\n</task-notification>"}]}}`,
 		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"This session is being continued from a previous conversation that ran out of context."}]}}`,
-		codexAsk("call_7c2e", `{"questions":[{"title":"Which machine?","options":["This Linux machine","A Mac"]},{"title":"Still up?","options":["Yes","No"]}]}`),
+		codexAsk("call_7c2e", `{"questions":[{"title":"Which branch?","options":["main","release/1.x"]},{"title":"Still deployed?","options":["Yes","No"]}]}`),
 		codexReply(reply),
 		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"check the march pushes first"}]}}`,
 	}, "\n") + "\n"
@@ -142,7 +142,7 @@ func TestCodexQuestionReplies(t *testing.T) {
 			us = append(us, l)
 		}
 	}
-	if strings.Join(us, "|") != "U: maybe the mac, i dont remember|U: check the march pushes first" {
+	if strings.Join(us, "|") != "U: maybe the release branch, i dont remember|U: check the march pushes first" {
 		t.Errorf("codex owner lines:\n%s", strings.Join(got, "\n"))
 	}
 }

@@ -11,13 +11,13 @@ import (
 )
 
 // RestateOverlap is the share of description terms (Jaccard) at which a
-// pending note restates a fact. Measured on the 2,094 pending dreamer notes
-// of 2026-10-11 with the token guard only: 0.5 dropped 4.9 percent and let
-// through pairs that differ in a detail (one task's lease path against
-// another's), 0.6 dropped 3.4 percent, 0.7 dropped 1.8 percent. The original guards
-// dropped 23 of the 2,108 pending notes (1.1 percent), each
-// a restatement in a sample of six. The negation guard now checks both
-// directions after a live fixture showed a positive update being dropped.
+// pending note restates a fact. Measured on a real store's pending dreamer
+// notes with the token guard only: 0.5 also dropped pairs that differ in a
+// detail (one task's lease path against another's), and each step up to 0.6
+// and 0.7 dropped fewer notes. With the original guards only a small share of
+// the pending notes was dropped, each a restatement in the sample checked.
+// The negation guard now checks both directions after a live fixture showed
+// a positive update being dropped.
 const RestateOverlap = 0.6
 
 // specificRx finds the tokens that carry a fact's specifics: anything with a

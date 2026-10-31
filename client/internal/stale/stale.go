@@ -9,10 +9,10 @@
 // Why deletions and not changes. A fact about a hot file is touched by every
 // commit that edits the file, and a name that survives is rewritten all the
 // time: the same word reworded in a doc, a refactor of the line around it, a
-// value on the same line. Hand-checked on the first sample, none of 16 flags
-// raised by a changed line holding a name that HEAD still holds was a stale
-// fact, and 4 of 4 raised by a deleted file were (eval/VALUE.md). So a changed
-// line does not flag; a deleted name or file does.
+// value on the same line. Hand-checked on a sample from a real store
+// (eval/VALUE.md), no flag raised by a changed line holding a name that HEAD
+// still holds was a stale fact, and every flag raised by a deleted file was.
+// So a changed line does not flag; a deleted name or file does.
 // A term found in 26 or more files at HEAD is never a term (gitev drops it),
 // and only specific identifiers are searched (gitev.Specific).
 //

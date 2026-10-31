@@ -6,9 +6,9 @@ package store
 // deadline. The local leg (the checkout of what arrived) does not: a
 // checkout killed at its deadline leaves HEAD at the old commit, the files
 // half way to the new one and a stale .git/index.lock, and every later
-// sync then refused the clone as dirty (the 2026-10-22 incident on a
-// read-only clone: 3,262 modified and 292 untracked files after a
-// 46-commit pull hit the follower's deadline). So:
+// sync then refused the clone as dirty (a read-only clone whose pull hit
+// the follower's deadline was left with many files modified or
+// untracked). So:
 //
 //   - the local leg runs under its own deadline (localTimeout), detached
 //     from the caller's; a caller whose time left is too short for the
@@ -42,9 +42,9 @@ import (
 
 const (
 	// localTimeout bounds one local git step of a sync (status, checkout,
-	// reset) on its own deadline. A 12,890-file fast-forward of the store
-	// took 3.5 s on the Mac; ten minutes is far above any real checkout
-	// and still ends a git that hangs.
+	// reset) on its own deadline. A fast-forward that rewrites every file of
+	// a large store takes seconds; ten minutes is far above any real
+	// checkout and still ends a git that hangs.
 	localTimeout = 10 * time.Minute
 	// staleLockAge is when a git lock no tacit checkout claims counts as
 	// left by a dead git: git holds index.lock only while it writes the
@@ -233,9 +233,9 @@ type dirt struct {
 
 // status lists the working tree's changes, untracked and ignored files.
 // The caller passes the local deadline (localCtx): a status is never cut short by the network
-// legs' deadline (in the incident it ran on an already spent one). On the
-// 49,228-file store it took 0.16 s with a stale index.lock and 5 s on a
-// fresh copy whose index had to be re-read.
+// legs' deadline (an interrupted update showed it running on an already
+// spent one). On a large store it takes a fraction of a second with a stale
+// index.lock and seconds on a fresh copy whose index has to be re-read.
 func (s *Store) status(ctx context.Context) ([]dirt, error) {
 	out, err := git(ctx, s.Dir, "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all", "--ignored")
 	if err != nil {
@@ -384,8 +384,8 @@ func (s *Store) towardRemote(lctx context.Context, ds []dirt, target string) (pr
 
 // maxPartial bounds the files an interruption may leave half written: git
 // writes a file in place, so the files its workers were writing when it was
-// killed hold a start of their content (an empty file, in the Mac's
-// measured kill). More than this is no interruption.
+// killed hold a start of their content (an empty file, in a measured
+// kill). More than this is no interruption.
 const maxPartial = 16
 
 // notPartial is the first of paths whose content is not a start of a blob

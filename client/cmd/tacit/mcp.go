@@ -112,7 +112,7 @@ func storeServer(s *store.Store, harness string) *mcp.Server {
 	})
 
 	type addArgs struct {
-		Name        string `json:"name" jsonschema:"short slug, e.g. memra-precommit-cargo-path"`
+		Name        string `json:"name" jsonschema:"short slug, e.g. demo-api-precommit-cargo-path"`
 		Description string `json:"description" jsonschema:"one line (max 200 chars) that states the fact itself with the concrete path, command, host or number"`
 		Body        string `json:"body,omitempty" jsonschema:"one to three sentences: the fact and the why"`
 		Type        string `json:"type" jsonschema:"user_standard | design_decision | past_mistake | machine_fact | code_change | structure | history | reference | user (who the owner is, user scope only)"`
@@ -159,7 +159,7 @@ func runProbeMCP() int {
 	}
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "tacit_probe",
-		Description: "Read-only look at the projects tree, the fact store, GitHub or this machine. Verbs: git-log <repo> [-n N] [--grep P] [--author A] [--since D] [-- path]; git-show <repo> <rev> [--stat] [-- path]; git-blame <repo> <path> [-L a,b]; git-grep <repo> <pattern> [-i] [-- path]; git-ls <repo> [path]; git-tags <repo> [--contains rev]; grep <dir> <pattern> [-i]; find <dir> <name-glob>; ls <path>; gh pr|issue view <n> [-R owner/repo]; gh pr|issue list [-R owner/repo] [--state s] [--search q] [--limit N]; gh repo view <owner/repo>; gh release list [-R owner/repo]; unit <name>; units; sys. Paths must be under ~/projects, the store, ~/.config/agents or the memory dir. Other options are refused.",
+		Description: "Read-only look at the projects tree, the fact store, GitHub or this machine. Verbs: git-log <repo> [-n N] [--grep P] [--author A] [--since D] [-- path]; git-show <repo> <rev> [--stat] [-- path]; git-blame <repo> <path> [-L a,b]; git-grep <repo> <pattern> [-i] [-- path]; git-ls <repo> [path]; git-tags <repo> [--contains rev]; grep <dir> <pattern> [-i]; find <dir> <name-glob>; ls <path>; gh pr|issue view <n> [-R owner/repo]; gh pr|issue list [-R owner/repo] [--state s] [--search q] [--limit N]; gh repo view <owner/repo>; gh release list [-R owner/repo]; unit <name>; units; sys. Paths must be under ~/projects, the store, a rule directory added to this run or the memory dir. Other options are refused.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a probeArgs) (*mcp.CallToolResult, any, error) {
 		out, err := probe(ctx, append([]string{a.Verb}, a.Args...))
 		if err != nil {

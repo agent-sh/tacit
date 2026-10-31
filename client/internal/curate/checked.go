@@ -121,9 +121,9 @@ func ParseChecked(text string) ([]Entry, error) {
 		}
 		// A repo or host in capitals is the same scope in lower case: the
 		// dreamer and delivery lower-case the repo, so projects/Foo would be a
-		// scope no hook asks for. Normalized, not rejected: on the author's Mac
-		// every rejected split answer was one entry with a Brazil package name
-		// in its scope (eval/VALUE.md, "Local layer").
+		// scope no hook asks for. Normalized, not rejected: a scope that names a
+		// Brazil package in capitals got a whole split answer refused for that
+		// one entry (eval/VALUE.md, "Local layer").
 		if !scopeRx.MatchString(entry.Scope) && scopeRx.MatchString(asciiLower(entry.Scope)) {
 			entry.Scope = asciiLower(entry.Scope)
 		}

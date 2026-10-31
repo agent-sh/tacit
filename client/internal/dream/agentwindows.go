@@ -9,12 +9,12 @@ import (
 
 // Owner content or agent content is decided per window, not per session
 // (SPEC.md, "Owner windows and agent windows"). A session of the owner's can
-// run on its own for weeks while they step in now and then; in Hermes they
-// write almost every other message. A window with at least one turn of the
-// owner's (a U: line: digest.SessionWho, digest.ClaudeTyped and
-// digest.ClaudeQueued decide it) is owner content. A window with none is an
-// agent's content, also inside an owner's session, and AgentWindows decides
-// whether it is dreamed.
+// run on its own for weeks while they step in now and then; in a chat front
+// end such as Hermes they may write every other message. A window with at
+// least one turn of the owner's (a U: line: digest.SessionWho,
+// digest.ClaudeTyped and digest.ClaudeQueued decide it) is owner content. A
+// window with none is an agent's content, also inside an owner's session,
+// and AgentWindows decides whether it is dreamed.
 
 // AgentWindows is what the dreamer does with a window that holds no turn of
 // the owner's: "all" dreams it (the default, the behaviour before the
@@ -85,12 +85,11 @@ func (p AgentWindows) takes(at, now time.Time) bool {
 
 // OwnerContext is how many digest lines before and after each turn of the
 // owner's are kept with it when a window is cut to the owner's turns.
-// Measured on the rig's rebuild selection (2026-10-24: 158 owner transcripts
-// and 158 Hermes owner sessions, 912 windows, 4,359 owner turns): the agent's
-// text the owner answers is within 12 lines before the turn for 93% of the
-// turns, which is every turn whose window holds one; the agent's first text
-// after it within 12 lines for 91%, its second for 73%. Twelve lines keep 38%
-// of the characters of the owner's windows (8: 31%, 16: 44%).
+// Measured on a real selection of owner transcripts and Hermes sessions: the
+// agent's text the owner answers is within 12 lines before the turn for every
+// turn whose window holds one, and the agent's first text after it is within
+// 12 lines for most turns. Twelve lines keep well under half of the
+// characters of the owner's windows; 8 keep less and 16 more.
 const OwnerContext = 12
 
 // HasOwnerTurn reports a window with at least one turn of the owner's.

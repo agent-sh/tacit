@@ -17,7 +17,7 @@ import (
 // person's front end, then response items), with turns typed by the owner.
 func codexRollout(id string, turns ...string) string {
 	var b strings.Builder
-	b.WriteString(`{"timestamp":"2026-10-12T21:00:32.366Z","type":"session_meta","payload":{"session_id":"` + id + `","id":"` + id + `","timestamp":"2026-10-12T21:00:32.201Z","cwd":"/home/u","originator":"codex-tui","cli_version":"0.162.1","source":"cli","thread_source":"user"}}` + "\n")
+	b.WriteString(`{"timestamp":"2026-10-02T09:15:07.120Z","type":"session_meta","payload":{"session_id":"` + id + `","id":"` + id + `","timestamp":"2026-10-02T09:15:06.955Z","cwd":"/home/u","originator":"codex-tui","cli_version":"0.162.1","source":"cli","thread_source":"user"}}` + "\n")
 	for i, t := range turns {
 		b.WriteString(codexTurn(i, t))
 	}
@@ -25,8 +25,8 @@ func codexRollout(id string, turns ...string) string {
 }
 
 func codexTurn(i int, text string) string {
-	return fmt.Sprintf(`{"timestamp":"2026-10-12T21:%02d:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":%q}]}}`, i%60, text) + "\n" +
-		fmt.Sprintf(`{"timestamp":"2026-10-12T21:%02d:30.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"On it. %s"}]}}`, i%60, strings.Repeat("z", minNewBytes)) + "\n"
+	return fmt.Sprintf(`{"timestamp":"2026-10-02T09:%02d:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":%q}]}}`, i%60, text) + "\n" +
+		fmt.Sprintf(`{"timestamp":"2026-10-02T09:%02d:30.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"On it. %s"}]}}`, i%60, strings.Repeat("z", minNewBytes)) + "\n"
 }
 
 // compress rolls a transcript into its .jsonl.zst copy and removes it, as
@@ -70,11 +70,11 @@ func joined(ws []Window) string {
 func TestCompressedSessionKeepsItsCursor(t *testing.T) {
 	t.Setenv("TACIT_STATE_DIR", t.TempDir())
 	home := t.TempDir()
-	day := filepath.Join(home, ".codex", "sessions", "2026", "10", "13")
+	day := filepath.Join(home, ".codex", "sessions", "2026", "10", "02")
 	os.MkdirAll(day, 0o755)
-	name := "rollout-2026-10-13T00-00-32-01a131ea-c641-7a43-9ec9-a2dbedef807b"
+	name := "rollout-2026-10-02T09-15-07-0c5e7a19-3b2d-4f6e-8a1c-9d0b2e4f6a8c"
 	plain := filepath.Join(day, name+".jsonl")
-	os.WriteFile(plain, []byte(codexRollout("01a131ea", "old turn, recorded before the dreamer")), 0o644)
+	os.WriteFile(plain, []byte(codexRollout("0c5e7a19", "old turn, recorded before the dreamer")), 0o644)
 	srcs := codexSources(home)
 	st := &State{Offsets: map[string]int64{}}
 	if ws, _ := Windows(srcs, st, true); len(ws) != 0 {

@@ -14,13 +14,13 @@ import (
 
 // HeldChars is the size of the held list when it is on
 // (TACIT_DREAM_HELD_CHARS=<chars>; it is off by default). The dreamer wrote
-// the same operational facts again in session after session (the
-// agents-sync rule, tower-crane's environment, the wrx heartbeat, the Spark
-// ssh wrapper, waitfor), and most of the copies the curator then paid to
-// split and judge started there. Replayed on 14 rig windows (eval/VALUE.md,
-// "Facts already held"), a list of this size cut the notes 131 to 120 and
-// the copies among them 20 to 14, for 11 percent more dreamer cost: within
-// the run-to-run noise, so it does not pay for itself yet and stays off.
+// the same operational facts again in session after session (a
+// generated-file rule, a tool's environment, a heartbeat command, an ssh
+// wrapper), and most of the copies the curator then paid to split and judge
+// started there. Replayed on real windows (eval/VALUE.md, "Facts already
+// held"), a list of this size cut the notes and the copies among them, for
+// more dreamer cost, by amounts within the run-to-run noise, so it does not
+// pay for itself yet and stays off.
 const HeldChars = 4000
 
 // heldMinShare is the least share of a held fact's weighted terms the

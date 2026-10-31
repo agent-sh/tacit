@@ -30,7 +30,7 @@ func (f *accountForge) Account(_ context.Context, name string) (ForgeAccount, er
 }
 
 // namesMachine is machine's widget with a symlink to it (gizmo), and a
-// shared catalog of another machine with a checkout pikadon known as ginza
+// shared catalog of another machine with a checkout storefront known as shop
 // (its origin's name), under the organization tools-org.
 func namesMachine(t *testing.T) *Checker {
 	t.Helper()
@@ -41,14 +41,14 @@ func namesMachine(t *testing.T) *Checker {
 	cat := repoid.LoadCatalog(home, "", filepath.Join(home, "projects"))
 	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
 	ff := &accountForge{fakeForge: fakeForge{user: "owner", repos: map[string]string{
-		"acme/widget": "acme/widget", "owner/ginza": "owner/ginza", "tools-org/hammer": "tools-org/anvil", "owner/gone": "",
+		"acme/widget": "acme/widget", "owner/shop": "owner/shop", "tools-org/hammer": "tools-org/anvil", "owner/gone": "",
 	}}, accounts: map[string]string{"acme": "Organization", "owner": "User", "tools-org": "Organization"}}
 	cache := NewCache(ff, filepath.Join(t.TempDir(), CacheFile))
 	cache.Now = func() time.Time { return now }
 	return &Checker{Host: "box", Catalog: cat, Forge: cache, Now: func() time.Time { return now },
 		Shared: map[string][]repoid.HostRepo{
-			"pikadon": {{Host: "rig", Aliases: []string{"ginza"}, URLs: []string{"github.com/owner/ginza"}}},
-			"hammer":  {{Host: "rig", URLs: []string{"github.com/tools-org/hammer"}}},
+			"storefront": {{Host: "host-b", Aliases: []string{"shop"}, URLs: []string{"github.com/owner/shop"}}},
+			"hammer":     {{Host: "host-b", URLs: []string{"github.com/tools-org/hammer"}}},
 		}}
 }
 
@@ -61,10 +61,10 @@ func TestCanonicalByTheMainCheckoutsDirectory(t *testing.T) {
 	for _, tc := range []struct{ name, other, verdict, value string }{
 		{"widget", "gizmo", Holds, "widget"},
 		{"gizmo", "widget", Fails, "widget"},
-		{"pikadon", "ginza", Holds, "pikadon"},
-		{"ginza", "pikadon", Fails, "pikadon"},
-		{"pikadon", "", Holds, "pikadon"},
-		{"ginza", "", Fails, "pikadon"},
+		{"storefront", "shop", Holds, "storefront"},
+		{"shop", "storefront", Fails, "storefront"},
+		{"storefront", "", Holds, "storefront"},
+		{"shop", "", Fails, "storefront"},
 		{"nowhere", "", Unknown, ""},
 	} {
 		r := c.Canonical(ctx, tc.name, tc.other)
@@ -72,14 +72,14 @@ func TestCanonicalByTheMainCheckoutsDirectory(t *testing.T) {
 			t.Errorf("canonical %s/%s: %s %q (%s)", tc.name, tc.other, r.Verdict, r.Value, r.Output)
 		}
 	}
-	if r := c.Canonical(ctx, "widget", "pikadon"); r.Verdict != Fails || !strings.Contains(r.Output, "two repositories") {
+	if r := c.Canonical(ctx, "widget", "storefront"); r.Verdict != Fails || !strings.Contains(r.Output, "two repositories") {
 		t.Errorf("two repositories: %+v", r)
 	}
-	if cn, where := c.CheckoutName("ginza"); cn != "pikadon" || len(where) != 1 || !strings.Contains(where[0], "on rig") {
-		t.Errorf("checkout name of ginza: %q %v", cn, where)
+	if cn, where := c.CheckoutName("shop"); cn != "storefront" || len(where) != 1 || !strings.Contains(where[0], "on host-b") {
+		t.Errorf("checkout name of shop: %q %v", cn, where)
 	}
 	// A claim without its other name is well formed; a bad name is not.
-	if ps := (Claim{Kind: "canonical", Name: "pikadon"}).Valid(); len(ps) != 0 {
+	if ps := (Claim{Kind: "canonical", Name: "storefront"}).Valid(); len(ps) != 0 {
 		t.Errorf("%v", ps)
 	}
 	if ps := (Claim{Kind: "canonical", Name: "Owner/x"}).Valid(); len(ps) == 0 {
@@ -94,8 +94,8 @@ func TestCanonicalByTheMainCheckoutsDirectory(t *testing.T) {
 func TestForgeNameAndOrg(t *testing.T) {
 	c := namesMachine(t)
 	ctx := context.Background()
-	if r := c.ForgeName(ctx, "github.com/owner/ginza"); r.Verdict != Holds || r.Value != "github.com/owner/ginza" {
-		t.Errorf("ginza %+v", r)
+	if r := c.ForgeName(ctx, "github.com/owner/shop"); r.Verdict != Holds || r.Value != "github.com/owner/shop" {
+		t.Errorf("shop %+v", r)
 	}
 	r := c.ForgeName(ctx, "github.com/tools-org/hammer")
 	if r.Verdict != Holds || r.Value != "github.com/tools-org/anvil" || !strings.Contains(r.Output, "renamed") {
@@ -107,7 +107,7 @@ func TestForgeNameAndOrg(t *testing.T) {
 	if org, r := c.OrgOf(ctx, "github.com/tools-org/anvil"); org != "tools-org" || r.Value != "Organization" {
 		t.Errorf("tools-org %q %+v", org, r)
 	}
-	if org, r := c.OrgOf(ctx, "github.com/owner/ginza"); org != "" || r.Value != "User" {
+	if org, r := c.OrgOf(ctx, "github.com/owner/shop"); org != "" || r.Value != "User" {
 		t.Errorf("a personal account is no org: %q %+v", org, r)
 	}
 	if ok, r := c.IsOrg(ctx, "stranger"); ok || r.Verdict != Unknown {
@@ -127,7 +127,7 @@ func TestForgeNameAndOrg(t *testing.T) {
 
 func (f *accountForge) Contents(_ context.Context, owner, name, path string) error {
 	f.calls++
-	if owner+"/"+name+":"+path == "acme/widget:infra/cdk.json" {
+	if owner+"/"+name+":"+path == "acme/widget:deploy/app.json" {
 		return nil
 	}
 	return ErrNotFound
@@ -138,15 +138,15 @@ func (f *accountForge) Contents(_ context.Context, owner, name, path string) err
 func TestForgePath(t *testing.T) {
 	c := namesMachine(t)
 	ctx := context.Background()
-	if r := c.ForgePath(ctx, "widget", "acme/widget", "infra/cdk.json"); r.Verdict != Holds || r.Source != "forge:github" {
+	if r := c.ForgePath(ctx, "widget", "acme/widget", "deploy/app.json"); r.Verdict != Holds || r.Source != "forge:github" {
 		t.Fatalf("%+v", r)
 	}
-	if r := c.ForgePath(ctx, "widget", "acme/widget", "infra/bin/infra.js"); r.Verdict != Fails || !strings.Contains(r.Output, "has no infra/bin/infra.js") {
+	if r := c.ForgePath(ctx, "widget", "acme/widget", "deploy/bin/app.js"); r.Verdict != Fails || !strings.Contains(r.Output, "has no deploy/bin/app.js") {
 		t.Fatalf("%+v", r)
 	}
 	ff := c.Forge.Forge.(*accountForge)
 	n := ff.calls
-	c.ForgePath(ctx, "widget", "acme/widget", "infra/cdk.json")
+	c.ForgePath(ctx, "widget", "acme/widget", "deploy/app.json")
 	if ff.calls != n {
 		t.Fatal("asked the forge again")
 	}

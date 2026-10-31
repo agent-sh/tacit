@@ -338,8 +338,8 @@ func replacedLines(hits []search.Hit, offset, limit int, recs map[string]*record
 // sessionRepoBoost is how much more a fact of the session's repository
 // (repoTied: its project scope or its applies_to.repos) weighs in a word
 // search than one of the user, system or machine scopes. Measured on the
-// held-out replay's 263 situations (their requests as queries) and the
-// act-bench: the held-out facts found stay level from 1 to 2 and fall from
+// held-out replay (its requests as queries) and the act-bench: the
+// held-out facts found stay level from 1 to 2 and fall from
 // 2.5, the act-bench's grow up to 1.5 to 2; 1.5 is the middle of the level
 // range. eval/VALUE.md, "Search, the push and the tree".
 const sessionRepoBoost = 1.5

@@ -25,9 +25,9 @@ func TestOrgRecords(t *testing.T) {
 		t.Fatal("orgs/<name> holds an org")
 	}
 
-	tc := repoRec("tower-crane")
+	tc := repoRec("tacit")
 	into := orgRec("agent-sh")
-	into.SuppressedBy = "projects/tower-crane"
+	into.SuppressedBy = "projects/tacit"
 	expect(t, Validate(nil, into, ByOpus, env(tc)), "an org folder is never folded")
 
 	// projects/agent-sh folds into orgs/agent-sh by code, with no session.
@@ -37,7 +37,7 @@ func TestOrgRecords(t *testing.T) {
 		Evidence: []Evidence{{Gathered: today, FactSessions: 3}}}
 	expect(t, Validate(nil, p, ByOpus, env(o)), "")
 	// Another project does not fold into an org.
-	q := repoRec("revuto")
+	q := repoRec("gizmo")
 	q.SuppressedBy = "orgs/agent-sh"
 	expect(t, Validate(nil, q, ByOpus, env(o)), "names a folder of another kind")
 	if !OrgFolds(p, o) || OrgFolds(q, o) {
@@ -49,17 +49,17 @@ func TestOrgRecords(t *testing.T) {
 // display name is the folder's with the current forge name beside it when
 // the two differ.
 func TestOrgAndForgeFields(t *testing.T) {
-	r := repoRec("pikadon")
-	r.Forge, r.Org = "github.com/avifenesh/ginza", ""
+	r := repoRec("storefront")
+	r.Forge, r.Org = "github.com/acme/shop-v2", ""
 	expect(t, Validate(nil, r, ByOpus, env()), "")
-	if d := r.Display(); d != "pikadon (GitHub: ginza)" {
+	if d := r.Display(); d != "storefront (GitHub: shop-v2)" {
 		t.Fatalf("display %q", d)
 	}
-	r.Forge = "github.com/avifenesh/pikadon"
-	if d := r.Display(); d != "pikadon" {
+	r.Forge = "github.com/acme/storefront"
+	if d := r.Display(); d != "storefront" {
 		t.Fatalf("display %q", d)
 	}
-	r.Forge, r.Org = "avifenesh/ginza", "Agent SH"
+	r.Forge, r.Org = "acme/shop-v2", "Agent SH"
 	ps := Validate(nil, r, ByOpus, env())
 	expect(t, ps, "forge: only a project has a forge name")
 	expect(t, ps, "org: only a project has an org")
@@ -67,15 +67,15 @@ func TestOrgAndForgeFields(t *testing.T) {
 	o.Org, o.Forge = "agent-sh", "github.com/agent-sh/x"
 	expect(t, Validate(nil, o, ByOpus, env()), "org: only a project has an org")
 	b, err := (func() ([]byte, error) {
-		x := repoRec("tower-crane")
-		x.Org, x.Forge = "agent-sh", "github.com/agent-sh/tower-crane"
+		x := repoRec("tacit")
+		x.Org, x.Forge = "agent-sh", "github.com/agent-sh/tacit"
 		return x.Encode()
 	})()
 	if err != nil {
 		t.Fatal(err)
 	}
-	back, err := Parse("projects/tower-crane", b)
-	if err != nil || back.Org != "agent-sh" || back.Forge != "github.com/agent-sh/tower-crane" {
+	back, err := Parse("projects/tacit", b)
+	if err != nil || back.Org != "agent-sh" || back.Forge != "github.com/agent-sh/tacit" {
 		t.Fatalf("round trip %+v %v", back, err)
 	}
 }

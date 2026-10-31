@@ -21,7 +21,7 @@ import (
 // OwnerSources are the sources of sessions a person types into: the phone
 // app, Telegram, the desktop app, the CLI, the TUI and the web UI. Every other
 // source is automation: cron, oneshot (tacit's own Hermes runner calls are
-// oneshot), subagent, grok-cli, kanban, llm-wiki-lint.
+// oneshot), subagent, grok-cli, kanban, or a scheduled job's own name.
 var OwnerSources = map[string]bool{"mobile": true, "telegram": true, "desktop": true, "cli": true, "tui": true, "webui": true}
 
 // continued are the end reasons of a session whose conversation goes on in a
@@ -134,20 +134,18 @@ type Session struct {
 	// delegation (Delegated); a CLI session only when created_source says
 	// cli; not one of several started together; and, when it has a parent,
 	// the continuation of an owner session (the parent ended by compression
-	// or a reset). Measured 2026-10-20 on one workstation's store (154
-	// sessions of owner sources): 7 phone sessions are subagents'
-	// (created_source subagent); 16 desktop ones are delegations from a phone
-	// session (created_source desktop, the parent still open); 17 Telegram
-	// sessions from an older Hermes are a delegation's fan-out with no parent
-	// recorded (two or three started within a second, one prompt each); 23
-	// CLI sessions with no created source are scripted one-query runs
-	// (`hermes chat -q`, all but one a single prompt such as "Reply with
-	// exactly: OK"). Every child of an owner session that ended by compression
-	// or a reset continues its conversation. Re-measured the same day (161
-	// sessions of owner sources): 7 of the 94 sessions those rules let in are
-	// lone Telegram delegations with no parent and no created source that
-	// only the delegation marker tells apart, and one more continues one of
-	// them; 86 are left.
+	// or a reset). On a real store each rule caught sessions the others let
+	// in: phone sessions that are subagents' (created_source subagent),
+	// desktop ones that are delegations from a phone session (created_source
+	// desktop, the parent still open), Telegram sessions from an older Hermes
+	// that are a delegation's fan-out with no parent recorded (two or three
+	// started within a second, one prompt each), and CLI sessions with no
+	// created source that are scripted one-query runs (`hermes chat -q`,
+	// nearly all a single prompt such as "Reply with exactly: OK"). Every
+	// child of an owner session that ended by compression or a reset
+	// continues its conversation. A few lone Telegram delegations with no
+	// parent and no created source pass the other rules; only the delegation
+	// marker tells them apart.
 	Owner bool
 }
 

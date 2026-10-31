@@ -32,16 +32,16 @@ import (
 // that is the description when the write changed it and the runs of lines
 // HEAD does not hold, each with the line before it as context; in a JSONL
 // ledger, the string values of the lines it adds that are not names, paths,
-// sessions, days or hashes. The 2026-10-26 rebuild's curator split an
-// imported memory whose body held a loopback llama-server key into a curated
-// fact: the note had come in through a path that did not mask it, and nothing
+// sessions, days or hashes. An imported memory that came into the inbox
+// unmasked could be split by the curator into a curated fact that held a
+// key: the note had come in through a path that did not mask it, and nothing
 // between the note and the push masked what the curator copied. A write whose
 // redaction cannot run is refused before anything is staged (fail closed).
 //
 // What the mask leaves: what HEAD already holds (a write masks what it adds;
 // it does not clean the store), the frontmatter but a description (names,
-// scopes, sessions and hashes: on the author's store the text profile took
-// 113 session ids, 14 origins and 5 names for secrets), a [[link]]'s target
+// scopes, sessions and hashes: on a real store the text profile took session
+// ids, origins and names for secrets), a [[link]]'s target
 // when it is a fact's name, the owner's recorded words (owner_quote,
 // owner_words, a ledger's quote and words: theirs, as their text in tacit app
 // is), and the files tacit generates from the facts (written again from the
@@ -577,8 +577,7 @@ func idLike(v string) bool {
 }
 
 // sessionValue is a session or a cite, <harness>:<id>; sessionHarness the
-// harnesses and sources a ledger names one by (the author's ledgers hold
-// claude, codex, hermes, pi, relay and git).
+// harnesses and sources a ledger names one by.
 var (
 	sessionValue   = regexp.MustCompile(`^([a-z]+):[\w.-]+$`)
 	sessionHarness = map[string]bool{"claude": true, "codex": true, "pi": true, "hermes": true, "grok": true, "muse": true, "agy": true,

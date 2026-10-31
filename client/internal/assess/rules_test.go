@@ -89,19 +89,19 @@ func TestEnforceFollowsTheForgesRenames(t *testing.T) {
 }
 
 func TestNamePatternsAndNearNames(t *testing.T) {
-	if NamePattern("KV-013-g1") != "kv-#-g#" || NamePattern("kv-150-g2") != "kv-#-g#" || NamePattern("pikadon") != "pikadon" {
+	if NamePattern("EXP-013-g1") != "exp-#-g#" || NamePattern("exp-150-g2") != "exp-#-g#" || NamePattern("storefront") != "storefront" {
 		t.Fatal("patterns")
 	}
 	for _, tc := range []struct {
 		a, b string
 		near bool
 	}{
-		{"valkey-reviewer-bot", "valkey-review-bot", true},
-		{"valkey-reviewer", "valkey-review-bot", true},
-		{"hermes-android", "hermes-android-app", true},
-		{"valkey", "valkey-glide", true},
-		{"tacit", "pikadon", false},
-		{"kv-146-g1", "pikadon", false},
+		{"ledger-reviewer-bot", "ledger-review-bot", true},
+		{"ledger-reviewer", "ledger-review-bot", true},
+		{"photo-sync", "photo-sync-app", true},
+		{"ledger", "ledger-sync", true},
+		{"tacit", "storefront", false},
+		{"exp-146-g1", "storefront", false},
 		{"a", "b", true},
 	} {
 		if _, ok := Near(tc.a, tc.b); ok != tc.near {
@@ -113,10 +113,10 @@ func TestNamePatternsAndNearNames(t *testing.T) {
 func TestSortPutsTargetsFirstAndPatternsTogether(t *testing.T) {
 	absent := repoCheck("x", check.Fails, "")
 	cands := []Candidate{
-		{Folder: "projects/kv-150-g2", Pattern: "kv-#-g#", Name: absent},
+		{Folder: "projects/exp-150-g2", Pattern: "exp-#-g#", Name: absent},
 		{Folder: "projects/alpha", Pattern: "alpha"},
-		{Folder: "projects/kv-013-g1", Pattern: "kv-#-g#"},
-		{Folder: "projects/kv-140-g2", Pattern: "kv-#-g#", Name: absent},
+		{Folder: "projects/exp-013-g1", Pattern: "exp-#-g#"},
+		{Folder: "projects/exp-140-g2", Pattern: "exp-#-g#", Name: absent},
 		{Folder: "projects/zeta", Pattern: "zeta"},
 	}
 	SortCandidates(cands, func(string) string { return "" })
@@ -124,7 +124,7 @@ func TestSortPutsTargetsFirstAndPatternsTogether(t *testing.T) {
 	for _, c := range cands {
 		got = append(got, c.Folder)
 	}
-	want := "projects/alpha projects/kv-013-g1 projects/zeta projects/kv-140-g2 projects/kv-150-g2"
+	want := "projects/alpha projects/exp-013-g1 projects/zeta projects/exp-140-g2 projects/exp-150-g2"
 	if strings.Join(got, " ") != want {
 		t.Fatalf("order %v", got)
 	}
@@ -132,40 +132,40 @@ func TestSortPutsTargetsFirstAndPatternsTogether(t *testing.T) {
 
 func TestSimilarLinesGroupDecisions(t *testing.T) {
 	recs := []*record.Record{
-		{Folder: "projects/kv-1-g1", Kind: "repo", Status: "active", SuppressedBy: "projects/pikadon", Was: []record.Entry{{Why: "a worktree of pikadon"}}},
-		{Folder: "projects/kv-2-g1", Kind: "repo", Status: "active", SuppressedBy: "projects/pikadon", Was: []record.Entry{{Why: "same"}}},
-		{Folder: "projects/kv-3-g1", Kind: "repo", Status: "needs-review", Was: []record.Entry{{Why: "unclear"}}},
+		{Folder: "projects/exp-1-g1", Kind: "repo", Status: "active", SuppressedBy: "projects/storefront", Was: []record.Entry{{Why: "a worktree of storefront"}}},
+		{Folder: "projects/exp-2-g1", Kind: "repo", Status: "active", SuppressedBy: "projects/storefront", Was: []record.Entry{{Why: "same"}}},
+		{Folder: "projects/exp-3-g1", Kind: "repo", Status: "needs-review", Was: []record.Entry{{Why: "unclear"}}},
 	}
-	ls := SimilarLines("the same name pattern kv-#-g#", recs)
-	if len(ls) != 3 || !strings.Contains(ls[1], "2 suppressed into projects/pikadon") || !strings.Contains(ls[2], "1 repo, needs-review") {
+	ls := SimilarLines("the same name pattern exp-#-g#", recs)
+	if len(ls) != 3 || !strings.Contains(ls[1], "2 suppressed into projects/storefront") || !strings.Contains(ls[2], "1 repo, needs-review") {
 		t.Fatalf("%q", ls)
 	}
 }
 
 func TestEnforceOneLiveFolderPerRepository(t *testing.T) {
-	same := []check.Result{{Kind: check.KindRepo, Claim: "ginza and pikadon are one repository", Source: "checkouts", Output: "ginza is another name of the checkout pikadon", Verdict: check.Holds, Value: "pikadon"}}
-	c := Candidate{Folder: "projects/ginza", Name: repoCheck("ginza", check.Holds, ""), Same: same}
-	recs := map[string]*record.Record{"projects/pikadon": {Folder: "projects/pikadon", Kind: record.KindRepo, Status: "active"}}
+	same := []check.Result{{Kind: check.KindRepo, Claim: "shop and storefront are one repository", Source: "checkouts", Output: "shop is another name of the checkout storefront", Verdict: check.Holds, Value: "storefront"}}
+	c := Candidate{Folder: "projects/shop", Name: repoCheck("shop", check.Holds, ""), Same: same}
+	recs := map[string]*record.Record{"projects/storefront": {Folder: "projects/storefront", Kind: record.KindRepo, Status: "active"}}
 	env := Checked{Repo: func(n string) check.RepoCheck { return *repoCheck(n, check.Holds, "") }, Record: func(f string) *record.Record { return recs[f] }}
 	ps := Enforce(c, Decision{Kind: "repo", Status: "active"}, env)
-	if len(ps) != 1 || !strings.Contains(ps[0], "same repository as projects/pikadon") || !strings.Contains(ps[0], "another name of the checkout pikadon") {
+	if len(ps) != 1 || !strings.Contains(ps[0], "same repository as projects/storefront") || !strings.Contains(ps[0], "another name of the checkout storefront") {
 		t.Fatalf("a second live folder: %v", ps)
 	}
 	if ps := Enforce(c, Decision{Kind: "none", Status: "dead"}, env); len(ps) != 1 {
 		t.Fatalf("none for another name of a project: %v", ps)
 	}
-	for _, d := range []Decision{{Kind: "repo", Status: "active", SuppressedBy: "projects/pikadon"}, {Kind: "repo", Status: "needs-review"}} {
+	for _, d := range []Decision{{Kind: "repo", Status: "active", SuppressedBy: "projects/storefront"}, {Kind: "repo", Status: "needs-review"}} {
 		if ps := Enforce(c, d, env); len(ps) != 0 {
 			t.Errorf("%+v refused: %v", d, ps)
 		}
 	}
-	// The other way round: pikadon folded into ginza leaves ginza the live one.
-	recs["projects/pikadon"].SuppressedBy = "projects/ginza"
+	// The other way round: storefront folded into shop leaves shop the live one.
+	recs["projects/storefront"].SuppressedBy = "projects/shop"
 	if ps := Enforce(c, Decision{Kind: "repo", Status: "active"}, env); len(ps) != 0 {
 		t.Fatalf("the winner refused: %v", ps)
 	}
 	// No record of the other name yet: nothing to fold into.
-	delete(recs, "projects/pikadon")
+	delete(recs, "projects/storefront")
 	if ps := Enforce(c, Decision{Kind: "repo", Status: "active"}, env); len(ps) != 0 {
 		t.Fatalf("no other record: %v", ps)
 	}
@@ -212,22 +212,22 @@ func TestFingerprintKeepsVerdictsAndNamesNotWording(t *testing.T) {
 // independence evidence it cites; without any, it must fold.
 func TestEnforceFindsTheAncestor(t *testing.T) {
 	env := Checked{Repo: func(n string) check.RepoCheck { return *repoCheck(n, check.Holds, "") }}
-	c := Candidate{Folder: "projects/wt-portfolio-rework", Name: repoCheck("wt-portfolio-rework", check.Unknown, ""),
-		Ancestors: []Ancestor{{Name: "portfolio", Folder: "projects/portfolio", Sources: []string{SourceName}, Why: []string{"its name contains portfolio"}}}}
+	c := Candidate{Folder: "projects/wt-widget-rework", Name: repoCheck("wt-widget-rework", check.Unknown, ""),
+		Ancestors: []Ancestor{{Name: "widget", Folder: "projects/widget", Sources: []string{SourceName}, Why: []string{"its name contains widget"}}}}
 	for _, d := range []Decision{
 		{Kind: "repo", Status: "active"}, {Kind: "repo", Status: "needs-review"}, {Kind: "none", Status: "dead"},
 		{Kind: "folder", Status: "dormant", Independent: Keys{"commits"}},
 	} {
 		ps := Enforce(c, d, env)
-		if len(ps) != 1 || !strings.Contains(ps[0], "presumed part of") || !strings.Contains(ps[0], "set suppressed_by to projects/portfolio") {
+		if len(ps) != 1 || !strings.Contains(ps[0], "presumed part of") || !strings.Contains(ps[0], "set suppressed_by to projects/widget") {
 			t.Errorf("%+v: %v", d, ps)
 		}
 	}
-	if ps := Enforce(c, Decision{Kind: "repo", Status: "active", SuppressedBy: "projects/portfolio"}, env); len(ps) != 0 {
+	if ps := Enforce(c, Decision{Kind: "repo", Status: "active", SuppressedBy: "projects/widget"}, env); len(ps) != 0 {
 		t.Errorf("the fold refused: %v", ps)
 	}
 	// An owner's quote decides for the owner (verified by the caller).
-	if ps := Enforce(c, Decision{Kind: "repo", Status: "active", OwnerQuote: "wt-portfolio-rework is its own site", OwnerQuoteFrom: "claude:x"}, env); len(ps) != 0 {
+	if ps := Enforce(c, Decision{Kind: "repo", Status: "active", OwnerQuote: "wt-widget-rework is its own site", OwnerQuoteFrom: "claude:x"}, env); len(ps) != 0 {
 		t.Errorf("the owner's decision refused: %v", ps)
 	}
 	// With its own commits it may stand alone, citing them.
@@ -250,9 +250,9 @@ func TestEnforceFindsTheAncestor(t *testing.T) {
 }
 
 func TestAncestorsRenderAndFingerprint(t *testing.T) {
-	c := Candidate{Folder: "projects/kvstore", Ancestors: []Ancestor{{Name: "agent-lab", Folder: "projects/agent-lab", Sources: []string{SourcePath}, Why: []string{"2 fact(s) name paths with a kvstore directory inside agent-lab's tree"}}}}
+	c := Candidate{Folder: "projects/kvstore", Ancestors: []Ancestor{{Name: "dev-lab", Folder: "projects/dev-lab", Sources: []string{SourcePath}, Why: []string{"2 fact(s) name paths with a kvstore directory inside dev-lab's tree"}}}}
 	out := Render([]Candidate{c})
-	for _, want := range []string{"ancestor candidates (code's, best first; this folder is presumed part of one of them): 1. projects/agent-lab [path]", "independence: none found"} {
+	for _, want := range []string{"ancestor candidates (code's, best first; this folder is presumed part of one of them): 1. projects/dev-lab [path]", "independence: none found"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("render lacks %q:\n%s", want, out)
 		}
@@ -265,7 +265,7 @@ func TestAncestorsRenderAndFingerprint(t *testing.T) {
 	if !strings.Contains(Render([]Candidate{d}), "independence [work]: 3 sessions worked in it") {
 		t.Error("independence not rendered")
 	}
-	if p := c.Proposed(); len(p) != 1 || p[0].Name != "agent-lab" {
+	if p := c.Proposed(); len(p) != 1 || p[0].Name != "dev-lab" {
 		t.Errorf("ancestors are proposed: %+v", p)
 	}
 	var k struct {
@@ -282,10 +282,10 @@ func TestAncestorsRenderAndFingerprint(t *testing.T) {
 func TestSortPutsTheAncestorFirstInItsGroup(t *testing.T) {
 	absent := repoCheck("x", check.Fails, "")
 	cands := []Candidate{
-		{Folder: "projects/kv-2-g1", Group: "pikadon", Name: absent},
-		{Folder: "projects/ginza", Group: "pikadon"},
-		{Folder: "projects/kv-1-g1", Group: "pikadon", Name: absent},
-		{Folder: "projects/pikadon", Group: "pikadon"},
+		{Folder: "projects/exp-2-g1", Group: "storefront", Name: absent},
+		{Folder: "projects/shop", Group: "storefront"},
+		{Folder: "projects/exp-1-g1", Group: "storefront", Name: absent},
+		{Folder: "projects/storefront", Group: "storefront"},
 		{Folder: "projects/alpha"},
 	}
 	SortCandidates(cands, func(string) string { return "" })
@@ -293,7 +293,7 @@ func TestSortPutsTheAncestorFirstInItsGroup(t *testing.T) {
 	for _, c := range cands {
 		got = append(got, c.Folder)
 	}
-	if want := "projects/alpha projects/pikadon projects/ginza projects/kv-1-g1 projects/kv-2-g1"; strings.Join(got, " ") != want {
+	if want := "projects/alpha projects/storefront projects/exp-1-g1 projects/exp-2-g1 projects/shop"; strings.Join(got, " ") != want {
 		t.Fatalf("order %v", got)
 	}
 }

@@ -32,7 +32,7 @@ func TestRepoNameSubdirAndWorktree(t *testing.T) {
 	// no git root above Go's temp dir.
 	t.Setenv("HOME", root)
 	t.Setenv("USERPROFILE", root)
-	repo := filepath.Join(root, "memra")
+	repo := filepath.Join(root, "kvengine")
 	os.MkdirAll(filepath.Join(repo, "src", "kv"), 0o755)
 	run(t, repo, "init", "-q", "-b", "main")
 	os.WriteFile(filepath.Join(repo, "a"), []byte("a"), 0o644)
@@ -42,9 +42,9 @@ func TestRepoNameSubdirAndWorktree(t *testing.T) {
 	run(t, repo, "worktree", "add", "-q", wt, "-b", "fix")
 	ctx := context.Background()
 	for _, c := range []struct{ dir, want string }{
-		{repo, "memra"},
-		{filepath.Join(repo, "src", "kv"), "memra"},
-		{wt, "memra"},
+		{repo, "kvengine"},
+		{filepath.Join(repo, "src", "kv"), "kvengine"},
+		{wt, "kvengine"},
 		{root, ""},
 	} {
 		if got := RepoName(ctx, c.dir); got != c.want {

@@ -185,8 +185,8 @@ var (
 )
 
 // rewriteLinks slugs [[link]] targets the same way import slugs file stems,
-// so a link to `feedback_no_tool_sprawl` resolves once that file is imported
-// as `feedback-no-tool-sprawl`. Only link-shaped targets are touched: bash
+// so a link to `feedback_small_commits` resolves once that file is imported
+// as `feedback-small-commits`. Only link-shaped targets are touched: bash
 // `[[ $n == 0 ]]`, `df[["a","b"]]` and `[[ ]]` are left alone.
 func rewriteLinks(body string) string {
 	return linkRe.ReplaceAllStringFunc(body, func(m string) string {

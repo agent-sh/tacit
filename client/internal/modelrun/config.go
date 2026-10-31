@@ -25,8 +25,7 @@ func Default(role string) Route {
 	model := ""
 	switch role {
 	case "dream", "curate", "verify", "judge", "review":
-		// Every deciding call runs on Opus (the owner, 2026-10-24: "but we
-		// said opus"), the conflict judge included.
+		// Every deciding call runs on Opus, the conflict judge included.
 		model = "opus"
 	}
 	return Route{Runner: "claude", Model: model}

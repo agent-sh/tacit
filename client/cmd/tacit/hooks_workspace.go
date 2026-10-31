@@ -25,18 +25,18 @@ const (
 	workspaceDepth = 2
 	// workspaceMaxRepos is the most distinct repositories a workspace holds;
 	// a folder with more is a general folder of projects, not one piece of
-	// work, and gets no repositories (as before workspaces). Measured on the
-	// author's Mac (eval/VALUE.md, "Workspaces"): Brazil workspaces and
-	// worktree folders hold 1 to 6 distinct repositories, the general folders
-	// above them 10, 16 and 84.
+	// work, and gets no repositories (as before workspaces). Measured on a
+	// real machine (eval/VALUE.md, "Workspaces"): Brazil workspaces and
+	// worktree folders hold a handful of distinct repositories, the general
+	// folders above them more than the cap.
 	workspaceMaxRepos = 8
 	// workspaceMaxRoots bounds the git roots the scan resolves (each one a
 	// few file reads), and workspaceMaxEntries the directory entries it looks
 	// at, so a huge folder costs a bounded share of a hook's budget; past
-	// either the folder is not a workspace. The author's Brazil workspaces
-	// hold at most 9 git roots; in a folder of 277 task worktrees the
-	// PreToolUse hook took 350 ms of its 400 ms without this cap, in one of
-	// 28 about what a repository costs.
+	// either the folder is not a workspace. A Brazil workspace holds a few
+	// git roots; in a folder of a few hundred task worktrees the PreToolUse
+	// hook took 350 ms of its 400 ms without this cap, in a small one about
+	// what a repository costs.
 	workspaceMaxRoots   = 64
 	workspaceMaxEntries = 2000
 )
@@ -166,7 +166,7 @@ func lowerDistinct(xs []string) []string {
 }
 
 // workspaceDisplay names a workspace in a hook's title: the folder and its
-// repositories ("the workspace ws: AgenticCore, CRAgents").
+// repositories ("the workspace ws: WidgetCore, GadgetAgents").
 func workspaceDisplay(cwd string, rs []repoid.Repo) string {
 	names := make([]string, len(rs))
 	for i, r := range rs {

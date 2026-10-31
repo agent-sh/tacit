@@ -32,9 +32,9 @@ const maxEchoChars = 60_000
 // final result's (a runner error, or an invalid answer wrapping
 // modelrun.ErrInvalidResult).
 //
-// The rulings pass sends back whole refusals since v0.9.16: it answered with
-// a sentence before an empty array about half the time when a note held no
-// owner words, and every such answer sent back came back clean
+// The rulings pass sends back whole refusals since v0.9.16: it often
+// answered with a sentence before an empty array when a note held no owner
+// words, and every such answer sent back came back clean
 // (eval/VALUE.md, "The rulings answer"). The split pass does not: its
 // answers are long, and no whole refusal of one was measured.
 func SplitChecked(ctx context.Context, run Runner, model, prompt string, check Check, whole bool) (entries []Entry, cost float64, first, err error) {

@@ -1,11 +1,11 @@
 package assess
 
 // What counts as the owner changing their mind about a folder they said
-// was dead, done or paused (the owner, 2026-10-23: "activity is not merely
-// commit. the commit might be just a dependabot or security fix"): real
-// work on it after the day they said so. Code decides it from what each
-// piece of activity is, never from a commit message's words: a session
-// that worked in the checkout is work; a commit is work when its diff
+// was dead, done or paused: real work on it after the day they said so, not
+// any commit (a commit may be only a dependency bump or a security fix).
+// Code decides it from what each piece of activity is, never from a commit
+// message's words: a session that worked in the checkout is work; a commit
+// is work when its diff
 // changes more than maintenance files (dependency manifests and lockfiles,
 // CI and workflow configuration, version and changelog files), and a commit
 // a bot authored is maintenance whatever it changes. A merge's diff is its

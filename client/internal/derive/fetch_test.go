@@ -229,14 +229,14 @@ func TestConfigFile(t *testing.T) {
 	if err := SetBranch(path, "myrepo", "dev"); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetBranch(path, "memra", "release/1.x"); err != nil {
+	if err := SetBranch(path, "engine", "release/1.x"); err != nil {
 		t.Fatal(err)
 	}
 	c, err := LoadConfig(path)
-	if err != nil || c.Branches["myrepo"] != "dev" || c.Branches["memra"] != "release/1.x" {
+	if err != nil || c.Branches["myrepo"] != "dev" || c.Branches["engine"] != "release/1.x" {
 		t.Fatalf("round trip: %v %v", c, err)
 	}
-	if err := SetBranch(path, "memra", ""); err != nil {
+	if err := SetBranch(path, "engine", ""); err != nil {
 		t.Fatal(err)
 	}
 	if c, _ = LoadConfig(path); len(c.Branches) != 1 || c.Branches["myrepo"] != "dev" {

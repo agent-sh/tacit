@@ -94,9 +94,9 @@ func deferUnknownRepos(pending []*fact.Fact, env validate.Env, cst *curatorState
 const maxNoteFailures = 3
 
 // systemicSplits is how many splits a run makes before any batch has a valid
-// answer: enough to bisect one batch of about 85 notes down to a single
-// note (7 levels), and then the run stops splitting, because a model that
-// fails every half is failing the run, not a note.
+// answer: enough to bisect one full batch down to a single note (a batch of
+// up to 128 notes takes 7 levels), and then the run stops splitting,
+// because a model that fails every half is failing the run, not a note.
 const systemicSplits = 8
 
 // runCurate implements `tacit curate [--model M] [--max-batches N] [--dry-run]
@@ -123,7 +123,7 @@ const systemicSplits = 8
 func runCurate(args []string) int {
 	fs := flag.NewFlagSet("curate", flag.ExitOnError)
 	model := fs.String("model", curate.DefaultModel, "split model")
-	maxBatches := fs.Int("max-batches", 16, "cap on split batches per run (about 85 dreamer notes and $0.91 each with Opus 5.5, 2026-10-18); the halves of a batch split after an invalid answer do not count")
+	maxBatches := fs.Int("max-batches", 16, "cap on split batches per run (each up to 45,000 characters of notes); the halves of a batch split after an invalid answer do not count")
 	budget := fs.Duration("budget", 150*time.Minute, "no split batch starts after this long; the derive, links and staleness steps run after")
 	dry := fs.Bool("dry-run", false, "split and check, write nothing")
 	recheck := fs.Bool("recheck-conflicts", false, "run only the conflict check again, for the curated facts made from --since on (a run whose check failed)")
@@ -194,7 +194,7 @@ func runCurate(args []string) int {
 	}
 	host := store.ShortHost()
 	// The batches stop at --budget; the steps after them (derive, results,
-	// links, staleness: about 25 minutes on the author's workstation) have the rest.
+	// links, staleness: about 25 minutes on a busy machine) have the rest.
 	tail := 75 * time.Minute
 	if *quick {
 		tail = 10 * time.Minute // the last batch's judge and push
@@ -363,7 +363,7 @@ func runCurate(args []string) int {
 		saveCuratorState(filepath.Join(stateDir, "curator.json"), cst)
 	}
 	// Notes that only restate a curated fact or an earlier note go before the
-	// split (no model): 23 of the 2,108 pending notes (1.1 percent) on 2026-10-11.
+	// split (no model): each one is a model call saved.
 	var curated []*fact.Fact
 	for _, f := range facts {
 		if !f.InInbox() {
@@ -963,8 +963,8 @@ func logInvalid(rep *curate.Report, pass string, err error) {
 var curateLockWait = time.Hour
 
 // The quick curate's limits (--quick): the notes of the last day, newest
-// first, at most two batches (about 170 dreamer notes; the dreamer adds about
-// 12 a half hour on the author's workstation) started within 20 minutes.
+// first, at most two batches (up to 90,000 characters of notes, far more
+// than the dreamer adds between two quick runs) started within 20 minutes.
 // Older pending notes are the full run's.
 const (
 	quickWindow  = 24 * time.Hour

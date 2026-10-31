@@ -32,10 +32,10 @@ var pathRx = regexp.MustCompile(`(?:~|/[A-Za-z0-9._@+-]+)(?:/[A-Za-z0-9._@+-]+)+
 var workRx = regexp.MustCompile(`(?:\bcd\s+|\bgit\s+-C\s+|T: (?:Edit|Write|MultiEdit|NotebookEdit)\s+|"file_path"\s*:\s*"|\bfile:\s+)$`)
 
 // Strong is how much more a path the agent works in (workRx) counts than one
-// it only mentions. Measured in eval/VALUE.md ("The repo of a session that
-// starts outside one"): with work paths at 3 and a three-quarter majority, 34
-// of 57 sampled windows right, 11 partly and 12 wrong, against main's cwd
-// rule at 12, 6 and 21 of 39.
+// it only mentions. Measured on sampled windows of real sessions
+// (eval/VALUE.md, "The repo of a session that starts outside one"): with
+// work paths at 3 and a three-quarter majority, most windows come out right
+// and far fewer wrong than under the cwd rule.
 const Strong = 3
 
 type mention struct {

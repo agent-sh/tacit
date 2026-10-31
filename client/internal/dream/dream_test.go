@@ -122,7 +122,7 @@ func TestRepoOfCwd(t *testing.T) {
 	for _, d := range []string{"workplace/widget", "projects/tacit", "projects/agent-sh/agnix", "projects/atlas"} {
 		git(d)
 	}
-	for _, d := range []string{"projects/park-predictor", "projects/tacit/client", ".cache/run42/head", "workplace/notes", "srv/memra"} {
+	for _, d := range []string{"projects/price-tracker", "projects/tacit/client", ".cache/run42/head", "workplace/notes", "srv/engine"} {
 		if err := os.MkdirAll(filepath.Join(h, d), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -134,11 +134,11 @@ func TestRepoOfCwd(t *testing.T) {
 		"projects/agent-sh/agnix":            "agnix",
 		"projects/agent-sh/agnix/crates/x":   "agnix",
 		"projects/agent-sh":                  "", // a folder of checkouts
-		"projects/park-predictor":            "", // under ~/projects but no git root
+		"projects/price-tracker":             "", // under ~/projects but no git root
 		"":                                   "",
 		"projects":                           "",
 		".cache/run42/head":                  "",
-		"srv/memra":                          "", // a folder named like a repo
+		"srv/engine":                         "", // a folder named like a repo
 		"workplace":                          "",
 		"workplace/widget/pkg":               "widget",
 		"workplace/notes":                    "",
@@ -343,9 +343,9 @@ func TestWindowsNameASeparateCloneForItsMainCheckout(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644)
 		os.WriteFile(filepath.Join(dir, ".git", "config"), []byte("[remote \"origin\"]\n\turl = "+origin+"\n"), 0o644)
 	}
-	mk(filepath.Join(home, "projects", "pikadon"), "git@github.com:acme/ginza.git")
-	clone := filepath.Join(home, "tasks", "t7", "ginza")
-	mk(clone, "https://github.com/acme/ginza.git")
+	mk(filepath.Join(home, "projects", "storefront"), "git@github.com:acme/shop.git")
+	clone := filepath.Join(home, "tasks", "t7", "shop")
+	mk(clone, "https://github.com/acme/shop.git")
 	dir := filepath.Join(home, "transcripts")
 	os.MkdirAll(dir, 0o755)
 	f := filepath.Join(dir, "a.jsonl")
@@ -353,7 +353,7 @@ func TestWindowsNameASeparateCloneForItsMainCheckout(t *testing.T) {
 		`{"type":"assistant","message":{"content":[{"type":"text","text":"Fixed."}]}}`+"\n"+strings.Repeat(" ", minNewBytes)+"\n"), 0o644)
 	st := &State{Offsets: map[string]int64{f: 0}}
 	ws, _ := Windows([]Source{{Glob: filepath.Join(dir, "*.jsonl"), Format: digest.Claude}}, st, false)
-	if len(ws) != 1 || ws[0].Repo != "pikadon" || ws[0].RepoRoot != filepath.Join(home, "projects", "pikadon") {
+	if len(ws) != 1 || ws[0].Repo != "storefront" || ws[0].RepoRoot != filepath.Join(home, "projects", "storefront") {
 		t.Fatalf("windows %+v", ws)
 	}
 }

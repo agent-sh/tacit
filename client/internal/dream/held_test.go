@@ -13,37 +13,37 @@ func curatedHeld(scope, name, desc string) *fact.Fact {
 }
 
 func TestHeldListsWhatTheWindowIsAbout(t *testing.T) {
-	waitfor := curatedHeld("machines/box", "waitfor", "waitfor blocks on a condition: `waitfor --until '<probe cmd>' --every 2m --timeout 1h`.")
-	heartbeat := curatedHeld("projects/darklanes", "wrx-heartbeat", "wrx heartbeat: `timeout 40 ssh wrx 'cd ~/negeig-next/box/orch; tail -3 orch.log'`.")
+	waitfor := curatedHeld("machines/box", "pollwait", "pollwait blocks on a condition: `pollwait --until '<probe cmd>' --every 2m --timeout 1h`.")
+	heartbeat := curatedHeld("projects/fleet", "gpu-box-heartbeat", "host-b heartbeat: `timeout 40 ssh host-b 'cd ~/jobs/box/orch; tail -3 orch.log'`.")
 	other := curatedHeld("projects/elsewhere", "walrus", "The walrus cache lives in /srv/walrus/cache and is pruned by walrus-prune.")
 	tied := curatedHeld("system", "tied", "The quokka scheduler listens on 7781.")
-	unrelated := curatedHeld("machines/box", "restic", "Local restic backups live in ~/backups/restic.")
+	unrelated := curatedHeld("machines/box", "borg", "Local borg backups live in ~/archive/borg.")
 	rule := curatedHeld("user", "rule", "Never force-push to main.")
 	rule.Meta.Source.Kind = "user"
-	words := curatedHeld("machines/box", "words", "waitfor is what the owner wants for every wait.")
-	words.Meta.Source.OwnerWords = "use waitfor"
-	retired := curatedHeld("machines/box", "old-waitfor", "waitfor lives in ~/bin/waitfor.")
-	retired.Meta.SupersededBy = "waitfor"
-	overview := curatedHeld("projects/darklanes", "_overview", "darklanes: wrx heartbeat, orch.log, the negeig box.")
-	inbox := curatedHeld("machines/box", "pending", "waitfor --until polls every 2m.")
+	words := curatedHeld("machines/box", "words", "pollwait is what the owner wants for every wait.")
+	words.Meta.Source.OwnerWords = "use pollwait"
+	retired := curatedHeld("machines/box", "old-pollwait", "pollwait lives in ~/bin/pollwait.")
+	retired.Meta.SupersededBy = "pollwait"
+	overview := curatedHeld("projects/fleet", "_overview", "fleet: host-b heartbeat, orch.log, the jobs box.")
+	inbox := curatedHeld("machines/box", "pending", "pollwait --until polls every 2m.")
 	inbox.Path = "inbox/dreamer@box/pending.md"
 	p := NewHeldPool([]*fact.Fact{waitfor, heartbeat, other, tied, unrelated, rule, words, retired, overview, inbox})
 	lines := []string{
-		"A: waitfor blocks on a condition, so I'll wait with waitfor --until '<probe cmd>' --every 2m --timeout 1h",
-		"T: timeout 40 ssh wrx 'cd ~/negeig-next/box/orch; tail -3 orch.log'",
+		"A: pollwait blocks on a condition, so I'll wait with pollwait --until '<probe cmd>' --every 2m --timeout 1h",
+		"T: timeout 40 ssh host-b 'cd ~/jobs/box/orch; tail -3 orch.log'",
 		"A: the walrus cache in /srv/walrus/cache was pruned by walrus-prune",
 		"U: never force-push to main",
 	}
-	got := p.Held("darklanes", "box", lines, HeldChars)
+	got := p.Held("fleet", "box", lines, HeldChars)
 	want := []string{"- " + waitfor.Meta.Description, "- " + heartbeat.Meta.Description}
 	if strings.Join(sortedCopy(got), "\n") != strings.Join(sortedCopy(want), "\n") {
 		t.Fatalf("held:\n%s", strings.Join(got, "\n"))
 	}
 	// The cap keeps the best that fit.
-	if got := p.Held("darklanes", "box", lines, len(want[0])+2); len(got) != 1 {
+	if got := p.Held("fleet", "box", lines, len(want[0])+2); len(got) != 1 {
 		t.Fatalf("capped: %q", got)
 	}
-	if got := p.Held("darklanes", "box", lines, 0); got != nil {
+	if got := p.Held("fleet", "box", lines, 0); got != nil {
 		t.Fatalf("off: %q", got)
 	}
 	// Another repository's fact is not held for this one.

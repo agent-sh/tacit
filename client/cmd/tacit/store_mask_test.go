@@ -26,12 +26,11 @@ func realRedact(t *testing.T) {
 	t.Cleanup(func() { store.Redact = prev })
 }
 
-// The 2026-10-26 rebuild's curator wrote an imported memory's loopback
-// llama-server key into a curated fact: the memory came into the inbox
-// through a path that did not mask it, and the split copied the key into the
-// fact's body. Every store write masks what it adds (SPEC.md, "Every write is
-// masked"), so the fact the split writes holds no key, however its note came
-// in. The key is synthetic; its canary part is what stubScrump's stand-in
+// An imported memory can come into the inbox through a path that does not
+// mask it, holding a loopback server's key, and the split copies the key into
+// the fact's body. Every store write masks what it adds (SPEC.md, "Every write
+// is masked"), so the fact the split writes holds no key, however its note
+// came in. The key is synthetic; its canary part is what stubScrump's stand-in
 // masks, which this test runs on.
 func TestTheCuratorWritesNoKeyItsNoteBroughtIn(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -54,10 +53,10 @@ func TestTheCuratorWritesNoKeyItsNoteBroughtIn(t *testing.T) {
 	}
 	s := &store.Store{Dir: filepath.Join(home, "store")}
 	key := "Zq7Vx9" + "Lm2Kp4Hc3Pz9Rk"
-	// An imported memory as the rebuild wrote it: committed into the inbox
+	// An imported memory as a rebuild can write it: committed into the inbox
 	// by hand, past every mask.
-	rel := "inbox/codex@" + store.ShortHost() + "/memory/exact-serve-wrapper.md"
-	note := "---\nname: exact-serve-wrapper\ndescription: The exact local serve wrapper is the source of truth for argv\ntype: machine_fact\nscope: machines/" + store.ShortHost() + "\nsource:\n  harness: codex\n  host: " + store.ShortHost() + "\n  kind: observed\ncreated: \"2026-06-05\"\n---\n\nPreserve the production flags: -fa on, --parallel 1, --jinja, `--api-key " + key + "`, --metrics.\n"
+	rel := "inbox/codex@" + store.ShortHost() + "/memory/dev-server-wrapper.md"
+	note := "---\nname: dev-server-wrapper\ndescription: The dev server wrapper sets every flag the server starts with\ntype: machine_fact\nscope: machines/" + store.ShortHost() + "\nsource:\n  harness: codex\n  host: " + store.ShortHost() + "\n  kind: observed\ncreated: \"2026-06-05\"\n---\n\nKeep the wrapper's flags: --workers 2, --log-json, --color never, `--api-key " + key + "`, --metrics.\n"
 	p := filepath.Join(s.Dir, filepath.FromSlash(rel))
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		t.Fatal(err)
@@ -80,9 +79,9 @@ func TestTheCuratorWritesNoKeyItsNoteBroughtIn(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(s.Dir, "machines", store.ShortHost(), "stray-leftover.md"), []byte(stray), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	split, _ := json.Marshal([]map[string]any{{"origin": "exact-serve-wrapper", "name": "serve-wrapper-flags", "description": "The serve wrapper's `--api-key " + key + "` and flags are the source of truth for argv",
+	split, _ := json.Marshal([]map[string]any{{"origin": "dev-server-wrapper", "name": "serve-wrapper-flags", "description": "The dev wrapper's `--api-key " + key + "` and flags are what the server starts with",
 		"type": "machine_fact", "scope": "machines/" + store.ShortHost(), "kind": "observed",
-		"body": "Production flags include -fa on, --parallel 1, --jinja, `--api-key " + key + "`, --metrics, plus the model paths in the wrapper."}})
+		"body": "Its flags include --workers 2, --log-json, --color never, `--api-key " + key + "`, --metrics, plus the config paths in the wrapper."}})
 	response, _ := json.Marshal(map[string]any{"result": string(split), "total_cost_usd": .01})
 	fake := filepath.Join(home, "fake-cli")
 	t.Setenv("FIXTURE_RESPONSE", string(response))
@@ -108,7 +107,7 @@ func TestTheCuratorWritesNoKeyItsNoteBroughtIn(t *testing.T) {
 	if strings.Contains(string(committed), "Zq7Vx9") {
 		t.Fatalf("the curated fact was committed with the key:\n%s", committed)
 	}
-	if !strings.Contains(string(committed), "--metrics, plus the model paths in the wrapper") {
+	if !strings.Contains(string(committed), "--metrics, plus the config paths in the wrapper") {
 		t.Fatalf("the mask took more than the key:\n%s", committed)
 	}
 	// The description is masked too, and the indexes written again from the

@@ -15,7 +15,7 @@ import (
 // index file and pruned the curator's. An open index must survive that.
 func TestOpenIndexSurvivesPrune(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "store")
-	write(t, root, "machines/host-a/pgrep-self-match.md", "pgrep-self-match", "machines/host-a", "pkill -f and pgrep -f match the Bash tool's own shell", "body", "")
+	write(t, root, "machines/host-a/findproc-loose-match.md", "findproc-loose-match", "machines/host-a", "zapproc -f and findproc -f match the runner's own shell", "body", "")
 	t.Setenv("TACIT_INDEX", filepath.Join(filepath.Dir(root), "index"))
 	ctx := context.Background()
 
@@ -38,15 +38,15 @@ func TestOpenIndexSurvivesPrune(t *testing.T) {
 		t.Fatal("setup: the held index file should be gone")
 	}
 
-	hits, err := held.Query(ctx, Situation{Host: "host-a", Query: "pgrep shell"}, 3, false)
+	hits, err := held.Query(ctx, Situation{Host: "host-a", Query: "findproc shell"}, 3, false)
 	if err != nil {
 		t.Fatalf("query on a held index after its file was pruned: %v", err)
 	}
-	if len(hits) != 1 || hits[0].Name != "pgrep-self-match" {
+	if len(hits) != 1 || hits[0].Name != "findproc-loose-match" {
 		t.Fatalf("hits %v", hits)
 	}
 	// And a second query on the same handle (one connection, kept).
-	if _, err := held.Query(ctx, Situation{Host: "host-a", Query: "pkill"}, 3, false); err != nil {
+	if _, err := held.Query(ctx, Situation{Host: "host-a", Query: "zapproc"}, 3, false); err != nil {
 		t.Fatalf("second query: %v", err)
 	}
 }
@@ -84,11 +84,11 @@ func TestPruneKeepsLiveBuildsAndNewerVersions(t *testing.T) {
 	}
 }
 
-// A truncated or corrupt index file under the workstationht name is built again
+// A truncated or corrupt index file under the right name is built again
 // instead of failing every open until HEAD moves.
 func TestOpenRebuildsACorruptFile(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "store")
-	write(t, root, "machines/host-a/pgrep-self-match.md", "pgrep-self-match", "machines/host-a", "pkill -f and pgrep -f match the Bash tool's own shell", "body", "")
+	write(t, root, "machines/host-a/findproc-loose-match.md", "findproc-loose-match", "machines/host-a", "zapproc -f and findproc -f match the runner's own shell", "body", "")
 	t.Setenv("TACIT_INDEX", filepath.Join(filepath.Dir(root), "index"))
 	os.MkdirAll(IndexDir(), 0o755)
 	os.WriteFile(filepath.Join(IndexDir(), fmt.Sprintf("index-v%d-ddd444.db", schemaVersion)), []byte("not a database"), 0o644)
@@ -97,7 +97,7 @@ func TestOpenRebuildsACorruptFile(t *testing.T) {
 		t.Fatalf("open over a corrupt file: %v", err)
 	}
 	defer ix.Close()
-	if hits, err := ix.Query(context.Background(), Situation{Host: "host-a", Query: "pgrep"}, 3, false); err != nil || len(hits) != 1 {
+	if hits, err := ix.Query(context.Background(), Situation{Host: "host-a", Query: "findproc"}, 3, false); err != nil || len(hits) != 1 {
 		t.Fatalf("hits %v err %v", hits, err)
 	}
 }

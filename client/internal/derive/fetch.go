@@ -7,12 +7,12 @@ import (
 	"time"
 )
 
-// FetchTimeout bounds the fetch of one branch of one checkout. Measured on the
-// author's workstation at load 40 over ssh and https, one branch with a few days of new
-// commits took 1.1 s (valkey-glide), 2.0 s (sglang dev), 2.6 s (memra) and 9.9
-// s (sglang main, upstream's busiest branch). 30 s is three times the worst of
-// those: a healthy fetch finishes, a dead or stalled link costs half a minute
-// and not the three minutes a repo is otherwise allowed. A fetch cut short
+// FetchTimeout bounds the fetch of one branch of one checkout. Measured on a
+// loaded machine over ssh and https, one branch with a few days of new commits
+// took 1 to 3 s, and 9.9 s on the main branch of a busy upstream. 30 s is
+// three times the worst of those: a healthy fetch finishes, a dead or stalled
+// link costs half a minute and not the three minutes a repo is otherwise
+// allowed. A fetch cut short
 // leaves the remote-tracking ref where it was (git updates it only after the
 // objects arrived), so the read falls back to the local ref. Where one branch
 // is further behind than 30 s can carry, the next run starts over and the

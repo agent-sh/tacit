@@ -267,19 +267,19 @@ func TestMigrateKeepsTryingHeldFacts(t *testing.T) {
 // out of the cap; rotation and the ancestor index read places on a machine
 // only, never a route.
 func TestPathReaders(t *testing.T) {
-	text := "Checkouts: /tmp/wt/tacit, /root/projects/tacit/main.go, (/workspace/app) and `~/projects/memra`; the API is /v1/messages, the forge /repos/agent-sh/tacit/pulls; logs in /var/log/x.log; " +
+	text := "Checkouts: /tmp/wt/tacit, /root/projects/tacit/main.go, (/workspace/app) and `~/projects/gadget`; the API is /v1/messages, the forge /repos/agent-sh/tacit/pulls; logs in /var/log/x.log; " +
 		"its cwd /proc/501543/cwd, /dev/fd/3, /sys/class/net, /dev and /net/buildbox/src/tacit; again /v1/messages; once ~//projects/old/a.md."
-	if got, want := strings.Join(repoPaths(text, -1), " "), "~/projects/memra /var/log/x.log ~//projects/old/a.md /tmp/wt/tacit /root/projects/tacit/main.go /workspace/app /v1/messages /repos/agent-sh/tacit/pulls"; got != want {
+	if got, want := strings.Join(repoPaths(text, -1), " "), "~/projects/gadget /var/log/x.log ~//projects/old/a.md /tmp/wt/tacit /root/projects/tacit/main.go /workspace/app /v1/messages /repos/agent-sh/tacit/pulls"; got != want {
 		t.Errorf("repoPaths read %q, want %q", got, want)
 	}
-	if got, want := strings.Join(repoPaths(text, 4), " "), "~/projects/memra /var/log/x.log ~//projects/old/a.md /tmp/wt/tacit"; got != want {
+	if got, want := strings.Join(repoPaths(text, 4), " "), "~/projects/gadget /var/log/x.log ~//projects/old/a.md /tmp/wt/tacit"; got != want {
 		t.Errorf("repoPaths(4) read %q, want %q", got, want)
 	}
 	var places []string
 	for _, m := range machinePathRx.FindAllStringSubmatch(text, -1) {
 		places = append(places, strings.TrimRight(m[1], ".,;:)"))
 	}
-	if got, want := strings.Join(places, " "), "~/projects/memra /var/log/x.log ~//projects/old/a.md"; got != want {
+	if got, want := strings.Join(places, " "), "~/projects/gadget /var/log/x.log ~//projects/old/a.md"; got != want {
 		t.Errorf("machinePathRx read %q, want %q", got, want)
 	}
 }

@@ -1,9 +1,8 @@
 package assess
 
-// The owner's words beat dates (the owner, 2026-10-23: "quote of me is
-// stronger than dates, beside if its seems like i changed my mind or so").
-// Code finds the store's notes in other folders that name a folder, the
-// owner's rulings, statements and decisions first, and shows them before
+// The owner's words beat dates, unless they seem to have changed their mind
+// since. Code finds the store's notes in other folders that name a folder,
+// the owner's rulings, statements and decisions first, and shows them before
 // the first ask. When the model reads one as the owner's word on the
 // folder's status (dead, shipped, paused, replaced by another), it cites
 // the words verbatim (owner_status), and code checks them like a
@@ -45,7 +44,7 @@ type Note struct {
 	// Body are the fact's text, which an owner_status item's words must be in.
 	Said, Description, Body string
 	// Projects are the other project folders code finds its text names, each
-	// with where its name leads now ("gishra (renamed: tower-crane)").
+	// with where its name leads now ("webshop (renamed: storefront)").
 	Projects []string
 	// Claim: an agent's note whose text claims the owner's authority ("Owner
 	// decided ...") without their words, by delivery's check
@@ -203,7 +202,7 @@ func noteDay(n Note, words string) string {
 func NameIn(text, name string) bool { return nameIn(text, name) }
 
 // nameIn reports a project name in text as words, its dashes as dashes or
-// spaces ("tower-crane" in "Tower Crane replaces them").
+// spaces ("order-service" in "Order Service replaces them").
 func nameIn(text, name string) bool {
 	t, n := strings.ToLower(text), strings.ToLower(strings.TrimSpace(name))
 	if n == "" {
@@ -226,9 +225,9 @@ var listSplitRx = regexp.MustCompile(`[.;:()!?\n]+`)
 var listItemRx = regexp.MustCompile(`(?i),|\s+(?:and|or|&)\s+`)
 
 // coListed reports words that list a successor's name and this folder's as
-// items of one enumeration ("deslop, sync-docs, drift-detect ... fold into
-// one tool"): the words retire both, so the one is no successor of the
-// other. An item is short (at most 4 words), as an enumeration's are.
+// items of one enumeration ("alpha-cli, beta-sync, gamma-check ... fold into
+// one cleanup tool"): the words retire both, so the one is no successor of
+// the other. An item is short (at most 4 words), as an enumeration's are.
 func coListed(words, folder, succ string) bool {
 	for _, clause := range listSplitRx.Split(words, -1) {
 		self, other := false, false
@@ -238,7 +237,7 @@ func coListed(words, folder, succ string) bool {
 			}
 			s, o := nameIn(it, folder), nameIn(it, succ)
 			if s && o {
-				continue // one item naming both ("tower replaces oldtool") is no list of them
+				continue // one item naming both ("order-service replaces oldtool") is no list of them
 			}
 			self = self || s
 			other = other || o

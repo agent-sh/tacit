@@ -48,8 +48,8 @@ const (
 	// its proof (a few KB), so a batch stays well inside one answer.
 	rotationBatch = 12
 	// rotationAgeDays is how long a checked fact rests before it is due
-	// again. The owner set no limit on the rotation's size (phase 2, answer
-	// 8); a fact checked yesterday is not due today. TACIT_ROTATION_AGE_DAYS.
+	// again. The rotation's size has no limit of its own; a fact checked
+	// yesterday is not due today. TACIT_ROTATION_AGE_DAYS.
 	rotationAgeDays = 30
 	// rotationLog is the per-batch cost log in the state directory.
 	rotationLog = "rotation.jsonl"

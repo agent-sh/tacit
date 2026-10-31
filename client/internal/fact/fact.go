@@ -22,7 +22,7 @@ var (
 	Types = set("user_standard", "design_decision", "past_mistake", "machine_fact", "code_change", "hot_spot", "structure", "history", "user", "reference", "result", "result_ref", "unclassified", StatementType)
 	// Harnesses name key ids (<harness>@<host>) and inbox directories. The
 	// server keeps the same list (server/lib/tacit_server/auth/key_id.ex).
-	// "reader" is a key that only reads (the Mac over the public path): the
+	// "reader" is a key that only reads (a laptop over the public path): the
 	// server refuses its pushes, and no fact is ever written as it.
 	Harnesses   = set("claude", "codex", "pi", "hermes", "grok", "muse", "agy", "dreamer", "import", "curator", "human", "reader")
 	SourceKinds = set("user", "observed", "web", "derived")

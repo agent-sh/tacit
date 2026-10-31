@@ -24,7 +24,7 @@ func TestParseAnswer(t *testing.T) {
 		{"no, that was a one-off for the demo", AnswerNo, "that was a one-off for the demo"},
 		{"nope", AnswerNo, ""},
 		{"correct it: the bucket is tacit-eu, not tacit-us", AnswerCorrect, "the bucket is tacit-eu, not tacit-us"},
-		{"correction - only on the rig", AnswerCorrect, "only on the rig"},
+		{"correction - only on the build box", AnswerCorrect, "only on the build box"},
 		{"no, it's only for the valkey repo", AnswerCorrect, "it's only for the valkey repo"},
 		{"yes but only on fridays", AnswerCorrect, "yes but only on fridays"},
 		{"correct", AnswerYes, ""},
@@ -242,30 +242,30 @@ func TestQueueLockedRoundTrip(t *testing.T) {
 
 func TestRulebookVerdicts(t *testing.T) {
 	rows := []RulebookRow{
-		{TS: "2026-10-24T00:38:46", Session: "a1", Kind: "tacit", Title: "the lab tree has no commit rule", Name: "lab-tree-commit", Verdict: "uncertain", Reason: "added rules"},
-		{TS: "2026-10-24T01:03:27", Session: "a1", Kind: "tacit", Title: "the lab tree has no commit rule; old entries were wrong", Name: "lab-tree-commit", Verdict: "correct", Reason: "quotes the owner"},
-		{TS: "2026-10-24T12:43:36", Session: "b2", Kind: "memory", Title: "urgent tasks run on the top rung", Path: "/h/.claude/projects/-h/memory/urgent.md", Verdict: "uncertain", Reason: "a question made a rule"},
-		{TS: "2026-10-24T12:50:00", Session: "b2", Kind: "memory", Title: "urgent tasks run on the top rung", Path: "/h/.claude/projects/-h/memory/urgent.md", Verdict: RulebookApproved, By: "owner"},
+		{TS: "2026-10-24T00:38:46", Session: "a1", Kind: "tacit", Title: "the build tree has no lint rule", Name: "build-tree-lint", Verdict: "uncertain", Reason: "added rules"},
+		{TS: "2026-10-24T01:03:27", Session: "a1", Kind: "tacit", Title: "the build tree has no lint rule; old entries were wrong", Name: "build-tree-lint", Verdict: "correct", Reason: "quotes the owner"},
+		{TS: "2026-10-24T12:43:36", Session: "b2", Kind: "memory", Title: "flaky tests are retried once", Path: "/h/.claude/projects/-h/memory/flaky.md", Verdict: "uncertain", Reason: "a question made a rule"},
+		{TS: "2026-10-24T12:50:00", Session: "b2", Kind: "memory", Title: "flaky tests are retried once", Path: "/h/.claude/projects/-h/memory/flaky.md", Verdict: RulebookApproved, By: "owner"},
 		{TS: "2026-10-24T13:00:00", Session: "c3", Kind: "memory", Title: "x", Path: "/h/.claude/projects/-h/memory/x.md", Verdict: "failed"},
-		{TS: "2026-10-24T13:05:00", Session: "c3", Tacit: "q-abcdef", Verdict: RulebookEdited, By: "owner", Text: "only on the rig"},
+		{TS: "2026-10-24T13:05:00", Session: "c3", Tacit: "q-abcdef", Verdict: RulebookEdited, By: "owner", Text: "only on the build box"},
 	}
 	at := "2026-10-25T00:00:00Z"
-	l, ok := RulebookVerdict(rows, Note{Path: "inbox/claude@h/lab-tree-commit.md", Name: "lab-tree-commit", Desc: "the lab tree has no commit rule; old entries were wrong"}, at)
+	l, ok := RulebookVerdict(rows, Note{Path: "inbox/claude@h/build-tree-lint.md", Name: "build-tree-lint", Desc: "the build tree has no lint rule; old entries were wrong"}, at)
 	if !ok || l.Verdict != "correct" || l.By != ledger.ByRulebook || l.Session != "claude:a1" || !ledger.ValidReview(l) {
 		t.Fatalf("tacit row: %+v %v", l, ok)
 	}
-	l, ok = RulebookVerdict(rows, Note{Path: "inbox/import@h/-h/urgent.md", Name: "urgent", Desc: "urgent tasks run on the top rung", ImportedFrom: "/h/.claude/projects/-h/memory/urgent.md"}, at)
+	l, ok = RulebookVerdict(rows, Note{Path: "inbox/import@h/-h/flaky.md", Name: "flaky", Desc: "flaky tests are retried once", ImportedFrom: "/h/.claude/projects/-h/memory/flaky.md"}, at)
 	if !ok || l.Verdict != ledger.VerdictConfirmed || l.By != ledger.ByOwner || !ledger.ValidReview(l) {
 		t.Fatalf("memory row with the owner's approval: %+v %v", l, ok)
 	}
 	if _, ok := RulebookVerdict(rows, Note{Path: "p", Name: "x", Desc: "x", ImportedFrom: "/h/.claude/projects/-h/memory/x.md"}, at); ok {
 		t.Fatal("a failed review is a verdict")
 	}
-	if _, ok := RulebookVerdict(rows, Note{Path: "p", Name: "other", Desc: "the lab tree has no commit rule"}, at); ok {
+	if _, ok := RulebookVerdict(rows, Note{Path: "p", Name: "other", Desc: "the build tree has no lint rule"}, at); ok {
 		t.Fatal("another note matched")
 	}
 	a := RulebookAnswers(rows)
-	if got := a["q-abcdef"]; got.Kind != AnswerCorrect || got.Words != "only on the rig" || got.From != "rulebook:c3" {
+	if got := a["q-abcdef"]; got.Kind != AnswerCorrect || got.Words != "only on the build box" || got.From != "rulebook:c3" {
 		t.Fatalf("pane answer %+v", got)
 	}
 }
@@ -430,7 +430,7 @@ func TestReadCodexAndPiSessions(t *testing.T) {
 // the harness's.
 func TestReadTranscriptSplitsSideAgentNotes(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "s1.jsonl")
-	note, _ := json.Marshal("Here is a note offered by a side agent:\n\n> Heads up · Your rule says every merge waits for a clean review.\n>\n> - **Consider a final review round at the cap.**\n\nits the correct decision, run a self review at the cap")
+	note, _ := json.Marshal("Here is a note offered by a side agent:\n\n> Heads up · Your rule says every deploy waits for green smoke tests.\n>\n> - **Consider one more smoke run at the budget.**\n\nthat call is fine by me, run a local check at the budget")
 	alone, _ := json.Marshal("Here is a note offered by a side agent:\n\n> Heads up · The server may restart on its own.")
 	queued, _ := json.Marshal("<system-reminder>\nThe user started your suggested background task task_c1 in a separate cloud session.\n</system-reminder>\n\nno more shop work for now")
 	writeLines(t, p,
@@ -450,7 +450,7 @@ func TestReadTranscriptSplitsSideAgentNotes(t *testing.T) {
 		}
 		got = append(got, who+": "+strings.SplitN(m.Text, "\n", 2)[0])
 	}
-	want := []string{"NOTE: Here is a note offered by a side agent:", "OWNER: its the correct decision, run a self review at the cap", "NOTE: Here is a note offered by a side agent:", "OWNER: no more shop work for now"}
+	want := []string{"NOTE: Here is a note offered by a side agent:", "OWNER: that call is fine by me, run a local check at the budget", "NOTE: Here is a note offered by a side agent:", "OWNER: no more shop work for now"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("messages:\n%s", strings.Join(got, "\n"))
 	}

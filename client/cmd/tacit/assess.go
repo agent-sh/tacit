@@ -75,7 +75,7 @@ func runAssess(args []string) int {
 	max := fs.Int("max", assessMax, "candidates per run")
 	dry := fs.Bool("dry-run", false, "gather, ask and check; write nothing")
 	recheckQuoted := fs.Bool("recheck-quoted", false, "ask again about every record whose status rests on the owner's words (a quote of theirs, their words on a note), dated by when they said them")
-	folders := fs.String("folders", "", "decide only these folders (comma separated, e.g. projects/memra,projects/ship): a bounded re-run")
+	folders := fs.String("folders", "", "decide only these folders (comma separated, e.g. projects/demo-api,projects/web-app): a bounded re-run")
 	envFile := fs.String("env-file", "", "KEY=VALUE lines with the runner's provider variables")
 	fs.Parse(args)
 	if *envFile != "" {
@@ -2067,7 +2067,7 @@ func (a *assessor) codeDecided(batch []assess.Candidate, pending map[string]*rec
 // sends a refused decision back once with code's problems; a second run asks
 // again with a fresh prompt and the decisions other folders got since; a
 // third on identical evidence asks the identical question and pays for the
-// identical answer (the shadow run: one folder refused 16 times in 8 runs).
+// identical answer (in a shadow run one folder was refused run after run).
 const assessHoldRuns = 2
 
 // assessHeldFile is the held folders' state file.

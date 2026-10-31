@@ -310,7 +310,7 @@ func TestOnlyTheProducingHostRetiresOrRewrites(t *testing.T) {
 	derived(t, Options{Store: store, Projects: projectsA, Host: "host-a"})
 	before := readTree(t, store)
 
-	// Machine "mac" has one of the three repos, at another commit.
+	// Machine host-b has one of the three repos, at another commit.
 	projectsB := t.TempDir()
 	rb := fixture(t, projectsB, "demo")
 	rb.write("src/a.go", "package a // host-b only\n")
@@ -348,7 +348,7 @@ func TestOnlyTheProducingHostRetiresOrRewrites(t *testing.T) {
 	}
 
 	// Explicitly taking over lets it: other and third have no checkout on the
-	// mac and go; demo is rewritten with the mac's commit and host.
+	// host-b and go; demo is rewritten with host-b's commit and host.
 	oB.TakeOver = true
 	rep = derived(t, oB)
 	if rep.Count(Retired) != 2 {

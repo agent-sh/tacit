@@ -245,7 +245,7 @@ func (s *Snapshot) lastChange(ctx context.Context, path string) string {
 // pathRe is the only shape of path that is written into a fact. File and
 // directory names in a repository are text chosen by whoever committed them,
 // and a fact's description is the line a hook prints into an agent's context;
-// sglang and valkey-glide take outside contributions. So a name outside this
+// many repositories take outside contributions. So a name outside this
 // conservative set is left out and counted, not quoted. The set also keeps
 // out everything that could corrupt a fact: no `[[` (lint L6 would read a
 // link), no backtick, quote, colon, space or newline.

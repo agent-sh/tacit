@@ -29,7 +29,7 @@ func TestAsRuleStripsTheOwnerPreamble(t *testing.T) {
 func TestBlockMarksOnlyHisRulingsAsRules(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "store")
 	src := func(name, s, typ string) string {
-		return "---\nname: " + name + "\ndescription: zebra quokka " + name + "\ntype: " + typ + "\nscope: projects/memra\nsource:\n  harness: curator\n  host: host-a\n" + s + "created: 2026-10-08\n---\n\nOwner: \"never rent a zebra box\" zebra quokka\n"
+		return "---\nname: " + name + "\ndescription: zebra quokka " + name + "\ntype: " + typ + "\nscope: projects/atlas\nsource:\n  harness: curator\n  host: host-a\n" + s + "created: 2026-10-08\n---\n\nOwner: \"never rent a zebra box\" zebra quokka\n"
 	}
 	for name, body := range map[string]string{
 		"owners-rule":    src("owners-rule", "  kind: user\n  owner_quote: never rent a zebra box\n  owner_quote_from: claude:s1\n", "design_decision"),
@@ -40,7 +40,7 @@ func TestBlockMarksOnlyHisRulingsAsRules(t *testing.T) {
 		// Words of theirs too short for a rule: no RULE, but the index says so.
 		"owners-words": src("owners-words", "  kind: observed\n  owner_words: never rent a zebra box\n  owner_words_from: claude:s1\n", "design_decision"),
 	} {
-		p := filepath.Join(root, "projects", "memra", name+".md")
+		p := filepath.Join(root, "projects", "atlas", name+".md")
 		os.MkdirAll(filepath.Dir(p), 0o755)
 		os.WriteFile(p, []byte(body), 0o644)
 	}
@@ -55,7 +55,7 @@ func TestBlockMarksOnlyHisRulingsAsRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ix.Close()
-	hits, err := ix.Query(context.Background(), Situation{Repo: "memra", Query: "zebra quokka"}, 5, false)
+	hits, err := ix.Query(context.Background(), Situation{Repo: "atlas", Query: "zebra quokka"}, 5, false)
 	if err != nil || len(hits) != 5 {
 		t.Fatalf("hits %v %v", hits, err)
 	}
@@ -131,14 +131,14 @@ func TestIndexMarksInTaskRulings(t *testing.T) {
 // A statement is printed in their words, dated, with its context, never as
 // a RULE; a flag of a check that disagrees is said beside it.
 func TestBlockPrintsAStatementInTheirWords(t *testing.T) {
-	h := Hit{Name: "pikadon-name", Type: "statement", Description: "The name of the pikadon repository.",
-		Body: "You said once (2026-10-21): \"the real name is pikadon, ginza is a name for now\"\nContext: The name of the pikadon repository.\n"}
+	h := Hit{Name: "storefront-name", Type: "statement", Description: "The name of the storefront repository.",
+		Body: "You said once (2026-10-21): \"the real name is storefront, shop-v2 is a name for now\"\nContext: The name of the storefront repository.\n"}
 	got := Block([]Hit{h}, "# t")
-	want := "- pikadon-name: you said once (2026-10-21): \"the real name is pikadon, ginza is a name for now\"; context: The name of the pikadon repository\n"
+	want := "- storefront-name: you said once (2026-10-21): \"the real name is storefront, shop-v2 is a name for now\"; context: The name of the storefront repository\n"
 	if !strings.HasSuffix(got, want) || strings.Contains(got, "RULE") {
 		t.Fatalf("%q", got)
 	}
-	h.Body += "> check disagrees 2026-10-22: pikadon is the real name: fails\n"
+	h.Body += "> check disagrees 2026-10-22: storefront is the real name: fails\n"
 	if got := Block([]Hit{h}, "# t"); !strings.Contains(got, "(a check disagrees, maybe misread)") {
 		t.Fatalf("%q", got)
 	}

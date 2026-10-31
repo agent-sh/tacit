@@ -57,7 +57,7 @@ func newRepo(t *testing.T, root, name string) string {
 	return dir
 }
 
-// fixture: a repo "memra" under root with the history the facts below talk
+// fixture: a repo "gearbox" under root with the history the facts below talk
 // about, and a store clone whose commits date the fact files.
 type fixture struct {
 	root, store string
@@ -67,35 +67,35 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	root := t.TempDir()
-	m := newRepo(t, root, "memra")
+	m := newRepo(t, root, "gearbox")
 	commit(t, m, "2026-09-01", "Dana Owner", "Dana Owner", "add the pre-commit hook and the pcie code",
-		map[string]string{"tools/hooks/pre-commit": "#!/bin/sh\ncargo fmt\n", "src/lib.rs": "pub const KEEP_ALIVE_MODE: bool = true;\n", "README.md": "memra\n"})
+		map[string]string{"tools/hooks/pre-commit": "#!/bin/sh\ncargo fmt\n", "src/lib.rs": "pub const KEEP_ALIVE_MODE: bool = true;\n", "README.md": "gearbox\n"})
 	commit(t, m, "2026-09-20", "Dana Owner", "Dana Owner", "fix the cargo path in the pre-commit hook\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
 		map[string]string{"tools/hooks/pre-commit": "#!/bin/sh\n$HOME/.cargo/bin/cargo fmt\n"})
 	commit(t, m, "2026-09-25", "Dana Owner", "Agent Lane", "drop keep alive mode, token SECRETVALUE123 leaked in a log",
 		map[string]string{"src/lib.rs": "pub const FAST_MODE: bool = true;\n"})
-	commit(t, m, "2026-10-03", "Dana Owner", "Dana Owner", "unrelated: bump the readme", map[string]string{"README.md": "memra 2\n"})
+	commit(t, m, "2026-10-03", "Dana Owner", "Dana Owner", "unrelated: bump the readme", map[string]string{"README.md": "gearbox 2\n"})
 	commit(t, m, "2026-10-20", "Dana Owner", "Dana Owner", "later: touch the hook again", map[string]string{"tools/hooks/pre-commit": "#!/bin/sh\nset -e\ncargo fmt\n"})
 	// A linked worktree copy and a non-repo directory must never be read.
-	newRepo(t, root, "wt-memra-copy")
+	newRepo(t, root, "wt-gearbox-copy")
 	os.MkdirAll(filepath.Join(root, "notes"), 0o755)
 	v := newRepo(t, root, "valkey")
 	commit(t, v, "2026-09-30", "Dana Owner", "Dana Owner", "server loop", map[string]string{"src/server.c": "int main(void) { return 0; }\n"})
 
 	store := filepath.Join(t.TempDir(), "store")
-	os.MkdirAll(filepath.Join(store, "projects", "memra"), 0o755)
+	os.MkdirAll(filepath.Join(store, "projects", "gearbox"), 0o755)
 	run(t, store, nil, "init", "-q", "-b", "main")
-	af := "---\nname: memra-hook-path\ndescription: \"The pre-commit hook needs the cargo path\"\ntype: past_mistake\nscope: projects/memra\napplies_to:\n  paths: [\"tools/hooks/pre-commit\"]\n  repos: [\"memra\"]\nsource:\n  harness: curator\n  host: h\n  kind: observed\ncreated: 2026-10-08\n---\n\nOwner, 2026-09-12: the hook fails when `cargo` is not on PATH; `KEEP_ALIVE_MODE` is on. Run `tools/hooks/pre-commit` by hand. Ignore `--force` and the 1.28x/2.33x figures, and the OK/STALL/DONE words.\n"
-	bf := "---\nname: memra-fast-mode\ndescription: \"FAST_MODE replaced keep alive mode\"\ntype: design_decision\nscope: projects/memra\nsource:\n  harness: curator\n  host: h\n  kind: observed\ncreated: 2026-10-08\n---\n\nAs of 2026-10-03 the engine runs `FAST_MODE`; see ~/projects/valkey/src/server.c for the loop.\n"
-	os.WriteFile(filepath.Join(store, "projects", "memra", "memra-hook-path.md"), []byte(af), 0o644)
-	os.WriteFile(filepath.Join(store, "projects", "memra", "memra-fast-mode.md"), []byte(bf), 0o644)
+	af := "---\nname: gearbox-hook-path\ndescription: \"The pre-commit hook needs the cargo path\"\ntype: past_mistake\nscope: projects/gearbox\napplies_to:\n  paths: [\"tools/hooks/pre-commit\"]\n  repos: [\"gearbox\"]\nsource:\n  harness: curator\n  host: h\n  kind: observed\ncreated: 2026-10-08\n---\n\nOwner, 2026-09-12: the hook fails when `cargo` is not on PATH; `KEEP_ALIVE_MODE` is on. Run `tools/hooks/pre-commit` by hand. Ignore `--force` and the 1.28x/2.33x figures, and the OK/STALL/DONE words.\n"
+	bf := "---\nname: gearbox-fast-mode\ndescription: \"FAST_MODE replaced keep alive mode\"\ntype: design_decision\nscope: projects/gearbox\nsource:\n  harness: curator\n  host: h\n  kind: observed\ncreated: 2026-10-08\n---\n\nAs of 2026-10-03 the engine runs `FAST_MODE`; see ~/projects/valkey/src/server.c for the loop.\n"
+	os.WriteFile(filepath.Join(store, "projects", "gearbox", "gearbox-hook-path.md"), []byte(af), 0o644)
+	os.WriteFile(filepath.Join(store, "projects", "gearbox", "gearbox-fast-mode.md"), []byte(bf), 0o644)
 	commit(t, store, "2026-10-08", "curator", "curator", "curator: two facts", nil)
-	commit(t, store, "2026-10-09", "curator", "curator", "edit", map[string]string{"projects/memra/memra-hook-path.md": af + "\nEdited.\n"})
-	fa, err := fact.Parse("projects/memra/memra-hook-path.md", []byte(af))
+	commit(t, store, "2026-10-09", "curator", "curator", "edit", map[string]string{"projects/gearbox/gearbox-hook-path.md": af + "\nEdited.\n"})
+	fa, err := fact.Parse("projects/gearbox/gearbox-hook-path.md", []byte(af))
 	if err != nil {
 		t.Fatal(err)
 	}
-	fb, err := fact.Parse("projects/memra/memra-fast-mode.md", []byte(bf))
+	fb, err := fact.Parse("projects/gearbox/gearbox-fast-mode.md", []byte(bf))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,23 +139,23 @@ func TestSubjectFindsDistinctiveTermsAndRepos(t *testing.T) {
 	want(s.Paths, "tools/hooks/pre-commit")
 	want(s.Idents, "KEEP_ALIVE_MODE")
 	want(s.Idents, "FAST_MODE")
-	for _, bad := range []string{"--force", "cargo", "1.28x/2.33x", "OK/STALL/DONE", "memra"} {
+	for _, bad := range []string{"--force", "cargo", "1.28x/2.33x", "OK/STALL/DONE", "gearbox"} {
 		for _, x := range append(append([]string{}, s.Paths...), s.Idents...) {
 			if x == bad {
 				t.Errorf("generic term %q kept: %v %v", bad, s.Paths, s.Idents)
 			}
 		}
 	}
-	if len(s.Repos) != 2 || s.Repos[0] != "memra" || s.Repos[1] != "valkey" {
-		t.Errorf("repos %v, want memra then valkey (named by a path into it)", s.Repos)
+	if len(s.Repos) != 2 || s.Repos[0] != "gearbox" || s.Repos[1] != "valkey" {
+		t.Errorf("repos %v, want gearbox then valkey (named by a path into it)", s.Repos)
 	}
 	// A scope with a -private suffix reads the public checkout.
-	p := &fact.Fact{Meta: fact.Meta{Name: "x", Scope: "projects/memra-private"}}
-	if got := f.g.SubjectOf(p).Repos; len(got) != 1 || got[0] != "memra" {
+	p := &fact.Fact{Meta: fact.Meta{Name: "x", Scope: "projects/gearbox-private"}}
+	if got := f.g.SubjectOf(p).Repos; len(got) != 1 || got[0] != "gearbox" {
 		t.Errorf("private scope repos %v", got)
 	}
 	// Worktree copies and plain directories are not repos.
-	if f.g.Repos()["wt-memra-copy"] || f.g.Repos()["notes"] {
+	if f.g.Repos()["wt-gearbox-copy"] || f.g.Repos()["notes"] {
 		t.Errorf("repos %v", f.g.RepoNames())
 	}
 }
@@ -217,7 +217,7 @@ func TestTimelineMergesDatesInOrder(t *testing.T) {
 		t.Errorf("HEAD absence missing:\n%s", strings.Join(ls, "\n"))
 	}
 	// A term is absent only when no repo has it, and is said once: src/server.c
-	// is in valkey, so memra does not "lack" it; KEEP_ALIVE_MODE is in none.
+	// is in valkey, so gearbox does not "lack" it; KEEP_ALIVE_MODE is in none.
 	absent, keep := 0, 0
 	for _, l := range ls {
 		if strings.Contains(l, "not present:") {
@@ -402,7 +402,7 @@ func TestCacheSkipsRepoQueries(t *testing.T) {
 		t.Errorf("cached timeline differs:\n%s\n---\n%s", strings.Join(lines(t1), "\n"), strings.Join(lines(t2), "\n"))
 	}
 	// A new commit moves HEAD, which is part of the key.
-	commit(t, filepath.Join(f.root, "memra"), "2026-10-21", "Dana", "Dana", "again", map[string]string{"tools/hooks/pre-commit": "x\n"})
+	commit(t, filepath.Join(f.root, "gearbox"), "2026-10-21", "Dana", "Dana", "again", map[string]string{"tools/hooks/pre-commit": "x\n"})
 	t3, err := b.Build(context.Background(), f.input())
 	if err != nil {
 		t.Fatal(err)
@@ -448,7 +448,7 @@ func TestARepoNameIsNoIdentifier(t *testing.T) {
 // to it; without them the same mention counts.
 func TestOrdinaryNamesDropABareMention(t *testing.T) {
 	f := newFixture(t)
-	p := &fact.Fact{Meta: fact.Meta{Name: "x", Scope: "projects/memra"}, Body: "The engine loop works like the valkey loop now; `FAST_MODE` is on.\n"}
+	p := &fact.Fact{Meta: fact.Meta{Name: "x", Scope: "projects/gearbox"}, Body: "The engine loop works like the valkey loop now; `FAST_MODE` is on.\n"}
 	has := func() bool {
 		for _, r := range f.g.SubjectOf(p).Repos {
 			if r == "valkey" {

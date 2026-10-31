@@ -1,8 +1,8 @@
 package main
 
-// Closing questions (SPEC.md, "Closing questions"). The owner, 2026-10-30:
-// "tacit questions - im probably not going to check it at all, so where agent
-// can prove and close, it should." A question is what tacit leaves waiting
+// Closing questions (SPEC.md, "Closing questions"). The owner may never look
+// at the list of questions, so where an agent can prove the answer and close
+// a question, it does. A question is what tacit leaves waiting
 // for the owner's answer: an agent's question on a finding (an ask), an
 // agent's query on a pair (a conflict it left to them), the rotation's check?
 // on one of their facts, and the reviewer's question about an agent's note

@@ -16,11 +16,11 @@ import (
 // read from the compressed copy at the same offset.
 func TestReviewerReadsCompressedCodexSessions(t *testing.T) {
 	dir := t.TempDir()
-	day := filepath.Join(dir, "sessions", "2026", "10", "13")
-	plain := filepath.Join(day, "rollout-2026-10-13T00-00-32-01a1cccc.jsonl")
-	head := `{"timestamp":"2026-10-13T00:00:32.000Z","type":"session_meta","payload":{"id":"01a1cccc","cwd":"/h/projects/tacit","originator":"codex-tui","source":"cli"}}` + "\n" +
-		`{"timestamp":"2026-10-13T00:01:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"is the dreamer reading codex?"}]}}` + "\n"
-	answer := `{"timestamp":"2026-10-13T00:02:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"yes, keep the hooks under 300 ms"}]}}` + "\n"
+	day := filepath.Join(dir, "sessions", "2026", "10", "02")
+	plain := filepath.Join(day, "rollout-2026-10-02T09-15-07-01a1cccc.jsonl")
+	head := `{"timestamp":"2026-10-02T09:15:07.000Z","type":"session_meta","payload":{"id":"01a1cccc","cwd":"/h/projects/tacit","originator":"codex-tui","source":"cli"}}` + "\n" +
+		`{"timestamp":"2026-10-02T09:16:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"is the dreamer reading codex?"}]}}` + "\n"
+	answer := `{"timestamp":"2026-10-02T09:17:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"yes, keep the hooks under 300 ms"}]}}` + "\n"
 	writeLines(t, plain, strings.TrimSuffix(head+answer, "\n"))
 	offset := int64(len(head)) // where a question was asked
 	enc, _ := zstd.NewWriter(nil)

@@ -1,7 +1,7 @@
 package record
 
 // The local layer's view of the store's records (phase 2, answer 7): a
-// machine that never writes the store (the Mac) reads the store's records
+// machine that never writes the store (a laptop) reads the store's records
 // as they come in, and may hold its own record of a store folder in its
 // overlay. That local record overrides the folder's status, and the history
 // that led to it, for this machine only: its kind, name, aliases,

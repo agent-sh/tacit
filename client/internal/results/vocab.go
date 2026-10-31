@@ -37,7 +37,7 @@ func words(s string) []string {
 }
 
 // tokens are the lower-case alphanumeric runs of a text, for matching a
-// saved fact against a row's setup. "31B" and "31b" are one token.
+// saved fact against a row's setup. "8B" and "8b" are one token.
 func tokens(s string) []string {
 	var out []string
 	var cur []rune
@@ -199,8 +199,8 @@ func canonUnit(u string) string {
 
 var cellRe = regexp.MustCompile(`^[~≈]?\$?(-?\d{1,3}(?:,\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?)\s?(%|x|×|ms|µs|us|ns|s|sec|tok/s|tokens/s|tokens/sec|tok/sec|t/s|tps|r/s|req/s|rps|qps|ops/s|GB/s|MB/s|TFLOPS|GB|MB|pts?|pp)?$`)
 
-// parseCell reads a table cell that holds exactly one number: "41.3",
-// "6,821 r/s", "**1.80x**", "~7 ms". Ranges, arrows and prose are not
+// parseCell reads a table cell that holds exactly one number: "52.7",
+// "7,412 r/s", "**1.92x**", "~7 ms". Ranges, arrows and prose are not
 // numbers here.
 func parseCell(s string) (v float64, dec int, unit string, ok bool) {
 	v, dec, unit, _, ok = parseCellRaw(s)

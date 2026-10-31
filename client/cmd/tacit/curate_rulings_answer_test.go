@@ -49,7 +49,7 @@ func jsonString(s string) string {
 }
 
 // The rulings pass of a note with no owner words is most often empty, and
-// the model put a sentence before half of those answers: "The note quotes no
+// the model often put a sentence before those answers: "The note quotes no
 // owner words, so there is nothing to extract." and the array in a fence.
 // Code refuses that answer whole. It goes back to the model once, saying why,
 // and the clean answer is taken: the quick run curates the note and exits 0.

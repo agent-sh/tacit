@@ -94,7 +94,7 @@ func TestTacitSearchFiltersTheTree(t *testing.T) {
 }
 
 // tacit_tree starts with the scopes this session reads and their facts by
-// type (a project counts the facts tied to it from elsewhere; the rig files
+// type (a project counts the facts tied to it from elsewhere; the fixture files
 // one note in projects/widget), never another project's or machine's unless
 // named as the path; tacit_search with a scope and no query lists that
 // scope's facts, paged, another machine's when named.

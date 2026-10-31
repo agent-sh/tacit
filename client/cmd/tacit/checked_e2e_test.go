@@ -152,7 +152,7 @@ var kvTopics = []string{
 // the forge renamed from old-gadget; stubborn, a checkout the model never
 // answers right; notes, a project folder that is no repository. The store
 // holds facts filed under widget's misspelling (widgit), under old-gadget,
-// under twelve task worktrees of widget (kv-<n>-g1), under stubborn and
+// under twelve task worktrees of widget (tk-<n>-w1), under stubborn and
 // notes; the dreamer's registry says which checkout each session worked in.
 func checkedHome(t *testing.T) (home string, s *store.Store, ghLog string) {
 	t.Helper()
@@ -212,13 +212,13 @@ func checkedHome(t *testing.T) (home string, s *store.Store, ghLog string) {
 	add("projects/old-gadget", "gadget-release", "design_decision", "s-g1", "Gadget releases go out from the release branch")
 	work = append(work, repoid.WorkItem{Root: gadget, Session: "s-g1", By: "commit"})
 	for i := 1; i <= 12; i++ {
-		id := fmt.Sprintf("s-kv%d", i)
-		add(fmt.Sprintf("projects/kv-%d-g1", i), fmt.Sprintf("kv-%d-task-note", i), "history", id, kvTopics[i-1])
+		id := fmt.Sprintf("s-tk%d", i)
+		add(fmt.Sprintf("projects/tk-%d-w1", i), fmt.Sprintf("tk-%d-task-note", i), "history", id, kvTopics[i-1])
 		work = append(work, repoid.WorkItem{Root: widget, Session: id, By: "edit"})
 	}
 	// One more task folder whose session the registry never saw: only the
 	// folders alike say where it belongs.
-	add("projects/kv-13-g1", "kv-13-task-note", "history", "s-kv13", "The importer skips rows whose checksum column is empty")
+	add("projects/tk-13-w1", "tk-13-task-note", "history", "s-tk13", "The importer skips rows whose checksum column is empty")
 	// A folder nothing places: the model leaves it for review.
 	add("projects/puzzle", "puzzle-note", "history", "s-pz", "The puzzle solver caches boards by their canonical hash")
 	add("projects/gizmo", "gizmo-flags", "design_decision", "s-z1", "Feature flags are read once at start from flags.toml")
@@ -264,21 +264,21 @@ func TestChecksResolveFoldersFromEvidence(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatal(errs)
 	}
-	for _, f := range []string{"projects/widgit", "projects/kv-1-g1", "projects/kv-7-g1", "projects/kv-12-g1"} {
+	for _, f := range []string{"projects/widgit", "projects/tk-1-w1", "projects/tk-7-w1", "projects/tk-12-w1"} {
 		if r := recs[f]; r == nil || r.SuppressedBy != "projects/widget" {
 			t.Errorf("%s: %+v", f, r)
 		}
 	}
 	folded := 0
 	for i := 1; i <= 12; i++ {
-		if r := recs[fmt.Sprintf("projects/kv-%d-g1", i)]; r != nil && r.SuppressedBy == "projects/widget" {
+		if r := recs[fmt.Sprintf("projects/tk-%d-w1", i)]; r != nil && r.SuppressedBy == "projects/widget" {
 			folded++
 		}
 	}
 	if folded != 12 {
 		t.Errorf("%d of 12 alike folders folded alike", folded)
 	}
-	if r := recs["projects/kv-13-g1"]; r == nil || r.SuppressedBy != "projects/widget" {
+	if r := recs["projects/tk-13-w1"]; r == nil || r.SuppressedBy != "projects/widget" {
 		t.Errorf("the alike folder with no evidence of its own: %+v", r)
 	}
 	if r := recs["projects/puzzle"]; r == nil || r.Status != "needs-review" {
@@ -325,7 +325,7 @@ func TestChecksResolveFoldersFromEvidence(t *testing.T) {
 		t.Errorf("old-gadget's code decision: %q", why)
 	}
 	all := strings.Join(m.prompts, "\n=====\n")
-	for _, never := range []string{"### folder=projects/widgit\n", "### folder=projects/old-gadget\n", "### folder=projects/kv-1-g1\n"} {
+	for _, never := range []string{"### folder=projects/widgit\n", "### folder=projects/old-gadget\n", "### folder=projects/tk-1-w1\n"} {
 		if strings.Contains(all, never) {
 			t.Errorf("the model was asked about a folder the checks settle: %q", never)
 		}
@@ -334,7 +334,7 @@ func TestChecksResolveFoldersFromEvidence(t *testing.T) {
 		"decided before on", "suppressed into projects/widget",
 		"check: gizmo and widget are one repository: holds", "have one origin, github.com/owner/widget",
 		"is the same repository as projects/widget, which has a live record",
-		"folder(s) of the same name pattern kv-#-g# are suppressed into it",
+		"folder(s) of the same name pattern tk-#-w# are suppressed into it",
 	} {
 		if !strings.Contains(all, want) {
 			t.Errorf("the prompts lack %q", want)
@@ -344,11 +344,11 @@ func TestChecksResolveFoldersFromEvidence(t *testing.T) {
 	// model with the decisions code made on the twelve.
 	var kvBatches []string
 	for _, p := range m.prompts {
-		if strings.Contains(p, "### folder=projects/kv-") && !strings.Contains(p, "CODE REFUSED") {
+		if strings.Contains(p, "### folder=projects/tk-") && !strings.Contains(p, "CODE REFUSED") {
 			kvBatches = append(kvBatches, p)
 		}
 	}
-	if len(kvBatches) != 1 || !strings.Contains(kvBatches[0], "### folder=projects/kv-13-g1") || !strings.Contains(kvBatches[0], "alike (the same name pattern kv-#-g#)") {
+	if len(kvBatches) != 1 || !strings.Contains(kvBatches[0], "### folder=projects/tk-13-w1") || !strings.Contains(kvBatches[0], "alike (the same name pattern tk-#-w#)") {
 		t.Fatalf("%d batches with the alike folders:\n%s", len(kvBatches), strings.Join(kvBatches, "\n====\n"))
 	}
 	if rep.CheckRefused == 0 || rep.AssessRefused != 1 {

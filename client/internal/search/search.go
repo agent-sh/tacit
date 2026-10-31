@@ -130,10 +130,10 @@ const schemaVersion = 15
 // The file is opened here, not at the first query, and the one connection is
 // kept until Close: another process may prune the file at any time (a new
 // HEAD, a binary of another schema version), and an open file survives its
-// unlink while a lazy open does not. The 2026-10-11 curator held an unopened
-// handle through a split call, the restarted follower pruned the file, and
-// 509 conflict checks failed with "unable to open database file". A file
-// pruned between the build and the open, or one that fails to read
+// unlink while a lazy open does not. A curator that held an unopened handle
+// through a split call lost the file to a restarted follower's prune, and
+// every conflict check after it failed with "unable to open database file".
+// A file pruned between the build and the open, or one that fails to read
 // (truncated, corrupt), is built again, up to three times.
 func Open(ctx context.Context, storeDir, head string) (*Index, error) {
 	t, err := targetFor(storeDir, head)
@@ -174,10 +174,10 @@ func Open(ctx context.Context, storeDir, head string) (*Index, error) {
 // calls start too; when another process is building it, it returns
 // ErrBuilding at once.
 //
-// On 2026-10-21 every change of the local overlay (the local curator writes
-// its facts a batch at a time) renamed the index, and every prompt hook
-// started a full build of 16k facts that took longer than its deadline: the
-// hooks printed nothing, three in a row, until the session gave up on them.
+// When every change of the local overlay (the local curator writes its facts
+// a batch at a time) renamed the index, every prompt hook started a full
+// build of a large store that took longer than its deadline: the hooks
+// printed nothing, several in a row, until the session gave up on them.
 func OpenRecent(ctx context.Context, storeDir, head string, start func()) (*Index, error) {
 	t, err := targetFor(storeDir, head)
 	if err != nil {
@@ -729,7 +729,7 @@ var indexName = regexp.MustCompile(`^index-v(\d+)-[^.]+\.db(?:\.(\d+)\.tmp)?(?:-
 type Situation struct {
 	Repo string
 	// RepoDisplay is how hooks name the repository to the agent: its
-	// record's display name ("pikadon (GitHub: ginza)"); Query ignores it.
+	// record's display name ("storefront (GitHub: shop-v2)"); Query ignores it.
 	RepoDisplay string
 	// Orgs are the org folders (orgs/<org>) of the repository's forge
 	// organization, from the records (the hooks'); Query ignores them.

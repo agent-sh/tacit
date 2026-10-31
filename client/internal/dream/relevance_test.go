@@ -16,7 +16,7 @@ func TestGateKeepsOnlyRemarksThatMatter(t *testing.T) {
 		pass bool
 		why  string
 	}{
-		{Extracted{Description: "pikadon is the real name", Kind: "statement", Quote: "the real name is pikadon", Relevance: keep}, true, ""},
+		{Extracted{Description: "storefront is the real name", Kind: "statement", Quote: "the real name is storefront", Relevance: keep}, true, ""},
 		{Extracted{Description: "push now", Kind: "user", Quote: "ok now push it", Relevance: &relevance.Judgement{Keep: false, Category: "steering", Reason: "one push"}}, false, "one push"},
 		{Extracted{Description: "x", Kind: "statement", Quote: "go"}, false, "refused: no relevance judgement"},
 		{Extracted{Description: "x", Kind: "user", Quote: "always run the linter", Relevance: &relevance.Judgement{Keep: true, Category: "instruction"}}, false, "refused: a kept remark needs a reason"},

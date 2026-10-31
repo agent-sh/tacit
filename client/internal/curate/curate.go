@@ -4,9 +4,9 @@
 // pushes as curator@<host>. Daily, using the configured model, from a machine that has
 // model access (the server has none).
 //
-// Measured in eval/VALUE.md: the split lifts delivery 6 to 7 points at every
-// block size; the two defects it showed (a dropped ruling, an undetected
-// contradiction) are what the ruling rule and the conflict check are for.
+// Measured in eval/VALUE.md: the split lifts delivery at every block size;
+// the two defects it showed (a dropped ruling, an undetected contradiction)
+// are what the ruling rule and the conflict check are for.
 package curate
 
 import (
@@ -29,7 +29,7 @@ import (
 // The split defaults to opus: it curated better than Sonnet, mostly by not
 // dropping facts (eval/VALUE.md, "Dreamer and curator models"). The judge
 // (and the rulings recovery pass on its route) defaults to opus too: every
-// deciding call runs on Opus (the owner, 2026-10-24: "but we said opus").
+// deciding call runs on Opus.
 // Operator configuration selects model versions, effort and provider profiles.
 // Model overrides accept the selected CLI's IDs; --model on curate wins.
 var (
@@ -91,7 +91,7 @@ Output ONLY a JSON array of strings, one per pair in order, each exactly "contra
 // notes must have a kind:user entry. The first live split dropped a ruling
 // while keeping its surroundings (eval/VALUE.md, D6). Its answer is most
 // often empty, and asked only for "a JSON array (possibly empty)" the model
-// put a sentence before half of the empty ones, which code refuses whole; it
+// often put a sentence before an empty one, which code refuses whole; it
 // is told what the empty answer is (eval/VALUE.md, "The rulings answer").
 const RulingsPrompt = `Below are agent memory notes and the list of OWNER RULINGS already extracted from them (kind user: something the owner said, decided or standardized).
 List every owner ruling in the notes that is NOT yet covered by the extracted list. A ruling is covered when an extracted entry states the same decision. A ruling is the owner's OWN WORDS as the note quotes them: list only those, never an agent's reading of what they want. ` + "`owner_quote`" + ` is their words exactly as the note gives them (at least six words, character for character, typos included) and the body holds that phrase in double quotes. Keep the date if visible, one entry per ruling, the note name as origin. An extracted entry marked "dropped" was judged not to matter to future work: it is covered. ` + relevance.Rule + `

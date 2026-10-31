@@ -175,28 +175,28 @@ func TestOrgFoldersAndForgeNames(t *testing.T) {
 	recs := map[string]*record.Record{}
 	add := func(r *record.Record) *record.Record { recs[r.Folder] = r; return r }
 	add(rec("org", "orgs/agent-sh", "active"))
-	add(rec("repo", "projects/tower-crane", "active")).Org = "agent-sh"
+	add(rec("repo", "projects/tacit", "active")).Org = "agent-sh"
 	add(rec("repo", "projects/agnix", "active")).Org = "agent-sh"
-	p := add(rec("repo", "projects/pikadon", "active"))
-	p.Forge = "github.com/avifenesh/ginza"
+	p := add(rec("repo", "projects/storefront", "active"))
+	p.Forge = "github.com/acme/shop-v2"
 	facts := []*fact.Fact{
 		mk("orgs/agent-sh/release-flow.md", "user_standard", "Every agent-sh repository releases from a signed tag", "2026-10-20"),
-		mk("projects/tower-crane/tc-build.md", "design_decision", "tower-crane builds with cargo", "2026-10-20"),
-		mk("projects/pikadon/pk-port.md", "machine_fact", "pikadon listens on 7781", "2026-10-20"),
+		mk("projects/tacit/tacit-build.md", "design_decision", "tacit builds with go", "2026-10-20"),
+		mk("projects/storefront/sf-port.md", "machine_fact", "storefront listens on 7781", "2026-10-20"),
 	}
 	dir := writeTree(t, facts, recs)
-	in := ReadOptions{Store: dir, Session: Session{Repos: []string{"tower-crane"}, Host: "box", Records: recs}}
+	in := ReadOptions{Store: dir, Session: Session{Repos: []string{"tacit"}, Host: "box", Records: recs}}
 	out, err := Read(in, "", 3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "orgs/agent-sh: orgs/agent-sh/_index.md") || !strings.Contains(out, "Member projects (2): agnix, tower-crane") || !strings.Contains(out, "release-flow") {
+	if !strings.Contains(out, "orgs/agent-sh: orgs/agent-sh/_index.md") || !strings.Contains(out, "Member projects (2): agnix, tacit") || !strings.Contains(out, "release-flow") {
 		t.Fatalf("the org in its member's session:\n%s", out)
 	}
 	if got := strings.Join(in.Session.Scopes(), ","); !strings.Contains(got, "orgs/agent-sh") {
 		t.Fatalf("scopes %s", got)
 	}
-	away := ReadOptions{Store: dir, Session: Session{Repos: []string{"pikadon"}, Host: "box", Records: recs}}
+	away := ReadOptions{Store: dir, Session: Session{Repos: []string{"storefront"}, Host: "box", Records: recs}}
 	out, _ = Read(away, "", 3)
 	if strings.Contains(out, "release-flow") {
 		t.Fatalf("the org read outside its projects:\n%s", out)
@@ -204,10 +204,10 @@ func TestOrgFoldersAndForgeNames(t *testing.T) {
 	if out, err := Read(away, "orgs/agent-sh", 0); err != nil || !strings.Contains(out, "release-flow") {
 		t.Fatalf("a named org: %v\n%s", err, out)
 	}
-	if out, _ := Read(away, "projects", 1); !strings.Contains(out, "- [pikadon/](pikadon/_index.md) (GitHub: ginza) repo, active") {
+	if out, _ := Read(away, "projects", 1); !strings.Contains(out, "- [storefront/](storefront/_index.md) (GitHub: shop-v2) repo, active") {
 		t.Fatalf("the forge name beside the folder's:\n%s", out)
 	}
-	if out, _ := Read(away, "projects/pikadon", 0); !strings.Contains(out, "Name: pikadon (GitHub: ginza), https://github.com/avifenesh/ginza") {
+	if out, _ := Read(away, "projects/storefront", 0); !strings.Contains(out, "Name: storefront (GitHub: shop-v2), https://github.com/acme/shop-v2") {
 		t.Fatalf("the record's name line:\n%s", out)
 	}
 }

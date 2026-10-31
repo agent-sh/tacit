@@ -384,9 +384,9 @@ func TestAMaskedFactWritesTheIndexesAgain(t *testing.T) {
 	}
 }
 
-// The real mask (scrump's text profile) takes the shape the 2026-10-26
-// rebuild wrote into a curated fact: a loopback llama-server key on a
-// command line. The key here is synthetic.
+// The real mask (scrump's text profile) takes a loopback server key on a
+// command line, a shape the curator can copy into a curated fact. The key
+// here is synthetic.
 func TestTheRealMaskTakesALoopbackServerKey(t *testing.T) {
 	if scrumpErr != nil {
 		t.Skip("needs scrump with the text profile: " + scrumpErr.Error())
@@ -394,18 +394,18 @@ func TestTheRealMaskTakesALoopbackServerKey(t *testing.T) {
 	withRedact(t, digest.RedactAllContext)
 	s, _ := seedPair(t)
 	run(t, s.Dir, "config", "user.email", "writer@example.test")
-	key := "qwen" + "local" + "7Hc3Pz9Rk2Lm5"
-	writeFile(t, s.Dir, "machines/h/serve-wrapper.md", fmt.Sprintf("---\nname: serve-wrapper\ndescription: the serve wrapper is the source of truth for argv\n---\n\nProduction flags include -fa on, --jinja, `--api-key %s`, `--metrics`.\n", key))
+	key := "demo" + "local" + "7Hc3Pz9Rk2Lm5"
+	writeFile(t, s.Dir, "machines/h/api-wrapper.md", fmt.Sprintf("---\nname: api-wrapper\ndescription: the api wrapper script sets the server flags\n---\n\nThe server starts with --port 8080, --workers 4, `--api-key %s`, `--log-level info`.\n", key))
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := s.CommitPush(ctx, []string{"machines/h/serve-wrapper.md"}, "curator: test", "curator"); err != nil {
+	if err := s.CommitPush(ctx, []string{"machines/h/api-wrapper.md"}, "curator: test", "curator"); err != nil {
 		t.Fatal(err)
 	}
-	head, server := committed(t, s, "machines/h/serve-wrapper.md")
+	head, server := committed(t, s, "machines/h/api-wrapper.md")
 	if strings.Contains(head, key) || strings.Contains(server, key) {
 		t.Fatalf("the key reached the commit:\n%s", head)
 	}
-	if !strings.Contains(head, "--api-key ****") || !strings.Contains(head, "the serve wrapper is the source of truth") {
+	if !strings.Contains(head, "--api-key ****") || !strings.Contains(head, "the api wrapper script sets the server flags") {
 		t.Fatalf("the mask took more or less than the key:\n%s", head)
 	}
 }

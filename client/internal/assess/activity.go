@@ -6,11 +6,10 @@ package assess
 // catalogs, the forge's newest commits by the owner's account, the sessions
 // that worked in the folder or filed its notes) and sets the status from how
 // recent the last one is, measured against the repository's own rhythm. Every
-// run reads the same dates, so every run gets the same status (the owner,
-// 2026-10-23: "why would different runs see different dates? last commit is
-// last commit"). The model keeps what dates cannot say: the kind, the
-// ancestor, and dead or shipped when explicit evidence says so, which code
-// checks.
+// run reads the same dates, so every run gets the same status: the last
+// commit is the last commit, whichever run reads it. The model keeps what
+// dates cannot say: the kind, the ancestor, and dead or shipped when explicit
+// evidence says so, which code checks.
 
 import (
 	"fmt"
@@ -22,24 +21,25 @@ import (
 	"github.com/agent-sh/tacit/client/internal/record"
 )
 
-// The rhythm's bounds, from the Mac shadow copies of 2026-10-23 (108 project
-// folders with owner activity: forge commits by the owner's account, the
-// rig's catalog first and last own commit, the days sessions filed notes):
+// The rhythm's bounds, measured on a real owner's project folders with
+// activity (forge commits by the owner's account, a catalog's first and last
+// own commit, the days sessions filed notes); the numbers stay with the
+// owner:
 //
 //   - minRhythmGaps: a folder's own typical gap is the median of its gaps
-//     from 3 on, a middle value and not one extreme; 63 of the 108 have 3 or
-//     more.
+//     from 3 on, a middle value and not one extreme; more than half of the
+//     folders have 3 or more.
 //   - defaultGapDays: below that, the typical gap is 8 days, the median of
-//     those 63 folders' own medians (quartiles 5.5, 8, 10.5).
+//     those folders' own medians.
 //   - minWindowDays: a folder is never dormant after 7 idle days or fewer:
-//     half of all the owner's 622 gaps between stretches of work are 7 days
-//     or less, so a pause that short is the owner's ordinary break, not a
-//     sign nobody is on it (a folder worked every other day has a window of
-//     4 days without the floor).
+//     half of the owner's gaps between stretches of work are 7 days or less,
+//     so a pause that short is the owner's ordinary break, not a sign nobody
+//     is on it (a folder worked every other day has a window of 4 days
+//     without the floor).
 //   - maxWindowDays: a folder idle more than 32 days is dormant whatever its
-//     rhythm: 80% of the owner's gaps end within 32 days (deciles 2, 3, 4,
-//     5, 7, 9, 16, 32, 58), and a folder touched every two months would
-//     otherwise be active four months after its last commit.
+//     rhythm: four in five of the owner's gaps end within 32 days, and a
+//     folder touched every two months would otherwise be active four months
+//     after its last commit.
 const (
 	minRhythmGaps  = 3
 	defaultGapDays = 8

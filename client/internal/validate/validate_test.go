@@ -42,7 +42,7 @@ func env(t *testing.T) Env {
 	write(t, filepath.Join(store, "projects", "legacy", "b.md"), "x")
 	write(t, filepath.Join(store, "projects", "empty", fact.IndexFile), "x") // an index alone is no fact
 	write(t, filepath.Join(store, "derived", "tool", "tool-hot-spots.md"), "x")
-	write(t, filepath.Join(store, "machines", "rig", "c.md"), "x")
+	write(t, filepath.Join(store, "machines", "host-b", "c.md"), "x")
 	write(t, filepath.Join(store, "keys", "codex@laptop.pub"), "k")
 	cat := repoid.LoadCatalog(home, "", p)
 	if runtime.GOOS != "windows" {
@@ -57,7 +57,7 @@ func env(t *testing.T) Env {
 
 func TestScopeNamesOnlyWhatExists(t *testing.T) {
 	e := env(t)
-	ok := []string{"user", "system", "projects/widget", "projects/atlas", "projects/legacy", "projects/tool", "machines/box", "machines/rig", "machines/laptop"}
+	ok := []string{"user", "system", "projects/widget", "projects/atlas", "projects/legacy", "projects/tool", "machines/box", "machines/host-b", "machines/laptop"}
 	for _, s := range ok {
 		if p := e.Scope(s); p != nil {
 			t.Errorf("Scope(%s) refused: %s", s, p.Message())
@@ -66,7 +66,7 @@ func TestScopeNamesOnlyWhatExists(t *testing.T) {
 	for s, rule := range map[string]string{
 		"":                        "empty",
 		"projects/scratch-folder": "names no known repository", // a folder under ~/projects with no git root
-		"projects/kv-013-g1":      "names no known repository", // a task worktree's folder name
+		"projects/exp-013-g1":     "names no known repository", // a task worktree's folder name
 		"projects/tune":           "names no known repository", // a scratch dir outside home
 		"projects/empty":          "names no known repository",
 		"projects/widget-svc":     "another name of a repository",
@@ -141,7 +141,7 @@ func TestReposMustBeKnown(t *testing.T) {
 	if ps := e.Repos([]string{"widget", "Widget", "widget-svc", "legacy", "tool", "atlas"}); len(ps) != 0 {
 		t.Errorf("known names refused: %v", ps)
 	}
-	for _, r := range []string{"wt-fcf-textflip", "client", "memory", "kv-013-g1", "acme/widget", "https://example.com/acme/widget", "~/projects/widget", ""} {
+	for _, r := range []string{"wt-api-hotfix", "client", "memory", "exp-013-g1", "acme/widget", "https://example.com/acme/widget", "~/projects/widget", ""} {
 		if ps := e.Repos([]string{r}); len(ps) != 1 {
 			t.Errorf("Repos(%q) = %v, want one refusal", r, ps)
 		}
@@ -254,12 +254,12 @@ func TestAttributionOnlyOnARuling(t *testing.T) {
 
 func TestMetaJoinsEveryCheck(t *testing.T) {
 	e := env(t)
-	m := fact.Meta{Name: "x", Description: "Owner ruling: use port 7781", Type: "hot_spot", Scope: "projects/kv-013-g1", AppliesTo: fact.AppliesTo{Repos: []string{"client"}, Paths: []string{"/abs/path"}}, Source: fact.Source{Kind: "observed"}}
+	m := fact.Meta{Name: "x", Description: "Owner ruling: use port 7781", Type: "hot_spot", Scope: "projects/exp-013-g1", AppliesTo: fact.AppliesTo{Repos: []string{"client"}, Paths: []string{"/abs/path"}}, Source: fact.Source{Kind: "observed"}}
 	ps := e.Meta(m, "body", false, false)
 	fields := map[string]bool{}
 	for _, p := range ps {
 		fields[p.Field] = true
-		if strings.Contains(p.String(), "kv-013-g1") || strings.Contains(p.String(), "client") {
+		if strings.Contains(p.String(), "exp-013-g1") || strings.Contains(p.String(), "client") {
 			t.Errorf("a logged problem holds the writer's value: %s", p.String())
 		}
 	}

@@ -128,7 +128,7 @@ func validToken(keyid, token string, pub ed25519.PublicKey) bool {
 	return ed25519.Verify(pub, []byte("tacit-v1\n"+keyid+"\n"+parts[0]+"\n"+parts[1]), sig)
 }
 
-// The Mac's read-only setup over the public URL: `tacit clone --read-only
+// A Mac's read-only setup over the public URL: `tacit clone --read-only
 // --as reader` clones with the reader key's token on every request, the
 // clone syncs with it, the follower signs the feed with it, `tacit authcheck
 // reader` asks fetch's question, and nothing in the clone can push.

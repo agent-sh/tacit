@@ -17,19 +17,19 @@ func TestCorpusSlashCommands(t *testing.T) {
 	home := t.TempDir()
 	lines := []string{
 		`{"parentUuid":"c0","promptId":"p1","type":"user","message":{"role":"user","content":"<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, and its output goes straight to the user.</local-command-caveat>"},"isMeta":true,"uuid":"c1","entrypoint":"cli","sessionId":"own"}`,
-		`{"parentUuid":"c1","promptId":"p1","type":"user","message":{"role":"user","content":"<command-name>/plugin</command-name>\n            <command-message>plugin</command-message>\n            <command-args>enable cc-plugin-you-should-know@builtin</command-args>"},"uuid":"c2","entrypoint":"cli","sessionId":"own"}`,
+		`{"parentUuid":"c1","promptId":"p1","type":"user","message":{"role":"user","content":"<command-name>/plugin</command-name>\n            <command-message>plugin</command-message>\n            <command-args>enable example-lint-helper@builtin</command-args>"},"uuid":"c2","entrypoint":"cli","sessionId":"own"}`,
 		`{"parentUuid":"c2","promptId":"p1","type":"user","message":{"role":"user","content":"<local-command-stdout>(no content)</local-command-stdout>"},"uuid":"c3","entrypoint":"cli","sessionId":"own"}`,
-		`{"parentUuid":"e0","type":"user","message":{"role":"user","content":"<command-name>/goal</command-name>\n            <command-message>goal</command-message>\n            <command-args>dont stay idle without a waker, push toward the goals</command-args>"},"uuid":"e2","entrypoint":"cli","sessionId":"own"}`,
+		`{"parentUuid":"e0","type":"user","message":{"role":"user","content":"<command-name>/goal</command-name>\n            <command-message>goal</command-message>\n            <command-args>keep going until the import is done, then post the summary</command-args>"},"uuid":"e2","entrypoint":"cli","sessionId":"own"}`,
 	}
 	writeFile(t, filepath.Join(home, ".claude", "projects", "-home-u", "own.jsonl"), strings.Join(lines, "\n")+"\n")
 	c, err := LoadAll(home, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m, _ := c.Find("dont stay idle without a waker", "", true); m.Ref != "claude:own" {
+	if m, _ := c.Find("keep going until the import is done", "", true); m.Ref != "claude:own" {
 		t.Fatalf("/goal's condition: %+v", m)
 	}
-	if m, ok := c.Find("enable cc-plugin-you-should-know", "", true); ok {
+	if m, ok := c.Find("enable example-lint-helper", "", true); ok {
 		t.Fatalf("a local command's arguments are in the corpus: %+v", m)
 	}
 	r := &TurnReader{}
@@ -38,7 +38,7 @@ func TestCorpusSlashCommands(t *testing.T) {
 		own, _ := r.Parts(digest.Claude, []byte(l))
 		got = append(got, own...)
 	}
-	if len(got) != 1 || got[0] != "dont stay idle without a waker, push toward the goals" {
+	if len(got) != 1 || got[0] != "keep going until the import is done, then post the summary" {
 		t.Fatalf("turn reader %q", got)
 	}
 }

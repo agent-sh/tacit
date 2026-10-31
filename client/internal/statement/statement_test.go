@@ -8,7 +8,7 @@ import (
 )
 
 func item(name, from, day string) Item {
-	return Item{Name: name, Scope: "projects/pikadon", Kind: "statement", Words: "words of " + name, From: from, Day: day, Context: "the name", Sessions: []string{from}}
+	return Item{Name: name, Scope: "projects/storefront", Kind: "statement", Words: "words of " + name, From: from, Day: day, Context: "the name", Sessions: []string{from}}
 }
 
 func judged(name, says string, same ...Relation) Entry {
@@ -88,8 +88,8 @@ func contains(xs []string, x string) bool {
 // Said once and a check agrees: a decision by the check. A check that
 // disagrees flags it, once for one check output; the statement stays.
 func TestCheckAgreesOrDisagrees(t *testing.T) {
-	holds := []check.Result{{Kind: check.KindRepo, Claim: "pikadon is the real name", Verdict: check.Holds, Output: "the main checkout's directory"}}
-	fails := []check.Result{{Kind: check.KindRepo, Claim: "ginza is the real name", Verdict: check.Fails, Output: "the main checkout's directory is pikadon"}}
+	holds := []check.Result{{Kind: check.KindRepo, Claim: "storefront is the real name", Verdict: check.Holds, Output: "the main checkout's directory"}}
+	fails := []check.Result{{Kind: check.KindRepo, Claim: "shop is the real name", Verdict: check.Fails, Output: "the main checkout's directory is storefront"}}
 	st := State{Statements: map[string]Item{"a": item("a", "claude:s1", "2026-10-15")},
 		Log: []Entry{judged("a", Choice)}, Checks: map[string][]check.Result{"a": holds}}
 	acts := Plan(st)
@@ -146,7 +146,7 @@ func TestParseChecksTheAnswer(t *testing.T) {
 	asks := []Ask{{S: item("a", "claude:s1", "2026-10-15"), Earlier: []Item{item("e", "claude:s0", "2026-10-01")}}, {S: Item{Name: "r", Kind: KindRuling}}}
 	js, problems, err := Parse("```json\n["+
 		`{"name":"a","says":"choice","same":[{"name":"e","relation":"same"},{"name":"zz","relation":"same"}]},`+
-		`{"name":"r","says":"choice","claims":[{"kind":"canonical","name":"pikadon"}]},`+
+		`{"name":"r","says":"choice","claims":[{"kind":"canonical","name":"storefront"}]},`+
 		`{"name":"x","says":"choice"}]`+"\n```", asks)
 	if err != nil {
 		t.Fatal(err)
@@ -169,12 +169,12 @@ func TestParseChecksTheAnswer(t *testing.T) {
 // Candidates are the earlier items sharing words or a folder name, most
 // shared first.
 func TestCandidatesShareWordsOrAFolder(t *testing.T) {
-	s := Item{Name: "s", Words: "the real name is pikadon, ginza is a name for now", Context: "the pikadon repository's name"}
+	s := Item{Name: "s", Words: "the real name is storefront, shop is a name for now", Context: "the storefront repository's name"}
 	earlier := []Item{
 		{Name: "far", Words: "use bun for scripts", Context: "tooling"},
-		{Name: "near", Words: "pikadon is the name, move what needed", Context: "renaming the checkout"},
+		{Name: "near", Words: "keep storefront as the checkout name", Context: "renaming the checkout"},
 	}
-	got := Candidates(s, earlier, map[string]bool{"pikadon": true, "ginza": true})
+	got := Candidates(s, earlier, map[string]bool{"storefront": true, "shop": true})
 	if len(got) != 1 || got[0].Name != "near" {
 		t.Fatalf("%+v", got)
 	}

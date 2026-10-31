@@ -255,8 +255,8 @@ func (m *firstAskModel) run(_ context.Context, _, prompt string) (string, float6
 	return string(bs), 0.05, nil
 }
 
-// The owner, 2026-10-23: "why would different runs see different dates?
-// last commit is last commit". Two runs on one store whose model answers
+// Status comes from dates, and every run reads the same dates: the last
+// commit is the last commit. Two runs on one store whose model answers
 // differently (one dormant at once; one needs-review first, then dormant
 // on the re-attempt) end with one status, code's from the dates both read
 // before the first ask. When the dates move a record across its window,

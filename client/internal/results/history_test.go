@@ -89,18 +89,18 @@ func TestSeriesCacheRoundTrips(t *testing.T) {
 // A header that says one unit and a cell that says another: the source
 // disagrees with itself, so no number is taken from that cell.
 func TestTableCellWithAUnitThatContradictsItsHeaderIsSkipped(t *testing.T) {
-	data := "## T\n\n| Shape | ms | vs single |\n|---|---:|---:|\n| split-K at 128 | 7.64 us | 1.426x |\n| split-K at 256 | 3.20 ms | 1.100x |\n"
+	data := "## T\n\n| Shape | ms | vs single |\n|---|---:|---:|\n| split-K at 64 | 5.31 us | 1.212x |\n| split-K at 512 | 2.84 ms | 1.075x |\n"
 	got := map[string]Obs{}
 	for _, o := range extractMarkdown([]byte(data)) {
 		got[o.Key] = o
 	}
-	if _, ok := got["split-K at 128|ms"]; ok {
-		t.Fatal("7.64 us under a header in ms was taken")
+	if _, ok := got["split-K at 64|ms"]; ok {
+		t.Fatal("5.31 us under a header in ms was taken")
 	}
-	if o, ok := got["split-K at 256|ms"]; !ok || o.Unit != "ms" {
+	if o, ok := got["split-K at 512|ms"]; !ok || o.Unit != "ms" {
 		t.Fatalf("a cell that agrees with its header: %+v", o)
 	}
-	if _, ok := got["split-K at 128|vs single"]; !ok {
+	if _, ok := got["split-K at 64|vs single"]; !ok {
 		t.Fatal("the other column of the row is fine")
 	}
 }

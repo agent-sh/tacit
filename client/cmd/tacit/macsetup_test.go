@@ -173,7 +173,7 @@ func TestMacSetupWriterDryRun(t *testing.T) {
 	}
 }
 
-// The Mac that cannot join the tailnet: the public path (from $TACIT_SERVER), one
+// A Mac that cannot join the tailnet: the public path (from $TACIT_SERVER), one
 // reader key enrolled and waited for, a read-only clone signed as reader,
 // hooks, follower and the view-only app, and never a dreamer.
 func TestMacSetupReadOnlyDryRun(t *testing.T) {

@@ -262,7 +262,7 @@ func TestModuleMapOpensTheDominantDirectory(t *testing.T) {
 }
 
 // A directory of run output with a few scripts in it is data, not a module:
-// it is never opened into hundreds of dated subdirectories (memra's research/).
+// it is never opened into hundreds of dated subdirectories.
 func TestModuleMapDoesNotOpenDataDirectories(t *testing.T) {
 	var tree []TreeFile
 	for i := 0; i < 50; i++ {

@@ -275,30 +275,30 @@ func TestReviewerTrimsEndToEnd(t *testing.T) {
 // the rest (also).
 func TestApplyTrimSplitsTheirWordsFromTheAgentsClaims(t *testing.T) {
 	stubScrump(t)
-	note := &fact.Fact{Path: "inbox/claude@h/wrx-cap.md", Meta: fact.Meta{Name: "wrx-cap", Description: "wrx GPUs always run at 250 W; measured 2% slower than 300 W", Type: "design_decision", Scope: "machines/wrx",
-		Source: fact.Source{Harness: "claude", Host: "h", Kind: "observed", Session: "s1"}, Created: "2026-10-20"}, Body: "wrx GPUs always run at 250 W. Measured 2% slower than 300 W."}
+	note := &fact.Fact{Path: "inbox/claude@h/buildbox-cap.md", Meta: fact.Meta{Name: "buildbox-cap", Description: "buildbox builds always run make -j8; measured 3% slower than -j16", Type: "design_decision", Scope: "machines/buildbox",
+		Source: fact.Source{Harness: "claude", Host: "h", Kind: "observed", Session: "s1"}, Created: "2026-10-20"}, Body: "buildbox builds always run make -j8. Measured 3% slower than -j16."}
 	msgs := []agentreview.Msg{
-		{Role: "user", Owner: true, Text: "cap the gpus at 250 w for now, the fans are too loud", At: "2026-10-19T08:00:00Z"},
-		{Role: "assistant", Text: "Measured: 250 W is about 2% slower than 300 W."},
+		{Role: "user", Owner: true, Text: "cap the builds at -j8 for now, the box runs too hot", At: "2026-10-19T08:00:00Z"},
+		{Role: "assistant", Text: "Measured: -j8 is about 3% slower than -j16."},
 	}
 	tr := &agentreview.Trim{
-		Claims:  []ledger.Claim{{Text: "wrx GPUs run at 250 W", Cites: []int{1}}, {Text: "Measured 2% slower than 300 W", Cites: []int{2}}},
+		Claims:  []ledger.Claim{{Text: "buildbox builds run make -j8", Cites: []int{1}}, {Text: "Measured 3% slower than -j16", Cites: []int{2}}},
 		Removed: []ledger.Removed{{Text: "always", Reason: "he said for now"}},
-		OneOff:  &agentreview.OneOff{Words: "cap the gpus at 250 w for now", Line: 1, Context: "the fans were too loud"},
+		OneOff:  &agentreview.OneOff{Words: "cap the builds at -j8 for now", Line: 1, Context: "the box ran too hot"},
 	}
 	res := agentreview.Result{Line: ledger.Review{Note: note.Path, Name: note.Meta.Name, Verdict: ledger.VerdictUncertain, By: ledger.ByTacit, Session: "claude:s1", At: "2026-10-25T00:00:00Z"},
 		Conv: agentreview.Conversation{Harness: "claude", Session: "s1"}, Called: true, Trim: tr, Msgs: msgs}
 	w := &reviewWork{supersede: map[string]string{}}
-	curated := []*fact.Fact{{Path: "machines/wrx/wrx-cap-fact.md", Meta: fact.Meta{Name: "wrx-cap-fact"}}}
+	curated := []*fact.Fact{{Path: "machines/buildbox/buildbox-cap-fact.md", Meta: fact.Meta{Name: "buildbox-cap-fact"}}}
 	into, as, ok := applyTrim(w, note, res, curated, false, true)
-	if !ok || as != ledger.TrimStatement || into != "owner-said-once-wrx-cap" || len(w.statements) != 1 || len(w.trimmed) != 1 || len(w.quotes) != 1 {
+	if !ok || as != ledger.TrimStatement || into != "owner-said-once-buildbox-cap" || len(w.statements) != 1 || len(w.trimmed) != 1 || len(w.quotes) != 1 {
 		t.Fatalf("%s %s %v: %+v", into, as, ok, w)
 	}
 	st, tn := w.statements[0], w.trimmed[0]
-	if st.Meta.Created != "2026-10-19" || st.Meta.Scope != "machines/wrx" || !strings.Contains(st.Body, "Gloss (the curator's reading, not your words): wrx GPUs run at 250 W") || strings.Contains(st.Body, "Measured") {
+	if st.Meta.Created != "2026-10-19" || st.Meta.Scope != "machines/buildbox" || !strings.Contains(st.Body, "Gloss (the curator's reading, not your words): buildbox builds run make -j8") || strings.Contains(st.Body, "Measured") {
 		t.Fatalf("statement: %+v %q", st.Meta, st.Body)
 	}
-	if tn.Path != "inbox/claude@h/wrx-cap-trimmed.md" || tn.Meta.Description != "Measured 2% slower than 300 W" || strings.Contains(tn.Body, "250 W\n") {
+	if tn.Path != "inbox/claude@h/buildbox-cap-trimmed.md" || tn.Meta.Description != "Measured 3% slower than -j16" || strings.Contains(tn.Body, "-j8\n") {
 		t.Fatalf("trimmed note: %+v %q", tn.Meta, tn.Body)
 	}
 	var replaced, trimmed ledger.Review
@@ -313,7 +313,7 @@ func TestApplyTrimSplitsTheirWordsFromTheAgentsClaims(t *testing.T) {
 	if replaced.Into != st.Meta.Name || replaced.Also != tn.Path || len(replaced.Kept) != 2 || trimmed.Of != note.Path || !ledger.ValidReview(replaced) || !ledger.ValidReview(trimmed) {
 		t.Fatalf("lines: %+v", w.lines)
 	}
-	if w.supersede["machines/wrx/wrx-cap-fact.md"] != st.Meta.Name {
+	if w.supersede["machines/buildbox/buildbox-cap-fact.md"] != st.Meta.Name {
 		t.Fatalf("the note's curated fact: %+v", w.supersede)
 	}
 	// A store whose format predates statements: no trim, the note stays uncertain.
@@ -358,16 +358,16 @@ func TestWriteReviewLocalWritesATrimInTheAgentsFolder(t *testing.T) {
 	dir, storeDir := filepath.Join(root, "local"), filepath.Join(root, "store")
 	os.MkdirAll(dir, 0o700)
 	os.MkdirAll(storeDir, 0o700)
-	note := &fact.Fact{Path: "local/claude@h/memory/users-x/wrx-cap.md", Meta: fact.Meta{Name: "wrx-cap", Description: "wrx GPUs always run at 250 W; measured 2% slower than 300 W", Type: "design_decision", Scope: "machines/wrx",
-		Source: fact.Source{Harness: "claude", Host: "h", Kind: "observed", Session: "s1"}, Created: "2026-10-20"}, Body: "wrx GPUs always run at 250 W. Measured 2% slower than 300 W."}
+	note := &fact.Fact{Path: "local/claude@h/memory/users-x/buildbox-cap.md", Meta: fact.Meta{Name: "buildbox-cap", Description: "buildbox builds always run make -j8; measured 3% slower than -j16", Type: "design_decision", Scope: "machines/buildbox",
+		Source: fact.Source{Harness: "claude", Host: "h", Kind: "observed", Session: "s1"}, Created: "2026-10-20"}, Body: "buildbox builds always run make -j8. Measured 3% slower than -j16."}
 	msgs := []agentreview.Msg{
-		{Role: "user", Owner: true, Text: "cap the gpus at 250 w for now, the fans are too loud", At: "2026-10-19T08:00:00Z"},
-		{Role: "assistant", Text: "Measured: 250 W is about 2% slower than 300 W."},
+		{Role: "user", Owner: true, Text: "cap the builds at -j8 for now, the box runs too hot", At: "2026-10-19T08:00:00Z"},
+		{Role: "assistant", Text: "Measured: -j8 is about 3% slower than -j16."},
 	}
 	tr := &agentreview.Trim{
-		Claims:  []ledger.Claim{{Text: "wrx GPUs run at 250 W", Cites: []int{1}}, {Text: "Measured 2% slower than 300 W", Cites: []int{2}}},
+		Claims:  []ledger.Claim{{Text: "buildbox builds run make -j8", Cites: []int{1}}, {Text: "Measured 3% slower than -j16", Cites: []int{2}}},
 		Removed: []ledger.Removed{{Text: "always", Reason: "he said for now"}},
-		OneOff:  &agentreview.OneOff{Words: "cap the gpus at 250 w for now", Line: 1, Context: "the fans were too loud"},
+		OneOff:  &agentreview.OneOff{Words: "cap the builds at -j8 for now", Line: 1, Context: "the box ran too hot"},
 	}
 	res := agentreview.Result{Line: ledger.Review{Note: note.Path, Name: note.Meta.Name, Verdict: ledger.VerdictUncertain, By: ledger.ByTacit, Session: "claude:s1", At: "2026-10-25T00:00:00Z"},
 		Conv: agentreview.Conversation{Harness: "claude", Session: "s1"}, Called: true, Trim: tr, Msgs: msgs}
@@ -378,7 +378,7 @@ func TestWriteReviewLocalWritesATrimInTheAgentsFolder(t *testing.T) {
 	if err := writeReviewLocal(dir, storeDir, w); err != nil {
 		t.Fatalf("writeReviewLocal: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "claude@h", "memory", "users-x", "wrx-cap-trimmed.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "claude@h", "memory", "users-x", "buildbox-cap-trimmed.md")); err != nil {
 		t.Fatalf("the trimmed note: %v", err)
 	}
 	rel := strings.TrimPrefix(w.statements[0].Path, overlay.Prefix)

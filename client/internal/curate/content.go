@@ -12,10 +12,9 @@ import (
 // The content rule of the Absorber: a fact of the split is not written when
 // every claim it makes is already in a curated fact it can see. The
 // description rule (restatesFact) compares descriptions only, and missed
-// 77 of the 99 written facts the 2026-10-28 measurement confirmed by hand as
-// copies of live facts: an agent's paraphrase shares the content, not the
-// wording of the description (four agents-md-generated-by-agents-sync-*
-// copies, each a curated fact of its own).
+// most of the written facts a hand check confirmed as copies of live facts:
+// an agent's paraphrase shares the content, not the wording of the
+// description (several copies of one rule, each a curated fact of its own).
 //
 // A claim is a sentence of the fact's description or body with at least
 // claimTerms terms. It is covered when one curated fact holds ContentCover of
@@ -27,11 +26,11 @@ import (
 // specific tokens as a whole must be in its covers.
 
 // ContentCover is the least share of a claim's terms its cover must hold.
-// Measured on the 5,340 facts the rig's curator wrote 2026-10-21..28, each
-// against the live facts its curation saw, hand-labelled (eval/VALUE.md,
-// "The absorber's content rule"): at 0.75 one of 32 absorptions before the
-// rebuild switch added a detail; from 0.78 none of 22, and none of the 18
-// after the switch (held out). 0.8 takes the round value above.
+// Measured on a week of a real store's curated facts, each against the live
+// facts its curation saw, hand-labelled (eval/VALUE.md, "The absorber's
+// content rule"): at 0.75 an absorption could drop a detail; from 0.78 none
+// did, on the labelled facts and on a held-out set. 0.8 takes the round
+// value above.
 var ContentCover = 0.8
 
 // claimTerms is the fewest terms a sentence must have to be a claim: shorter
@@ -80,9 +79,9 @@ func sentences(text string) []string {
 }
 
 // wholePathRx finds a path as written, with its placeholders and globs
-// (/run/user/1000/<id>/apps/*.stderr.log), which specificRx cuts at < and
-// *: the measurement's one wrong absorption at 0.8 was a new path under a
-// covered directory that differed only past the cut.
+// (/run/user/1000/<id>/jobs/*.stderr.log), which specificRx cuts at < and
+// *: at 0.8 a new path under a covered directory that differed only past the
+// cut was absorbed by mistake.
 var wholePathRx = regexp.MustCompile(`[\w~.<>*{}$@:-]*/[\w./~<>*{}$@:-]+`)
 
 // homeDirRx is a home directory spelled out, as a fact may write ~.

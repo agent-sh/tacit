@@ -17,10 +17,11 @@ import (
 	"unicode"
 )
 
-// Normalize lowers case, drops apostrophes (the owner writes "dont", an agent quoting
-// them writes "don't"), turns every other character that is not a letter or a
-// digit into a space, and collapses spaces. Two texts that differ only in
-// case, whitespace or punctuation normalize to the same string.
+// Normalize lowers case, drops apostrophes (a person typing fast writes
+// "dont", an agent quoting them writes "don't"), turns every other character
+// that is not a letter or a digit into a space, and collapses spaces. Two
+// texts that differ only in case, whitespace or punctuation normalize to the
+// same string.
 func Normalize(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -84,7 +85,7 @@ func Segments(quote string) []string {
 func Usable(quote string) bool { return Segments(quote) != nil }
 
 // ProofWords is how many words of theirs a quote needs to prove a ruling by
-// itself. A shorter phrase ("what would you build", a session's name) is theirs
+// itself. A shorter phrase ("keep the old one", a session's name) is theirs
 // but may not be the rule the fact states: the fact carries it as their words
 // (source.owner_words), evidence for the verifier, not a ruling.
 const ProofWords = 6
@@ -94,13 +95,13 @@ const ProofWords = 6
 // its name) to prove that rule. Six words of theirs with none of the rule's
 // words in them are their words in the fact, not that rule.
 //
-// The gate was chosen on the author's store (2026-10-11): of the 31 facts the
-// plain six-word rule kept and a lexical gate questions, 29 are their rulings
-// an agent paraphrased and 2 are agent lessons (a dashboard checklist under a
-// request of theirs, a removal checklist under a principle of theirs). One shared
-// stem sends 7 of the 29 to observed with their words recorded: their quotes
-// share no word with the rule as the agent wrote it, so no overlap gate keeps
-// them while keeping the removal checklist off. A
+// The gate was chosen on a real store. Of the facts the plain six-word rule
+// kept and a lexical gate questions, nearly all are their rulings an agent
+// paraphrased; the rest are agent lessons (a report checklist under a
+// request of theirs, a removal checklist under a principle of theirs). One
+// shared stem sends some of those rulings to observed with their words
+// recorded: their quotes share no word with the rule as the agent wrote it,
+// so no overlap gate keeps them while keeping the removal checklist off. A
 // share of the description's stems adds nothing here: any share over zero
 // is one stem.
 const ProofStems = 1
@@ -124,8 +125,8 @@ func ProvesRuling(quote, description, name string) bool {
 	return n >= ProofWords && SharedStems(quote, description+" "+name) >= ProofStems
 }
 
-// Request reports a quote that asks an agent for something ("i need the board
-// to show disk i/o", "can you add a filter", "please show me the list") rather
+// Request reports a quote that asks an agent for something ("i need the report
+// to show churn rates", "can you add a filter", "please show me the list") rather
 // than stating a rule: it opens with "can/could/would you", "please", "show
 // me" or "give me", or with "i need/want" and a thing to be done ("i need
 // the X to ..."), and holds no rule word (never, always, dont, only, must,
@@ -133,8 +134,8 @@ func ProvesRuling(quote, description, name string) bool {
 // any, instead, without, when, if: "i need the tests to pass before any
 // merge" is a standing condition). Their rules are statements; a request of theirs under an
 // agent's lesson is their words in the fact, not that lesson's rule. The check
-// is kept narrow on purpose: on the author's store (2026-10-11) it moves only
-// the dashboard checklist above, and none of their rulings.
+// is kept narrow on purpose: on a real store it moves only the report
+// checklist above, and none of their rulings.
 func Request(quote string) bool {
 	ws := strings.Fields(Normalize(quote))
 	for len(ws) > 0 && (ws[0] == "so" || ws[0] == "and" || ws[0] == "ok") {
@@ -164,8 +165,8 @@ func Request(quote string) bool {
 }
 
 // InTask reports a quote of theirs that is an instruction inside the task at
-// hand ("lets create the bucket as a draft", "set the cli to run on the
-// staging region", "1. drop it 3. fix it") rather than a rule for later
+// hand ("open the PR as a draft", "run the tests on the staging box",
+// "1. keep it 2. skip it") rather than a rule for later
 // sessions: it opens with a task verb or a reply (yes, ok, lets, first,
 // now, check, fix, you can, ...; a leading so, and or plus is skipped), is a
 // numbered answer, holds a question mark or says "im", and holds no word that
@@ -174,9 +175,10 @@ func Request(quote string) bool {
 // condition). It is still their
 // ruling; delivery ranks it as an ordinary fact (SPEC.md, Delivery).
 //
-// The lists were derived on the dev half of a judge's labels of 283 kept
-// rulings on the author's store (2026-10-19): on the test half it flags 25
-// of 89 one-off instructions and 2 of 51 standing rules.
+// The lists were derived on the dev half of a judge's labels of kept rulings
+// on a real store. On the test half it flags part of the one-off
+// instructions and almost none of the standing rules: it trades recall for
+// precision.
 func InTask(quote string) bool {
 	ws := strings.Fields(Normalize(quote))
 	for len(ws) > 0 && inTaskLead[ws[0]] {
@@ -207,7 +209,7 @@ func InTask(quote string) bool {
 }
 
 var (
-	// numberedItem is an answer by number: "1. keep it", "2) drop", "3- fix".
+	// numberedItem is an answer by number: "1. keep it", "2) skip", "3- retry".
 	// One counts at the start of the quote; elsewhere it takes two, since a
 	// sentence may end in a number ("keep the cap at 50. it is the limit").
 	numberedItem  = regexp.MustCompile(`(^|\s)\d+[.)-]\s`)
@@ -235,7 +237,7 @@ var (
 	// it a standing condition on how work is done, not a task.
 	ruleWords = map[string]bool{"never": true, "always": true, "dont": true, "only": true, "must": true, "should": true, "every": true, "cant": true, "shouldnt": true,
 		"not": true, "no": true, "before": true, "after": true, "until": true, "unless": true, "any": true, "instead": true, "without": true, "when": true, "whenever": true, "if": true}
-	// requestObject opens the thing the owner asks for: "i need the crm to ...".
+	// requestObject opens the thing the owner asks for: "i need the report to ...".
 	requestObject = map[string]bool{"the": true, "a": true, "an": true, "my": true, "our": true, "this": true, "that": true, "some": true, "it": true}
 )
 
@@ -254,9 +256,9 @@ func SharedStems(quote, text string) int {
 	return n
 }
 
-// stemLen is the prefix a content word is cut to: a typed "piecess" and an
-// agent's "pieces", a typed "messurment" and "measured" do not meet, but
-// "review" and "reviews", "functionalities" and "functionality" do.
+// stemLen is the prefix a content word is cut to: a typed "recieved" and an
+// agent's "received", a typed "conifg" and "config" do not meet, but
+// "review" and "reviews", "configurations" and "configuration" do.
 const stemLen = 4
 
 // ContentStems are the content words of text cut to stemLen letters, each
@@ -341,7 +343,7 @@ func segsIn(padded string, segs []string) bool {
 
 // codeQuote reports a quoted command, path, flag or agent markdown rather
 // than a sentence of theirs. Their sentences carry a flag or a path now and then
-// ("if needed you can use --admin", "org/* included"), so a phrase is
+// ("if it hangs you can pass --verbose", "docs/* included"), so a phrase is
 // judged as a whole. It is code when:
 //   - it holds a backtick or "**" (the owner types in a terminal; markdown is an
 //     agent's), or an environment assignment (KEY=value);

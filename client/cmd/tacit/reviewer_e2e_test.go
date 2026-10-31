@@ -388,7 +388,7 @@ func readBytes(t *testing.T, p string) []byte {
 	return b
 }
 
-// On a read-only clone with the local layer (the Mac): the reviewer judges
+// On a read-only clone with the local layer (a Mac): the reviewer judges
 // this machine's agents' notes into the overlay's ledger. The wrong one no
 // hook delivers; the checked one is labelled so. The uncertain one is asked
 // in a session in the folder its session ran in, and the owner's correction
@@ -409,7 +409,7 @@ func TestReviewerOnTheLocalLayerEndToEnd(t *testing.T) {
 	putRecordFile(t, filepath.Join(r.local, "curated"), testRec(record.KindRepo, "projects/walrus"))
 	notes := map[string]string{
 		"note-correct": "the walrus driver listens on port 7790",
-		"note-unsure":  "walrus deploys always need the rig",
+		"note-unsure":  "walrus deploys always need the vpn",
 		"note-wrong":   "walrus deploys are fine on fridays",
 	}
 	var calls []string
@@ -476,7 +476,7 @@ func TestReviewerOnTheLocalLayerEndToEnd(t *testing.T) {
 	if strings.Contains(got, "- note-wrong") {
 		t.Fatalf("a note judged wrong was delivered:\n%s", got)
 	}
-	if !strings.Contains(got, "walrus deploys always need the rig") || !strings.Contains(got, "tacit q-") {
+	if !strings.Contains(got, "walrus deploys always need the vpn") || !strings.Contains(got, "tacit q-") {
 		t.Fatalf("no question in the folder's session:\n%s", got)
 	}
 	t3 := claudeSession(t, r.home, "sess-m3", "/home/u/elsewhere")
@@ -491,18 +491,18 @@ func TestReviewerOnTheLocalLayerEndToEnd(t *testing.T) {
 	}
 
 	tag := readQueue(t, r.home).Open()[0].Text()
-	appendLine(t, t2, agentTurn("sess-m2", "Port 7790.\n\n"+tag), ownerTurn("sess-m2", "correct it: walrus deploys need a rollback plan, not the rig"))
+	appendLine(t, t2, agentTurn("sess-m2", "Port 7790.\n\n"+tag), ownerTurn("sess-m2", "correct it: walrus deploys need a rollback plan, not the vpn"))
 	if code := runReviewer(nil); code != 0 {
 		t.Fatalf("reviewer exit %d", code)
 	}
 	reviews = ledger.ParseReviews(readBytes(t, filepath.Join(r.local, filepath.FromSlash(overlay.ReviewsRel))))
 	l, _ := reviews.ForNote(overlay.Prefix + "claude@" + host + "/note-unsure.md")
-	if l.Verdict != ledger.VerdictCorrected || l.Words != "walrus deploys need a rollback plan, not the rig" || l.Statement != "owner-corrects-note-unsure" {
+	if l.Verdict != ledger.VerdictCorrected || l.Words != "walrus deploys need a rollback plan, not the vpn" || l.Statement != "owner-corrects-note-unsure" {
 		t.Fatalf("ledger: %+v", l)
 	}
 	st := filepath.Join(r.local, "curated", "projects", "walrus", "owner-corrects-note-unsure.md")
 	sf, err := fact.Parse("local/curated/projects/walrus/owner-corrects-note-unsure.md", readBytes(t, st))
-	if err != nil || sf.Meta.Type != fact.StatementType || sf.Meta.Source.OwnerWords != "walrus deploys need a rollback plan, not the rig" || sf.Meta.Source.OwnerWordsFrom != "claude:sess-m2" {
+	if err != nil || sf.Meta.Type != fact.StatementType || sf.Meta.Source.OwnerWords != "walrus deploys need a rollback plan, not the vpn" || sf.Meta.Source.OwnerWordsFrom != "claude:sess-m2" {
 		t.Fatalf("statement: %+v %v", sf, err)
 	}
 	if !strings.Contains(string(readBytes(t, filepath.Join(r.local, filepath.FromSlash(overlay.QuotesRel)))), "owner-corrects-note-unsure") {
@@ -510,7 +510,7 @@ func TestReviewerOnTheLocalLayerEndToEnd(t *testing.T) {
 	}
 	r.untouched()
 	ix = exactIndex(t, r.s)
-	hits, _ := ix.Query(ctx, search.Situation{Repo: "walrus", Query: "walrus deploys rollback rig", RestrictRepos: true}, 10, false)
+	hits, _ := ix.Query(ctx, search.Situation{Repo: "walrus", Query: "walrus deploys rollback vpn", RestrictRepos: true}, 10, false)
 	ix.Close()
 	var sawStatement bool
 	for _, h := range hits {

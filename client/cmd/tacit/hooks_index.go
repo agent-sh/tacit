@@ -31,12 +31,11 @@ import (
 // written; sync and follow, which build ahead for the hooks; the owner app.
 
 // indexBuildBudget bounds a build that is not answering anyone: sync,
-// follow, the hooks' background build. Measured 2026-10-21 on a copy of the
-// owner's store and overlay (16k facts, 662 local notes, a 71 MB index) on
-// their Mac under a load average of 60 to 110: a build of the store from
-// nothing took 8.8 to 24.5 s (about 11 s the same day in their sessions),
-// the overlay's file built from the store's 0.17 s. Sync's own deadline (2
-// minutes) is the network's, so the index gets its own.
+// follow, the hooks' background build. Measured on a copy of a large store
+// and its overlay on a heavily loaded machine: a build of the store from
+// nothing took 8.8 to 24.5 s, the overlay's file built from the store's
+// 0.17 s. Sync's own deadline (2 minutes) is the network's, so the index gets
+// its own.
 const indexBuildBudget = 5 * time.Minute
 
 // indexBuildLog caps the background builds' log, as dreamSessionLog does.

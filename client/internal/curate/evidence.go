@@ -165,8 +165,7 @@ func ApplyStatement(f *fact.Fact, e Entry, note *fact.Fact, where Where, said Sa
 
 // OneOff settles a ruling ApplyEvidence kept (SPEC.md, "One-offs"): words
 // the owner said in one session are a statement scoped to their moment,
-// never a standing rule (the owner, 2026-10-25: "not everything I say needs
-// to become a rule"). sessions is every session code finds the quote in, as a
+// never a standing rule. sessions is every session code finds the quote in, as a
 // statement of theirs (ownerwords.Corpus.SaidIn). Said in two or more, it
 // stays a ruling. Said in one (or none code can count), f becomes their
 // statement as ApplyStatement writes one: type statement, their words in

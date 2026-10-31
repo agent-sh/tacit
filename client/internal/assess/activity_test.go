@@ -18,7 +18,7 @@ func activityOf(today string, days ...string) *Activity {
 }
 
 // Code's status is the dates against the folder's own rhythm, within the
-// bounds the shadow data gave.
+// rhythm's bounds.
 func TestActivityRhythm(t *testing.T) {
 	for _, c := range []struct {
 		name, today string

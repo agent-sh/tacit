@@ -25,20 +25,20 @@ import (
 // dreamer keeps each as a statement (verbatim, dated, a line of context), the
 // split writes them as statements once code finds the words in the owner's
 // own turns, and the statements step reads each once. "the real name is
-// pikadon" is one statement that a check agrees with (the checkout's
-// directory is pikadon, ginza its origin's name): a decision. The release
+// storefront" is one statement that a check agrees with (the checkout's
+// directory is storefront, shop-v2 its origin's name): a decision. The release
 // branch, said in two separate sessions, is a decision by repeat. "the real
 // name of widget is gizmo" is refuted by the check (gizmo is a symlink to
 // widget): it stays a statement, flagged, an optional review item, and a
 // session in widget reads it in the owner's words with the flag, never as a
 // RULE line; the decisions are rules now.
 func TestStatementsEndToEnd(t *testing.T) {
-	w := newNamesWorld(t, map[string]string{"owner/ginza": "owner/ginza", "owner/widget": "owner/widget"}, map[string]string{"owner": "User"})
+	w := newNamesWorld(t, map[string]string{"owner/shop-v2": "owner/shop-v2", "owner/widget": "owner/widget"}, map[string]string{"owner": "User"})
 	for k, v := range map[string]string{"USERPROFILE": w.home, "TACIT_HERMES_DB": "off", "TACIT_SETTINGS": "", "TACIT_DREAM_MAX_RUNTIME": "",
 		"TACIT_DREAM_RUNNER": "claude", "TACIT_CURATE_RUNNER": "claude", "TACIT_JUDGE_RUNNER": "claude"} {
 		t.Setenv(k, v)
 	}
-	pk := w.git("pikadon", "https://github.com/owner/ginza.git")
+	pk := w.git("storefront", "https://github.com/owner/shop-v2.git")
 	widget := w.git("widget", "https://github.com/owner/widget.git")
 	if err := os.Symlink("widget", filepath.Join(w.p, "gizmo")); err != nil {
 		t.Fatal(err)
@@ -46,7 +46,7 @@ func TestStatementsEndToEnd(t *testing.T) {
 	// Each said on its own day, weeks before the run: a statement is dated by
 	// the owner's turn, never by the day the dreamer or the curator ran.
 	said := map[string]struct{ id, cwd, words, context, day string }{
-		"pk":   {"11111111-0000-4000-8000-000000000001", pk, "the real name is pikadon, ginza is a name for now until we move it to public repo", "what the lab repository is called", "2026-09-14"},
+		"pk":   {"11111111-0000-4000-8000-000000000001", pk, "the real name is storefront, shop-v2 is only what the repo is called until we rename it", "what the lab repository is called", "2026-09-14"},
 		"rel1": {"11111111-0000-4000-8000-000000000002", widget, "we ship widget from the release branch, never from main", "where widget releases are cut", "2026-09-20"},
 		"rel2": {"11111111-0000-4000-8000-000000000003", widget, "widget releases go out from the release branch", "cutting the widget release", "2026-10-02"},
 		"gz":   {"11111111-0000-4000-8000-000000000004", widget, "the real name of widget is gizmo", "what the widget repository is called", "2026-10-05"},
@@ -88,7 +88,7 @@ func TestStatementsEndToEnd(t *testing.T) {
 	for k, v := range said {
 		scope := "projects/widget"
 		if k == "pk" {
-			scope = "projects/pikadon"
+			scope = "projects/storefront"
 		}
 		e := entry(noteOf[v.id].Meta.Name, k+"-statement", v.context, "design_decision", scope)
 		e["kind"], e["owner_quote"], e["context"], e["body"] = "statement", v.words, v.context, "the owner's reading of "+k
@@ -135,7 +135,7 @@ func TestStatementsEndToEnd(t *testing.T) {
 			j := statement.Judgement{Name: m[1], Says: statement.Choice}
 			switch m[2] {
 			case said["pk"].words:
-				j.Claims = []check.Claim{{Kind: "canonical", Name: "pikadon", Other: "ginza"}}
+				j.Claims = []check.Claim{{Kind: "canonical", Name: "storefront", Other: "shop-v2"}}
 			case said["gz"].words:
 				j.Claims = []check.Claim{{Kind: "canonical", Name: "gizmo", Other: "widget"}}
 			case said["rel2"].words, said["rel1"].words:
@@ -174,7 +174,7 @@ func TestStatementsEndToEnd(t *testing.T) {
 	}
 	pkd := dec("pk")
 	if pkd.Meta.Type != "design_decision" || pkd.Meta.Source.Kind != "user" || pkd.Meta.Source.OwnerQuote != said["pk"].words || !strings.Contains(pkd.Body, "a check agrees") || !fact.IsRuling(pkd) {
-		t.Fatalf("pikadon's decision %+v\n%s", pkd.Meta, pkd.Body)
+		t.Fatalf("storefront's decision %+v\n%s", pkd.Meta, pkd.Body)
 	}
 	rd := dec("rel2")
 	if by["rel1-statement"].Meta.SupersededBy != rd.Meta.Name || !strings.Contains(rd.Body, "said in 2 separate sessions") || !fact.IsRuling(rd) ||
@@ -263,7 +263,7 @@ func ownerSession(t *testing.T, home, cwd, id, words, at string) string {
 	return f
 }
 
-// The Mac's statements stay in its overlay: a statement of the owner's
+// A Mac's statements stay in its overlay: a statement of the owner's
 // words on a read-only clone with the local layer is written, read and
 // logged in the overlay only; the clone and the server are untouched.
 func TestLocalStatementsStayInTheOverlay(t *testing.T) {

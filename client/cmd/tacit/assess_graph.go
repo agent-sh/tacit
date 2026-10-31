@@ -1,22 +1,22 @@
 package main
 
-// The ancestor graph (the owner's rule, 2026-10-23: "each piece that
-// clearly related to another should tried to find it ancestor"), computed
-// from all the evidence at once before any decision of a run, and again
-// after each batch's records are written.
+// The ancestor graph (the owner's rule: each piece that is clearly related
+// to another belongs under its ancestor), computed from all the evidence at
+// once before any decision of a run, and again after each batch's records
+// are written.
 //
 // Finding a folder's ancestor one candidate at a time made the answer
 // depend on the order of the run: a folder related to another that had no
-// record yet found no ancestor (knapcio before dspark), and one decided in a
-// later run found it. The graph takes every project folder of the store and
-// the catalogs: a folder with a record stands as its record says; one with
-// none yet stands in as a project folder of its own (it will get a record),
-// with the ancestors its own evidence finds. Chains resolve to their end
-// (a part of b, b part of c: a is c's), and a cycle is broken by code: the
-// member with the strongest identity of its own (a checkout, a remote of its
-// own, the most own commits; then the name) keeps no ancestor in the cycle.
-// The same evidence gives the same graph whatever the order the folders,
-// facts or decisions come in.
+// record yet found no ancestor (a part decided before its whole), and one
+// decided in a later run found it. The graph takes every project folder of
+// the store and the catalogs: a folder with a record stands as its record
+// says; one with none yet stands in as a project folder of its own (it will
+// get a record), with the ancestors its own evidence finds. Chains resolve
+// to their end (a part of b, b part of c: a is c's), and a cycle is broken by
+// code: the member with the strongest identity of its own (a checkout, a
+// remote of its own, the most own commits; then the name) keeps no ancestor
+// in the cycle. The same evidence gives the same graph whatever the order the
+// folders, facts or decisions come in.
 
 import (
 	"fmt"

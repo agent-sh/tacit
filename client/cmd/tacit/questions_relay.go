@@ -3,7 +3,7 @@ package main
 // The owner's own answer, relayed (SPEC.md, "Closing questions"). The owner
 // answers in the session they are in, often a line typed under each item of
 // a list an agent put to them, and no question kind may send them to tacit
-// app to answer it again (the owner, 2026-10-31). So an agent passes their
+// app to answer it again. So an agent passes their
 // answer on: `tacit questions close ID --proof words --words W`, where code
 // finds W in the owner's own turns. The words are their answer to the
 // question when they were said on or after the day it was asked, after the
@@ -99,7 +99,7 @@ func (rs *reviewServer) relays(o *op, q relayQuestion) error {
 }
 
 // askedDay is the day a question was asked (this machine's time): of an RFC
-// 3339 time, or a day a review file's name starts with ("2026-10-31-names").
+// 3339 time, or a day a review file's name starts with ("2026-03-14-names").
 func askedDay(s string) string {
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
 		return t.Local().Format("2006-01-02")

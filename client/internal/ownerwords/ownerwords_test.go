@@ -14,16 +14,16 @@ func TestNormalizeAndIn(t *testing.T) {
 	if got := Normalize("  Don't   RESET: caches!  it’s team-related "); got != "dont reset caches its team related" {
 		t.Fatalf("normalize: %q", got)
 	}
-	text := "Owner, 2026-09-21: never print a token's value, not even \"if you confirm\"."
+	text := "Owner, 2026-09-21: never paste a customer's email, not even \"if you confirm\"."
 	for q, want := range map[string]bool{
-		"never print a tokens value":            true,
-		"Never print a token's value, not even": true,
-		"never print a token":                   false, // "token" is not the word "tokens"
-		"ever print a tokens value":             false, // not on a word boundary
-		"print a tokens":                        false, // too short to be evidence
-		"never ... tokens value":                false, // a one-word piece
-		"never print ... not even if you":       true,  // an ellipsis keeps every part in order
-		"not even if you ... never print a":     false, // parts out of order
+		"never paste a customers email":            true,
+		"Never paste a customer's email, not even": true,
+		"never paste a customer":                   false, // "customer" is not the word "customers"
+		"ever paste a customers email":             false, // not on a word boundary
+		"paste a customers":                        false, // too short to be evidence
+		"never ... customers email":                false, // a one-word piece
+		"never paste ... not even if you":          true,  // an ellipsis keeps every part in order
+		"not even if you ... never paste a":        false, // parts out of order
 	} {
 		if got := In(text, q); got != want {
 			t.Errorf("In(%q) = %v, want %v", q, got, want)
@@ -105,21 +105,21 @@ func TestProofNeedsTheRulesWords(t *testing.T) {
 		{"the old export format can wait until the new one has users", "The dashboard shows the on-call summary one click from the home page.", "dashboard-summary", false},
 		{"look at the login page on a phone and you will see why", "Release notes list every user-visible change, and a breaking change gets its own section before anything else.", "release-notes-list-changes", false},
 		// The gate's known losses: rulings of theirs, paraphrased by an agent with
-		// none of their words (observed, their words kept). Synthetic stand-ins of
-		// the same shape as the losses measured on the author's store.
-		{"speed is not the point when nobody is waiting on it.", "The full integration suite gates only tagged releases. Pull requests run lint, unit checks and a build, and nightly jobs catch the rest.", "full-suite-gates-releases-only", false},
-		{"after the reply leaves us the clock is not ours to watch.", "Published response times are measured at the load balancer on the service's own health route, not from a laptop and not from browser timings.", "response-times-measured-at-the-balancer", false},
-		{"most of those come in as favours, and every one of them lands on my desk later.", "Project READMEs get one neutral line on contributions that points to CONTRIBUTING.md; no badges, no calls to join, no extra sections.", "readme-contribution-line", false},
-		{"neither path is good, the thing underneath is broken.", "When two workarounds cost different things for one root bug, do not offer the owner a pick between them; fix the bug and check both costs.", "fix-the-bug-not-a-workaround", false},
-		{"we are adding tenants this month, so it has to stay up.", "On the shared worker pool the checkout service wins: a batch job that slows checkout is paused or moved, never checkout.", "checkout-over-batch-jobs", false},
-		{"those were all decided without me", "Closing a project, cutting a release and publishing the docs are the owner's calls; agents do not do them alone, even with autonomy granted.", "closes-releases-publication-owner-calls", false},
-		{"years for all i know", "The dependency audit that began 2026-09-29 closes only when every flagged package is upgraded or pinned with a reason, and the audit notes list each one.", "dependency-audit-closure", false},
+		// none of their words (observed, their words kept). Synthetic cases of
+		// the same shape as the losses seen on a real store.
+		{"nobody opens those emails on a sunday anyway.", "Marketing newsletters go out on weekday mornings only; the scheduler skips weekends and public holidays.", "newsletter-weekday-mornings", false},
+		{"once it leaves the printer the paper is not ours to fix.", "Invoice totals are checked against the ledger export before the PDF is generated, not after delivery and not by the client.", "invoice-totals-checked-before-pdf", false},
+		{"each new button there is one more thing somebody has to maintain later.", "The settings page keeps a single save action at the bottom; no per-field controls, no autosave toggles, no extra panels.", "settings-single-save-action", false},
+		{"both of those are patches over a crack in the floor.", "A failing nightly import is rerun only after its cause is found and written in the run log; reruns without a cause are not allowed.", "nightly-import-rerun-after-cause", false},
+		{"the trade show is next week, so the demo has to hold.", "On the shared print server the payroll queue wins: a large print job that delays payroll is paused or moved, never payroll.", "payroll-over-print-jobs", false},
+		{"that was all done behind my back", "Renaming a shared folder, archiving a channel and changing the guest list are the organizer's calls; helpers do not make them alone, even when asked to tidy up.", "renames-archives-guest-list-organizer-calls", false},
+		{"since forever, i think", "The library card cleanup closes only when every expired card is renewed or removed with a note, and the cleanup log lists each one.", "library-card-cleanup-closure", false},
 		// One shared stem proves.
 		{"nobody reads the footer on the download page anyway", "The download section lists the current version first and older builds below.", "download-current-first", true},
-		{"send me the full log in one go, dont chop it into peices", "Logs go to the owner whole, in one message; never chopped into pieces or trimmed", "logs-sent-whole", true},
-		{"a faster rival is good news, it gives us a number to beat.", "When another tool is faster on a fair benchmark, report it plainly and use it as the target; do not tune flags only to close that gap", "faster-tool-is-the-target", true},
+		{"send me all the songs in one go, dont chop it into secitons", "Set lists reach the band complete, in one sheet; never chopped into sections or cut short", "set-lists-complete", true},
+		{"a slower checkout is bad news, every second costs us carts.", "When a release makes the payment page slower, it waits until the old load time is back; new features do not ship on top of it", "slower-payment-page-waits", true},
 		{"keep the hooks quiet", "Hooks print nothing unless a rule matches", "hooks-quiet", false},
-		{"no release on docs", "No release on docs.", "no-release-on-docs", true}, // most of the description's words
+		{"no deploy on weekends", "No deploy on weekends.", "no-deploy-on-weekends", true}, // most of the description's words
 	} {
 		if got := ProvesRuling(c.quote, c.desc, c.name); got != c.want {
 			t.Errorf("ProvesRuling(%q) = %v, want %v (shared stems %d)", c.quote, got, c.want, SharedStems(c.quote, c.desc+" "+c.name))
@@ -171,7 +171,7 @@ func TestDisowns(t *testing.T) {
 			t.Errorf("does not disown: %q", s)
 		}
 	}
-	for _, s := range []string{"Not relevant anymore, no inference", "both hold, b is the exception for x", "the owner decides", "not my problem today",
+	for _, s := range []string{"Not needed anymore, no follow-up", "both hold, b is the exception for x", "the owner decides", "not my problem today",
 		"the left is the agents wording, the right is mine", "I never said to drop it, keep it", "not my call, let the verifier decide", "not the owner's problem, the agent broke the build", "keep the newer one; the older is the agents' assumption",
 		"these are my words, not an interpretation of agents"} {
 		if Disowns(s) {
@@ -242,7 +242,7 @@ func TestCorpusReadsOnlyOwnerTurns(t *testing.T) {
 	}, "\n")+"\n")
 	writeFile(t, filepath.Join(proj, "agent.jsonl"), `{"type":"user","entrypoint":"sdk-cli","sessionId":"agent","message":{"role":"user","content":"Owner ruling, verbatim: \"ship the dashboard before friday noon\""}}`+"\n")
 	// A runner starts its workers as interactive sessions; the prompt is the manager's.
-	writeFile(t, filepath.Join(home, ".claude", "projects", "-home-u-projects-web-app--local-runners-worker-01", "w.jsonl"), `{"type":"user","entrypoint":"claude-desktop","cwd":"/home/u/projects/web-app/.local/runners/worker-01/worktrees/task-001","message":{"role":"user","content":"Preserve immutable receipts and report blockers today"}}`+"\n")
+	writeFile(t, filepath.Join(home, ".claude", "projects", "-home-u-projects-web-app--local-runners-worker-01", "w.jsonl"), `{"type":"user","entrypoint":"claude-desktop","cwd":"/home/u/projects/web-app/.local/runners/worker-01/worktrees/task-001","message":{"role":"user","content":"Keep the build logs and report failures today"}}`+"\n")
 	writeFile(t, filepath.Join(home, ".codex", "sessions", "2026", "10", "01", "a.jsonl"), strings.Join([]string{
 		`{"type":"session_meta","payload":{"id":"cx1","originator":"Codex Desktop"}}`,
 		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>cwd</environment_context>"},{"type":"input_text","text":"we dont speculate without profiling first"}]}}`,
@@ -269,7 +269,7 @@ func TestCorpusReadsOnlyOwnerTurns(t *testing.T) {
 		"the assistant says squash the commits":            "",
 		"ship the dashboard before friday noon":            "",
 		"review the pull request as the owner":             "",
-		"Preserve immutable receipts and report":           "",
+		"Keep the build logs and report failures":          "",
 		"Coordination request from Codex chat":             "",
 		"read this and answer":                             "claude:own",
 		"tag every release candidate by hand":              "claude:own",
@@ -338,11 +338,11 @@ func TestOwnerNamesAttribute(t *testing.T) {
 // whatever it opens with.
 func TestInTask(t *testing.T) {
 	for q, want := range map[string]bool{
-		"lets create the bucket as a draft":                     true,
-		"set the cli to run on the staging region":              true,
+		"open the PR as a draft":                                true,
+		"run the tests on the staging box":                      true,
 		"ok, push it and open the review":                       true,
 		"so first rebase on main, then rerun the suite":         true,
-		"1. keep it 2. drop it 3. fix the typo":                 true,
+		"1. keep it 2. skip it":                                 true,
 		"drop 2 and 4, keep the rest":                           true,
 		"which region did the deploy go to?":                    true,
 		"im on the train, keep it short":                        true,
@@ -354,7 +354,7 @@ func TestInTask(t *testing.T) {
 		"dont open a pr without the numbers":                    false,
 		"the review bot posts one summary comment per pr":       false, // a statement, no task opener
 		"we keep the api keys in the vault":                     false,
-		"never rent a gpu box without checking the price":       false,
+		"never resize a disk without checking the backups":      false,
 		"do not push to main on a friday":                       false, // "do not" is "dont"
 		"Do NOT merge with the override button":                 false,
 		"3) keep the old index":                                 true,  // a numbered answer opens it

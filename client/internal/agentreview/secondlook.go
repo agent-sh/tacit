@@ -13,8 +13,8 @@ import (
 // The second look (SPEC.md, "Trims"): over its budget the digest leaves the
 // oldest messages out, and it cuts long messages short and shows older
 // messages' tools not at all; a trim may remove a claim as unsupported whose
-// support sits in what was not shown (7 of 15 trims judged by hand,
-// 2026-10-25). For each claim a trim removed as unsupported (basis
+// support sits in what was not shown (a hand review of real trims found
+// this often). For each claim a trim removed as unsupported (basis
 // unsupported, or none given), code searches what was not shown for the
 // claim's distinctive words; the reviewer reads the parts it finds and
 // judges those claims again. A claim is never removed as unsupported while

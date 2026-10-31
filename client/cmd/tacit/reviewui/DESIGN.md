@@ -17,7 +17,7 @@ The identity is the one tacit review started with (Proof: Literata to read, Atki
 | This is mine | The owner makes such a fact their rule (a `mine` decision, `source.endorsed`) |
 | Retire, Restore | Set or clear `retired` |
 | Keep the newer, Keep the older | The pair marks, named by what they keep |
-| Who it reaches | The scope, said as "in memra", "on workstation", "about you, in every repo", "for every agent, everywhere" |
+| Who it reaches | The scope, said as "in web-app", "on workstation", "about you, in every repo", "for every agent, everywhere" |
 | What agents read | The description |
 | Only when working on | `applies_to` (files, code names, repos, machines, commands) |
 | Details | Name, file, kind, source, links, history, git |
@@ -37,14 +37,14 @@ Five places in one top bar, the current one in ink with an underline: Needs you 
 
   Older, 14 Sep  Your rule                Newer, 20 Sep
   what the older fact says                what the newer fact says
-  In memra                                In memra
+  In web-app                              In web-app
   Details                                 Details
 
   [Keep the newer ->] [Keep the older <-] [Both are true s] [Mark as conflicting q] [Skip for now j]
   Keeps the newer fact. The older fact stops reaching agents; it stays in history.
 
  What git shows
-  In memra, 60+ commits since 14 Sep changed what these facts name, the latest on 22 Sep: "...".
+  In web-app, 60+ commits since 14 Sep changed what these facts name, the latest on 22 Sep: "...".
   Full git history
 ```
 

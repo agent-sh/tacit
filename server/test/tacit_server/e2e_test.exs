@@ -53,7 +53,7 @@ defmodule TacitServer.E2ETest do
     # The hook keeps no log of its own; the journal and the unit log cover it.
     refute File.exists?(Path.join(TacitServer.Config.get(:data), "hook.log"))
 
-    write_commit!(dir, "projects/memra/sneaky.md", "x\n", "escape")
+    write_commit!(dir, "projects/demo-api/sneaky.md", "x\n", "escape")
     {out, status} = git(dir, ["push", "origin", "HEAD:main"], git_env(keyid, priv))
     assert status != 0
     assert out =~ "may write only under inbox/#{keyid}/"

@@ -42,9 +42,9 @@ const (
 	// tied to them weighs promptRepoBoost times its word score, and a fact
 	// of another project's folder that is not tied to them weighs
 	// 1/promptOtherPenalty of it, so it needs that much more match to clear
-	// the floor. Ranked over promptRankPool candidates. Measured on the
-	// crdm-bench cells and the 276-case replay (eval/VALUE.md, "Workspaces
-	// and the session's repositories first"): the held-out facts reached stay
+	// the floor. Ranked over promptRankPool candidates. Measured on a live
+	// bench and a replay of graded cases (eval/VALUE.md, "Workspaces and the
+	// session's repositories first"): the held-out facts reached stay
 	// level up to a boost of 1.5 and fall above it; the same penalty on this
 	// machine's facts loses held-out facts the task needed (a machine's
 	// tools, its build quirks), so machine facts keep their score unless the
@@ -476,8 +476,8 @@ func metaSelect(all []search.Hit, names []string, paths []string, command, promp
 // names and folders: those are where the call runs, which every fact tied
 // to the repository shares. Past the first terms a line is mostly a
 // heredoc's or a script's text, not the command: counting the whole line
-// added 14 noise lines for 3 useful ones on the graded pushes
-// (eval/DELIVERY.md, "Pushes keyed on a bare program").
+// added mostly noise lines on the graded pushes (eval/DELIVERY.md, "Pushes
+// keyed on a bare program").
 func commandWords(command string, names []string, folders string) map[string]bool {
 	if command == "" {
 		return nil
@@ -505,8 +505,9 @@ var scriptExt = regexp.MustCompile(`[^./]\.[a-z][a-z0-9]{0,4}$`)
 // secondWord: a word of the fact's whole name and description, other than
 // its command's own, is in the command line (words, commandWords). A key of one
 // word matched every call of that program: of the pushes so keyed (ssh,
-// python3, git, sed) 9% were useful and 63% noise, against 36% and 26% for
-// the longer keys (eval/DELIVERY.md, "Pushes keyed on a bare program").
+// python3, git, sed) few were useful and most were noise, against far more
+// useful and far less noise for the longer keys (eval/DELIVERY.md, "Pushes
+// keyed on a bare program").
 func secondWord(h search.Hit, key string, words map[string]bool) bool {
 	own := map[string]bool{}
 	for _, t := range search.Terms(key) {

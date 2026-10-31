@@ -603,7 +603,7 @@ func Width(line string) int {
 // "[Request interrupted by user]" or "[Request interrupted by user for tool
 // use]". Claude Code writes it as a user line of the transcript the
 // interruption happened in, a subagent's too, and a Codex rollout that holds a
-// Claude Code conversation (an import, a Relay hand-off) keeps it as a user
+// Claude Code conversation (an import, a hand-off) keeps it as a user
 // message. No person typed it and no agent wrote it: it is harness text in
 // every session and every format.
 var interrupted = regexp.MustCompile(`^\s*\[Request interrupted`)
@@ -720,8 +720,8 @@ func codexLine(o map[string]any, owner bool, asked CodexAsked) []string {
 			}
 			switch role {
 			case "user":
-				// A session imported from another harness (a Relay hand-off of
-				// a Claude Code conversation) holds that harness's frames too:
+				// A session imported from another harness (a hand-off of a
+				// Claude Code conversation) holds that harness's frames too:
 				// one rule for every format (TurnPieces).
 				out = append(out, userLines(Codex, txt, owner, asked)...)
 			case "assistant":

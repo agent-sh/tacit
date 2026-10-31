@@ -283,9 +283,9 @@ func TestCommandMatchThroughARunner(t *testing.T) {
 // repository's name, not a word of the session's folder or home. Words are
 // compared by stem, among the command's first terms (a word deep in a
 // heredoc does not count). A longer command, or a script's path or file
-// name, matches as before. Of the
-// pushes keyed on a bare program in real sessions, 9% were useful
-// (eval/DELIVERY.md, "Pushes keyed on a bare program").
+// name, matches as before. Of the pushes keyed on a bare program in real
+// sessions, few were useful (eval/DELIVERY.md, "Pushes keyed on a bare
+// program").
 func TestPreToolBareProgramNeedsASecondWord(t *testing.T) {
 	r, cwd := repoFirstRig(t,
 		fact.Meta{Name: "ssh-gpubox-batchmode", Description: "Reach the widget gpubox in projects from home with ssh and BatchMode; a password prompt hangs the agent", Type: "past_mistake", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Commands: []string{"ssh"}}},

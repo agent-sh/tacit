@@ -46,7 +46,7 @@ func TestPageAsksEachFindingInPlainWords(t *testing.T) {
 	var got map[string]any
 	runPage(t, `
   await new Promise((r) => setTimeout(r, 30));
-  const f = (name, created, text, more) => Object.assign({ name, created, description: text, body: "", scope: "projects/memra", type: "design_decision", kind: "observed" }, more || {});
+  const f = (name, created, text, more) => Object.assign({ name, created, description: text, body: "", scope: "projects/web-app", type: "design_decision", kind: "observed" }, more || {});
   const pair = (kind, a, b) => ({ kind, a, b, allowed: ["left", "right", "both", "query"] });
   const old = f("old", "2026-10-08", "Workers retry three times, as of 2026-08-03."), neu = f("neu", "2026-10-08", "Workers retry five times since 2026-08-17.");
   const out = { q: {}, labels: {} };
@@ -69,8 +69,8 @@ func TestPageAsksEachFindingInPlainWords(t *testing.T) {
   out.evidence = plainEvidence("B's rule postdates A (2026-08-03). B also says the model stays. A is moot.", sides(c));
   const asked = Object.assign(pair("supersede-proposed", old, neu), { ask: { proposed: "neu", evidence: "A was replaced." } });
   out.word = agentWord(asked, sides(asked)).text;
-  out.stale = staleSummary({ n: 3, since: "2026-10-01", detail: ["commits count from 2026-10-01 (last current); 3 deleted something the fact names", "2026-10-02 bcd2345 memra: move capture - capture.rs", "2026-10-03 abc1234 memra: drop the rename worker - rename_worker.rs, RenameWorker"] });
-  out.where = ["projects/memra", "machines/host-a", "user", "system", "derived/memra"].map(whereWords);
+  out.stale = staleSummary({ n: 3, since: "2026-10-01", detail: ["commits count from 2026-10-01 (last current); 3 deleted something the fact names", "2026-10-02 bcd2345 web-app: move capture - capture.rs", "2026-10-03 abc1234 web-app: drop the rename worker - rename_worker.rs, RenameWorker"] });
+  out.where = ["projects/web-app", "machines/host-a", "user", "system", "derived/web-app"].map(whereWords);
   return JSON.stringify(out);
 `, &got)
 	want := map[string]string{
@@ -123,10 +123,10 @@ func TestPageAsksEachFindingInPlainWords(t *testing.T) {
 	if w := "An agent suggests: keep the newer. Its reason: The older fact was replaced."; got["word"] != w {
 		t.Errorf("suggestion %q, want %q", got["word"], w)
 	}
-	if s, _ := json.Marshal(got["stale"]); string(s) != `["rename_worker.rs and RenameWorker were deleted in memra on 3 Oct (“drop the rename worker”).","2 more commits since 1 Oct deleted something it names."]` {
+	if s, _ := json.Marshal(got["stale"]); string(s) != `["rename_worker.rs and RenameWorker were deleted in web-app on 3 Oct (“drop the rename worker”).","2 more commits since 1 Oct deleted something it names."]` {
 		t.Errorf("stale summary %s", s)
 	}
-	if s, _ := json.Marshal(got["where"]); string(s) != `["in memra","on host-a","about you, in every repo","for every agent, everywhere","in memra, computed from git"]` {
+	if s, _ := json.Marshal(got["where"]); string(s) != `["in web-app","on host-a","about you, in every repo","for every agent, everywhere","in web-app, computed from git"]` {
 		t.Errorf("where %s", s)
 	}
 }
@@ -136,14 +136,14 @@ func TestPageSpeaksNoInternalWords(t *testing.T) {
 	var got map[string]string
 	runPage(t, `
   await new Promise((r) => setTimeout(r, 30));
-  const f = (name, created, kind) => ({ name, created, description: "Workers retry three times.", body: "Since the pool rewrite.", scope: "projects/memra", type: "user_standard", kind: kind || "user", ruling: !kind, path: "projects/memra/" + name + ".md" });
+  const f = (name, created, kind) => ({ name, created, description: "Workers retry three times.", body: "Since the pool rewrite.", scope: "projects/web-app", type: "user_standard", kind: kind || "user", ruling: !kind, path: "projects/web-app/" + name + ".md" });
   const out = {};
   for (const k of ["contradiction", "supersede-proposed", "result-superseded", "ruling-change", "supersede-applied", "duplicate"]) {
     const it = { id: k, kind: k, a: f("docs-review-every-change", "2026-08-03"), b: f("docs-work-paused", "2026-08-17", "observed"), allowed: ["left", "right", "both", "query"], needs_owner: true,
       ask: { proposed: "docs-work-paused", evidence: "A predates B.", question: "An agent would change the relations of your ruling docs-review-every-change (right). What stands?" } };
     items = [it]; view = [it]; cur = 0; sheet(); out[k] = els["sheet-inner"].innerHTML;
   }
-  const st = { id: "s", kind: "stale", single: true, a: f("engine-retries", "2026-10-01"), b: null, flag: { n: 1, since: "2026-10-01", detail: ["2026-10-03 abc1234 memra: drop - rename_worker.rs"] }, allowed: ["current", "retire"], needs_owner: true, state: "live" };
+  const st = { id: "s", kind: "stale", single: true, a: f("engine-retries", "2026-10-01"), b: null, flag: { n: 1, since: "2026-10-01", detail: ["2026-10-03 abc1234 web-app: drop - rename_worker.rs"] }, allowed: ["current", "retire"], needs_owner: true, state: "live" };
   st.b = st.a; items = [st]; view = [st]; cur = 0; sheet(); out.stale = els["sheet-inner"].innerHTML;
   items = []; view = []; sheet(); out.done = els["sheet-inner"].innerHTML;
   return JSON.stringify(out);
@@ -172,7 +172,7 @@ func TestPageOffersNeitherAndANote(t *testing.T) {
 	var got map[string]any
 	runPage(t, `
   await new Promise((r) => setTimeout(r, 30));
-  const f = (name, created) => ({ name, created, description: "d " + name, body: "", scope: "projects/memra", type: "design_decision", kind: "observed", path: "projects/memra/" + name + ".md" });
+  const f = (name, created) => ({ name, created, description: "d " + name, body: "", scope: "projects/web-app", type: "design_decision", kind: "observed", path: "projects/web-app/" + name + ".md" });
   const it = { id: "p1", kind: "contradiction", a: f("a", "2026-09-01"), b: f("b", "2026-09-19"), allowed: ["left", "right", "both", "query", "wrong"], needs_owner: true, notes: [{ at: "2026-10-11T06:00:00Z", text: "a holds on the old boxes" }] };
   items = [it]; view = [it]; cur = 0; sheet();
   const out = { open: els["sheet-inner"].innerHTML, hint: choiceHint(it, "wrong"), past: pastFor(it, "wrong") };
@@ -287,7 +287,7 @@ func TestPageShowsAFindingTheCuratorClosedAsMoot(t *testing.T) {
 	var got map[string]string
 	runPage(t, `
   await new Promise((r) => setTimeout(r, 30));
-  const f = (name, created) => ({ name, created, description: "d " + name, body: "", scope: "projects/memra", type: "design_decision", kind: "observed", path: "projects/memra/" + name + ".md" });
+  const f = (name, created) => ({ name, created, description: "d " + name, body: "", scope: "projects/web-app", type: "design_decision", kind: "observed", path: "projects/web-app/" + name + ".md" });
   const out = {};
   for (const [k, repointed, why] of [["moved", "c0ffee000001", "re-pointed to c / b, finding c0ffee000001: a is replaced by c; b stands"], ["moot", "", "moot: f is replaced by g, which is retired (2026-10-27), and no live fact replaces it"]]) {
     const it = { id: k, kind: "contradiction", a: f("a", "2026-09-01"), b: f("b", "2026-09-19"), allowed: ["reopen"], needs_owner: false, decision: { action: "moot", by: "curator", at: "2026-10-30T06:00:00Z", evidence: why, repointed } };

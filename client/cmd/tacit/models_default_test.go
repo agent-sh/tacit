@@ -7,9 +7,9 @@ import (
 	"github.com/agent-sh/tacit/client/internal/dream"
 )
 
-// Every deciding call defaults to Opus (the owner, 2026-10-24: "but we said
-// opus"), the conflict judge too, also when a job names the Claude runner
-// for the judge explicitly (the live judge's route) and sets no model.
+// Every deciding call defaults to Opus, the conflict judge too, also when a
+// job names the Claude runner for the judge explicitly (the live judge's
+// route) and sets no model.
 func TestDecidingCallsDefaultToOpus(t *testing.T) {
 	prev := []string{curate.DefaultModel, curate.JudgeModel, dream.DefaultModel, verifyModel, verifyFallbackModel}
 	t.Cleanup(func() {

@@ -20,15 +20,15 @@ import (
 // holder's pid and start time for a person reading the directory, and for
 // lockStaleAge.
 //
-// On 2026-10-21 every hook that found no index for the current overlay
+// Without it, every hook that found no index for the current overlay
 // started its own full build (several <index>.<pid>.tmp at once) and none
 // finished inside its deadline.
 
 // lockStaleAge is how long a waiter respects a lock whose holder is alive.
-// A build of the largest store measured (16k facts, 2026-10-21) took 9 to
-// 25 s, and the callers that build in the background give up after 5
-// minutes, so a builder holding the lock for this long is stuck, and a
-// waiter builds its own copy rather than wait forever (a duplicate build is
+// A full build of a large store took 9 to 25 s, and the callers that build
+// in the background give up after 5 minutes, so a builder holding the lock
+// for this long is stuck, and a waiter builds its own copy rather than wait
+// forever (a duplicate build is
 // wasted work, never a wrong index: every build writes its own temp file and
 // renames it into place).
 var lockStaleAge = 10 * time.Minute

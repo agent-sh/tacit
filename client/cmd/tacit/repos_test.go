@@ -20,7 +20,7 @@ func TestAcceptPendingReposKeepsTheEvidenceAcrossRuns(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("TACIT_STATE_DIR", "")
 	t.Setenv("TACIT_PROJECTS", filepath.Join(home, "projects"))
-	scratch := filepath.Join(base, "srv", "memra")
+	scratch := filepath.Join(base, "srv", "orbit")
 	os.MkdirAll(filepath.Join(scratch, ".git"), 0o755)
 	os.WriteFile(filepath.Join(scratch, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644)
 	r, _ := repoid.Of(scratch, home)
@@ -35,13 +35,13 @@ func TestAcceptPendingReposKeepsTheEvidenceAcrossRuns(t *testing.T) {
 	}
 	acceptPendingRepos(home, ws, true)
 	recordWindowRepos(home, ws)
-	if ws[0].Repo != "" || machineCatalog(home).Has("memra") {
+	if ws[0].Repo != "" || machineCatalog(home).Has("orbit") {
 		t.Fatal("one session named the repo")
 	}
 	ws = win("s2")
 	acceptPendingRepos(home, ws, true)
 	recordWindowRepos(home, ws)
-	if ws[0].Repo != "memra" || ws[0].RepoRoot != scratch || !machineCatalog(home).Has("memra") {
+	if ws[0].Repo != "orbit" || ws[0].RepoRoot != scratch || !machineCatalog(home).Has("orbit") {
 		t.Fatalf("two sessions: %+v", ws[0])
 	}
 }

@@ -51,26 +51,24 @@ const (
 	// derivedPromptFloor is the floor for the one derived fact (hot spots,
 	// module map) a prompt may add. Lower than promptFloor because the field
 	// is different: derived facts rank alone in their own scope, and a hit is
-	// a prompt that names a file or module in them. Measured on the live store
-	// plus the derived facts with 31 prompts for two repos
-	// (eval/VALUE.md, bm25 as the hook computes it): the 18 prompts
-	// that name no file or module scored up to 7.9; a deploy prompt that said
-	// "console worker" 9.7; the 6 that name one hot file by a short name 9.0,
-	// 9.1, 12.3, 12.6, 15.4 and 16.8; the 5 that name two files, a full path or
-	// ask for hot spots or the layout 15.9 to 29.4. There is no clean gap below
-	// 12.3, so 12 is a judgment inside that band, not an optimum. A false
-	// positive costs one line of about 60 tokens (the hook prints name and
-	// description only), so it is set lower than the curated floor.
+	// a prompt that names a file or module in them. Measured on a real store
+	// plus its derived facts with prompts for two repos (eval/VALUE.md, bm25
+	// as the hook computes it): the prompts that name no file or module scored
+	// under the floor; the ones that name one hot file by a short name spread
+	// across it; the ones that name two files, a full path or ask for hot spots
+	// or the layout scored well above it. There is no clean gap in the
+	// one-file band, so 12 is a judgment inside that band, not an optimum. A
+	// false positive costs one line of about 60 tokens (the hook prints name
+	// and description only), so it is set lower than the curated floor.
 	//
 	// Result facts (type result, from git) share this floor, measured again on
-	// the same kind of prompt set (eval/VALUE.md, "Results from git"): 31
-	// prompts for two repos, the highest score of a result fact on a
-	// prompt that asks for no number was 9.7; 21 prompts that ask for a
-	// measurement, the 8 result lines the gated hook printed scored 15.3 to
-	// 35.3, and helpful and weak lines overlap in that range, so there is no
-	// floor between them. Quality comes from what may be printed at all (only
-	// result facts of row logs and of groups a curated fact quotes), not from a
-	// higher floor.
+	// the same kind of prompt set (eval/VALUE.md, "Results from git"): on a
+	// prompt that asks for no number a result fact stayed under it; on the
+	// prompts that ask for a measurement the result lines the gated hook
+	// printed scored above it, and helpful and weak lines overlap in that
+	// range, so there is no floor between them. Quality comes from what may be
+	// printed at all (only result facts of row logs and of groups a curated
+	// fact quotes), not from a higher floor.
 	derivedPromptFloor = 12.0
 )
 
@@ -404,8 +402,8 @@ func promptHits(ctx context.Context, ix *search.Index, sit search.Situation, p s
 // 3 letters or more (the search's stop words aside, a path's parts counted
 // as words, compared by stem) names too little to pick a rule or an action
 // for it, so it gets neither the rule slot nor the action line; its ranked,
-// metadata and derived lines stay. On the graded prompt blocks it removed 5
-// noise lines and 1 weak one and no useful line (eval/DELIVERY.md, "Short
+// metadata and derived lines stay. On the graded prompt blocks it removed
+// only noise and weak lines, no useful one (eval/DELIVERY.md, "Short
 // requests").
 func shortRequest(p string) bool {
 	keys := map[string]bool{}
@@ -428,9 +426,9 @@ func promptSelectionFor(p string, hits, derived []search.Hit, seen map[string]bo
 // echoShare: a line whose name and description words the request holds for
 // at least this share of them says back what the request says. Measured on
 // the graded prompt blocks (eval/DELIVERY.md, "Echoes of the request"): at
-// 0.7 it drops 32 lines of program-written prompts (a scheduled review's own
-// instructions said back to it) and no useful line; at 0.6 it dropped two
-// useful ones; owner prompts lost nothing at 0.5 to 0.8.
+// 0.7 it drops the lines of program-written prompts (a scheduled review's own
+// instructions said back to it) and no useful line; at 0.6 it dropped useful
+// ones; owner prompts lost nothing from 0.5 to 0.8.
 const echoShare = 0.7
 
 // echoMinTerms: a line of fewer distinct words is no echo, however many of
@@ -539,7 +537,7 @@ func selectPrompt(hits, derived []search.Hit, seen map[string]bool, floor float6
 
 // startSelection orders the SessionStart block: owner rules first
 // (search.Hit.Rule), then their rulings given inside a task (still theirs,
-// and on 254 situations dropping them lost one the session needed), then
+// and on the replay bench dropping them lost a fact a session needed), then
 // repo and machine facts, then the rest; nothing under
 // the score floor and nothing derived (the block is for owner rulings and host
 // facts).

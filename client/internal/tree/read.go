@@ -12,7 +12,7 @@ import (
 // DefaultDepth is how many levels below the asked folder the tree tool
 // returns when the caller does not say (DepthFor): RootDepth for the store
 // root, whose third level is every fact of every scope the session reads
-// (26 to 36 KB on the rig's stores, 2026-10-21), DefaultDepth for any other
+// (tens of KB on a store in daily use), DefaultDepth for any other
 // folder. MaxDepth is the most it accepts.
 const (
 	DefaultDepth = 3

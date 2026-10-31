@@ -2,8 +2,8 @@
 // transcripts since its last run, digests it, asks a model for the durable
 // facts nobody wrote down, and files them in inbox/dreamer@<host>/.
 //
-// Measured in eval/VALUE.md: Opus 5.5 states 78 percent of the truth facts
-// in their windows against Sonnet's 72, for 2.3 times the cost.
+// Measured in eval/VALUE.md: Opus 5.5 states more of the truth facts in
+// their windows than Sonnet does, at a higher cost.
 package dream
 
 import (
@@ -38,10 +38,10 @@ import (
 
 // DefaultModel is the extraction model: $TACIT_DREAM_MODEL (a provider's
 // full model id, for example), else the Claude CLI alias opus. --model on
-// tacit dream wins. Measured 2026-10-18 on 89 transcript windows (53 owner
-// rulings), prompt v4, Sonnet 5.5 judging: the truth fact was written down
-// in 64% of windows by Haiku 5.5, 72% by Sonnet 5.5 and 78% by Opus 5.5, at
-// about 0.01, 0.12 and 0.27 dollars a 60k-character window.
+// tacit dream wins. Measured on real transcript windows with prompt v4,
+// Sonnet 5.5 judging: Opus 5.5 wrote the truth fact down in the most
+// windows, then Sonnet 5.5, then Haiku 5.5, and the cost of a 60k-character
+// window falls in the same order.
 var DefaultModel = modelrun.Model("dream", "opus")
 
 const (
@@ -53,9 +53,9 @@ const (
 // Prompt is v8. Versions (measurements in eval/VALUE.md):
 //   - v4 (2026-10-11, eval/dream/dream_recall.py): v2 plus one rule, skip what
 //     holds only inside the task in progress, never a failure and its fix or a
-//     rule of the owner. On two samples of 30 windows it cut the facts 25 and
-//     23 percent and the task-only ones 90 and 81 percent; recall on the 80
-//     truth gaps 58 and 58 at least partial against v2's 60 and 61.
+//     rule of the owner. On two samples of windows it cut the facts by about
+//     a quarter and most of the task-only ones, with recall on the truth
+//     gaps about where v2's was.
 //   - v5 (2026-10-18): v4 plus the owner's exact words in "quote" for a ruling
 //     ("Dreamed rulings keep the owner's words").
 //   - v6 (2026-10-22): v5 plus statements (SPEC.md, "Statements"): owner
@@ -74,8 +74,8 @@ const (
 //     of a remark dropped or kept with no stated future use (Gate).
 //   - v9 (2026-10-28): v8 plus, when the held list is on (HeldChars), the
 //     facts already held for the window before its digest (PromptFor,
-//     HeldPool.Held). Replayed on 14 rig windows: 131 notes to 120, copies of
-//     held facts 20 to 14, within run-to-run noise; off by default.
+//     HeldPool.Held). Replayed on real windows: fewer notes and fewer copies
+//     of held facts, within run-to-run noise; off by default.
 const Prompt = `You are the dreamer of tacit, a fact store shared by coding agents on one owner's machines.
 Below is a digest of part of an agent session (U: owner, P: a prompt another agent or a program wrote, H: harness-injected text, A: agent, T: tool call, E: tool error).
 P: lines are never the owner's words, even when they say the owner wants or ruled something: they are an agent's instructions or its report of the owner, so a rule found only in a P: line is kind observed with no quote.
@@ -757,7 +757,7 @@ func fileWindows(f string, format digest.Format, session string, off, size int64
 	}
 	// The cwd's repo, else the repo the window's own paths are in. Per
 	// window, not per delta: a long session moves between repos, and
-	// measured per delta, 10 of 40 inferred repos were wrong.
+	// measured per delta, many inferred repos were wrong.
 	cwdRepo, cwd := repoOf(head, home, mains)
 	resolver := repoinfer.NewResolver(home).WithMains(mains)
 	all := windowsOf(lines, at, cwdRepo, cwd, home, mains, resolver, func(part int, c []string) Window {

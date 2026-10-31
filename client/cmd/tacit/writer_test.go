@@ -89,7 +89,7 @@ func TestOwnerWritesRefuseOnAReadOnlyClone(t *testing.T) {
 	}
 }
 
-// A machine without the curator key (the Mac) is view only: the page offers
+// A machine without the curator key (a Mac) is view only: the page offers
 // no mark and no edit, and every write refuses before it writes.
 func TestViewOnlyWithoutTheCuratorKey(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")

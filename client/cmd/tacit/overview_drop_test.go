@@ -18,7 +18,7 @@ import (
 )
 
 // overviewRig is a store at the current format with folders of three facts
-// each (four for the first: the rig's own note), each with a live record,
+// each (four for the first: the fixture's own note), each with a live record,
 // pushed behind the server's real pre-receive hook, which sees this
 // machine's curator key.
 func overviewRig(t *testing.T, repos ...string) *rig {
@@ -242,7 +242,7 @@ func TestCuratorChangeRemovesOnlyGeneratedFiles(t *testing.T) {
 	for rel, ok := range map[string]bool{
 		"projects/widget/_overview.md":     true,
 		"projects/widget/_index.md":        true,
-		"areas/spark/sub/_overview.md":     true,
+		"areas/build/sub/_overview.md":     true,
 		"projects/widget/widget-port.md":   false,
 		"projects/widget/_record.md":       false,
 		"derived/widget/_overview.md":      false,
@@ -282,8 +282,8 @@ func TestCuratorChangeRemovesOnlyGeneratedFiles(t *testing.T) {
 }
 
 // The order is by tier, and the tier decides alone: a red overview goes
-// before a forced change whose share passes 1 (on the rig, projects/hqmtp
-// with share 0 came after 34 forced folders and was never reached), a forced
+// before a forced change whose share passes 1 (a red overview with share 0
+// that sorted behind many forced folders was never reached), a forced
 // change before a folder with none, and that before an unforced share.
 func TestOverviewCandidatesOrderByTier(t *testing.T) {
 	old := &overview.Overview{}

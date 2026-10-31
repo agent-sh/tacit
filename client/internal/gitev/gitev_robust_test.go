@@ -105,7 +105,7 @@ func TestEvidenceIsRedactedAndFailsClosed(t *testing.T) {
 func TestBadPathsDoNotHideTheRealOnes(t *testing.T) {
 	f := newFixture(t)
 	body := "Owner, 2026-09-12: the hook `tools/hooks/pre-commit` and also `../shared/notes.md` and `./../x/y.md` and `a/../b.md`."
-	a := &fact.Fact{Meta: fact.Meta{Name: "a", Scope: "projects/memra", Created: "2026-10-08", AppliesTo: fact.AppliesTo{Paths: []string{"tools/hooks/pre-commit", "../escape.md"}}}, Body: body}
+	a := &fact.Fact{Meta: fact.Meta{Name: "a", Scope: "projects/gearbox", Created: "2026-10-08", AppliesTo: fact.AppliesTo{Paths: []string{"tools/hooks/pre-commit", "../escape.md"}}}, Body: body}
 	s := f.g.SubjectOf(a)
 	for _, p := range s.Paths {
 		if strings.Contains(p, "..") {
@@ -122,7 +122,7 @@ func TestBadPathsDoNotHideTheRealOnes(t *testing.T) {
 	}
 	// Even when a refused pathspec reaches the query (it bypasses the parser),
 	// the others are still asked one by one and the refusal is a note.
-	ev := f.g.Collect(context.Background(), Subject{Repos: []string{"memra"}, Paths: []string{"../escape.md", "tools/hooks/pre-commit"}}, Window{Since: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), Anchor: time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)})[0]
+	ev := f.g.Collect(context.Background(), Subject{Repos: []string{"gearbox"}, Paths: []string{"../escape.md", "tools/hooks/pre-commit"}}, Window{Since: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), Anchor: time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)})[0]
 	if !ev.Incomplete || indexOf(ev.Notes, "refused by git") < 0 {
 		t.Errorf("a refused path is not reported: %+v", ev.Notes)
 	}
@@ -161,7 +161,7 @@ func TestRunStopsAHungGitAndCapsOutput(t *testing.T) {
 	g := New(f.root)
 	g.Timeout = 400 * time.Millisecond
 	start := time.Now()
-	_, trunc, err := g.run(context.Background(), filepath.Join(f.root, "memra"), 1<<10, "hang-forever")
+	_, trunc, err := g.run(context.Background(), filepath.Join(f.root, "gearbox"), 1<<10, "hang-forever")
 	if !errors.Is(err, context.DeadlineExceeded) || !trunc {
 		t.Errorf("a hung git returned %v (truncated %v)", err, trunc)
 	}
@@ -169,7 +169,7 @@ func TestRunStopsAHungGitAndCapsOutput(t *testing.T) {
 		t.Errorf("the hung git held the caller for %v", d)
 	}
 	g.Timeout = 15 * time.Second
-	out, trunc, err := g.run(context.Background(), filepath.Join(f.root, "memra"), 50, "log", "--format=%H%n%s")
+	out, trunc, err := g.run(context.Background(), filepath.Join(f.root, "gearbox"), 50, "log", "--format=%H%n%s")
 	if err != nil || !trunc || len(out) > 50 || len(out) == 0 {
 		t.Errorf("capped output: %d bytes, truncated %v, err %v", len(out), trunc, err)
 	}
@@ -200,7 +200,7 @@ func TestTimedOutReadIsNotCached(t *testing.T) {
 	if err != nil || tl.Incomplete {
 		t.Fatalf("second build: incomplete %v err %v", tl != nil && tl.Incomplete, err)
 	}
-	if i := indexOf(lines(tl), "HEAD memra"); i < 0 || strings.Contains(lines(tl)[i], ": 0 commits since") {
+	if i := indexOf(lines(tl), "HEAD gearbox"); i < 0 || strings.Contains(lines(tl)[i], ": 0 commits since") {
 		t.Errorf("the count is still wrong:\n%s", strings.Join(lines(tl), "\n"))
 	}
 	if files, _ := filepath.Glob(filepath.Join(f.g.CacheDir, "*.json")); len(files) == 0 {
