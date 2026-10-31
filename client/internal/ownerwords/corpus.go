@@ -390,6 +390,50 @@ func (c *Corpus) Find(quote, session string, exactOnly bool) (Match, bool) {
 	return Match{}, false
 }
 
+// Latest is the latest turn that holds quote as a statement of theirs,
+// exactly (not their question, not negated), in the given session when it
+// holds one, else anywhere, with its time (zero when its source records
+// none). Words they said again are their newest saying: an answer of theirs
+// given on two days is the later answer.
+func (c *Corpus) Latest(quote, session string) (Match, time.Time, bool) {
+	segs := Segments(quote)
+	if segs == nil || c == nil || c.sa == nil {
+		return Match{}, time.Time{}, false
+	}
+	pick := func(idx []int) (Match, int64, bool) {
+		var best Match
+		var at int64
+		found := false
+		for _, i := range idx {
+			m, ok := c.matchTurn(i, segs, false)
+			if !ok || !m.Clean() {
+				continue
+			}
+			if !found || c.at[i] > at {
+				best, at, found = m, c.at[i], true
+			}
+		}
+		return best, at, found
+	}
+	var preferred []int
+	if session != "" {
+		for _, src := range []string{"claude:", "codex:", "pi:", "hermes:"} {
+			preferred = append(preferred, c.turns[src+session]...)
+		}
+	}
+	m, at, ok := pick(preferred)
+	if !ok {
+		m, at, ok = pick(c.candidates(segs[0]))
+	}
+	if !ok {
+		return Match{}, time.Time{}, false
+	}
+	if at == 0 {
+		return m, time.Time{}, true
+	}
+	return m, time.Unix(at, 0), true
+}
+
 // SaidIn is every session in which the owner said the quote as a statement
 // of theirs (exact words, or a typo of theirs the quote corrected as Find
 // forgives one; not their question, not negated): their refs, each once,

@@ -364,8 +364,9 @@ func (rs *reviewServer) applyNameOp(o *op, it *reviewItem) (string, []string, er
 			reopenPair(x, y, prev.Before[x.Path])
 			reopenPair(y, x, prev.Before[y.Path])
 			if markOf(prev.Action) == "wrong" {
-				// Neither retired both: put back what each was.
-				x.Meta.Retired, y.Meta.Retired = prev.Before[x.Path].Retired, prev.Before[y.Path].Retired
+				// Neither retired both: put back what each was, but a
+				// file retired again since keeps that retirement.
+				note = strings.TrimSpace(reopenRetired(x, prev.Before[x.Path], prev.At) + " " + reopenRetired(y, prev.Before[y.Path], prev.At))
 			}
 			for _, f := range []*fact.Fact{x, y} {
 				b := prev.Before[f.Path]
@@ -436,18 +437,24 @@ func (rs *reviewServer) applyNameRelay(o *op, it *reviewItem) (string, []string,
 		return "", nil, err
 	}
 	switch {
-	case it.Decision != nil:
+	case it.Decision != nil && !(it.Decision.By == "agent" && it.Stale):
+		// An agent's answer the store no longer says waits again; any other
+		// answer stands until the owner reopens it.
 		return "", nil, errors.New("this name is answered already; the owner reopens that answer first")
 	case it.State == "gone":
 		return "", nil, errors.New("a file of this name is retired, replaced or not in the store: the name is no longer held twice")
 	case it.Crowded:
 		return "", nil, errors.New("more than two files hold this name; the owner retires the copies, file by file, in tacit app")
 	}
+	// Asked when the name was raised, or when an agent asked about it after.
 	closes, question, asked := kindName, nameQuestion(*it), strings.TrimSuffix(it.Source, ".md")
 	if it.Ask != nil {
-		closes, question, asked = closesAsk, it.Ask.Question, it.Ask.At
+		closes, question = closesAsk, it.Ask.Question
+		if askedDay(it.Ask.At) > askedDay(asked) {
+			asked = it.Ask.At
+		}
 	}
-	why := o.relays(relayQuestion{asked: asked, question: question, facts: []*factView{it.A, it.B}, last: rs.ownerLast(it.ID, it.A.Name)})
+	why := rs.relays(o, relayQuestion{asked: asked, question: question, facts: []*factView{it.A, it.B}, last: rs.ownerLast(it.ID, it.A.Name)})
 	if why != nil {
 		return "", nil, fmt.Errorf("a name two files hold closes only on the owner's own answer, and these words are not their answer to it: %v", why)
 	}

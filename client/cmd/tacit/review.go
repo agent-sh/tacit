@@ -620,6 +620,24 @@ func sameSnap(f *fact.Fact, s snap) bool {
 	return f.Meta.SupersededBy == s.SupersededBy && strings.Join(f.Meta.ConflictsWith, ",") == strings.Join(s.ConflictsWith, ",") && f.Meta.Retired == s.Retired
 }
 
+// reopenRetired puts back the retirement a neither answer, made at at, set
+// on f: only while f still carries that answer's day, so a fact retired again
+// since keeps that retirement, and the note returned says so.
+func reopenRetired(f *fact.Fact, before snap, at string) string {
+	if f.Meta.Retired == before.Retired {
+		return ""
+	}
+	day := at
+	if len(day) > 10 {
+		day = day[:10] // the answer retired its facts on the day it was made
+	}
+	if f.Meta.Retired != day {
+		return f.Path + " was retired again after this answer; it stays as it is."
+	}
+	f.Meta.Retired = before.Retired
+	return ""
+}
+
 // reopenPair undoes what a mark did to the relations between x and y, and
 // nothing else: other proofs' marks and later edits on these facts stay.
 func reopenPair(x, y *fact.Fact, before snap) {
@@ -770,7 +788,9 @@ func (rs *reviewServer) applyOnce(ctx context.Context, ops []op) ([]string, []er
 		if errs[i] == nil && first == "" {
 			first, by = fmt.Sprintf("%s %s / %s", o.Mark, o.A, o.B), o.By
 			if o.Relayed {
-				by += ", the owner's answer relayed"
+				// The subject still ends "by agent": tacit app's history reads
+				// every other review commit as the owner's.
+				first += " (the owner's answer, relayed)"
 			}
 		}
 	}
@@ -964,8 +984,9 @@ func (rs *reviewServer) applyOp(o *op) (string, []string, error) {
 			reopenPair(x, y, prev.Before[x.Meta.Name])
 			reopenPair(y, x, prev.Before[y.Meta.Name])
 			if markOf(prev.Action) == "wrong" {
-				// Neither is true retired both: put back what each was.
-				x.Meta.Retired, y.Meta.Retired = prev.Before[x.Meta.Name].Retired, prev.Before[y.Meta.Name].Retired
+				// Neither is true retired both: put back what each was, but a
+				// fact retired again since keeps that retirement.
+				note = strings.TrimSpace(reopenRetired(x, prev.Before[x.Meta.Name], prev.At) + " " + reopenRetired(y, prev.Before[y.Meta.Name], prev.At))
 			}
 			for _, f := range []*fact.Fact{x, y} {
 				b := prev.Before[f.Meta.Name]

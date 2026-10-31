@@ -7,17 +7,18 @@ package main
 // answer on: `tacit questions close ID --proof words --words W`, where code
 // finds W in the owner's own turns. The words are their answer to the
 // question when they were said on or after the day it was asked, after the
-// owner's own last word on it (a mark, a reopen, a keep, a note), and in a
-// turn on its subject, read whole: the question's words they pasted and the
-// terse answer they typed after them. Such a closure is the owner's answer:
-// the guards that keep an agent off the owner's questions do not hold it back
-// (a name two files hold, a finding they marked, reopened or kept a fact of,
-// their note on it, an ask addressed to them), and it may change their ruling
-// on their later words on its subject. It is recorded as an agent's,
-// relayed: it endorses nothing, and the owner's reopen undoes it. Without
-// such words every guard stands.
+// owner's own last word on it (a mark, a reopen, a keep, a note, an edit in
+// tacit app), and in an item of their turn on its subject: the question's
+// words they pasted and the terse answer they typed after them. Such a
+// closure is the owner's answer: the guards that keep an agent off the
+// owner's questions do not hold it back (a name two files hold, a finding
+// they marked, reopened or kept a fact of, their note on it, an ask
+// addressed to them), and it may change their ruling on their later words on
+// its subject. It is recorded as an agent's, relayed: it endorses nothing,
+// and the owner's reopen undoes it. Without such words every guard stands.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,20 +28,22 @@ import (
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/agentreview"
+	"github.com/agent-sh/tacit/client/internal/store"
 )
 
 // ownerAnswer is the owner's turn a words proof rests on, as code found it in
-// their turns: the turn whole, as they wrote it, when they said it and its
-// day (this machine's time).
+// their turns: the item of the turn that holds the words, as they wrote it
+// (ownerwords.ItemAround), when they said it and its day (this machine's
+// time).
 type ownerAnswer struct {
-	turn string
+	item string
 	at   time.Time
 	on   string
 }
 
 // relayQuestion is what a relay is checked against: when the question was
-// asked (a day, or a time), what it asked, the facts it is about, and the
-// owner's own last record on it (zero for none).
+// asked (a day, or a time), what it asked, the facts it is about, the files
+// that hold them, and the owner's own last record on it (zero for none).
 type relayQuestion struct {
 	asked, question string
 	facts           []*factView
@@ -49,7 +52,7 @@ type relayQuestion struct {
 
 // relays says why the owner's words a closure rests on are not their answer
 // to q, or nil when they are.
-func (o *op) relays(q relayQuestion) error {
+func (rs *reviewServer) relays(o *op, q relayQuestion) error {
 	a := o.answer
 	if o.Proof != "words" || a == nil {
 		return errors.New("the closure rests on no words of the owner's")
@@ -64,25 +67,27 @@ func (o *op) relays(q relayQuestion) error {
 	if a.on < day {
 		return fmt.Errorf("they said them on %s, before the question was asked (%s)", a.on, day)
 	}
-	if !q.last.IsZero() && !a.at.After(q.last) {
-		return fmt.Errorf("the owner's own answer or note on it (%s) is later than these words", q.last.Local().Format("2006-01-02 15:04"))
-	}
-	if !agentreview.OnSubject(q.question, factsText(q.facts...), a.turn) {
-		return errors.New("their turn is about another subject")
-	}
-	return nil
-}
-
-// factsText is what a question's facts say, for the same-subject rule: each
-// one's name, file and description.
-func factsText(facts ...*factView) string {
-	var parts []string
-	for _, f := range facts {
-		if f != nil {
-			parts = append(parts, f.Name, f.Path, f.Description)
+	var paths []string
+	for _, f := range q.facts {
+		if f != nil && !f.Missing {
+			paths = append(paths, f.Path)
 		}
 	}
-	return strings.Join(parts, "\n")
+	edited, err := rs.ownerEdited(paths...)
+	if err != nil {
+		return fmt.Errorf("the owner's own edits of its facts could not be read (%s)", shortErr(err))
+	}
+	last := q.last
+	if edited.After(last) {
+		last = edited
+	}
+	if !last.IsZero() && !a.at.After(last) {
+		return fmt.Errorf("the owner's own answer, note or edit on it (%s) is later than these words", last.Local().Format("2006-01-02 15:04"))
+	}
+	if !agentreview.OnSubject(q.question, factsText(q.facts...), a.item) {
+		return errors.New("the item of their turn that holds them is about another subject")
+	}
+	return nil
 }
 
 // askedDay is the day a question was asked (this machine's time): of an RFC
@@ -127,6 +132,32 @@ func (rs *reviewServer) ownerLast(id string, names ...string) time.Time {
 	return last
 }
 
+// ownerEdited is the time of the owner's newest commit of their own in tacit
+// app (`owner: `: an edit, a retire, a restore, an undo, a new rule) on any of
+// the files; zero for none. Those write no decision, and their newer word on
+// a fact stands over older words of theirs.
+func (rs *reviewServer) ownerEdited(paths ...string) (time.Time, error) {
+	if len(paths) == 0 {
+		return time.Time{}, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	out, err := store.Git(ctx, rs.s.Dir, append([]string{"log", "-n", "400", "--format=%cI%x1f%s", "--"}, paths...)...)
+	if err != nil {
+		return time.Time{}, err
+	}
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+		at, subject, ok := strings.Cut(l, "\x1f")
+		if !ok || !strings.HasPrefix(subject, ownerCommit) {
+			continue
+		}
+		if t, err := time.Parse(time.RFC3339, at); err == nil {
+			return t, nil // newest first
+		}
+	}
+	return time.Time{}, nil
+}
+
 // notTheirAnswer is a guard's refusal, with why the owner's words a closure
 // gave are no answer of theirs to the question.
 func notTheirAnswer(msg string, o *op, why error) error {
@@ -146,6 +177,24 @@ func rulingRefusal(msg string, o *op, why error) error {
 	return notTheirAnswer(msg, o, why)
 }
 
+// factsText is what a question's facts say, for the same-subject rule: each
+// one's name and description, and its scope's own name (the repository or
+// the machine). Not its file: folder words (user, projects, machines) name
+// no subject.
+func factsText(facts ...*factView) string {
+	var parts []string
+	for _, f := range facts {
+		if f == nil {
+			continue
+		}
+		parts = append(parts, f.Name, f.Description)
+		if i := strings.LastIndexByte(f.Scope, '/'); i >= 0 {
+			parts = append(parts, f.Scope[i+1:])
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
 // pairAsked is when the question a pair carries was asked: its ask, or its
 // query.
 func pairAsked(it reviewItem) string {
@@ -162,4 +211,23 @@ func pairAsked(it reviewItem) string {
 // its own words.
 func nameQuestion(it reviewItem) string {
 	return "Two files hold the name " + it.A.Name + ": " + it.A.Path + " and " + it.B.Path + ". Which one stands?"
+}
+
+// relayMoot closes, with the owner's own answer, a question of theirs that
+// went moot: a fact it is about was retired, replaced or is gone, and the
+// moot pass leaves the owner's questions to them. Nothing changes but the
+// record, which keeps their words and why the question is moot.
+func (rs *reviewServer) relayMoot(o *op, closes, a, b, question, why string) (string, []string, error) {
+	if err := closureText(o); err != nil {
+		return "", nil, err
+	}
+	o.Mark = mootMark
+	d := closureDecision(o, closes, a, b)
+	d.Evidence, d.Question = strings.TrimSpace(why+". "+o.Evidence), question
+	if o.dry {
+		return "the closure would land: " + why, nil, nil
+	}
+	files := map[string][]byte{}
+	rs.appendDecision(files, d)
+	return writeFiles(rs.s.Dir, "", files)
 }
