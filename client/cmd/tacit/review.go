@@ -384,9 +384,9 @@ func (rs *reviewServer) decisions() (marks, asks map[string]*decision) {
 
 // ownerTouched lists findings with any record the owner made themself (a
 // mark from the page, a reopen, or a record from before marks carried By),
-// or that an agent relayed as their own answer, and the facts of every pair
-// where the owner kept one over the other. A verifier never touches those
-// findings or facts.
+// and the facts of every pair where the owner kept one over the other. A
+// verifier never touches those findings or facts (nor, theirs, the facts
+// their standing relayed answers kept).
 func (rs *reviewServer) ownerTouched() map[string]bool {
 	out := map[string]bool{}
 	b, err := os.ReadFile(filepath.Join(rs.s.Dir, "review", "decisions.jsonl"))
@@ -395,7 +395,7 @@ func (rs *reviewServer) ownerTouched() map[string]bool {
 	}
 	for _, l := range strings.Split(string(b), "\n") {
 		var d decision
-		if json.Unmarshal([]byte(l), &d) == nil && d.ID != "" && (d.By == "" || (d.By == "agent" && d.Relayed)) && d.Action != "note" {
+		if json.Unmarshal([]byte(l), &d) == nil && d.ID != "" && d.By == "" && d.Action != "note" {
 			// A note alone answers nothing: the finding stays open to the
 			// verifier, which reads the note as the owner's word on it.
 			out[d.ID] = true
@@ -897,7 +897,7 @@ func (rs *reviewServer) applyOp(o *op) (string, []string, error) {
 		if it.Decision != nil || it.Ask != nil {
 			return "", nil, errors.New("an agent may not mark a finding that already carries a mark or a question")
 		}
-		if owned := rs.ownerTouched(); owned[o.ID] || owned[it.A.Name] || owned[it.B.Name] {
+		if owned := rs.theirs(); owned[o.ID] || owned[it.A.Name] || owned[it.B.Name] {
 			return "", nil, errors.New("the owner has marked or reopened this finding or one of its facts; it is theirs")
 		}
 		if mark != "ask" && strings.TrimSpace(o.Evidence) == "" {
@@ -1002,8 +1002,8 @@ func (rs *reviewServer) applyOp(o *op) (string, []string, error) {
 			}
 			for _, f := range []*fact.Fact{x, y} {
 				b := prev.Before[f.Meta.Name]
-				if c := now[f.Meta.Name]; sameSnap(f, c) && c.Updated == f.Meta.Updated && !sameSnap(f, b) {
-					continue // the reopen left it as it is (retired again since)
+				if sameSnap(f, now[f.Meta.Name]) {
+					continue // the reopen changed nothing in it
 				}
 				if sameSnap(f, b) {
 					f.Meta.Updated = b.Updated

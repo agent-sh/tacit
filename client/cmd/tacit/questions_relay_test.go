@@ -620,6 +620,140 @@ func TestTheOwnersEditInTheAppOutranksTheirOlderWords(t *testing.T) {
 	}
 }
 
+// One turn of the owner's may answer two questions on one fact: the second
+// answer is no older than the first one an agent relayed, so it lands too.
+func TestTheSameTurnAnswersTwoQuestionsOnOneFact(t *testing.T) {
+	stubScrump(t)
+	uv, vy := pairID(kindContradiction, "u", "v"), pairID(kindContradiction, "v", "y")
+	rs := questionStore(t, map[string]string{"u": "", "v": "", "y": ""},
+		"- CONTRADICTION?: [[v]] (system) vs [[u]] (system)\n- CONTRADICTION?: [[y]] (system) vs [[v]] (system)\n",
+		askOn(uv, "u", "v", "Which walrus port holds, 7781 or 7790?"),
+		askOn(vy, "v", "y", "Which walrus port holds now, 7790 or 7800?"))
+	describe(t, rs, map[string]string{"u": "The walrus driver listens on port 7781", "v": "The walrus driver listens on port 7790", "y": "The walrus driver listens on port 7800"})
+	home := questionsHome(t, rs)
+	const one, two = "the walrus driver moved to port 7790 last week", "the walrus driver stays on port 7790, the 7800 test is over"
+	ownerTurns(t, home, [3]string{"owner-later", "2026-10-29T10:00:00Z", "which walrus port holds, 7781 or 7790?\n- " + one + "\nwhich walrus port holds now, 7790 or 7800?\n- " + two})
+	if c := relayOn(uv, "keep:v", one); c != 0 {
+		t.Fatalf("the first answer: exit %d", c)
+	}
+	if c := relayOn(vy, "keep:v", two); c != 0 {
+		t.Fatalf("the second answer of the same turn: exit %d", c)
+	}
+	rs.loadFacts()
+	if rs.facts["u"].Meta.SupersededBy != "v" || rs.facts["y"].Meta.SupersededBy != "v" {
+		t.Fatalf("u %+v y %+v", rs.facts["u"].Meta, rs.facts["y"].Meta)
+	}
+}
+
+// A relayed answer guards the facts it kept only while it stands: after the
+// owner's reopen an agent may mark them again. Facts a relayed neither retired
+// leave their other questions moot, and the moot pass closes those.
+func TestARelayedAnswerGuardsOnlyWhileItStands(t *testing.T) {
+	stubScrump(t)
+	uv, vw, ab, bc := pairID(kindContradiction, "u", "v"), pairID(kindContradiction, "v", "w"), pairID(kindContradiction, "a", "b"), pairID(kindContradiction, "b", "c")
+	rs := questionStore(t, map[string]string{"u": "", "v": "", "w": "", "a": "", "b": "", "c": ""},
+		"- CONTRADICTION?: [[v]] (system) vs [[u]] (system)\n- CONTRADICTION?: [[w]] (system) vs [[v]] (system)\n- CONTRADICTION?: [[b]] (system) vs [[a]] (system)\n- CONTRADICTION?: [[c]] (system) vs [[b]] (system)\n",
+		askOn(uv, "u", "v", "Which walrus port holds, 7781 or 7790?"), askOn(ab, "a", "b", "Which quokka queue holds, blue or green?"),
+		askOn(bc, "b", "c", "Which quokka queue holds, green or red?"))
+	describe(t, rs, map[string]string{"u": "The walrus driver listens on port 7781", "v": "The walrus driver listens on port 7790", "w": "The walrus driver listens on port 7800",
+		"a": "The quokka scheduler runs on the blue queue", "b": "The quokka scheduler runs on the green queue", "c": "The quokka scheduler runs on the red queue"})
+	home := questionsHome(t, rs)
+	const keepV, neither = "the walrus driver moved to port 7790 last week", "the quokka scheduler left both of those queues, neither holds"
+	ownerTurns(t, home, [3]string{"owner-later", "2026-10-29T10:00:00Z", "which walrus port holds; - " + keepV},
+		[3]string{"owner-later", "2026-10-29T11:00:00Z", "which quokka queue holds, blue or green; - " + neither})
+	if c := relayOn(uv, "keep:v", keepV); c != 0 {
+		t.Fatalf("the relayed keep: exit %d", c)
+	}
+	verdict := []map[string]string{{"id": vw, "a": "v", "b": "w", "mark": "keep", "keep": "w", "evidence": "w names the port the unit runs"}}
+	if code := applyVerdicts(t, verdict); code == 0 {
+		t.Fatal("an agent retired the fact a standing relayed answer kept")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if _, err := rs.decide(ctx, uv, "reopen", false); err != nil {
+		t.Fatalf("the owner's reopen: %v", err)
+	}
+	if code := applyVerdicts(t, verdict); code != 0 {
+		t.Fatal("after the owner's reopen the relayed answer still guards its fact")
+	}
+	if c := relayOn(ab, "neither", neither); c != 0 {
+		t.Fatalf("the relayed neither: exit %d", c)
+	}
+	rs.loadFacts()
+	if n, err := closeMootQuestions(ctx, rs, rs.ownerTouched(), map[string]bool{bc: true}, false, func(string) {}); err != nil || n != 1 {
+		t.Fatalf("the moot pass on the question a relayed neither left moot: closed %d (%v)", n, err)
+	}
+}
+
+// A reopen leaves what it does not change: a fact retired again since on
+// another day keeps that retirement, and a fact the mark kept and an edit
+// changed since keeps the edit, byte for byte.
+func TestAPairReopenLeavesWhatItDoesNotChange(t *testing.T) {
+	_, clone := reviewFixture(t)
+	rs := clone("one")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	it := itemFor(t, rs, "a", "b")
+	if err := mark(ctx, rs, it.ID, "wrong"); err != nil {
+		t.Fatal(err)
+	}
+	day := time.Now().Format("2006-01-02")
+	p := filepath.Join(rs.s.Dir, "system", "b.md")
+	b, _ := os.ReadFile(p)
+	again := strings.Replace(strings.Replace(string(b), "retired: "+day, "retired: 2026-01-02", 1), "updated: "+day, "updated: 2026-01-02", 1)
+	if again == string(b) {
+		t.Fatalf("fixture: b has no retired line of today:\n%s", b)
+	}
+	os.WriteFile(p, []byte(again), 0o644)
+	git(t, rs.s.Dir, "commit", "-qam", "another tool retires it again")
+	git(t, rs.s.Dir, "push", "-q", "origin", "HEAD:main")
+	rs.loadFacts()
+	if err := mark(ctx, rs, it.ID, "reopen"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(p); string(got) != again {
+		t.Fatalf("the reopen changed the file it left as it is:\n%s\nwas:\n%s", got, again)
+	}
+	cd := itemFor(t, rs, "d", "c")
+	if err := mark(ctx, rs, cd.ID, "left"); err != nil {
+		t.Fatal(err)
+	}
+	kp := filepath.Join(rs.s.Dir, "system", cd.A.Name+".md")
+	kb, _ := os.ReadFile(kp)
+	edited := strings.Replace(string(kb), "created:", "updated: 2026-10-30\ncreated:", 1)
+	os.WriteFile(kp, []byte(edited), 0o644)
+	git(t, rs.s.Dir, "commit", "-qam", "an edit of the kept fact")
+	git(t, rs.s.Dir, "push", "-q", "origin", "HEAD:main")
+	rs.loadFacts()
+	if err := mark(ctx, rs, cd.ID, "reopen"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(kp); string(got) != edited {
+		t.Fatalf("the reopen rewrote %s, which it does not change:\n%s\nwas:\n%s", cd.A.Name, got, edited)
+	}
+}
+
+// A question the owner pasted with no answer dash, their answer on the line
+// under it, is that answer's question, a space after its question mark too.
+func TestARelayReadsAQuestionPastedWithoutADash(t *testing.T) {
+	r := nameFixture(t)
+	stubScrump(t)
+	if code := runDedupe([]string{"--names"}); code != 0 {
+		t.Fatalf("dedupe --names exited %d", code)
+	}
+	it := nameItemFor(t, r, "lantern-proxy-port")
+	appendDecisionLine(t, r, decision{ID: "aaaaaaaaaaaa", Action: "right", A: "another-fact", B: "lantern-proxy-port", At: "2026-10-20T00:00:00Z"})
+	home := relayHome(t)
+	const answer = "keep the machine one, the user copy is noise"
+	ownerTurns(t, home, [3]string{"owner-chat", time.Now().UTC().Add(time.Minute).Format(time.RFC3339), nameQuestion(it) + " \n" + answer})
+	if c := relayOnName(it.ID, "keep:"+it.A.Path, answer); c != 0 {
+		t.Fatalf("their answer under the question they pasted: exit %d", c)
+	}
+	if got := supersededOnServer(t, r, it.B.Path); got != "lantern-proxy-port" {
+		t.Fatalf("%s: superseded_by %q", it.B.Path, got)
+	}
+}
+
 // The owner's page shows a relayed answer as theirs: their words, the day they
 // said them, and that an agent only passed them on, with the way to undo it.
 func TestPageShowsARelayedAnswerAsTheOwners(t *testing.T) {

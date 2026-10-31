@@ -42,12 +42,12 @@ type ownerAnswer struct {
 }
 
 // relayQuestion is what a relay is checked against: when the question was
-// asked (a day, or a time), what it asked, the facts it is about, the files
-// that hold them, and the owner's own last record on it (zero for none).
+// asked (a day, or a time), what it asked, the facts it is about, and the
+// owner's own last word on it (ownerLast).
 type relayQuestion struct {
 	asked, question string
 	facts           []*factView
-	last            time.Time
+	last            ownerWord
 }
 
 // relays says why the owner's words a closure rests on are not their answer
@@ -77,12 +77,17 @@ func (rs *reviewServer) relays(o *op, q relayQuestion) error {
 	if err != nil {
 		return fmt.Errorf("the owner's own edits of its facts could not be read (%s)", shortErr(err))
 	}
-	last := q.last
+	last := q.last.own
 	if edited.After(last) {
 		last = edited
 	}
 	if !last.IsZero() && !a.at.After(last) {
 		return fmt.Errorf("the owner's own answer, note or edit on it (%s) is later than these words", last.Local().Format("2006-01-02 15:04"))
+	}
+	// An answer of theirs an agent relayed stands over older words; the same
+	// turn may answer two questions on one fact.
+	if a.at.Before(q.last.relayed) {
+		return fmt.Errorf("an answer of theirs an agent relayed, said %s, is later than these words", q.last.relayed.Local().Format("2006-01-02 15:04"))
 	}
 	if a.item == "" {
 		return errors.New("their turn does not say which question these words answer: they are no answer in it, they run on into the next question, or its items run together")
@@ -107,16 +112,23 @@ func askedDay(s string) string {
 	return ""
 }
 
-// ownerLast is the time of the owner's latest record on a finding or on a
-// fact it names: a mark, a reopen, a keep in another answer, a note, This is
-// mine, and an answer of theirs an agent relayed, at the time they said its
-// words; zero for none. A relay rests only on words they said after it, so
-// their reopen of a relayed answer is never undone by the words it relayed,
-// and older words of theirs never undo a newer answer.
-func (rs *reviewServer) ownerLast(id string, names ...string) time.Time {
+// ownerWord is the owner's own last word on a question: own, the latest
+// record of theirs (a relay rests only on words said after it), and relayed,
+// the latest time they said the words of an answer of theirs an agent relayed
+// (a relay rests on words not older than it).
+type ownerWord struct{ own, relayed time.Time }
+
+// ownerLast is the owner's last word on a finding or on a fact it names: a
+// mark, a reopen, a keep in another answer, a note, This is mine, and an
+// answer of theirs an agent relayed, at the time they said its words (or the
+// record's time, when that is not recorded). So their reopen of a relayed
+// answer is never undone by the words it relayed, and older words of theirs
+// never undo a newer answer.
+func (rs *reviewServer) ownerLast(id string, names ...string) ownerWord {
+	var w ownerWord
 	b, err := os.ReadFile(filepath.Join(rs.s.Dir, "review", "decisions.jsonl"))
 	if err != nil {
-		return time.Time{}
+		return w
 	}
 	named := map[string]bool{}
 	for _, n := range names {
@@ -124,25 +136,61 @@ func (rs *reviewServer) ownerLast(id string, names ...string) time.Time {
 			named[n] = true
 		}
 	}
-	var last time.Time
 	for _, l := range strings.Split(string(b), "\n") {
 		var d decision
 		if json.Unmarshal([]byte(l), &d) != nil || d.ID == "" || (d.ID != id && !named[d.A] && !named[d.B]) {
 			continue
 		}
-		at := d.At
 		switch {
 		case d.By == "":
+			if t, err := time.Parse(time.RFC3339, d.At); err == nil && t.After(w.own) {
+				w.own = t
+			}
 		case d.By == "agent" && d.Relayed:
-			at = d.WordsAt
-		default:
-			continue
-		}
-		if t, err := time.Parse(time.RFC3339, at); err == nil && t.After(last) {
-			last = t
+			t, err := time.Parse(time.RFC3339, d.WordsAt)
+			if err != nil {
+				t, err = time.Parse(time.RFC3339, d.At)
+			}
+			if err == nil && t.After(w.relayed) {
+				w.relayed = t
+			}
 		}
 	}
-	return last
+	return w
+}
+
+// relayKept is the facts a standing answer of the owner's, relayed by an
+// agent, kept (left keeps A, right keeps B, both keeps both): no agent's own
+// mark or closure retires one, as none retires a fact their own answer kept.
+// Their reopen of the answer ends it.
+func (rs *reviewServer) relayKept() map[string]bool {
+	out := map[string]bool{}
+	marks, _ := rs.decisions()
+	for _, d := range marks {
+		if d.By != "agent" || !d.Relayed {
+			continue
+		}
+		switch markOf(d.Action) {
+		case "left":
+			out[d.A] = true
+		case "right":
+			out[d.B] = true
+		case "both":
+			out[d.A], out[d.B] = true, true
+		}
+	}
+	return out
+}
+
+// theirs is what no agent's own mark or closure touches: the findings and
+// facts the owner touched (ownerTouched) and the facts their standing relayed
+// answers kept.
+func (rs *reviewServer) theirs() map[string]bool {
+	out := rs.ownerTouched()
+	for n := range rs.relayKept() {
+		out[n] = true
+	}
+	return out
 }
 
 // ownerEdited is the time of the owner's newest commit of their own in tacit

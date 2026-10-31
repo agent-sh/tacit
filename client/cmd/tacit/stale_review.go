@@ -295,7 +295,7 @@ func (rs *reviewServer) applyStaleOp(o *op, it *staleItem) (string, []string, er
 		}
 		// The owner's word on the finding, or on the fact (keeping one fact over
 		// another in a pair is a word on both), is theirs.
-		if owned := rs.ownerTouched(); owned[o.ID] || owned[name] {
+		if owned := rs.theirs(); owned[o.ID] || owned[name] {
 			return "", nil, errors.New("the owner has marked or reopened this finding, or kept this fact in a pair; it is theirs")
 		}
 		if it.State != "live" {

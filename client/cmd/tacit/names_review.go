@@ -302,7 +302,7 @@ func (rs *reviewServer) applyNameOp(o *op, it *reviewItem) (string, []string, er
 		if it.Decision != nil || it.Ask != nil {
 			return "", nil, errors.New("an agent may not mark a finding that already carries a mark or a question")
 		}
-		if owned := rs.ownerTouched(); owned[o.ID] || owned[it.A.Name] {
+		if owned := rs.theirs(); owned[o.ID] || owned[it.A.Name] {
 			return "", nil, errors.New("the owner has marked or reopened this finding or a fact of this name; it is theirs")
 		}
 		if mark != "ask" && strings.TrimSpace(o.Evidence) == "" {
@@ -371,8 +371,8 @@ func (rs *reviewServer) applyNameOp(o *op, it *reviewItem) (string, []string, er
 			}
 			for _, f := range []*fact.Fact{x, y} {
 				b := prev.Before[f.Path]
-				if c := now[f.Path]; sameSnap(f, c) && c.Updated == f.Meta.Updated && !sameSnap(f, b) {
-					continue // the reopen left it as it is (retired again since)
+				if sameSnap(f, now[f.Path]) {
+					continue // the reopen changed nothing in it
 				}
 				if sameSnap(f, b) {
 					f.Meta.Updated = b.Updated

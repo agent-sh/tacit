@@ -3,11 +3,11 @@ package ownerwords
 // The item of a turn that holds a quote (SPEC.md, "Closing questions",
 // Relayed). The owner often answers a list an agent put to them in one turn,
 // a short line after each item's words, which they pasted: "<question>; -
-// <answer>.  <question>; - <answer>", or one question and one answer to a
-// line. What a quote of theirs is about is read from the item that holds it:
-// its question and its answer. So the question's words above a terse answer
-// count, and another item's words never do; where the turn does not say
-// which question the quote answers, there is no item.
+// <answer>.  <question>; - <answer>", or a question line and an answer line
+// under it. What a quote of theirs is about is read from the item that holds
+// it: its question and its answer. So the question's words above a terse
+// answer count, and another item's words never do; where the turn does not
+// say which question the quote answers, there is no item.
 
 import (
 	"regexp"
@@ -20,27 +20,36 @@ import (
 // line's start, or after a clause ends (";", ":", ".", ")", "?", "!") and a
 // space ("; - keep both", "). - yes", "\n- no"). A dash between two words
 // ("keep it - the other is stale") joins them and opens nothing.
-var answerMark = regexp.MustCompile(`(?m)(?:^[ \t]*|[;:.)!?][ \t]+)([-–—])(?:[ \t]|$)`)
+var answerMark = regexp.MustCompile(`(?m)(?:^[ \t\x{00a0}]*|[;:.)!?][ \t\x{00a0}]+)([-–—])(?:[ \t\x{00a0}]|$)`)
 
 // unit is a sentence or a line of a turn, the pieces an item is made of.
 type unit struct {
 	start, end int
-	kind       byte // 'q' a question or other text, 'a' an answer (it opens with a dash), 'b' both (a question with its answer after a dash), 'c' an answer going on (a sentence after an answer on its line)
+	line       int  // the line it starts on
+	kind       byte // 'q' a question or other text, 'a' an answer (it opens with a dash), 'b' both (a question with its answer after a dash in it), 'c' an answer going on
 	marks      []int
 	question   bool // it ends with a question mark
+	blank      bool // nothing but spaces
 }
 
 // ItemAround is the part of turn, as the owner wrote it, that holds quote,
-// the item that says which question the quote answers:
+// the item that says which question the quote answers.
 //
-//   - In a turn with no answer dash: the sentences that hold the quote, with
-//     the questions (sentences ending in "?") right above them.
-//   - In a turn with answer dashes: the sentences or lines that hold the
-//     quote, when they hold one answer and the quote reaches into it, and no
-//     question follows the answer in them; with the question lines above an
-//     answer line, back to the answer before them. A sentence after an answer
-//     on its line goes on with that answer unless it asks ("?"), and a
-//     dash-led line that asks is a question, its dash a bullet.
+// A turn is read in sentences and lines. A sentence after an answer on its
+// line goes on with that answer, unless it asks ("?") or an answer dash
+// follows it on that line, which makes it that answer's question; a
+// dash-led line that asks is a question, its dash a bullet. The quote's
+// sentences must hold one answer, which the quote reaches into, and no
+// question after it. The item is those sentences, with the answer's question
+// before it: the sentences before the answer on its line, back to the answer
+// before them, or, for an answer that opens its line, the nearest line above
+// it, the part of that line after its own answer when it holds one. A quote
+// that starts in an answer's going on starts at that answer.
+//
+// In a turn with no answer dash at all, the quote's sentences are the
+// answer, and the question is the questions ("?") right before it on its
+// line or, when it opens its line, the nearest line above it when that line
+// asks.
 //
 // "" when the turn does not hold the quote word for word, or when no item
 // says which question it answers: the quote is a question's words alone, it
@@ -74,22 +83,26 @@ func ItemAround(turn, quote string) string {
 	qs, qe := -1, -1
 	for i, u := range us {
 		dashed = dashed || len(u.marks) > 0
-		if u.end > from && u.start < to {
+		if !u.blank && u.end > from && u.start < to {
 			if qs < 0 {
 				qs = i
 			}
 			qe = i
 		}
 	}
-	start := qs
 	if !dashed {
-		for start > 0 && us[start-1].question {
-			start--
+		return dashless(turn, us, qs, qe)
+	}
+	if us[qs].kind == 'c' {
+		for qs > 0 && us[qs].kind == 'c' {
+			qs-- // a quote that starts in an answer's going on starts at that answer
 		}
-		return turn[us[start].start:us[qe].end]
 	}
 	answers, reached, answered := 0, false, false
 	for _, u := range us[qs : qe+1] {
+		if u.blank {
+			continue
+		}
 		if answered && u.kind == 'q' {
 			return "" // the quote runs on into the next question
 		}
@@ -97,17 +110,134 @@ func ItemAround(turn, quote string) string {
 			answers++
 			reached = reached || answerStart(turn, d) < to
 		}
-		answered = answered || len(u.marks) > 0
+		answered = answered || len(u.marks) > 0 || u.kind == 'c'
 	}
 	if answers != 1 || !reached {
 		return ""
 	}
-	if us[qs].kind == 'a' {
-		for start > 0 && us[start-1].kind == 'q' {
+	start := qs
+	if k := us[qs].kind; k == 'a' || k == 'b' {
+		// The answer's question: the sentences before it on its line.
+		for start > 0 && us[start-1].line == us[qs].line && us[start-1].kind == 'q' {
 			start--
+		}
+		// An answer that opens its line answers the line above it: the
+		// part of it after its own answer, when it holds one.
+		if k == 'a' && opens(us, qs) {
+			if l := lineAbove(us, qs); l >= 0 {
+				start = askedOn(us, l, start)
+			}
+		}
+	}
+	end := qe
+	for end+1 < len(us) && us[end+1].line == us[qe].line && us[end+1].kind == 'c' {
+		end++ // the answer going on
+	}
+	return turn[us[start].start:us[end].end]
+}
+
+// dashless is ItemAround for a turn with no answer dash: the quote's
+// sentences, with the questions right before them on their line, or the line
+// above when they open theirs and that line asks.
+func dashless(turn string, us []unit, qs, qe int) string {
+	asked := false
+	for _, u := range us[qs : qe+1] {
+		if u.blank {
+			continue
+		}
+		if asked && u.question {
+			return "" // the quote runs on from an answer into the next question
+		}
+		asked = asked || !u.question
+	}
+	start := qs
+	for start > 0 && us[start-1].line == us[qs].line && us[start-1].question {
+		start--
+	}
+	if opens(us, start) {
+		if l := lineAbove(us, start); l >= 0 && asks(us, l) {
+			start = firstOf(us, l)
 		}
 	}
 	return turn[us[start].start:us[qe].end]
+}
+
+// opens reports that unit i is the first one with words on its line.
+func opens(us []unit, i int) bool {
+	for j := i - 1; j >= 0 && us[j].line == us[i].line; j-- {
+		if !us[j].blank {
+			return false
+		}
+	}
+	return true
+}
+
+// lineAbove is the nearest line above unit i's that has words in it; -1 for
+// none.
+func lineAbove(us []unit, i int) int {
+	for j := i - 1; j >= 0; j-- {
+		if us[j].line < us[i].line && !us[j].blank {
+			return us[j].line
+		}
+	}
+	return -1
+}
+
+// firstOf is the first unit of line l.
+func firstOf(us []unit, l int) int {
+	for i, u := range us {
+		if u.line == l {
+			return i
+		}
+	}
+	return -1
+}
+
+// askedOn is where the question line l puts to the answer below it begins:
+// the line's start, or the first question sentence after its own last answer
+// or answer going on; start when the line asks nothing after it.
+func askedOn(us []unit, l, start int) int {
+	from := -1
+	for i, u := range us {
+		if u.line != l || u.blank {
+			continue
+		}
+		if u.kind != 'q' {
+			from = -1 // an answer, or one going on: what asks comes after it
+			continue
+		}
+		if from < 0 {
+			from = i
+		}
+	}
+	if from < 0 {
+		return start
+	}
+	if from == firstWords(us, l) {
+		return firstOf(us, l) // the whole line asks
+	}
+	return from
+}
+
+// firstWords is the first unit with words on line l.
+func firstWords(us []unit, l int) int {
+	for i, u := range us {
+		if u.line == l && !u.blank {
+			return i
+		}
+	}
+	return -1
+}
+
+// asks reports that line l ends with a question.
+func asks(us []unit, l int) bool {
+	last := -1
+	for i, u := range us {
+		if u.line == l && !u.blank {
+			last = i
+		}
+	}
+	return last >= 0 && us[last].question
 }
 
 // answerStart is where the answer a dash at d opens begins: past the dash and
@@ -123,38 +253,36 @@ func answerStart(s string, d int) int {
 
 // units splits a turn into its sentences and lines: a sentence ends after a
 // full stop, question or exclamation mark followed by a space or the end; a
-// line break starts a new unit. Each unit carries the answer dashes in it.
+// line break starts a new unit, and a new line. Each unit carries the answer
+// dashes in it.
 func units(s string) []unit {
 	var dashes []int
 	for _, m := range answerMark.FindAllStringSubmatchIndex(s, -1) {
 		dashes = append(dashes, m[2])
 	}
 	var out []unit
-	start := 0
-	answered := false // the line so far holds an answer
+	start, line := 0, 0
 	add := func(end int) {
 		if end <= start {
 			return
 		}
 		t := s[start:end]
-		u := unit{start: start, end: end}
+		if strings.HasPrefix(t, "\n") && start > 0 {
+			line++
+		}
+		u := unit{start: start, end: end, line: line, blank: strings.TrimSpace(t) == ""}
 		for _, d := range dashes {
 			if d >= start && d < end {
 				u.marks = append(u.marks, d)
 			}
 		}
-		lead := start + len(t) - len(strings.TrimLeft(t, " \t\n\r"))
+		lead := start + len(t) - len(strings.TrimLeftFunc(t, unicode.IsSpace))
 		bullet := len(u.marks) > 0 && u.marks[0] == lead
 		u.question = strings.HasSuffix(strings.TrimSpace(t), "?")
 		if bullet && u.question {
 			u.marks, bullet = u.marks[1:], false // a bulleted question: its dash opens no answer
 		}
-		if start == 0 || strings.HasPrefix(t, "\n") {
-			answered = false
-		}
 		switch {
-		case len(u.marks) == 0 && answered && !u.question:
-			u.kind = 'c'
 		case len(u.marks) == 0:
 			u.kind = 'q'
 		case bullet && len(u.marks) == 1:
@@ -162,7 +290,6 @@ func units(s string) []unit {
 		default:
 			u.kind = 'b'
 		}
-		answered = (answered || len(u.marks) > 0) && !(u.kind == 'q' && u.question)
 		out = append(out, u)
 		start = end
 	}
@@ -171,13 +298,46 @@ func units(s string) []unit {
 		case '\n':
 			add(j)
 		case '.', '?', '!':
-			if j+1 == len(s) || s[j+1] == ' ' || s[j+1] == '\n' || s[j+1] == '\t' {
+			if j+1 == len(s) || s[j+1] == ' ' || s[j+1] == '\n' || s[j+1] == '\t' || s[j+1] == '\r' {
 				add(j + 1)
 			}
 		}
 	}
 	add(len(s))
+	// A sentence after an answer on its line goes on with it, unless it asks
+	// or the next sentence on the line is an answer, whose question it is.
+	answered := false
+	for i := range out {
+		u := &out[i]
+		if i == 0 || u.line != out[i-1].line {
+			answered = false
+		}
+		if u.blank {
+			continue
+		}
+		switch {
+		case u.kind == 'a' || u.kind == 'b':
+			answered = true
+		case u.question:
+			answered = false
+		case answered && !answerNext(out, i):
+			u.kind = 'c'
+		case answered:
+			answered = false // the next answer's question
+		}
+	}
 	return out
+}
+
+// answerNext reports that the next sentence with words on unit i's line is an
+// answer that opens with its dash.
+func answerNext(us []unit, i int) bool {
+	for j := i + 1; j < len(us) && us[j].line == us[i].line; j++ {
+		if !us[j].blank {
+			return us[j].kind == 'a'
+		}
+	}
+	return false
 }
 
 // tokAt is one word of tokenize with where it sits in the text (byte

@@ -497,7 +497,7 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 		}
 	}
 	rs.loadFacts()
-	owned := rs.ownerTouched()
+	owned := rs.theirs()
 	var lastErr error
 	// A pair whose fact a third fact replaced cannot take "keep the other":
 	// it moves to the live facts, or closes as moot, before anything is sent.

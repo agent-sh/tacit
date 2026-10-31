@@ -122,8 +122,8 @@ func (rs *reviewServer) applyClosure(o *op, it *reviewItem) (string, []string, e
 		return "", nil, errors.New("a closure answers a question an agent left on the finding; this one has none open")
 	}
 	why := rs.relays(o, relayQuestion{asked: pairAsked(*it), question: questionText(*it), facts: []*factView{it.A, it.B}, last: rs.ownerLast(it.ID, it.A.Name, it.B.Name)})
-	o.Relayed = why == nil
-	owned := rs.ownerTouched()
+	o.Relayed, o.closedMoot = why == nil, false
+	owned := rs.theirs()
 	theirs := owned[o.ID] || owned[it.A.Name] || owned[it.B.Name]
 	if theirs && !o.Relayed {
 		return "", nil, notTheirAnswer("the owner has marked or reopened this finding or one of its facts; it is theirs", o, why)
@@ -247,8 +247,8 @@ func (rs *reviewServer) applyStaleClosure(o *op, it *staleItem) (string, []strin
 		asked, question = it.Ask.At, it.Ask.Question
 	}
 	why := rs.relays(o, relayQuestion{asked: asked, question: question, facts: []*factView{it.A}, last: rs.ownerLast(it.ID, name)})
-	o.Relayed = why == nil
-	owned := rs.ownerTouched()
+	o.Relayed, o.closedMoot = why == nil, false
+	owned := rs.theirs()
 	theirs := owned[o.ID] || owned[name]
 	if theirs && !o.Relayed {
 		return "", nil, notTheirAnswer("the owner has marked or reopened this finding, or kept this fact in a pair; it is theirs", o, why)
@@ -897,7 +897,7 @@ func (rs *reviewServer) wrongFacts(o *op, q agentreview.Item) ([]*fact.Fact, err
 		}
 	}
 	made := rs.madeFrom(q)
-	owned, notes := rs.ownerTouched(), rs.ownerNotes()
+	owned, notes := rs.theirs(), rs.ownerNotes()
 	for _, f := range made {
 		if owned[f.Meta.Name] || len(notes.For("", f.Meta.Name)) > 0 {
 			return nil, fmt.Errorf("%s, made from this note, is one the owner kept or left a note on; it stays their question", f.Meta.Name)
@@ -1031,7 +1031,7 @@ type questionRow struct {
 	// two files hold. OwnerOnly are the answers only their own answer gives
 	// on a question an agent may otherwise close.
 	WordsOnly bool     `json:"words_only,omitempty"`
-	OwnerOnly []string `json:"owner_only,omitempty"`
+	OwnerOnly []string `json:"owner_answers,omitempty"`
 	// Moot is why the question went moot: code closes it (tacit questions
 	// moot), but the owner's, which only their own answer closes.
 	Moot   string    `json:"moot,omitempty"`
@@ -1041,7 +1041,7 @@ type questionRow struct {
 // openQuestions is every question waiting for the owner on this machine.
 func openQuestions(rs *reviewServer, q *agentreview.Queue) []questionRow {
 	var out []questionRow
-	owned := rs.ownerTouched()
+	owned, kept := rs.ownerTouched(), rs.relayKept()
 	items := rs.items()
 	ix := indexFindings(items)
 	for _, it := range items {
@@ -1055,8 +1055,12 @@ func openQuestions(rs *reviewServer, q *agentreview.Queue) []questionRow {
 			r.Owners, r.WordsOnly = "the owner marked or reopened it, or kept one of its facts", true
 		case len(it.Notes) > 0:
 			r.Owners, r.WordsOnly = "the owner left a note on it", true
+		case kept[it.A.Name] || kept[it.B.Name]:
+			r.Owners, r.WordsOnly = "an answer of theirs an agent relayed kept one of its facts", true
 		}
-		r.Moot, _ = rs.questionMoot(it, ix)
+		if r.Moot, _ = rs.questionMoot(it, ix); r.Moot != "" && !owned[it.ID] && !owned[it.A.Name] && !owned[it.B.Name] && len(it.Notes) == 0 {
+			r.Owners, r.WordsOnly = "", false // the moot pass closes it
+		}
 		if k == closesAsk {
 			r.Asked, r.Question = it.Ask.At, it.Ask.Question
 		} else {
@@ -1070,16 +1074,19 @@ func openQuestions(rs *reviewServer, q *agentreview.Queue) []questionRow {
 			continue
 		}
 		r := questionRow{ID: it.ID, Closes: k, Finding: it.Kind, Facts: []string{it.A.Name}, Answers: []string{"current", "retire"}}
+		theirsToo := false // the owner's: the moot pass leaves it
 		switch {
 		case owned[it.ID] || owned[it.A.Name]:
-			r.Owners, r.WordsOnly = "the owner marked or reopened it, or kept its fact", true
+			r.Owners, r.WordsOnly, theirsToo = "the owner marked or reopened it, or kept its fact", true, true
 		case len(it.Notes) > 0:
-			r.Owners, r.WordsOnly = "the owner left a note on it", true
+			r.Owners, r.WordsOnly, theirsToo = "the owner left a note on it", true, true
+		case kept[it.A.Name]:
+			r.Owners, r.WordsOnly = "an answer of theirs an agent relayed kept its fact", true
 		}
 		if it.State != "live" {
 			// The moot pass closes an agent's; the owner's waits for their
 			// own answer.
-			if !r.WordsOnly {
+			if !theirsToo {
 				continue
 			}
 			if r.Moot = rs.staleMootWhy(it); r.Moot == "" {
@@ -1121,6 +1128,8 @@ func openQuestions(rs *reviewServer, q *agentreview.Queue) []questionRow {
 			r.Owners = "the owner marked or reopened it, or kept a fact of this name"
 		case len(it.Notes) > 0:
 			r.Owners = "the owner left a note on it"
+		case kept[it.A.Name]:
+			r.Owners = "an answer of theirs an agent relayed kept this name"
 		}
 		out = append(out, r)
 	}
