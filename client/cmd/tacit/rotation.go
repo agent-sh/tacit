@@ -522,13 +522,19 @@ func clip(s string, n int) string {
 	return s
 }
 
+// machineRoots are the system roots a path must be under, or ~, to name a
+// place on a machine. Both of the rotation's path readers take them, the
+// place reader (machinePathRx) and the gone-path reader (gonePathRx), so
+// the paths the pick finds gone and the paths its proof stats are read the
+// same way.
+const machineRoots = `Users|home|data|opt|etc|var|usr|srv|mnt|Library`
+
 // machinePathRx finds the paths a fact names as places on a machine: under
-// ~, or under one of these system roots. Rotation stats them and the
-// ancestor index reads folder names from them, so a route of an API
-// (/v1/messages) or of a forge (/repos/<owner>/<name>/pulls) must not count.
-// Where a path only names a repository, repoPaths reads every one, these
-// places first.
-var machinePathRx = regexp.MustCompile(`(?:^|[\s(\x60"'])((?:~|/(?:Users|home|opt|etc|var|usr|srv|mnt|Library))/[A-Za-z0-9._\-/]+)`)
+// ~, or under one of machineRoots. Rotation stats them and the ancestor
+// index reads folder names from them, so a route of an API (/v1/messages)
+// or of a forge (/repos/<owner>/<name>/pulls) must not count. Where a path
+// only names a repository, repoPaths reads every one, these places first.
+var machinePathRx = regexp.MustCompile(`(?:^|[\s(\x60"'])((?:~|/(?:` + machineRoots + `))/[A-Za-z0-9._\-/]+)`)
 
 // repoPathRx finds every ~ and absolute path in a text (repoPaths).
 var repoPathRx = regexp.MustCompile(`(?:^|[\s(\x60"'])((?:~/+|/)[A-Za-z0-9._\-][A-Za-z0-9._\-/]*)`)

@@ -159,15 +159,20 @@ func (a *assessor) ancestorIx() *ancestorIndex {
 
 // indexPath reads one machine path of fact f into ix.
 func (a *assessor) indexPath(ix *ancestorIndex, f *fact.Fact, p string) {
-	rest := p
+	rest, sysRoot := p, false
 	if loc := homePrefixRx.FindStringIndex(p); loc != nil {
 		rest = p[loc[1]:]
 	} else {
-		rest = strings.TrimPrefix(p, "/")
+		rest, sysRoot = strings.TrimPrefix(p, "/"), true
 	}
 	comps := strings.Split(rest, "/")
+	if sysRoot && len(comps) > 1 {
+		// The system root the path is under (machineRoots) is no folder of
+		// a tree: /data/<x> is not inside a repository named data.
+		comps = comps[1:]
+	}
 	start := 0
-	if len(comps) > 1 && comps[0] == "projects" {
+	if !sysRoot && len(comps) > 1 && comps[0] == "projects" {
 		// A folder of the projects directory under its own name (or, past a
 		// folder of checkouts, the checkout's).
 		top := strings.ToLower(comps[1])

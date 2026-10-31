@@ -18,10 +18,10 @@ import (
 // The rules below were each written for a kind of false flag the samples
 // showed; no model is called.
 var (
-	// An absolute path under a system root, or one under ~, cut at the
-	// first character no path in the samples held. A colon ends it (a
-	// line number, a list of paths).
-	gonePathRx = regexp.MustCompile(`(?:^|[^\p{L}\p{N}_$/.~-])(~/[\p{L}\p{N}_@%+=,./-]+|/(?:home|data|opt|etc|srv|var|usr|mnt|Users)/[\p{L}\p{N}_@%+=,./-]+)`)
+	// An absolute path under a system root (machineRoots, the place
+	// reader's), or one under ~, cut at the first character no path in the
+	// samples held. A colon ends it (a line number, a list of paths).
+	gonePathRx = regexp.MustCompile(`(?:^|[^\p{L}\p{N}_$/.~-])(~/[\p{L}\p{N}_@%+=,./-]+|/(?:` + machineRoots + `)/[\p{L}\p{N}_@%+=,./-]+)`)
 	// A placeholder or a pattern, not a path: NN, XXXX, YYYY, %Y, a dot run.
 	goneTemplate = regexp.MustCompile(`\.\.\.|N{2,}|X{2,}|YYYY|MMDD|\bHH\b|[a-z]N(?:$|[-_./])|%[A-Za-z]`)
 	// What comes before a path a command writes: an output, a scratch dir.
