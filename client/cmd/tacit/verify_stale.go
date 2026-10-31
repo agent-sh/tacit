@@ -215,6 +215,8 @@ func (r *verifyRun) runStale(ctx context.Context, s *store.Store, rs *reviewServ
 				lastErr = preferVerifyFailure(lastErr, err)
 				continue
 			}
+			// The run's error may be an earlier one; say this one here.
+			fmt.Fprintf(os.Stderr, "verify: stale batch %d: %v\n", batchNumber, err)
 			return total, cost, err
 		}
 		for k, e := range errs {

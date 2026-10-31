@@ -18,8 +18,9 @@ const (
 // on, so the turn's own end decides. A turn that recovered is a result, and a
 // notice after its end changes nothing; a failed turn fails with its own
 // error, not the first notice; a turn that never ended fails with the last
-// notice. Before, the first notice failed the call and threw away the answer
-// that followed it.
+// notice. Only a transport error behind "stream disconnected before
+// completion:" is a dropped stream. Before, the first notice failed the call
+// and threw away the answer that followed it.
 func TestCodexRetryNoticeIsNotTheTurnsFailure(t *testing.T) {
 	recovered := reconnectNotice + "\n" + `{"type":"item.completed","item":{"type":"agent_message","text":"[]"}}` + "\n" + `{"type":"turn.completed","usage":{"input_tokens":12}}`
 	for name, stream := range map[string]string{"recovered": recovered, "a notice after the turn's end": recovered + "\n" + reconnectNotice} {
@@ -32,9 +33,19 @@ func TestCodexRetryNoticeIsNotTheTurnsFailure(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 	}
-	capacity := reconnectNotice + "\n" + `{"type":"turn.failed","error":{"message":"{\"status\":503,\"error\":{\"message\":\"try again\"}}"}}`
-	if _, err := parse("codex", []byte(capacity)); IsTransport(err) || !CanFallback(err) {
-		t.Fatalf("a turn that failed for capacity after a retry notice: %v", err)
+	for name, stream := range map[string]string{
+		"failed for capacity after a retry notice": reconnectNotice + "\n" + `{"type":"turn.failed","error":{"message":"{\"status\":503,\"error\":{\"message\":\"try again\"}}"}}`,
+		"no end, the last notice for capacity":     reconnectNotice + "\n" + `{"type":"error","message":"Reconnecting... 2/5 (unexpected status 503 Service Unavailable: try again)"}`,
+	} {
+		if _, err := parse("codex", []byte(stream)); IsTransport(err) || FailureKind(err) != "capacity" || !CanFallback(err) {
+			t.Fatalf("%s: kind %q: %v", name, FailureKind(err), err)
+		}
+	}
+	// Codex puts other errors behind the same "stream disconnected before
+	// completion:"; a filtered response fails that way every time.
+	filtered := `{"type":"turn.failed","error":{"message":"stream disconnected before completion: Incomplete response returned, reason: content_filter"}}`
+	if _, err := parse("codex", []byte(filtered)); err == nil || IsTransport(err) {
+		t.Fatalf("a filtered response read as a dropped stream: %v", err)
 	}
 }
 

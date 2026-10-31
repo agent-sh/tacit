@@ -441,11 +441,13 @@ func runVerify(args []string) int {
 	return 0
 }
 
-// finishVerify is the run's outcome. A run whose only failures were runner
+// finishVerify is the run's outcome. A run whose only errors were runner
 // streams that dropped (modelrun.IsTransport), and that settled or asked a
 // finding, succeeds: each batch's marks land, pushed, as the batch ends, and
-// a push that does not land ends the run with its own error, so the drops
-// lost nothing settled. The findings they left stay open for the next run.
+// a push that does not land fails the run, so the drops lost nothing settled.
+// The findings they left stay open for the next run. A finding left without
+// a verdict it can take, or with a mark the page refused, is no run error
+// (it counts against the finding), with a drop or without.
 func finishVerify(settled int, dry bool, runErr error) error {
 	if runErr == nil || settled == 0 || dry || !modelrun.IsTransport(runErr) {
 		return runErr
