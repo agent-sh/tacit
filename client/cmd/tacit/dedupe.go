@@ -23,13 +23,21 @@ import (
 //
 //	tacit dedupe --dry-run   read the clone as it is (no sync), print the clusters and the names, change nothing
 //	tacit dedupe             sync, supersede the copies, raise the names, commit and push as curator
+//	tacit dedupe --names     the names alone: retire no copy (with --dry-run, list them)
 //
 // No model is called. The contract is SPEC.md "Near-duplicates".
 func runDedupe(args []string) int {
 	fs := flag.NewFlagSet("dedupe", flag.ExitOnError)
 	dry := fs.Bool("dry-run", false, "print the clusters and the copies it would retire, write nothing (no sync)")
 	out := fs.String("json", "", "also write the clusters to this file as JSON lines")
+	namesOnly := fs.Bool("names", false, "raise the names two live curated files hold, and retire no copy")
 	fs.Parse(args)
+	// The names alone: no copy is planned, and no chain is repointed.
+	plan, files := dedupePlan, dedupeFiles
+	if *namesOnly {
+		plan = func(string) ([]curate.Copies, error) { return nil, nil }
+		files = func(string, []curate.Copies, time.Time) (map[string][]byte, string, error) { return nil, "", nil }
+	}
 	s, err := store.Default()
 	if err != nil || !s.Exists() {
 		fmt.Fprintln(os.Stderr, "dedupe: no store")
@@ -42,7 +50,7 @@ func runDedupe(args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	if *dry {
-		cs, err := dedupePlan(s.Dir)
+		cs, err := plan(s.Dir)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "dedupe:", err)
 			return 1
@@ -52,7 +60,9 @@ func runDedupe(args []string) int {
 			fmt.Fprintln(os.Stderr, "dedupe:", err)
 			return 1
 		}
-		printDedupe(cs, true)
+		if !*namesOnly {
+			printDedupe(cs, true)
+		}
 		printNames(all, notRetiring(fresh, cs), true)
 		return writeDedupeJSON(*out, cs)
 	}
@@ -60,11 +70,11 @@ func runDedupe(args []string) int {
 	var all, raised [][2]*fact.Fact
 	pushed, err := curatorWrite(ctx, s, func() (map[string][]byte, string, error) {
 		var err error
-		if cs, err = dedupePlan(s.Dir); err != nil {
+		if cs, err = plan(s.Dir); err != nil {
 			return nil, "", err
 		}
 		now := time.Now()
-		files, msg, err := dedupeFiles(s.Dir, cs, now)
+		written, msg, err := files(s.Dir, cs, now)
 		if err != nil {
 			return nil, "", err
 		}
@@ -73,10 +83,10 @@ func runDedupe(args []string) int {
 			return nil, "", err
 		}
 		raised = notRetiring(fresh, cs)
-		if files == nil {
-			files = map[string][]byte{}
+		if written == nil {
+			written = map[string][]byte{}
 		}
-		if lines := nameFindings(s.Dir, raised, now, files); len(lines) > 0 {
+		if lines := nameFindings(s.Dir, raised, now, written); len(lines) > 0 {
 			what := fmt.Sprintf("%d name(s) two files hold raised for review", len(lines))
 			if msg == "" {
 				msg = "curator: dedupe: " + what + "\n\n" + strings.Join(lines, "\n")
@@ -85,10 +95,10 @@ func runDedupe(args []string) int {
 				msg = subject + "; " + what + "\n\n" + body + "\n" + strings.Join(lines, "\n")
 			}
 		}
-		if len(files) == 0 {
+		if len(written) == 0 {
 			return nil, "", nil
 		}
-		return files, msg, nil
+		return written, msg, nil
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "dedupe:", err)
@@ -97,7 +107,9 @@ func runDedupe(args []string) int {
 	if !pushed {
 		cs, raised = nil, nil
 	}
-	printDedupe(cs, false)
+	if !*namesOnly {
+		printDedupe(cs, false)
+	}
 	printNames(all, raised, false)
 	return writeDedupeJSON(*out, cs)
 }

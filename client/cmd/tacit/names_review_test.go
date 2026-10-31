@@ -193,3 +193,36 @@ func TestAKeepAgainstTheOwnersRulingOfANameIsTheirQuestion(t *testing.T) {
 	}
 	t.Errorf("tacit questions does not list %s", it.ID)
 }
+
+// tacit dedupe --names raises the names alone: the copies a full run would
+// retire stay live, and no chain is pointed elsewhere.
+func TestDedupeNamesRaisesTheNamesAlone(t *testing.T) {
+	r := nameFixture(t)
+	const ws = "machines/host-a"
+	writeFact(t, r.clone, fact.Meta{Name: "cwd-resets", Description: "The Bash tool resets cwd to /Users/u/work after every call; start every command with cd", Type: "machine_fact", Scope: ws}, "Seen on every call.\n")
+	writeFact(t, r.clone, fact.Meta{Name: "cwd-resets-again", Description: "Bash tool resets the cwd to /Users/u/work after each call, so start every command with cd", Type: "machine_fact", Scope: ws}, "Do not rely on an earlier cd.\n")
+	r.commitIndex(r.clone, "a copy")
+	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
+	if code := runDedupe([]string{"--dry-run"}); code != 0 {
+		t.Fatalf("dedupe --dry-run exited %d", code)
+	}
+	if code := runDedupe([]string{"--names"}); code != 0 {
+		t.Fatalf("dedupe --names exited %d", code)
+	}
+	if got := supersededOnServer(t, r, ws+"/cwd-resets-again.md"); got != "" {
+		t.Errorf("dedupe --names retired a copy: superseded_by %q", got)
+	}
+	page := r.onServer("review/" + time.Now().Format("2006-01-02") + ".md")
+	if strings.Count(page, "- name held twice: ") != 2 {
+		t.Errorf("the names were not raised:\n%s", page)
+	}
+	if code := runDedupe(nil); code != 0 {
+		t.Fatalf("dedupe exited %d", code)
+	}
+	if got := supersededOnServer(t, r, ws+"/cwd-resets-again.md"); got != "cwd-resets" {
+		t.Errorf("the full run left the copy: superseded_by %q", got)
+	}
+	if page = r.onServer("review/" + time.Now().Format("2006-01-02") + ".md"); strings.Count(page, "- name held twice: ") != 2 {
+		t.Errorf("the full run raised a name again:\n%s", page)
+	}
+}
