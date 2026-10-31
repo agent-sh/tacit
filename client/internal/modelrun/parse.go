@@ -93,10 +93,19 @@ func parse(name string, data []byte) (Result, error) {
 				}
 			case "turn.completed":
 				done = true
+				pendingErr = nil
 				u := obj(event, "usage")
 				result.InputTokens = int(num(u, "input_tokens"))
-			case "turn.failed", "error":
+			case "turn.failed":
 				return result, eventFailure(event, strings.TrimSpace(str(event, "message")+" "+str(obj(event, "error"), "message")))
+			case "error":
+				// A notice, not the turn's end: Codex prints a stream retry
+				// here ("Reconnecting... 1/5 (...)") and goes on. The turn's
+				// own end decides; a run whose turn never ends fails with the
+				// last notice.
+				if !done {
+					pendingErr = eventFailure(event, strings.TrimSpace(str(event, "message")+" "+str(obj(event, "error"), "message")))
+				}
 			}
 		case "muse":
 			p := obj(event, "payload")

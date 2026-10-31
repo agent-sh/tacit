@@ -130,7 +130,7 @@ func (r *verifyRun) runStale(ctx context.Context, s *store.Store, rs *reviewServ
 		i = end
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "verify: stale %s: %v\n", open[start].ID, err)
-			lastErr = err
+			lastErr = preferVerifyFailure(lastErr, err)
 			continue
 		}
 		batchNumber++
@@ -152,7 +152,7 @@ func (r *verifyRun) runStale(ctx context.Context, s *store.Store, rs *reviewServ
 		cost += c
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "verify: stale batch %d: %v\n", batchNumber, err)
-			lastErr = err
+			lastErr = preferVerifyFailure(lastErr, err)
 			if c == 0 && !timedOut && !r.dry {
 				for _, it := range batch {
 					tries[it.ID]--
@@ -169,7 +169,7 @@ func (r *verifyRun) runStale(ctx context.Context, s *store.Store, rs *reviewServ
 		ops, err := r.opsFromStale(vs, inBatch)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "verify: stale batch %d: %v\n", batchNumber, err)
-			lastErr = err
+			lastErr = preferVerifyFailure(lastErr, err)
 			if !r.dry {
 				for _, it := range batch {
 					tries[it.ID]--
@@ -212,7 +212,7 @@ func (r *verifyRun) runStale(ctx context.Context, s *store.Store, rs *reviewServ
 			r.saveAttempts(tries)
 			if errors.As(err, &rej) {
 				fmt.Fprintf(os.Stderr, "verify: stale batch %d refused by the server: %s\n", batchNumber, rej.Reason)
-				lastErr = err
+				lastErr = preferVerifyFailure(lastErr, err)
 				continue
 			}
 			return total, cost, err

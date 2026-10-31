@@ -61,7 +61,8 @@ func (t *Trace) CostSummary(reported float64) string {
 
 // FailureKind names what failed in a model call, as the trace records it: a
 // provider's kind (capacity, unavailable, authentication, request, refusal,
-// provider), invalid_result, timeout, canceled, or runner. "" for nil.
+// transport, provider), invalid_result, timeout, canceled, or runner. "" for
+// nil.
 func FailureKind(err error) string {
 	if err == nil {
 		return ""

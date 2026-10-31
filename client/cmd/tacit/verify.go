@@ -434,11 +434,34 @@ func runVerify(args []string) int {
 		}
 	}
 	fmt.Printf("verify: %d finding(s) settled or asked, %s%s\n", n, trace.CostSummary(cost), r.modelSummary())
-	if err != nil {
+	if err = finishVerify(n, r.dry, err); err != nil {
 		fmt.Fprintln(os.Stderr, "verify:", err)
 		return 1
 	}
 	return 0
+}
+
+// finishVerify is the run's outcome. A run whose only failures were runner
+// streams that dropped (modelrun.IsTransport), and that settled or asked a
+// finding, succeeds: each batch's marks land, pushed, as the batch ends, and
+// a push that does not land ends the run with its own error, so the drops
+// lost nothing settled. The findings they left stay open for the next run.
+func finishVerify(settled int, dry bool, runErr error) error {
+	if runErr == nil || settled == 0 || dry || !modelrun.IsTransport(runErr) {
+		return runErr
+	}
+	fmt.Fprintf(os.Stderr, "verify: %v; the settled findings landed, the ones without a verdict stay open for the next run\n", runErr)
+	return nil
+}
+
+// preferVerifyFailure is the run's error after another one: the first
+// failure that is not a dropped stream stands, so a drop in a later batch,
+// which alone would let the run succeed, never hides it.
+func preferVerifyFailure(current, next error) error {
+	if current != nil && !modelrun.IsTransport(current) {
+		return current
+	}
+	return next
 }
 
 type verifyRun struct {
@@ -503,13 +526,13 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 	// it moves to the live facts, or closes as moot, before anything is sent.
 	if err := r.repoint(ctx, rs, owned); err != nil {
 		fmt.Fprintln(os.Stderr, "verify: closing the findings whose facts were replaced:", err)
-		lastErr = err
+		lastErr = preferVerifyFailure(lastErr, err)
 	}
 	// A question an agent left for the owner that went moot (a fact of it
 	// retired, replaced or gone) is closed too (SPEC.md, "Closing questions").
 	if n, err := closeMootQuestions(ctx, rs, owned, idSet(r.only), r.dry, func(l string) { fmt.Fprintln(os.Stderr, "verify: "+l) }); err != nil {
 		fmt.Fprintln(os.Stderr, "verify: closing the questions that went moot:", err)
-		lastErr = err
+		lastErr = preferVerifyFailure(lastErr, err)
 	} else if n > 0 {
 		fmt.Fprintf(os.Stderr, "verify: %d question(s) went moot and were closed\n", n)
 	}
@@ -587,7 +610,7 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 		i = end
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "verify: %s: %v\n", open[start].ID, err)
-			lastErr = err
+			lastErr = preferVerifyFailure(lastErr, err)
 			continue
 		}
 		batchNumber++
@@ -609,7 +632,7 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 		cost += c
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "verify: batch %d: %v\n", batchNumber, err)
-			lastErr = err
+			lastErr = preferVerifyFailure(lastErr, err)
 			if c == 0 && !timedOut && !r.dry {
 				// The model never ran: this attempt does not count. A timeout
 				// did run (and may have cost); it counts.
@@ -630,7 +653,7 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 			// Nothing from this batch may land unredacted; it does not count
 			// against the findings either.
 			fmt.Fprintf(os.Stderr, "verify: batch %d: %v\n", batchNumber, err)
-			lastErr = err
+			lastErr = preferVerifyFailure(lastErr, err)
 			if !r.dry {
 				for _, it := range batch {
 					tries[it.ID]--
@@ -673,7 +696,7 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 			r.saveAttempts(tries)
 			if errors.As(err, &rej) {
 				fmt.Fprintf(os.Stderr, "verify: batch %d refused by the server: %s\n", batchNumber, rej.Reason)
-				lastErr = err
+				lastErr = preferVerifyFailure(lastErr, err)
 				continue
 			}
 			return total, cost, err
@@ -694,7 +717,7 @@ func (r *verifyRun) run(ctx context.Context, s *store.Store, call verifierRunner
 	sn, sc, serr := r.runStale(ctx, s, rs, call, r.max-len(open), owned, tries)
 	total, cost = total+sn, cost+sc
 	if serr != nil {
-		lastErr = serr
+		lastErr = preferVerifyFailure(lastErr, serr)
 	}
 	r.reportStranded(rs, tries)
 	return total, cost, lastErr

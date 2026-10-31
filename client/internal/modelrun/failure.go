@@ -2,6 +2,7 @@ package modelrun
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -23,6 +24,12 @@ func (e *Failure) Error() string {
 
 var statusPattern = regexp.MustCompile(`(?i)\b(?:HTTP|API error|status(?: code)?)\s*[:=]?\s*(\d{3})\b`)
 var refusalPattern = regexp.MustCompile(`(?i)safeguards flagged this (session|request)|anthropic\.com/legal/aup`)
+
+// transportPattern is a Codex stream to the provider that failed at the
+// transport level part way through a response. Codex puts other errors
+// behind the same "stream disconnected before completion:" (a provider's
+// rate limit or retryable error), so only the transport error's words count.
+var transportPattern = regexp.MustCompile(`(?i)\bstream disconnected before completion\s*:\s*transport error\s*:`)
 
 var providerCodePattern = regexp.MustCompile(`(?i)\b(overloaded_error|ThrottlingException|ServiceUnavailableException|ModelNotReadyException|rate_limit_error|authentication_error|AccessDeniedException|ValidationException|ResourceNotFoundException)\b`)
 
@@ -68,6 +75,9 @@ func ProviderFailure(status int, code, message string) *Failure {
 			kind = "capacity"
 		}
 	}
+	if status == 0 && code == "" && transportPattern.MatchString(message) {
+		kind = "transport"
+	}
 	// The model's own safety filter refused the request (Claude: "Opus 5.5's
 	// safeguards flagged this session", linking the usage policy). The same
 	// prompt fails on that model every time, so it is the configured
@@ -76,6 +86,14 @@ func ProviderFailure(status int, code, message string) *Failure {
 		kind = "refusal"
 	}
 	return &Failure{kind, status, code, message}
+}
+
+// IsTransport reports a model call whose runner's stream to the provider
+// dropped at the transport level (transportPattern). It is no reason to fall
+// back; tacit verify reads it to tell a run whose only failures were drops.
+func IsTransport(err error) bool {
+	var failure *Failure
+	return errors.As(err, &failure) && failure.Kind == "transport"
 }
 
 func eventFailure(event map[string]any, message string) error {
