@@ -90,6 +90,9 @@ const KINDS = {
 };
 // How an agent proved the answer to a question it closed (SPEC.md, "Closing questions").
 const PROOF = { git: "git history", file: "the current files", config: "a configuration", words: "your own words", gone: "its subject is gone", moot: "a fact it asked about was retired or replaced" };
+// Where words of yours were found, said as the harness you typed them in.
+const SESSION_WORDS = { claude: "a Claude Code session", codex: "a Codex session", pi: "a pi session", hermes: "a Hermes session", note: "a note of yours" };
+const sessionWords = (from) => SESSION_WORDS[String(from || "").split(":")[0]] || "one of your sessions";
 const an = (w) => (/^[aeiou]/i.test(w) ? "an " : "a ") + w;
 // The day a fact speaks for, the one its card prints: the newest date in its
 // text that is not after the day it was written (as the timeline reads it),
@@ -148,7 +151,7 @@ function choiceHint(it, mark) {
     case "right": return `Keeps ${np(s.b)}. ${goes(s.a, it.a)}; it stays in history.`;
     case "both": return it.kind === "supersede-applied" ? "Undoes the replacement: both reach agents again." : "Both stay and both reach agents.";
     case "query": return "Both stay, marked as conflicting: agents are shown one of them at a time.";
-    case "wrong": return `Neither is true: both facts stop reaching agents${isRule(it.a) || isRule(it.b) ? ", your rule too" : ""}. They stay in history, and Change this answer brings both back.`;
+    case "wrong": return `Neither is true: both ${it.kind === "name" ? "files" : "facts"} stop reaching agents${isRule(it.a) || isRule(it.b) ? ", your rule too" : ""}. They stay in history, and Change this answer brings both back.`;
     case "skip": return "Left out of the comparison.";
     case "current": return isRule(it.a) ? "Keeps your rule and dates it today." : "Keeps the fact and dates it today.";
     case "retire": return isRule(it.a) ? "Your rule stops reaching agents. It stays in history and can be restored." : "The fact stops reaching agents. It stays in history and can be restored.";
@@ -342,6 +345,13 @@ function recordHTML(it) {
   // answer, or by the curator when a fact of it was retired or replaced.
   const q = d.question || (it.ask && it.ask.question) || "";
   const asked = q && it.kind !== "question" ? `<p class="evidence"><b>The question it closed:</b> ${esc(q)}</p>` : "";
+  // Your own answer, typed in a session, which an agent only passed on.
+  if (d.by === "agent" && d.proof && d.relayed) {
+    return `<div class="record"><p><b>Your answer, relayed by an agent: ${esc(pastFor(it, it.mark || d.action))}</b>, ${esc(WHEN.format(new Date(d.at)))}.</p>${reopen}</div>${asked}`
+      + `<p class="evidence"><b>Your words</b> (${esc(plainDate(d.words_on || ""))}, in ${esc(sessionWords(d.words_from))}): “${esc(d.words || "")}”</p>`
+      + `<p class="evidence"><b>How the agent read them:</b> ${esc(d.reason || "")}</p>`
+      + (d.evidence ? `<details class="more"><summary>Details</summary><p>${esc(plainEvidence(d.evidence, sides(it)))}</p></details>` : "");
+  }
   if (d.by === "agent" && d.proof) {
     const how = PROOF[d.proof] || d.proof;
     return `<div class="record"><p><b>An agent closed your question: ${esc(pastFor(it, it.mark || d.action))}</b>, proved by ${esc(how)}, ${esc(WHEN.format(new Date(d.at)))}.</p>${reopen}</div>${asked}`

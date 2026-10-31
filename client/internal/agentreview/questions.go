@@ -323,19 +323,57 @@ func (it Item) Relevant(s Situation) bool {
 // stems, or two when one is a specific identifier.
 func SharesWords(a, b string) bool { return sharesWords(a, b) }
 
+// SameSubject is the same rule read over every word of both texts, where
+// SharesWords reads the first terms a query takes: a closure on the owner's
+// words asks it of their whole turn (SPEC.md, "Closing questions"), which may
+// answer a list of questions, each under its own words, and the subject (a
+// question with its facts, or a fact's words or description).
+func SameSubject(subject, turn string) bool {
+	if subject == "" || turn == "" {
+		return false
+	}
+	return sharesTerms(search.AllTerms(subject), search.AllTerms(turn))
+}
+
+// OnSubject is SameSubject for a question about facts: the turn shares the
+// rule's words with the question and its facts together, and one of them at
+// least with the facts themselves (their names, files and descriptions), so
+// the words every question of a kind holds ("which one stands", "does your
+// ruling still hold") never put a turn on its subject alone.
+func OnSubject(question, facts, turn string) bool {
+	if facts == "" || turn == "" {
+		return false
+	}
+	t := search.AllTerms(turn)
+	n, _ := common(search.AllTerms(facts), t)
+	return n > 0 && sharesTerms(search.AllTerms(question+"\n"+facts), t)
+}
+
 func sharesWords(a, b string) bool {
 	if a == "" || b == "" {
 		return false
 	}
+	return sharesTerms(search.Terms(a), search.Terms(b))
+}
+
+// sharesTerms is the rule on two texts' terms: three of four letters or more
+// in common by their stems, or two when one is a specific identifier.
+func sharesTerms(a, b []string) bool {
+	n, specific := common(a, b)
+	return n >= 3 || (n >= 2 && specific)
+}
+
+// common counts the stems of terms of four letters or more that a and b
+// share, and reports whether one of b's is a specific identifier.
+func common(a, b []string) (n int, specific bool) {
 	have := map[string]bool{}
-	for _, t := range search.Terms(a) {
+	for _, t := range a {
 		if len(t) >= 4 {
 			have[search.Stem(t)] = true
 		}
 	}
-	n, specific := 0, false
 	seen := map[string]bool{}
-	for _, t := range search.Terms(b) {
+	for _, t := range b {
 		st := search.Stem(t)
 		if len(t) < 4 || seen[st] || !have[st] {
 			continue
@@ -344,7 +382,7 @@ func sharesWords(a, b string) bool {
 		n++
 		specific = specific || search.SpecificIdentifier(t)
 	}
-	return n >= 3 || (n >= 2 && specific)
+	return n, specific
 }
 
 // asksIn is how many questions this session has been asked.

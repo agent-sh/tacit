@@ -432,8 +432,9 @@ func TestADryRunClosureRunsTheGuards(t *testing.T) {
 	}
 }
 
-// tacit questions says which questions no agent closes: the owner's (a note
-// of theirs on it) and a moot one, which code closes.
+// tacit questions says which questions no agent closes on its own proof: the
+// owner's (a note of theirs on it), which only their own answer closes, and a
+// moot one, which code closes.
 func TestTheQuestionsListSaysWhoClosesEach(t *testing.T) {
 	stubScrump(t)
 	kl, ab, uv := pairID(kindSupersedeAsk, "k", "l"), pairID(kindContradiction, "a", "b"), pairID(kindContradiction, "u", "v")
@@ -458,11 +459,11 @@ func TestTheQuestionsListSaysWhoClosesEach(t *testing.T) {
 	if r := byID[ab]; !strings.Contains(asString(r["moot"]), "a is retired") {
 		t.Errorf("a moot question: %v", r)
 	}
-	if r := byID[uv]; !strings.Contains(asString(r["owners"]), "note") {
+	if r := byID[uv]; !strings.Contains(asString(r["owners"]), "note") || r["words_only"] != true {
 		t.Errorf("a question with the owner's note: %v", r)
 	}
 	out = captureStdout(t, func() { code = runQuestions(nil) })
-	if code != 0 || !strings.Contains(out, "moot, `tacit questions moot` closes it") || !strings.Contains(out, "the owner's, no agent closes it") || !strings.Contains(out, "answers: keep:k, keep:l, both, neither") {
+	if code != 0 || !strings.Contains(out, "moot, `tacit questions moot` closes it") || !strings.Contains(out, "an agent closes it only with their own answer (--proof words)") || !strings.Contains(out, "answers: keep:k, keep:l, both, neither") {
 		t.Fatalf("exit %d, the list:\n%s", code, out)
 	}
 }

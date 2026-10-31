@@ -56,6 +56,7 @@ Five places in one top bar, the current one in ink with an underline: Needs you 
 - What git shows is a few sentences built on the server from the evidence (`Timeline.Summary`): what the facts name that is gone, per repo how much changed since and the latest change, which repos were quiet or unreadable. The dated ledger of commits is folded under Full git history.
 - A stale check sets the card on the left and what git shows on the right: what was deleted, where, when and in which commit, read from the finding's own lines.
 - Every pair also offers Neither is true (w, an x): both facts stop reaching agents, both cards grey on hover, and Change this answer brings both back exactly.
+- An answer the owner typed in a session, which an agent relayed, reads as theirs among past answers: "Your answer, relayed by an agent: Kept the older fact", then Your words with the day and the kind of session, then how the agent read them, with Change this answer. It never reads as the agent's own closure.
 - Under the choices, Add a note (optional): their words, sent with whatever the owner answers, or alone with Comment without answering (a speech bubble), which leaves the finding open. Their notes show on the finding as Your notes; an answered one shows "Your note:" under "You answered".
 - Find any fact (/) sits at the top of every place: every fact, the owner's rules among them, the retired and replaced ones when "Retired and replaced too" is ticked; a result opens in All facts with its actions (Edit, Retire or Restore, Replace with a new rule, Undo). A link ending `#fact=<name>` opens on that fact, or says plainly that no fact has that name. In Needs you, Filter folds out find, the kinds that have something open, the scope, and Needs you, Past answers or Everything. An answered finding shows "You answered: ..." with Change this answer (z).
 - When nothing is left: "Nothing needs you." and See past answers.
@@ -68,7 +69,7 @@ Five places in one top bar, the current one in ink with an underline: Needs you 
 | ruling-change | A newer fact may change your rule. Does your rule still stand? | Keep your rule, Use the newer fact, Both are true, Mark as conflicting |
 | supersede-applied | The curator replaced the older fact with the newer one. Keep it that way? | Keep it replaced, Undo, both are true, Keep the older instead, Mark as conflicting |
 | duplicate | These two facts say the same thing. Keep one? | Keep the newer, Keep the older, Both are true, Mark as conflicting |
-| name | Two files hold this fact's name. Which one stands? | Keep the newer, Keep the older, Both are true (no Mark as conflicting or Neither is true) |
+| name | Two files hold this fact's name. Which one stands? | Keep the newer, Keep the older, Both are true, Neither is true (no Mark as conflicting) |
 | stale | Git says something this fact names was deleted. Is it still true? (a rule: Does your rule still hold?) | Still true, Outdated, retire it |
 | link | Your rule links to a fact that does not exist. | Apply the fix, Edit the rule |
 

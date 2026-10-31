@@ -467,6 +467,21 @@ func (c *Corpus) TurnIn(quote, ref string) string {
 	return ""
 }
 
+// TurnAt is the owner's turn, as they wrote it, in session ref whose hash is
+// turnHash (Match.TurnHash): the whole turn a match was found in. "" when the
+// session holds no such turn.
+func (c *Corpus) TurnAt(ref, turnHash string) string {
+	if c == nil || turnHash == "" {
+		return ""
+	}
+	for _, i := range c.turns[ref] {
+		if ledger.TurnHash(Normalize(c.raw[i])) == turnHash {
+			return c.raw[i]
+		}
+	}
+	return ""
+}
+
 // SaidAt is when the owner said quote as a statement of theirs (as SaidIn
 // counts it): the time of the earliest turn that holds it in the session ref,
 // the turn whose hash is turnHash (ledger.TurnHash of the turn as they wrote

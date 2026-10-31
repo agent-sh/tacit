@@ -12,10 +12,12 @@ package main
 // pair's marks, recorded in review/decisions.jsonl under its id with the
 // files' state before the mark keyed by path: left keeps the first file and
 // gives the second `superseded_by` the name, which then reads as the first
-// (Search and the tree); right keeps the second; both keeps the two. An agent
-// marks it through `tacit review apply`, naming the two paths, under the
-// guards of every agent mark; the owner answers it on the review page and
-// reopens a mark there. The verifier does not take these findings.
+// (Search and the tree); right keeps the second; both keeps the two; neither
+// (wrong) retires both. An agent marks it through `tacit review apply`,
+// naming the two paths, under the guards of every agent mark, or relays the
+// owner's own answer with `tacit questions close --proof words`
+// (applyNameRelay); the owner answers it on the review page and reopens an
+// answer there. The verifier does not take these findings.
 
 import (
 	"bytes"
@@ -157,6 +159,8 @@ func nameAnswerWords(mark, a, b string) string {
 		return "keep the file " + b + ", retire " + a
 	case "both":
 		return "both files are true"
+	case "wrong":
+		return "neither file stands, retire " + a + " and " + b
 	}
 	return answerWords(mark, a, b)
 }
@@ -198,13 +202,20 @@ func (rs *reviewServer) nameItems() []reviewItem {
 		seen[id] = true
 		it := reviewItem{ID: id, Kind: kindName, Source: r.source, A: rs.fileView(r.name, r.a), B: rs.fileView(r.name, r.b), Decision: ds[id], Ask: asks[id], Notes: notes.For(id, r.name)}
 		// A file another fact replaced, or one retired or gone, ends the
-		// finding: the name is no longer held twice.
+		// finding: the name is no longer held twice. Both files retired by
+		// the standing answer neither is that answer's state: it reopens.
 		live := func(v *factView) bool {
 			return !v.Missing && v.Retired == "" && (v.SupersededBy == "" || v.SupersededBy == r.name)
 		}
-		if live(it.A) && live(it.B) {
+		retired := func(v *factView) bool {
+			return !v.Missing && v.Retired != "" && (v.SupersededBy == "" || v.SupersededBy == r.name)
+		}
+		switch {
+		case live(it.A) && live(it.B):
 			it.State = pairState(it.A, it.B)
-		} else {
+		case retired(it.A) && retired(it.B) && it.Decision != nil && markOf(it.Decision.Action) == "wrong":
+			it.State = "wrong"
+		default:
 			it.State = "gone"
 		}
 		if d := it.Decision; d != nil {
@@ -239,6 +250,8 @@ func (rs *reviewServer) nameItemByID(id string) *reviewItem {
 
 // allowedName lists the marks the server accepts on a name finding now. No
 // conflict mark: a fact cannot conflict with its own name (lint L13).
+// Neither (wrong) retires both files: the owner's answer on the page or in
+// their own words, relayed; an agent never sends it on its own.
 func (rs *reviewServer) allowedName(it reviewItem) []string {
 	if rs.viewOnly != "" {
 		return []string{}
@@ -246,10 +259,10 @@ func (rs *reviewServer) allowedName(it reviewItem) []string {
 	if it.Decision != nil && !(it.Decision.By == "agent" && it.Stale) {
 		return []string{"reopen"}
 	}
-	if it.State == "gone" || it.Crowded {
+	if it.State == "gone" || it.State == "wrong" || it.Crowded {
 		return []string{} // a crowded name is the owner's to sort out, file by file, in tacit app
 	}
-	out := []string{"both"}
+	out := []string{"both", "wrong"}
 	if it.B.SupersededBy == "" || it.B.SupersededBy == it.A.Name {
 		out = append(out, "left")
 	}
@@ -270,6 +283,9 @@ func (rs *reviewServer) applyNameOp(o *op, it *reviewItem) (string, []string, er
 		return "", nil, fmt.Errorf("finding %s is about %s then %s, the verdict says %s then %s", o.ID, it.A.Path, it.B.Path, o.A, o.B)
 	}
 	o.A, o.B = it.A.Path, it.B.Path
+	if o.By == "agent" && o.Proof != "" {
+		return rs.applyNameRelay(o, it) // the owner's own answer, relayed
+	}
 	if o.Mark == mootMark || o.Proof != "" {
 		return "", nil, errors.New("a name two files hold takes a mark, not a closure")
 	}
@@ -347,6 +363,10 @@ func (rs *reviewServer) applyNameOp(o *op, it *reviewItem) (string, []string, er
 		default:
 			reopenPair(x, y, prev.Before[x.Path])
 			reopenPair(y, x, prev.Before[y.Path])
+			if markOf(prev.Action) == "wrong" {
+				// Neither retired both: put back what each was.
+				x.Meta.Retired, y.Meta.Retired = prev.Before[x.Path].Retired, prev.Before[y.Path].Retired
+			}
 			for _, f := range []*fact.Fact{x, y} {
 				b := prev.Before[f.Path]
 				if sameSnap(f, b) {
@@ -397,4 +417,96 @@ func (rs *reviewServer) applyNameOp(o *op, it *reviewItem) (string, []string, er
 	}
 	rs.appendDecision(files, d)
 	return writeFiles(rs.s.Dir, note, files)
+}
+
+// applyNameRelay closes a name finding with the owner's own answer, which an
+// agent relays (SPEC.md, "Closing questions"; questions_relay.go): their
+// words, found by code in their turns, said on or after the day the name was
+// raised or an agent asked about it, after their own last word on it, in a
+// turn on its subject. It keeps one file, both, or neither (both retired),
+// read by path; its record keeps their words with the files as they were, so
+// their reopen puts back what it changed. Without such words no closure takes
+// a name: an agent keeps one file with tacit review apply, under the guards
+// of every agent mark.
+func (rs *reviewServer) applyNameRelay(o *op, it *reviewItem) (string, []string, error) {
+	if o.Proof != "words" {
+		return "", nil, errors.New("a name two files hold closes only on the owner's own answer (--proof words); without their words an agent keeps one file with tacit review apply")
+	}
+	if err := closureText(o); err != nil {
+		return "", nil, err
+	}
+	switch {
+	case it.Decision != nil:
+		return "", nil, errors.New("this name is answered already; the owner reopens that answer first")
+	case it.State == "gone":
+		return "", nil, errors.New("a file of this name is retired, replaced or not in the store: the name is no longer held twice")
+	case it.Crowded:
+		return "", nil, errors.New("more than two files hold this name; the owner retires the copies, file by file, in tacit app")
+	}
+	closes, question, asked := kindName, nameQuestion(*it), strings.TrimSuffix(it.Source, ".md")
+	if it.Ask != nil {
+		closes, question, asked = closesAsk, it.Ask.Question, it.Ask.At
+	}
+	why := o.relays(relayQuestion{asked: asked, question: question, facts: []*factView{it.A, it.B}, last: rs.ownerLast(it.ID, it.A.Name)})
+	if why != nil {
+		return "", nil, fmt.Errorf("a name two files hold closes only on the owner's own answer, and these words are not their answer to it: %v", why)
+	}
+	o.Relayed = true
+	if !contains(it.Allowed, o.Mark) {
+		return "", nil, errors.New("that answer is not possible for this name now")
+	}
+	a, b := rs.byPath[it.A.Path], rs.byPath[it.B.Path]
+	if a == nil || b == nil {
+		return "", nil, errors.New("one of these files is gone from the store")
+	}
+	before := map[string]snap{a.Path: snapOf(a), b.Path: snapOf(b)}
+	ca, cb := *a, *b
+	ca.Meta.ConflictsWith = append([]string(nil), a.Meta.ConflictsWith...)
+	cb.Meta.ConflictsWith = append([]string(nil), b.Meta.ConflictsWith...)
+	day := time.Now().Format("2006-01-02")
+	if o.Mark == "wrong" {
+		for _, c := range []*fact.Fact{&ca, &cb} {
+			if c.Meta.Retired == "" {
+				c.Meta.Retired = day
+			}
+		}
+	} else if err := setState(&ca, &cb, o.Mark); err != nil {
+		return "", nil, err
+	}
+	files := map[string][]byte{}
+	for _, c := range []*fact.Fact{&ca, &cb} {
+		was := before[c.Path]
+		if sameSnap(c, was) {
+			continue
+		}
+		f := rs.byPath[c.Path]
+		// Their ruling changes, and a file with their words is retired,
+		// only on their own later words on it.
+		gone := (c.Meta.Retired != "" && was.Retired == "") || (c.Meta.SupersededBy != "" && was.SupersededBy == "")
+		if isRuling(f) && !o.wordsLetRetire(f) {
+			return "", nil, fmt.Errorf("the answer would change your ruling in %s; a relayed answer does that only on your own later words on it", c.Path)
+		}
+		if w := fact.OwnerWordsOf(f); w != "" && gone && !o.wordsLetRetire(f) {
+			return "", nil, fmt.Errorf("the answer retires %s, which holds the owner's words %q; only their own later words on it let a relayed answer do that", c.Path, w)
+		}
+		c.Meta.Updated = day
+		old, err := os.ReadFile(filepath.Join(rs.s.Dir, f.Path))
+		if err != nil {
+			return "", nil, err
+		}
+		nb, err := fact.PatchRelations(old, c)
+		if err != nil {
+			return "", nil, fmt.Errorf("%s: %w", f.Path, err)
+		}
+		if string(nb) != string(old) {
+			files[f.Path] = nb
+		}
+	}
+	d := closureDecision(o, closes, it.A.Name, it.B.Name)
+	d.Before, d.Question = before, question
+	if o.dry {
+		return "the closure would land", nil, nil
+	}
+	rs.appendDecision(files, d)
+	return writeFiles(rs.s.Dir, "", files)
 }

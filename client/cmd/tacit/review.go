@@ -133,6 +133,12 @@ type decision struct {
 	Words     string `json:"words,omitempty"`
 	WordsFrom string `json:"words_from,omitempty"`
 	WordsOn   string `json:"words_on,omitempty"`
+	// Relayed: the closure is the owner's own answer, which the agent only
+	// passed on: the words were said on or after the day the question was
+	// asked and after the owner's own last word on it, in a turn on its
+	// subject (SPEC.md, "Closing questions"). The record is still an agent's:
+	// it endorses nothing, and the owner's reopen undoes it.
+	Relayed bool `json:"relayed,omitempty"`
 }
 
 type reviewItem struct {
@@ -647,17 +653,23 @@ type op struct {
 	// owner's words a words proof rests on (Words, WordsFrom, WordsOn).
 	Proof, Reason, Session    string
 	Words, WordsFrom, WordsOn string
-	// wordsRetire reports, for a fact that holds words of theirs, that the
-	// owner's own later words on its subject (a words proof) let the closure
-	// retire it. It reads the fact as the closure finds it, under the store's
-	// lock; nil lets no closure retire one.
+	// wordsRetire reports, for a fact that holds words of theirs (or, for a
+	// relayed answer, their ruling), that the owner's own later words on its
+	// subject (a words proof) let the closure retire or change it. It reads
+	// the fact as the closure finds it, under the store's lock; nil lets no
+	// closure retire one.
 	wordsRetire func(*fact.Fact) bool
+	// answer is the owner's turn a words proof rests on, as code found it;
+	// nil for any other proof. Relayed is set by the closure that finds the
+	// words are their answer to its question (op.relays).
+	answer  *ownerAnswer
+	Relayed bool
 	// dry checks a closure with every guard and writes nothing.
 	dry bool
 }
 
 // wordsLetRetire reports that a closure's words proof lets it retire f,
-// which holds words of the owner's (op.wordsRetire).
+// which holds words of the owner's or is their ruling (op.wordsRetire).
 func (o *op) wordsLetRetire(f *fact.Fact) bool {
 	return o.wordsRetire != nil && f != nil && o.wordsRetire(f)
 }
@@ -757,6 +769,9 @@ func (rs *reviewServer) applyOnce(ctx context.Context, ops []op) ([]string, []er
 	for i, o := range ops {
 		if errs[i] == nil && first == "" {
 			first, by = fmt.Sprintf("%s %s / %s", o.Mark, o.A, o.B), o.By
+			if o.Relayed {
+				by += ", the owner's answer relayed"
+			}
 		}
 	}
 	msg := "review: " + first

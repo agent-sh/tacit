@@ -339,6 +339,9 @@ func (rs *reviewServer) saved(res *saveResult, err error) (string, error) {
 func (rs *reviewServer) neither(ctx context.Context, id, comment string) (*saveResult, error) {
 	return rs.ownerWrite(ctx, func() (*ownerChange, error) {
 		f := rs.findFinding(ctx, id)
+		if f != nil && f.kind == kindName {
+			return rs.neitherName(f, comment)
+		}
 		if f == nil || f.pair == nil {
 			return nil, errors.New("neither is true is an answer for two facts; this finding is not a pair")
 		}
@@ -379,6 +382,54 @@ func (rs *reviewServer) neither(ctx context.Context, id, comment string) (*saveR
 		return &ownerChange{write: files, name: it.A.Name,
 			msg: fmt.Sprintf("%sneither is true: retire %s and %s\n\nBy the owner in tacit app, on review finding %s.", ownerCommit, it.A.Name, it.B.Name, id)}, nil
 	})
+}
+
+// neitherName is neither for a name two files hold: both files, each read by
+// its path, get retired, and one decision records both as they were, keyed by
+// path, so reopen puts both back.
+func (rs *reviewServer) neitherName(f *findingRef, comment string) (*ownerChange, error) {
+	it := rs.nameItemByID(f.id)
+	if it == nil {
+		return nil, errors.New("this finding is no longer in the review files")
+	}
+	if !contains(it.Allowed, "wrong") {
+		if it.Decision != nil {
+			return nil, errors.New("this finding is already answered; change the answer first")
+		}
+		return nil, errors.New("neither is true is not possible for this finding now")
+	}
+	a, b := rs.byPath[it.A.Path], rs.byPath[it.B.Path]
+	if a == nil || b == nil {
+		return nil, errors.New("one of these files is gone from the store")
+	}
+	day := today()
+	d := decision{ID: f.id, Action: "wrong", A: it.A.Name, B: it.B.Name, At: time.Now().Format(time.RFC3339),
+		Before: map[string]snap{a.Path: snapOf(a), b.Path: snapOf(b)}}
+	files := map[string][]byte{}
+	for _, x := range []*fact.Fact{a, b} {
+		if x.Meta.Retired != "" {
+			continue
+		}
+		old, err := os.ReadFile(filepath.Join(rs.s.Dir, x.Path))
+		if err != nil {
+			return nil, err
+		}
+		c := *x
+		c.Meta.Retired, c.Meta.Updated = day, day
+		nb, err := fact.PatchRelations(old, &c)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", x.Path, err)
+		}
+		files[x.Path] = nb
+	}
+	c, err := rs.noteWrites(files, f, comment, "wrong")
+	if err != nil {
+		return nil, err
+	}
+	d.Comment = c
+	rs.appendDecision(files, d)
+	return &ownerChange{write: files, name: it.A.Name,
+		msg: fmt.Sprintf("%sneither file of %s stands: retire %s and %s\n\nBy the owner in tacit app, on review finding %s.", ownerCommit, it.A.Name, it.A.Path, it.B.Path, f.id)}, nil
 }
 
 // noteOnly records the owner's note on a finding and leaves it open.
