@@ -221,9 +221,13 @@ func questionText(it reviewItem) string {
 
 // closureDecision is the record an agent's closure leaves.
 func closureDecision(o *op, closes, a, b string) decision {
-	return decision{ID: o.ID, Action: o.Mark, A: a, B: b, At: time.Now().Format(time.RFC3339), By: "agent",
+	d := decision{ID: o.ID, Action: o.Mark, A: a, B: b, At: time.Now().Format(time.RFC3339), By: "agent",
 		Evidence: o.Evidence, Reason: o.Reason, Proof: o.Proof, Closes: closes, Session: o.Session, Model: o.Model,
 		Words: o.Words, WordsFrom: o.WordsFrom, WordsOn: o.WordsOn, Relayed: o.Relayed}
+	if o.Relayed && o.answer != nil && !o.answer.at.IsZero() {
+		d.WordsAt = o.answer.at.Format(time.RFC3339)
+	}
+	return d
 }
 
 // applyStaleClosure checks an agent's closure of the question a one-fact
@@ -1024,10 +1028,12 @@ type questionRow struct {
 	Owners string `json:"owners,omitempty"`
 	// WordsOnly: only the owner's own answer closes it, which an agent relays
 	// (tacit questions close --proof words): a question of theirs, or a name
-	// two files hold.
-	WordsOnly bool `json:"words_only,omitempty"`
+	// two files hold. OwnerOnly are the answers only their own answer gives
+	// on a question an agent may otherwise close.
+	WordsOnly bool     `json:"words_only,omitempty"`
+	OwnerOnly []string `json:"owner_only,omitempty"`
 	// Moot is why the question went moot: code closes it (tacit questions
-	// moot), no agent does.
+	// moot), but the owner's, which only their own answer closes.
 	Moot   string    `json:"moot,omitempty"`
 	Closed *decision `json:"closed,omitempty"`
 }
@@ -1060,7 +1066,7 @@ func openQuestions(rs *reviewServer, q *agentreview.Queue) []questionRow {
 	}
 	for _, it := range append(rs.staleItems(), rs.checkItems()...) {
 		k := staleQuestionOf(it)
-		if k == "" || it.State != "live" {
+		if k == "" {
 			continue
 		}
 		r := questionRow{ID: it.ID, Closes: k, Finding: it.Kind, Facts: []string{it.A.Name}, Answers: []string{"current", "retire"}}
@@ -1070,13 +1076,22 @@ func openQuestions(rs *reviewServer, q *agentreview.Queue) []questionRow {
 		case len(it.Notes) > 0:
 			r.Owners, r.WordsOnly = "the owner left a note on it", true
 		}
+		if it.State != "live" {
+			// The moot pass closes an agent's; the owner's waits for their
+			// own answer.
+			if !r.WordsOnly {
+				continue
+			}
+			if r.Moot = rs.staleMootWhy(it); r.Moot == "" {
+				continue
+			}
+		}
 		if k == closesAsk {
 			r.Asked, r.Question = it.Ask.At, it.Ask.Question
 		} else {
 			r.Asked, r.Question = it.Flag.Since, "The rotation read this fact of the owner's against what tacit knows now: "+strings.Join(it.Flag.Detail, " ")
 			if !r.WordsOnly {
-				// Only their own answer retires their fact.
-				r.Answers = []string{"current", "retire (only as the owner's own answer, --proof words)"}
+				r.OwnerOnly = []string{"retire"} // only their own answer retires their fact
 			}
 		}
 		out = append(out, r)
@@ -1098,6 +1113,8 @@ func openQuestions(rs *reviewServer, q *agentreview.Queue) []questionRow {
 		switch {
 		case it.Crowded:
 			r.Owners, r.Answers, r.WordsOnly = "more than two files hold this name (also "+strings.Join(it.Also, ", ")+"); the owner retires the copies, file by file, in tacit app", []string{}, false
+		case it.Decision != nil:
+			r.Owners = "an agent's answer on it the store no longer says"
 		case it.Ask != nil:
 			r.Owners = "an agent asked the owner"
 		case owned[it.ID] || owned[it.A.Name]:
@@ -1177,6 +1194,9 @@ func runQuestions(args []string) int {
 			day = day[:10]
 		}
 		answers := "answers: " + strings.Join(r.Answers, ", ")
+		if len(r.OwnerOnly) > 0 {
+			answers += " (" + strings.Join(r.OwnerOnly, ", ") + " only as the owner's own answer, --proof words)"
+		}
 		switch {
 		case r.Moot != "" && r.WordsOnly:
 			answers = "moot, but the owner's (" + r.Owners + "): `tacit questions moot` leaves it, and their own answer closes it (--proof words): " + strings.TrimPrefix(r.Moot, "moot: ")
@@ -1309,11 +1329,18 @@ func runQuestionsClose(args []string) int {
 		// their sentence. An answer of theirs is often a terse line under the
 		// question's own words, which they pasted; a turn that answers a list
 		// holds every item's words, and another item's are not this one's.
-		item := ownerwords.ItemAround(corpus.TurnAt(m.Ref, m.TurnHash), *words)
-		if item == "" {
-			item = *words
+		// A turn that does not say which question the words answer gives no
+		// item: no relay, and the rule on their words reads the words alone.
+		turn := corpus.TurnAt(m.Ref, m.TurnHash)
+		item := *words
+		if turn != "" {
+			item = ownerwords.ItemAround(turn, *words)
 		}
 		o.answer = &ownerAnswer{item: item, at: at, on: o.WordsOn}
+		subject := item
+		if subject == "" {
+			subject = *words
+		}
 		// Their later words on the same subject let a closure retire a fact
 		// that holds older words of theirs, and let their relayed answer
 		// change their ruling: said after the fact's words (or the ruling's
@@ -1345,7 +1372,7 @@ func runQuestionsClose(args []string) int {
 			if ruling && f.Meta.Updated > was {
 				was = f.Meta.Updated // a rule they edited speaks for that day
 			}
-			same := (w != "" && agentreview.SameSubject(w, item)) || agentreview.SameSubject(f.Meta.Description, item)
+			same := (w != "" && agentreview.SameSubject(w, subject)) || agentreview.SameSubject(f.Meta.Description, subject)
 			return same && was != "" && on > was
 		}
 	}

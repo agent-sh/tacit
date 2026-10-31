@@ -361,6 +361,7 @@ func (rs *reviewServer) applyNameOp(o *op, it *reviewItem) (string, []string, er
 		case x == nil || y == nil:
 			note = "One of these files is gone from the store."
 		default:
+			now := map[string]snap{x.Path: snapOf(x), y.Path: snapOf(y)}
 			reopenPair(x, y, prev.Before[x.Path])
 			reopenPair(y, x, prev.Before[y.Path])
 			if markOf(prev.Action) == "wrong" {
@@ -370,6 +371,9 @@ func (rs *reviewServer) applyNameOp(o *op, it *reviewItem) (string, []string, er
 			}
 			for _, f := range []*fact.Fact{x, y} {
 				b := prev.Before[f.Path]
+				if c := now[f.Path]; sameSnap(f, c) && c.Updated == f.Meta.Updated && !sameSnap(f, b) {
+					continue // the reopen left it as it is (retired again since)
+				}
 				if sameSnap(f, b) {
 					f.Meta.Updated = b.Updated
 				} else {

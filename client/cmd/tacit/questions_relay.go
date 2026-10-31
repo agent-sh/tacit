@@ -33,8 +33,8 @@ import (
 
 // ownerAnswer is the owner's turn a words proof rests on, as code found it in
 // their turns: the item of the turn that holds the words, as they wrote it
-// (ownerwords.ItemAround), when they said it and its day (this machine's
-// time).
+// (ownerwords.ItemAround; "" when the turn does not say which question they
+// answer), when they said it and its day (this machine's time).
 type ownerAnswer struct {
 	item string
 	at   time.Time
@@ -84,6 +84,9 @@ func (rs *reviewServer) relays(o *op, q relayQuestion) error {
 	if !last.IsZero() && !a.at.After(last) {
 		return fmt.Errorf("the owner's own answer, note or edit on it (%s) is later than these words", last.Local().Format("2006-01-02 15:04"))
 	}
+	if a.item == "" {
+		return errors.New("their turn does not say which question these words answer: they are no answer in it, they run on into the next question, or its items run together")
+	}
 	if !agentreview.OnSubject(q.question, factsText(q.facts...), a.item) {
 		return errors.New("the item of their turn that holds them is about another subject")
 	}
@@ -106,8 +109,10 @@ func askedDay(s string) string {
 
 // ownerLast is the time of the owner's latest record on a finding or on a
 // fact it names: a mark, a reopen, a keep in another answer, a note, This is
-// mine; zero for none. A relay rests only on words they said after it, so
-// their reopen of a relayed answer is never undone by the words it relayed.
+// mine, and an answer of theirs an agent relayed, at the time they said its
+// words; zero for none. A relay rests only on words they said after it, so
+// their reopen of a relayed answer is never undone by the words it relayed,
+// and older words of theirs never undo a newer answer.
 func (rs *reviewServer) ownerLast(id string, names ...string) time.Time {
 	b, err := os.ReadFile(filepath.Join(rs.s.Dir, "review", "decisions.jsonl"))
 	if err != nil {
@@ -122,10 +127,18 @@ func (rs *reviewServer) ownerLast(id string, names ...string) time.Time {
 	var last time.Time
 	for _, l := range strings.Split(string(b), "\n") {
 		var d decision
-		if json.Unmarshal([]byte(l), &d) != nil || d.ID == "" || d.By != "" || (d.ID != id && !named[d.A] && !named[d.B]) {
+		if json.Unmarshal([]byte(l), &d) != nil || d.ID == "" || (d.ID != id && !named[d.A] && !named[d.B]) {
 			continue
 		}
-		if t, err := time.Parse(time.RFC3339, d.At); err == nil && t.After(last) {
+		at := d.At
+		switch {
+		case d.By == "":
+		case d.By == "agent" && d.Relayed:
+			at = d.WordsAt
+		default:
+			continue
+		}
+		if t, err := time.Parse(time.RFC3339, at); err == nil && t.After(last) {
 			last = t
 		}
 	}
@@ -216,18 +229,41 @@ func nameQuestion(it reviewItem) string {
 // relayMoot closes, with the owner's own answer, a question of theirs that
 // went moot: a fact it is about was retired, replaced or is gone, and the
 // moot pass leaves the owner's questions to them. Nothing changes but the
-// record, which keeps their words and why the question is moot.
+// record, which keeps their words, what the agent read them as and why the
+// question is moot. The op keeps its mark: a lost push race applies it again.
 func (rs *reviewServer) relayMoot(o *op, closes, a, b, question, why string) (string, []string, error) {
 	if err := closureText(o); err != nil {
 		return "", nil, err
 	}
-	o.Mark = mootMark
+	o.closedMoot = true
 	d := closureDecision(o, closes, a, b)
-	d.Evidence, d.Question = strings.TrimSpace(why+". "+o.Evidence), question
+	d.Action = mootMark
+	d.Evidence = strings.TrimSpace(why + "; their answer read as " + relayedAnswer(o.Mark, a, b) + ". " + o.Evidence)
+	d.Question = question
 	if o.dry {
 		return "the closure would land: " + why, nil, nil
 	}
 	files := map[string][]byte{}
 	rs.appendDecision(files, d)
 	return writeFiles(rs.s.Dir, "", files)
+}
+
+// relayedAnswer is what an agent read the owner's words as, on a question
+// whose answer changes nothing.
+func relayedAnswer(mark, a, b string) string {
+	switch mark {
+	case "left":
+		return "keep " + a
+	case "right":
+		return "keep " + b
+	case "both":
+		return "both stand"
+	case "wrong":
+		return "neither stands"
+	case "current":
+		return "still true"
+	case "retire":
+		return "retire it"
+	}
+	return mark
 }

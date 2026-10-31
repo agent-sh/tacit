@@ -139,6 +139,9 @@ type decision struct {
 	// subject (SPEC.md, "Closing questions"). The record is still an agent's:
 	// it endorses nothing, and the owner's reopen undoes it.
 	Relayed bool `json:"relayed,omitempty"`
+	// WordsAt is when the owner said the words a relayed answer rests on (RFC
+	// 3339): a later relay rests only on words said after it.
+	WordsAt string `json:"words_at,omitempty"`
 }
 
 type reviewItem struct {
@@ -381,8 +384,9 @@ func (rs *reviewServer) decisions() (marks, asks map[string]*decision) {
 
 // ownerTouched lists findings with any record the owner made themself (a
 // mark from the page, a reopen, or a record from before marks carried By),
-// and the facts of every pair where the owner kept one over the other. A verifier
-// never touches those findings or facts.
+// or that an agent relayed as their own answer, and the facts of every pair
+// where the owner kept one over the other. A verifier never touches those
+// findings or facts.
 func (rs *reviewServer) ownerTouched() map[string]bool {
 	out := map[string]bool{}
 	b, err := os.ReadFile(filepath.Join(rs.s.Dir, "review", "decisions.jsonl"))
@@ -391,7 +395,7 @@ func (rs *reviewServer) ownerTouched() map[string]bool {
 	}
 	for _, l := range strings.Split(string(b), "\n") {
 		var d decision
-		if json.Unmarshal([]byte(l), &d) == nil && d.ID != "" && d.By == "" && d.Action != "note" {
+		if json.Unmarshal([]byte(l), &d) == nil && d.ID != "" && (d.By == "" || (d.By == "agent" && d.Relayed)) && d.Action != "note" {
 			// A note alone answers nothing: the finding stays open to the
 			// verifier, which reads the note as the owner's word on it.
 			out[d.ID] = true
@@ -682,6 +686,9 @@ type op struct {
 	// words are their answer to its question (op.relays).
 	answer  *ownerAnswer
 	Relayed bool
+	// closedMoot: the relayed answer closed a question of the owner's that
+	// went moot, changing nothing (relayMoot); the commit says so.
+	closedMoot bool
 	// dry checks a closure with every guard and writes nothing.
 	dry bool
 }
@@ -786,7 +793,11 @@ func (rs *reviewServer) applyOnce(ctx context.Context, ops []op) ([]string, []er
 	var by, first string
 	for i, o := range ops {
 		if errs[i] == nil && first == "" {
-			first, by = fmt.Sprintf("%s %s / %s", o.Mark, o.A, o.B), o.By
+			mark := o.Mark
+			if o.closedMoot {
+				mark = mootMark
+			}
+			first, by = fmt.Sprintf("%s %s / %s", mark, o.A, o.B), o.By
 			if o.Relayed {
 				// The subject still ends "by agent": tacit app's history reads
 				// every other review commit as the owner's.
@@ -981,6 +992,7 @@ func (rs *reviewServer) applyOp(o *op) (string, []string, error) {
 		case x == nil || y == nil:
 			note = "One of these facts is gone from the store."
 		default:
+			now := map[string]snap{x.Meta.Name: snapOf(x), y.Meta.Name: snapOf(y)}
 			reopenPair(x, y, prev.Before[x.Meta.Name])
 			reopenPair(y, x, prev.Before[y.Meta.Name])
 			if markOf(prev.Action) == "wrong" {
@@ -990,6 +1002,9 @@ func (rs *reviewServer) applyOp(o *op) (string, []string, error) {
 			}
 			for _, f := range []*fact.Fact{x, y} {
 				b := prev.Before[f.Meta.Name]
+				if c := now[f.Meta.Name]; sameSnap(f, c) && c.Updated == f.Meta.Updated && !sameSnap(f, b) {
+					continue // the reopen left it as it is (retired again since)
+				}
 				if sameSnap(f, b) {
 					f.Meta.Updated = b.Updated
 				} else {

@@ -123,13 +123,16 @@ func TestARelayOfTheOwnersAnswerClosesAGuardedNameFinding(t *testing.T) {
 	// of its files, name no subject; nor does an answer in a turn that does
 	// not say where its item begins, nor the sentence an answer above it went
 	// on with.
-	const generic, folders, run, onward = "which one stands now, keep the files that hold it", "the user files hold the old name, rename them", "retire both of them now", "retire both of those please"
+	const generic, folders, run, onward, asked = "which one stands now, keep the files that hold it", "the user files hold the old name, rename them", "retire both of them now", "retire both of those please", "whether to retire both lantern-proxy-port files"
 	ownerTurns(t, home, [3]string{"owner-chat", now.Format(time.RFC3339), turn}, [3]string{"owner-other", now.Format(time.RFC3339), releaseNotes},
 		[3]string{"owner-third", now.Format(time.RFC3339), generic}, [3]string{"owner-fourth", now.Format(time.RFC3339), folders},
 		[3]string{"owner-fifth", now.Format(time.RFC3339), "which lantern proxy file stands; - keep the old one; which zebra nightly cron stands; - " + run},
-		[3]string{"owner-sixth", now.Format(time.RFC3339), "which lantern proxy port file stands?\n- keep the old one. the lantern proxy port still works.\nwhich zebra nightly cron stands?\n- " + onward})
+		[3]string{"owner-sixth", now.Format(time.RFC3339), "which lantern proxy port file stands?\n- keep the old one. the lantern proxy port still works.\nwhich zebra nightly cron stands?\n- " + onward},
+		[3]string{"owner-seventh", now.Format(time.RFC3339), asked + "\n- no, keep the machine one"})
 	head := r.serverHead()
-	for _, off := range []string{zebra, releaseNotes, generic, folders, run, onward} {
+	// The question's own words, pasted above their answer, are no answer of
+	// theirs either.
+	for _, off := range []string{zebra, releaseNotes, generic, folders, run, onward, asked} {
 		if c := relayOnName(it.ID, "keep:"+it.A.Path, off); c == 0 || r.serverHead() != head {
 			t.Fatalf("their words on another subject (%q) closed the name: exit %d", off, c)
 		}
@@ -229,7 +232,10 @@ func TestARelayRetiresBothFilesOfANameWhenTheOwnerSaysSo(t *testing.T) {
 	if !bytes.Contains(b, []byte("retired: \""+day+"\"")) && !bytes.Contains(b, []byte("retired: "+day)) {
 		t.Fatalf("fixture: %s has no retired line of today:\n%s", it.B.Path, b)
 	}
-	b = bytes.Replace(bytes.Replace(b, []byte("retired: \""+day+"\""), []byte("retired: \"2026-01-02\""), 1), []byte("retired: "+day), []byte("retired: 2026-01-02"), 1)
+	for _, f := range []string{"retired", "updated"} {
+		b = bytes.Replace(bytes.Replace(b, []byte(f+": \""+day+"\""), []byte(f+": \"2026-01-02\""), 1), []byte(f+": "+day), []byte(f+": 2026-01-02"), 1)
+	}
+	kept := string(b)
 	os.WriteFile(p, b, 0o644)
 	gitIn(t, r.clone, "commit", "-qam", "another tool retires it again")
 	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
@@ -243,6 +249,9 @@ func TestARelayRetiresBothFilesOfANameWhenTheOwnerSaysSo(t *testing.T) {
 	}
 	if got := retiredOnServer(t, r, it.B.Path); got != "2026-01-02" {
 		t.Errorf("after the reopen %s: retired %q, want the later retirement kept", it.B.Path, got)
+	}
+	if got := r.onServer(it.B.Path); got != kept {
+		t.Errorf("the reopen changed the file it left as it is:\n%s\nwas:\n%s", got, kept)
 	}
 	r.assertServerLintsClean()
 }
@@ -288,6 +297,49 @@ func TestARelayAnswersANameWhoseAgentAnswerWentStale(t *testing.T) {
 	}
 }
 
+// A name is asked the day it was raised: an agent's ask dated before that day
+// does not make the owner's earlier words its answer.
+func TestARelayOfANameRestsOnWordsSaidSinceItWasRaised(t *testing.T) {
+	r := nameFixture(t)
+	stubScrump(t)
+	if code := runDedupe([]string{"--names"}); code != 0 {
+		t.Fatalf("dedupe --names exited %d", code)
+	}
+	it := nameItemFor(t, r, "lantern-proxy-port")
+	appendDecisionLine(t, r, decision{ID: it.ID, Action: "ask", A: it.A.Name, B: it.B.Name, At: "2026-10-20T10:00:00Z", By: "agent", Evidence: "the two files name different hosts",
+		Question: "Two files hold lantern-proxy-port and they name different hosts. Which one stands, or are both true?"})
+	home := relayHome(t)
+	const older, newer = "the lantern proxy is gone from both hosts, retire both", "the lantern proxy left both hosts, retire both files"
+	ownerTurns(t, home, [3]string{"owner-chat", time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339), older},
+		[3]string{"owner-chat", time.Now().UTC().Add(time.Minute).Format(time.RFC3339), newer})
+	if c := relayOnName(it.ID, "neither", older); c == 0 {
+		t.Fatal("words said before the name was raised answered it")
+	}
+	if c := relayOnName(it.ID, "neither", newer); c != 0 {
+		t.Fatalf("their answer since the name was raised: exit %d", c)
+	}
+}
+
+// racePush makes the clone's next push lose a race once: a pre-push hook
+// pushes another commit from a second clone first, so the write syncs and
+// applies its marks again.
+func racePush(t *testing.T, dir string) {
+	t.Helper()
+	bare := strings.TrimSpace(gitIn(t, dir, "remote", "get-url", "origin"))
+	tmp := t.TempDir()
+	marker, racer := filepath.Join(tmp, "raced"), filepath.Join(tmp, "racer")
+	hook := "#!/bin/sh\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX\n[ -e " + marker + " ] && exit 0\ntouch " + marker + "\n" +
+		"git clone -q " + bare + " " + racer + " && cd " + racer + " && echo x > race.txt && git add race.txt && git -c user.name=racer -c user.email=r@example.test commit -qm race && git push -q origin HEAD:main\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-push"), []byte(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := os.Stat(marker); err != nil {
+			t.Error("fixture: the push never lost its race")
+		}
+	})
+}
+
 // The owner's own page takes the same answer: Neither is true retires both
 // files of a name, each by its path, in one commit of theirs, and their
 // reopen brings both back byte for byte.
@@ -329,20 +381,25 @@ func TestTheOwnerRetiresBothFilesOfANameOnThePage(t *testing.T) {
 // The same-subject rule reads the item of the owner's turn that holds their
 // words: their answer after the dash shares no word with the fact's words or
 // its description, the question's words above it do. Words in a turn about
-// another subject still retire nothing.
-func TestTheSameSubjectRuleReadsTheOwnersWholeTurn(t *testing.T) {
+// another subject retire nothing, and nor do words in a sentence of their
+// turn that went on from the fact's subject to another.
+func TestTheSameSubjectRuleReadsTheItemOfTheOwnersTurn(t *testing.T) {
 	stubScrump(t)
 	rs, home, wx := walrusStore(t)
 	sid := strings.TrimPrefix(testOwnerSession, "claude:")
 	const answer = "it moved last week to the new box"
+	const onward = "and the parser release goes out on friday morning"
 	ownerTurns(t, home, [3]string{sid, "2026-10-01T09:00:00Z", walrusWords},
 		[3]string{"owner-later", "2026-10-29T09:00:00Z", releaseNotes},
+		[3]string{"owner-other", "2026-10-29T09:30:00Z", "the walrus driver stays on its old port, i checked the unit file. " + onward},
 		[3]string{"owner-later", "2026-10-29T10:00:00Z", "whether your words on the walrus driver port still hold (only you may answer); - " + answer})
 	if agentreview.SharesWords(walrusWords, answer) || agentreview.SharesWords(rs.facts["w"].Meta.Description, answer) {
 		t.Fatal("fixture: the answer alone should not be on the fact's subject")
 	}
-	if c := closeOnWords(wx, releaseNotes); c != 1 {
-		t.Fatalf("their words on another subject: exit %d", c)
+	for _, off := range []string{releaseNotes, onward} {
+		if c := closeOnWords(wx, off); c != 1 {
+			t.Fatalf("their words on another subject (%q): exit %d", off, c)
+		}
 	}
 	rs.loadFacts()
 	if m := rs.facts["w"].Meta; m.SupersededBy != "" || m.Retired != "" {
@@ -374,12 +431,13 @@ func TestARelayAnswersTheOwnersQuestionOnTheirRuling(t *testing.T) {
 		t.Fatal("fixture: r is no ruling")
 	}
 	home := questionsHome(t, rs)
-	const early, answer, other = "the green queue takes the quokka jobs from now", "the green queue replaced it last week", "drop them all now, they are gone"
+	const early, answer, other, onward = "the green queue takes the quokka jobs from now", "the green queue replaced it last week", "drop them all now, they are gone", "lets ship the green release notes for the parser today"
 	ownerTurns(t, home, [3]string{"owner-early", "2026-10-15T09:00:00Z", early},
 		[3]string{"owner-later", "2026-10-29T09:00:00Z", releaseNotes},
 		[3]string{"owner-later", "2026-10-29T09:30:00Z", "does your quokka scheduler rule still hold (the blue queue one); - yes it still holds. the old zebra cron jobs; - " + other},
+		[3]string{"owner-other", "2026-10-29T09:45:00Z", "my quokka scheduler rule stands, the blue queue stays. " + onward},
 		[3]string{"owner-later", "2026-10-29T10:00:00Z", "does your quokka scheduler rule still hold (the blue queue one); - " + answer})
-	for _, w := range []string{early, releaseNotes, other} {
+	for _, w := range []string{early, releaseNotes, other, onward} {
 		if c := relayOn(ro, "keep:o", w); c == 0 {
 			t.Fatalf("words that are no answer of theirs to it (%q) changed their ruling", w)
 		}
@@ -405,18 +463,21 @@ func TestARelayAnswersTheOwnersQuestionOnTheirRuling(t *testing.T) {
 // said before their note are no answer over it.
 func TestARelayAnswersAPairTheOwnerTouched(t *testing.T) {
 	stubScrump(t)
-	uv, kl := pairID(kindContradiction, "u", "v"), pairID(kindSupersedeAsk, "k", "l")
-	rs := questionStore(t, map[string]string{"u": "", "v": "", "k": "", "l": "", "z": ""},
-		"- CONTRADICTION?: [[v]] (system) vs [[u]] (system)\n- supersedes? [[l]] may replace [[k]]\n",
+	uv, kl, vw, vy := pairID(kindContradiction, "u", "v"), pairID(kindSupersedeAsk, "k", "l"), pairID(kindContradiction, "v", "w"), pairID(kindContradiction, "v", "y")
+	rs := questionStore(t, map[string]string{"u": "", "v": "", "k": "", "l": "", "z": "", "w": "", "y": ""},
+		"- CONTRADICTION?: [[v]] (system) vs [[u]] (system)\n- supersedes? [[l]] may replace [[k]]\n- CONTRADICTION?: [[w]] (system) vs [[v]] (system)\n- CONTRADICTION?: [[y]] (system) vs [[v]] (system)\n",
 		askOn(uv, "u", "v", "Which walrus port holds, 7781 or 7790?"),
 		decision{ID: uv, Action: "note", A: "u", B: "v", At: "2026-10-21T10:00:00Z", Comment: "check the walrus unit first"},
 		askOn(kl, "k", "l", "Does the green box note replace the blue box one?"),
+		askOn(vy, "v", "y", "Which walrus port holds now, 7790 or 7800?"),
 		decision{ID: pairID(kindContradiction, "k", "z"), Action: "left", A: "k", B: "z", At: "2026-10-21T10:00:00Z"})
 	describe(t, rs, map[string]string{"u": "The walrus driver listens on port 7781", "v": "The walrus driver listens on port 7790",
-		"k": "The quokka scheduler runs on the blue box", "l": "The quokka scheduler runs on the green box"})
+		"k": "The quokka scheduler runs on the blue box", "l": "The quokka scheduler runs on the green box", "y": "The walrus driver listens on port 7800"})
 	home := questionsHome(t, rs)
 	const early, onPorts, onBoxes = "keep the walrus driver on port 7781 for now", "the walrus driver moved to port 7790 last week", "the quokka scheduler moved to the green box"
+	const before = "the walrus driver went to port 7800 for a while"
 	ownerTurns(t, home, [3]string{"owner-early", "2026-10-20T12:00:00Z", early},
+		[3]string{"owner-early", "2026-10-29T09:30:00Z", "which walrus port holds now; - " + before},
 		[3]string{"owner-later", "2026-10-29T10:00:00Z", "which walrus port holds; - " + onPorts},
 		[3]string{"owner-later", "2026-10-29T11:00:00Z", "does the green box note replace the blue one; - yes, " + onBoxes})
 	if c := relayOn(uv, "keep:u", early); c == 0 {
@@ -436,6 +497,20 @@ func TestARelayAnswersAPairTheOwnerTouched(t *testing.T) {
 		if l := recordOf(t, rs, id); !strings.Contains(l, `"relayed":true`) {
 			t.Errorf("%s: the record:\n%s", id, l)
 		}
+	}
+	// The fact their answer kept is theirs now, as their own keep makes it:
+	// an agent's mark that would retire it on another pair is refused.
+	if code := applyVerdicts(t, []map[string]string{{"id": vw, "a": "v", "b": "w", "mark": "keep", "keep": "w", "evidence": "w names the port the unit runs"}}); code == 0 {
+		t.Fatal("an agent retired the fact the owner's relayed answer kept")
+	}
+	// Words of theirs older than the answer that kept it are no answer over
+	// it on another question.
+	if c := relayOn(vy, "keep:y", before); c == 0 {
+		t.Fatal("words older than the owner's relayed answer undid it on another question")
+	}
+	rs.loadFacts()
+	if got := rs.facts["v"].Meta.SupersededBy; got != "" {
+		t.Fatalf("v: superseded_by %q", got)
 	}
 }
 
@@ -500,6 +575,7 @@ func TestARelayClosesTheOwnersQuestionThatWentMoot(t *testing.T) {
 	const answer = "the walrus driver is on port 7790 now"
 	ownerTurns(t, home, [3]string{"owner-later", "2026-10-29T10:00:00Z", "which walrus port holds; - " + answer})
 	b, _ := os.ReadFile(filepath.Join(rs.s.Dir, "system", "b.md"))
+	racePush(t, rs.s.Dir) // a lost push race applies the closure again
 	if c := relayOn(ab, "keep:b", answer); c != 0 {
 		t.Fatalf("their answer on their moot question: exit %d", c)
 	}
@@ -508,7 +584,7 @@ func TestARelayClosesTheOwnersQuestionThatWentMoot(t *testing.T) {
 		t.Fatalf("a moot closure changed a fact: a %+v\n%s", rs.facts["a"].Meta, got)
 	}
 	var d map[string]any
-	if json.Unmarshal([]byte(recordOf(t, rs, ab)), &d) != nil || d["action"] != mootMark || d["relayed"] != true || d["words"] != answer || !strings.Contains(asString(d["evidence"]), "a is retired") {
+	if json.Unmarshal([]byte(recordOf(t, rs, ab)), &d) != nil || d["action"] != mootMark || d["relayed"] != true || d["words"] != answer || !strings.Contains(asString(d["evidence"]), "a is retired") || !strings.Contains(asString(d["evidence"]), "keep b") {
 		t.Fatalf("the record: %v", d)
 	}
 }
