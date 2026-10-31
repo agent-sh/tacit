@@ -72,7 +72,7 @@ func (rs *reviewServer) snapshot(ctx context.Context) (*factSnap, error) {
 			sn.inbox[f.Meta.Name] = append(sn.inbox[f.Meta.Name], f)
 			continue
 		}
-		sn.curated[f.Meta.Name] = f
+		putByName(sn.curated, f)
 		for _, l := range f.Links() {
 			sn.back[l] = append(sn.back[l], f.Meta.Name)
 		}

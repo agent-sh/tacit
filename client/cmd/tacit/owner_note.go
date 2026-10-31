@@ -175,8 +175,14 @@ func noteFile(dir, comment, mark, kind string, names []string, exists func(strin
 		}
 	}
 	about := strings.Join(refs, " and ")
+	answer := answerWords(mark, firstOf(names, 0), firstOf(names, 1))
+	if kind == kindName && len(refs) == 3 {
+		// Two files of one name: the answer names the files.
+		about = refs[0] + ", in two files: " + names[1] + " and " + names[2]
+		answer = nameAnswerWords(mark, names[1], names[2])
+	}
 	body := fmt.Sprintf("The owner wrote this in tacit app on %s, on a review finding (%s) about %s. The owner's answer: %s.\n\n%s\n",
-		day, kind, about, answerWords(mark, firstOf(names, 0), firstOf(names, 1)), quote(comment))
+		day, kind, about, answer, quote(comment))
 	if !fact.ValidScope(scope) || strings.HasPrefix(scope, "derived/") {
 		scope = "user"
 	}
@@ -246,7 +252,7 @@ func (rs *reviewServer) findFinding(ctx context.Context, id string) *findingRef 
 		return &findingRef{id: id, kind: kindStale, a: st.A.Name, b: st.Flag.Sha, scope: st.A.Scope, names: []string{st.A.Name}}
 	}
 	if it := rs.nameItemByID(id); it != nil {
-		return &findingRef{id: id, kind: kindName, a: it.A.Name, b: it.B.Name, scope: it.A.Scope, names: []string{it.A.Name}}
+		return &findingRef{id: id, kind: kindName, a: it.A.Name, b: it.B.Name, scope: it.A.Scope, names: []string{it.A.Name, it.A.Path, it.B.Path}}
 	}
 	for _, it := range rs.linkItems(ctx) {
 		if it.ID == id {

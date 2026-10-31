@@ -152,6 +152,9 @@ type reviewItem struct {
 	NeedsOwner bool `json:"needs_owner"`
 	// Notes are what the owner wrote on this finding without answering it.
 	Notes []ownerNote `json:"notes,omitempty"`
+	// crowded: a name finding whose name more than its two files hold
+	// (names_review.go). No mark can say which file replaced which.
+	crowded bool
 }
 
 var (
@@ -310,7 +313,7 @@ func (rs *reviewServer) loadFacts() {
 	m, in, bp := map[string]*fact.Fact{}, map[string]*fact.Fact{}, map[string]*fact.Fact{}
 	for _, f := range all {
 		if !f.InInbox() {
-			m[f.Meta.Name] = f
+			putByName(m, f)
 			bp[f.Path] = f
 		} else if old := in[f.Meta.Name]; old == nil || f.Meta.Created < old.Meta.Created {
 			in[f.Meta.Name] = f

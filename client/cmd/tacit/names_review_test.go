@@ -67,7 +67,7 @@ func TestDedupeRaisesANameTwoFilesHoldOnce(t *testing.T) {
 	if code := runDedupe(nil); code != 0 {
 		t.Fatalf("dedupe exited %d", code)
 	}
-	rel := "review/" + time.Now().Format("2006-01-02") + ".md"
+	rel := "review/" + time.Now().Format("2006-01-02") + "-names.md"
 	page := r.onServer(rel)
 	for _, want := range []string{
 		nameLine("lantern-proxy-port", "machines/host-a/lantern-proxy-port.md", "user/lantern-proxy-port.md"),
@@ -212,7 +212,7 @@ func TestDedupeNamesRaisesTheNamesAlone(t *testing.T) {
 	if got := supersededOnServer(t, r, ws+"/cwd-resets-again.md"); got != "" {
 		t.Errorf("dedupe --names retired a copy: superseded_by %q", got)
 	}
-	page := r.onServer("review/" + time.Now().Format("2006-01-02") + ".md")
+	page := r.onServer("review/" + time.Now().Format("2006-01-02") + "-names.md")
 	if strings.Count(page, "- name held twice: ") != 2 {
 		t.Errorf("the names were not raised:\n%s", page)
 	}
@@ -222,7 +222,7 @@ func TestDedupeNamesRaisesTheNamesAlone(t *testing.T) {
 	if got := supersededOnServer(t, r, ws+"/cwd-resets-again.md"); got != "cwd-resets" {
 		t.Errorf("the full run left the copy: superseded_by %q", got)
 	}
-	if page = r.onServer("review/" + time.Now().Format("2006-01-02") + ".md"); strings.Count(page, "- name held twice: ") != 2 {
+	if page = r.onServer("review/" + time.Now().Format("2006-01-02") + "-names.md"); strings.Count(page, "- name held twice: ") != 2 {
 		t.Errorf("the full run raised a name again:\n%s", page)
 	}
 }

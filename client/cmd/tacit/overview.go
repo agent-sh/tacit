@@ -354,7 +354,7 @@ func overviewCands(dir string, local bool) ([]overviewCand, []overviewDrop, map[
 		if f.InInbox() || overlay.IsInbox(f.Path) {
 			continue
 		}
-		byName[f.Meta.Name] = f
+		putByName(byName, f)
 		allIn[f.Meta.Scope] = append(allIn[f.Meta.Scope], f)
 		if f.Meta.SupersededBy == "" && f.Meta.Retired == "" {
 			inFolder[f.Meta.Scope] = append(inFolder[f.Meta.Scope], f)

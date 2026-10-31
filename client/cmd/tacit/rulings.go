@@ -438,6 +438,11 @@ func (a *rulingAuditor) decide(f *fact.Fact) rulingVerdict {
 		return keep(ruledWritten)
 	}
 	end := a.endorsed[f.Meta.Name]
+	if f.Meta.SupersededBy == f.Meta.Name {
+		// A copy retired into its own name (a name two files held): the
+		// owner's keep of that name kept the other file.
+		end = ledger.Endorsement{}
+	}
 	// The later of their words wins: a note that says the fact is not theirs over
 	// an older keep, a keep (or This is mine) over an older note.
 	dis, disowned := a.disowned[f.Meta.Name]

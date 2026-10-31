@@ -122,7 +122,9 @@ func nameFindings(dir string, fresh [][2]*fact.Fact, now time.Time, files map[st
 	if len(fresh) == 0 {
 		return nil
 	}
-	rel := "review/" + now.Format("2006-01-02") + ".md"
+	// Its own file: the curator appends to the day's file outside the lock
+	// and commits it later, and a write naming it would wait on that.
+	rel := "review/" + now.Format("2006-01-02") + "-names.md"
 	cur, ok := files[rel]
 	if !ok {
 		cur, _ = os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
@@ -145,6 +147,20 @@ func nameFindings(dir string, fresh [][2]*fact.Fact, now time.Time, files map[st
 	return msg
 }
 
+// nameAnswerWords is an answer to a name finding in words: the files it
+// keeps and retires.
+func nameAnswerWords(mark, a, b string) string {
+	switch mark {
+	case "left":
+		return "keep the file " + a + ", retire " + b
+	case "right":
+		return "keep the file " + b + ", retire " + a
+	case "both":
+		return "both files are true"
+	}
+	return answerWords(mark, a, b)
+}
+
 // fileView is the curated file at rel as the page shows it, when it still
 // holds name.
 func (rs *reviewServer) fileView(name, rel string) *factView {
@@ -163,6 +179,15 @@ func (rs *reviewServer) nameItems() []reviewItem {
 	}
 	ds, asks := rs.decisions()
 	notes := rs.ownerNotes()
+	// The files each name takes part in: live, or retired into the name
+	// itself. With more than two, `superseded_by` the name no longer says
+	// which file replaced a copy.
+	held := map[string]int{}
+	for _, f := range rs.byPath {
+		if (f.Meta.SupersededBy == "" && f.Meta.Retired == "") || f.Meta.SupersededBy == f.Meta.Name {
+			held[f.Meta.Name]++
+		}
+	}
 	seen := map[string]bool{}
 	var out []reviewItem
 	for _, r := range parseNameFiles(rs.s.Dir) {
@@ -186,6 +211,7 @@ func (rs *reviewServer) nameItems() []reviewItem {
 			it.Mark = markOf(d.Action)
 			it.Stale = it.Mark != "" && it.State != it.Mark
 		}
+		it.crowded = held[r.name] > 2
 		it.Allowed = rs.allowedName(it)
 		it.NeedsOwner = it.State != "gone" && (it.Decision == nil || (it.Decision.By == "agent" && it.Stale))
 		out = append(out, it)
@@ -212,8 +238,8 @@ func (rs *reviewServer) allowedName(it reviewItem) []string {
 	if it.Decision != nil && !(it.Decision.By == "agent" && it.Stale) {
 		return []string{"reopen"}
 	}
-	if it.State == "gone" {
-		return []string{}
+	if it.State == "gone" || it.crowded {
+		return []string{} // a crowded name is the owner's to sort out, file by file, in tacit app
 	}
 	out := []string{"both"}
 	if it.B.SupersededBy == "" || it.B.SupersededBy == it.A.Name {
@@ -354,7 +380,7 @@ func (rs *reviewServer) applyNameOp(o *op, it *reviewItem) (string, []string, er
 		}
 	}
 	if o.Comment != "" && mark != "reopen" && mark != "ask" {
-		ref := &findingRef{id: it.ID, kind: it.Kind, a: it.A.Name, b: it.B.Name, scope: it.A.Scope, names: []string{it.A.Name}}
+		ref := &findingRef{id: it.ID, kind: it.Kind, a: it.A.Name, b: it.B.Name, scope: it.A.Scope, names: []string{it.A.Name, it.A.Path, it.B.Path}}
 		c, err := rs.noteWrites(files, ref, o.Comment, mark)
 		if err != nil {
 			return "", nil, err

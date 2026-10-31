@@ -1045,12 +1045,14 @@ func openQuestions(rs *reviewServer, q *agentreview.Queue) []questionRow {
 			continue
 		}
 		r := questionRow{ID: it.ID, Closes: kindName, Finding: kindName, Asked: strings.TrimSuffix(it.Source, ".md"), Facts: []string{it.A.Path, it.B.Path},
-			Question: "Two files hold the name " + it.A.Name + ": " + it.A.Path + " and " + it.B.Path + ". Which one stands? An agent that can tell marks it with tacit review apply.",
-			Answers:  []string{"keep:" + it.A.Path, "keep:" + it.B.Path}}
+			Question: "Two files hold the name " + it.A.Name + ": " + it.A.Path + " and " + it.B.Path + ". Which one stands?",
+			Answers:  []string{"tacit review apply: keep " + it.A.Path, "keep " + it.B.Path}}
 		switch {
 		case it.Ask != nil:
 			r.Closes, r.Asked, r.Question = closesAsk, it.Ask.At, it.Ask.Question
 			r.Owners = "an agent asked the owner; they answer it on the review page"
+		case it.crowded:
+			r.Owners = "more than two files hold this name; the owner retires the copies, file by file, in tacit app"
 		case owned[it.ID] || owned[it.A.Name]:
 			r.Owners = "the owner marked or reopened it, or kept a fact of this name"
 		case len(it.Notes) > 0:

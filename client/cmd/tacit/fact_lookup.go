@@ -98,6 +98,28 @@ func factFiles(storeDir, localDir, name string) []nameFile {
 	return out
 }
 
+// curatedRank ranks a curated fact for a map by name as rankOf does: live,
+// then superseded, then retired.
+func curatedRank(f *fact.Fact) int {
+	switch {
+	case f.Meta.SupersededBy != "":
+		return rankSuperseded
+	case f.Meta.Retired != "":
+		return rankRetired
+	}
+	return rankLive
+}
+
+// putByName sets m[f's name] to f unless m holds a file of that name that
+// ranks above it, so a name two files hold reads as its live curated file
+// (a copy retired into its own name never stands for it). Among files of one
+// rank the last one put wins, as a plain assignment did.
+func putByName(m map[string]*fact.Fact, f *fact.Fact) {
+	if old := m[f.Meta.Name]; old == nil || curatedRank(f) <= curatedRank(old) {
+		m[f.Meta.Name] = f
+	}
+}
+
 // rankOf ranks one file of the name: a note (note), or a curated fact by
 // its frontmatter.
 func rankOf(p, rel, name string, note bool) int {

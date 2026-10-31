@@ -195,7 +195,7 @@ function staleSummary(flag) {
   return out;
 }
 
-const ORDER = { "contradiction": ["right", "left", "both", "query"], "supersede-applied": ["right", "both", "left", "query"], "ruling-change": ["left", "right", "both", "query"], "stale": ["current", "retire"] };
+const ORDER = { "contradiction": ["right", "left", "both", "query"], "supersede-applied": ["right", "both", "left", "query"], "ruling-change": ["left", "right", "both", "query"], "name": ["right", "left", "both"], "stale": ["current", "retire"] };
 // The choice that keeps the newer fact leads, whichever side the data has it on.
 const orderFor = (k, it) => (ORDER[k] || ["right", "left", "both", "query"]).map((m) => (it && flipped(it) && (m === "left" || m === "right") ? (m === "left" ? "right" : "left") : m)).concat(["wrong", "skip"].filter((m) => it && (can(it, m) || it.mark === m)));
 // A mark sets what the store says about the pair; the server lists the marks
@@ -315,7 +315,9 @@ function agentWord(it, s) {
   const why = (e) => (e ? " Its reason: " + plainEvidence(e, s) : "");
   if (ask) {
     let m = "", templ = false;
-    if (ask.proposed) m = ask.proposed === it.a.name ? "left" : ask.proposed === it.b.name ? "right" : "";
+    // A name finding's two files share the name: its agent proposes a path.
+    const ka = it.kind === "name" ? it.a.path : it.a.name, kb = it.kind === "name" ? it.b.path : it.b.name;
+    if (ask.proposed) m = ask.proposed === ka ? "left" : ask.proposed === kb ? "right" : "";
     const own = String(ask.question || "").trim();
     for (const [re, f] of ASK_TEMPLATES) { const x = re.exec(own); if (x) { templ = true; if (!m && f) m = f(x) || ""; } }
     if (m === "fix") return { text: "An agent says it is true but a detail changed." + (rule ? " Only you can change your rule." : "") + why(ask.evidence), mark: "" };

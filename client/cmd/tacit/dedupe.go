@@ -63,11 +63,11 @@ func runDedupe(args []string) int {
 		if !*namesOnly {
 			printDedupe(cs, true)
 		}
-		printNames(all, notRetiring(fresh, cs), true)
+		printNames(all, fresh, notRetiring(fresh, cs), true)
 		return writeDedupeJSON(*out, cs)
 	}
 	var cs []curate.Copies
-	var all, raised [][2]*fact.Fact
+	var all, fresh, raised [][2]*fact.Fact
 	pushed, err := curatorWrite(ctx, s, func() (map[string][]byte, string, error) {
 		var err error
 		if cs, err = plan(s.Dir); err != nil {
@@ -78,7 +78,6 @@ func runDedupe(args []string) int {
 		if err != nil {
 			return nil, "", err
 		}
-		var fresh [][2]*fact.Fact
 		if all, fresh, err = namesHeldTwice(s.Dir); err != nil {
 			return nil, "", err
 		}
@@ -105,12 +104,12 @@ func runDedupe(args []string) int {
 		return 1
 	}
 	if !pushed {
-		cs, raised = nil, nil
+		cs, fresh, raised = nil, nil, nil
 	}
 	if !*namesOnly {
 		printDedupe(cs, false)
 	}
-	printNames(all, raised, false)
+	printNames(all, fresh, raised, false)
 	return writeDedupeJSON(*out, cs)
 }
 
@@ -132,28 +131,36 @@ func notRetiring(pairs [][2]*fact.Fact, cs []curate.Copies) [][2]*fact.Fact {
 	return out
 }
 
-// printNames lists the names two live curated files hold, and which of them
-// this run raises (or would raise) for review.
-func printNames(all, raising [][2]*fact.Fact, dry bool) {
+// printNames lists the names two live curated files hold: the ones this run
+// raises (or would raise) for review, the ones raised before, and the ones
+// it leaves out because it retires one of their files as a copy.
+func printNames(all, fresh, raising [][2]*fact.Fact, dry bool) {
 	if len(all) == 0 {
 		return
 	}
-	now := map[[2]string]bool{}
-	for _, p := range raising {
-		now[[2]string{p[0].Path, p[1].Path}] = true
+	key := func(p [2]*fact.Fact) [2]string { return [2]string{p[0].Path, p[1].Path} }
+	isFresh, now := map[[2]string]bool{}, map[[2]string]bool{}
+	for _, p := range fresh {
+		isFresh[key(p)] = true
 	}
-	verb, already := "raised", "raised before"
+	for _, p := range raising {
+		now[key(p)] = true
+	}
+	verb := "raised"
 	if dry {
 		verb = "would raise"
 	}
 	for _, p := range all {
-		state := already
-		if now[[2]string{p[0].Path, p[1].Path}] {
+		state := "raised before"
+		switch {
+		case now[key(p)]:
 			state = verb
+		case isFresh[key(p)]:
+			state = "left out: this run retires one of its files as a copy"
 		}
 		fmt.Printf("%s (%s)\n", nameLine(p[0].Meta.Name, p[0].Path, p[1].Path), state)
 	}
-	fmt.Printf("dedupe: %d name(s) two files hold; %s %d for review\n", len(all), verb, len(raising))
+	fmt.Printf("dedupe: %d name(s) two files hold; %s %d for review\n", len(all)-(len(fresh)-len(raising)), verb, len(raising))
 }
 
 // dedupePlan reads the clone: the clusters of near-identical curated facts,
