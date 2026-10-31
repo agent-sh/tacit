@@ -7,27 +7,27 @@ The optional Jev selector reduced unrelated memory injections while preserving t
 - Freeze retrieval candidates from the existing scoped search. Do not use labels to retrieve, rewrite queries, or score candidates.
 - Score the printed `Name + Description`, not the body. Share the task as state and put each memory in a structured question.
 - Pin `jev-1.13.0`. Compare bare Noul, a Noul rubric, and three-way Choice. Choose the rubric using development data at a fixed 0.50 threshold before threshold selection.
-- Keep episode-disjoint development and calibration splits: 19 queries in 10 episodes and 12 queries in 6 episodes. Three context arms produce 93 scorer records and 286 candidate pairs, not 93 independent queries.
+- Keep episode-disjoint development and calibration splits. Three context arms give three scorer records per query: count queries, not records, as independent observations.
 - Read usefulness labels only after scoring. Keep primary labels separate from a blinded assistant review of summary usefulness. The review is subjective, not human ground truth. Leave uncertain and unlisted items out of precision/recall and report them separately.
-- Measure three repeats on 30 unique nonempty payloads. Evaluate stored scores without new API calls. Reproduce the frozen baseline's counts before trusting the evaluator. Keep held-out cases sealed.
+- Measure three repeats on every unique nonempty payload. Evaluate stored scores without new API calls. Reproduce the frozen baseline's counts before trusting the evaluator. Keep held-out cases sealed.
 
 ## Calibration result
 
-Original-query candidate pools, 12 calibration queries:
+Original-query candidate pools, calibration queries (measured on a real store; the counts stay with the owner):
 
 | Selector | Reviewed useful retained | Reviewed incorrect retained | Uncertain retained |
-|---|---:|---:|---:|
-| Existing local selection | 9 | 15 | 0 |
-| Jev rubric, 0.70 | 9 | 4 | 1 |
-| Jev rubric, 0.86 | 5 | 0 | 0 |
+|---|---|---|---|
+| Existing local selection | all in the pools | many | none |
+| Jev rubric, 0.70 | all in the pools | few | almost none |
+| Jev rubric, 0.86 | about half | none | none |
 
-The moderate point keeps the baseline's nine reviewed useful items and reduces known incorrect items from 15 to 4. Two other reviewed useful items are absent from the original-query candidate pools. The precision-heavy threshold drops useful items as well; a zero-error count over five items is not a deployment guarantee.
+The moderate point keeps every reviewed useful item the baseline keeps and cuts the known incorrect items sharply. Other reviewed useful items are absent from the original-query candidate pools. The precision-heavy threshold drops useful items as well; a zero-error count over a handful of items is not a deployment guarantee.
 
 The 0.70 threshold is an exploratory operating point chosen after inspecting calibration curves, not a held-out result. Remaining errors include topical instructions that do not change the requested action. Do not describe the model's Noul values as domain-calibrated confidence. These results do not establish downstream task success.
 
 ## Latency and cost
 
-The hosted scorer's HTTP round trip was 300 ms p50 and 375 ms p95, with all three prompt arms evaluated together and empty candidate sets excluded. The 90 calls consumed 179,868 input tokens, an estimated $0.00755 at the published input-token rate. This is not end-to-end hook latency or a billing receipt. The production Go path uses only the rubric and adds scrump redaction. An initial one-second deadline timed out twice in three live hook probes; the successful probe spent 725 ms in utility selection. The default was therefore raised to two seconds, retaining bounded fallback and leaving room in the integration's four-second prompt timeout. Review actual hook receipts, not only isolated HTTP timings.
+The hosted scorer's HTTP round trip was 300 ms p50 and 375 ms p95, with all three prompt arms evaluated together and empty candidate sets excluded. At the published input-token rate the calls' token cost was negligible. This is not end-to-end hook latency or a billing receipt. The production Go path uses only the rubric and adds scrump redaction. An initial one-second deadline timed out in most live hook probes; the successful probe spent 725 ms in utility selection. The default was therefore raised to two seconds, retaining bounded fallback and leaving room in the integration's four-second prompt timeout. Review actual hook receipts, not only isolated HTTP timings.
 
 ## Production contract and review
 

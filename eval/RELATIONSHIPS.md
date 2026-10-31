@@ -80,30 +80,27 @@ The existing 60 private cases were replayed unchanged against one clean pinned
 store with the actual binaries and isolated indices/overlays. Both 30-case
 groups were already inspected during development; neither is held out. Final
 runs used three repetitions and were deterministic. Each group has 15 positive
-and 15 no-memory cases. Labels were not expanded for new results.
+and 15 no-memory cases. Labels were not expanded for new results. The counts
+measured on that store stay with the owner; both groups gave the same picture:
 
-| Arm | Group | Lines | Useful | Unexpected | Positive hit / 15 | No-memory injection / 15 |
-|---|---|---:|---:|---:|---:|---:|
-| Main 0732543 | A | 24 | 16 | 8 | 10 | 0 |
-| Main 0732543 | B | 27 | 17 | 10 | 12 | 0 |
-| Weighted relationships | A | 30 | 19 | 11 | 12 | 0 |
-| Weighted relationships | B | 31 | 20 | 11 | 13 | 0 |
-| Uniform known-term weights | A | 30 | 18 | 12 | 12 | 0 |
-| Uniform known-term weights | B | 31 | 20 | 11 | 13 | 0 |
-| No marginal correction | A | 32 | 19 | 13 | 12 | 1 |
-| No marginal correction | B | 32 | 20 | 12 | 13 | 1 |
+| Arm | Lines | Useful | Unexpected | Positive hit | No-memory injection |
+|---|---|---|---|---|---|
+| Main 0732543 | baseline | baseline | baseline | baseline | none |
+| Weighted relationships | more | more | more | more | none |
+| Uniform known-term weights | more | more, slightly fewer than weighted | more | as weighted | none |
+| No marginal correction | most | as weighted | most | as weighted | some |
 
 Ablations used one repetition, separate compiled binaries and the same corpus.
 Uniform weighting changes only the coverage weights. The uncorrected arm
 retains two-document support and location binding but removes the lift > 1
-test. It causes two no-memory false triggers; the marginal correction matters.
-IDF adds one labelled useful line on this set, not another positive query hit.
+test. It causes no-memory false triggers; the marginal correction matters.
+IDF adds a labelled useful line on this set, not another positive query hit.
 
-Positive coverage improves from 22/30 to 25/30, while no-memory injections stay
-at 0/30. Unexpected lines increase from 18 to 22, so this is not a claim of
-unchanged line-level precision. Warm median hook latency is about 107-118 ms
-versus 91 ms for main on the shared machine. The initial whole-corpus runtime
-prototype took about 330 ms and was replaced with indexed postings.
+Positive coverage improves, while no-memory injections stay at none.
+Unexpected lines increase too, so this is not a claim of unchanged line-level
+precision. Warm median hook latency is about 107-118 ms versus 91 ms for main
+on a shared machine. The initial whole-corpus runtime prototype took about
+330 ms and was replaced with indexed postings.
 
 An observed synthetic regression fails on main and passes here: an explicitly
 named service can resolve its current-host fact from an unknown cwd despite
@@ -117,24 +114,24 @@ composition changes IDF; duplicate-origin facts can inflate support; broad
 phrases can still add unwanted lines on positive requests. Majority coverage
 is a design rule, not a validated optimum. No new heldout set was available to
 the implementation author. A separately prepared evaluation follows; no
-task-level outcome study was run. Do not generalize these numbers to production
+task-level outcome study was run. Do not generalize these results to production
 traffic.
 
 ## Independently prepared evaluation and post-evaluation correction
 
 A separate evaluator prepared 36 cases without seeing candidate source, output
 or the development-60 cases: 24 positive requests and 12 no-memory requests.
-Eight were bounded excerpts of actual user messages; 28 were independently
-written targeted requests. All used a home-directory cwd. Frozen primary labels
+A few were bounded excerpts of actual user messages; the rest were
+independently written targeted requests. All used a home-directory cwd. Frozen primary labels
 preceded baseline replay; the files were hashed and unchanged. There was no
 exact normalized prompt overlap with the development set. This is a small,
 purposive sample, not a random traffic estimate.
 
-| Arm | Lines | Primary useful | Unexpected | Positive hit / 24 | No-memory injection / 12 |
-|---|---:|---:|---:|---:|---:|
-| Main 0732543 | 55 | 19 | 36 | 17 | 0 |
-| Frozen candidate, first exposure | 56 | 22 | 34 | 18 | 0 |
-| Candidate after scope correction | 56 | 21 | 35 | 18 | 0 |
+| Arm | Lines | Primary useful | Unexpected | Positive hit | No-memory injection |
+|---|---|---|---|---|---|
+| Main 0732543 | baseline | baseline | baseline | baseline | none |
+| Frozen candidate, first exposure | about the same | more | fewer | slightly more | none |
+| Candidate after scope correction | about the same | more | slightly fewer | slightly more | none |
 
 The first exposure found an explicit-project scope leak: a supported generic
 phrase admitted a different project's fact from a home cwd despite the request
@@ -144,10 +141,10 @@ it never overrides a repo explicitly named in the request. The final row is
 therefore post-evaluation, not an untouched heldout result. No threshold was
 tuned on these cases and no labels were changed for the candidate.
 
-Before candidate exposure, the evaluator also documented 11 useful omissions in
-the baseline labels. Against that additive, baseline-informed label set, useful
-lines are 30 to 31 and positive hits 19 to 20; uncredited lines stay 25. Both
-candidate versions have those same supplementary counts. Frozen primary and
+Before candidate exposure, the evaluator also documented useful omissions in
+the baseline labels. Against that additive, baseline-informed label set, the
+candidate has slightly more useful lines and positive hits than main, the same
+uncredited lines, and both candidate versions score alike. Frozen primary and
 supplementary results remain separate: an unexpected result is not necessarily
 irrelevant, and redundant useful facts do not prove additional task value.
 
@@ -155,11 +152,11 @@ All final replays used three deterministic repetitions. Post-correction warm
 median latency was about 115-119 ms on development cases and 129 ms on the
 independent cases. Three isolated cold-index hook runs measured a median of
 2.63 seconds versus 1.05 seconds for main. Both returned real fact blocks on
-this shared machine; cold-build growth and the harness timeout remain risks
+a shared machine; cold-build growth and the harness timeout remain risks
 for larger stores. Review additionally found that linked pointers could escape
 scope constraints. Foreign-host, foreign-project, restricted-applicability and
 global-ambiguity regressions now pass. Link hydration was moved after ranked
-candidate selection. Final three-repeat replays retained all published counts;
+candidate selection. Final three-repeat replays retained every result above;
 warm medians were about 106-107 ms in that run. These shared-machine timings
 are observations, not an isolated speedup claim. Full Go client tests and vet
 pass after both scope corrections.

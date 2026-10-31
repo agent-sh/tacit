@@ -19,7 +19,7 @@ command echoes, permission frames), A: assistant text, T: tool call, E: tool
 error. Miners must not mint user standards from H: lines.
 
 Set TACIT_MINE_SUBAGENTS=1 to also digest <project>/<session>/subagents/*.jsonl
-(about 11k files on the author's workstation; slow).
+(they can far outnumber the sessions; slow).
 """
 import json
 import os

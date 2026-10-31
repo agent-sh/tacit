@@ -17,8 +17,9 @@ The expected sets were augmented with equivalent useful baseline facts before
 candidate replay. They were not expanded to include candidate-only results;
 therefore `unexpected` is a diagnostic label, not proof every such line is
 irrelevant. Labels concern contextual usefulness, not factual freshness.
-Private prompts, fact text, labels, corpus and raw outputs stay off the public
-repository. `delivery/hook_replay.py` supplies the generic replay procedure.
+Private prompts, fact text, labels, corpus, raw outputs and the counts measured
+on them stay off the public repository. `delivery/hook_replay.py` supplies the
+generic replay procedure.
 
 Each prompt runs through the actual binary three times with an empty session
 ID and isolated index/overlay, so delivery dedupe cannot suppress repetitions
@@ -29,20 +30,19 @@ re-evaluation: extraction recall cannot validate prompt-delivery thresholds.
 
 ## Results
 
-| Arm | Group | Delivered lines | Labelled useful | Unexpected | Positive queries hit / 15 | No-memory queries injecting / 15 |
-|---|---|---:|---:|---:|---:|---:|
-| Installed baseline | A | 53 | 24 | 29 | 15 | 7 |
-| Installed baseline | B | 60 | 24 | 36 | 15 | 9 |
-| Summary coherence and repo gates, floor 15 | A | 36 | 21 | 15 | 13 | 2 |
-| Summary coherence and repo gates, floor 15 | B | 41 | 20 | 21 | 13 | 3 |
-| Same gates, repo-less floor 20 | A | 24 | 16 | 8 | 10 | 0 |
-| Same gates, repo-less floor 20 | B | 27 | 17 | 10 | 12 | 0 |
+Both groups gave the same picture:
+
+| Arm | Delivered lines | Labelled useful | Unexpected | Positive queries hit | No-memory queries injecting |
+|---|---|---|---|---|---|
+| Installed baseline | most | most | most | all | many |
+| Summary coherence and repo gates, floor 15 | fewer | slightly fewer | fewer | most | few |
+| Same gates, repo-less floor 20 | fewest | fewer | fewest | fewer | none |
 
 The selected policy favors precision for unsolicited memory in repo-less
-sessions. It loses useful recall: 22/30 positive requests hit, versus 30/30 in
-the baseline. This is a cost, not a free improvement. Explicit search remains
-available and retains its previous broad retrieval behavior. Known-project
-requests keep floor 15; computed facts keep floor 12.
+sessions. It loses useful recall: the baseline hits every positive request, and
+the selected policy misses some. This is a cost, not a free improvement.
+Explicit search remains available and retains its previous broad retrieval
+behavior. Known-project requests keep floor 15; computed facts keep floor 12.
 
 A sweep of repo-less floors 15 through 20 used the real tokenizer and boosted
 query scores. Higher floors progressively suppressed more weak matches; 20
@@ -50,7 +50,7 @@ was the first tested floor with no injections on either no-memory group.
 The chosen floor was then run through the actual candidate binary, not just a
 score simulation. Floors are specific to this corpus and should be revisited
 with fresh labelled traffic. Warm-hook median latency rose from about 16 ms
-to about 91-92 ms, within the existing query budget on this machine.
+to about 91-92 ms, within the existing query budget.
 
 ## What changed and what remains
 
@@ -78,112 +78,90 @@ no-backfill behavior. Existing package tests remain part of validation.
 
 ## Code before the scorer (2026-10-17)
 
-Rule: when code can decide, code decides, and a scorer (the opt-in Jev selector or any model) judges only the rest. Four deterministic rules were tried as a pre-filter on the same frozen candidate pools as [JEV.md](JEV.md) (one frozen store snapshot, 6 curated + 1 derived candidates, original prompt). They read only the prompt and candidate metadata, never labels. Labels: authored primary labels plus the blinded review on dev (19 queries) and calibration (12). The rules were written after looking at dev/calibration errors, so the sealed test set (20 queries) was opened once, with every threshold frozen beforehand.
+Rule: when code can decide, code decides, and a scorer (the opt-in Jev selector or any model) judges only the rest. Four deterministic rules were tried as a pre-filter on the same frozen candidate pools as [JEV.md](JEV.md) (one frozen store snapshot, 6 curated + 1 derived candidates, original prompt). They read only the prompt and candidate metadata, never labels. Labels: authored primary labels plus the blinded review on dev and calibration. The rules were written after looking at dev/calibration errors, so the sealed test set was opened once, with every threshold frozen beforehand.
 
 | Rule | Dev + calibration drops | Sealed test drops | Shipped |
 |---|---|---|---|
-| R1: a pure text operation on a literal the prompt supplies needs no memory | 9 wrong, 0 useful (2 prompts) | none (it did not fire) | yes |
+| R1: a pure text operation on a literal the prompt supplies needs no memory | wrong facts only, no useful one | none (it did not fire) | yes |
 | R2: drop a fact whose only link is a topic the user excluded ("not X", "do not Y") | none (never fired) | none | no: no measured gain |
-| R3: derived hot-spot facts only when the prompt names a file or asks to change code | 6 wrong, 0 useful | 1 wrong, **1 useful** | no |
-| R4: a repo-anchored prompt keeps only that repo's facts plus user/system standards | 11 wrong or unlabelled, 0 useful | 14 wrong or unlabelled, **2 useful** | no |
+| R3: derived hot-spot facts only when the prompt names a file or asks to change code | wrong facts only, no useful one | a wrong fact and **a useful one** | no |
+| R4: a repo-anchored prompt keeps only that repo's facts plus user/system standards | wrong or unlabelled facts only, no useful one | wrong or unlabelled facts and **useful ones** | no |
 
-Sealed test, primary labels, frozen calibration thresholds (useful / wrong / unlabelled picks, of 6 findable useful): today's selection 5 / 2 / 12; Jev 5 / 0 / 1; Jev behind R1-R4 3 / 0 / 3; Amazon Nova Micro on Bedrock 4 / 0 / 1, behind R1-R4 3 / 0 / 5. R3 and R4 removed useful facts on unseen prompts, so they are not shipped. R1 ships as part of the harness-turn check: a prompt with the word "literal" and an operation (upper/lowercase form, reverse, spell, length, count characters/letters/words) gets no facts and no scorer call. Either word alone does not trigger it (`TestPromptHookSkipsSelfContainedTextOperations`).
+On the sealed test (primary labels, frozen calibration thresholds), Jev kept as many useful facts as today's selection and no wrong one; behind R1-R4, Jev and Amazon Nova Micro on Bedrock both kept fewer useful facts than without them. R3 and R4 removed useful facts on unseen prompts, so they are not shipped. R1 ships as part of the harness-turn check: a prompt with the word "literal" and an operation (upper/lowercase form, reverse, spell, length, count characters/letters/words) gets no facts and no scorer call. Either word alone does not trigger it (`TestPromptHookSkipsSelfContainedTextOperations`).
 
 ## Real traffic, graded (2026-10-30)
 
-The precision checks above use authored prompts. This one grades what the hooks printed in the author's own sessions and replays it with `delivery/labelled_replay.py` (method and fidelity: [LABELLED-REPLAY.md](delivery/LABELLED-REPLAY.md)). A line is useful (R) when it bears on the request, weak (W) when it is on the topic but not needed, noise (N) otherwise; one rater, with a blind second rater on 227 lines (kappa 0.54 to 0.63). Release 0.9.14 replayed at each call's own store commit:
+The precision checks above use authored prompts. This one grades what the hooks printed in the author's own sessions and replays it with `delivery/labelled_replay.py` (method and fidelity: [LABELLED-REPLAY.md](delivery/LABELLED-REPLAY.md)). A line is useful (R) when it bears on the request, weak (W) when it is on the topic but not needed, noise (N) otherwise; one rater, with a blind second rater on a sample of the lines (moderate agreement). Release 0.9.14 was replayed at each call's own store commit, over owner prompts and tool-call pushes in two windows, one of 3 days and one of 14 days. In every set a minority of the printed lines were useful and noise was the largest share.
 
-| set | calls | lines | useful | weak | noise |
-|---|---:|---:|---:|---:|---:|
-| owner prompts, 3 days (10-27 to 10-30) | 93 | 238 | 55 (23%) | 62 | 117 (50%, 44-56) |
-| tool-call pushes, 3 days | 122 | 124 | 30 (24%) | 39 | 55 (44%, 36-53) |
-| owner prompts, 14 days | 68 | 171 | 39 | 36 | 85 (53% of 160 graded) |
-| tool-call pushes, 14 days | 65 | 65 | 13 | 18 | 34 (52%) |
+Recall: fewer than half of the owner prompts of the 3 days that a fact in the store answered got one. Those prompts are the recall probe the sections below use.
 
-Recall: of 22 owner prompts of the 3 days that a fact in the store answered, 10 got one.
-
-Where the prompt block's noise comes from, on the 3 days (an analysis build that logs why each line got in, not shipped): the ranked lines are 201 of the 238 and 45% noise; the action line 28 lines, 2 useful and 20 noise; the metadata line 5, all noise; the rule slot 4, 1 useful. Ranked lines whose only coherence was the anchor (no two name matches, no phrase) are 58 lines, 10 useful and 37 noise: the anchor is the request's least frequent known word, and in a request of common words that is a word like "out" (in 1,392 facts).
+Where the prompt block's noise comes from, on the 3 days (an analysis build that logs why each line got in, not shipped): most lines are ranked lines, much of them noise; the action line is mostly noise; the metadata line is all noise; the rule slot prints few lines. Ranked lines whose only coherence was the anchor (no two name matches, no phrase) are mostly noise: the anchor is the request's least frequent known word, and in a request of common words that is a word like "out", which many facts hold.
 
 ## Pushes keyed on a bare program (2026-10-30)
 
-A fact's `applies_to.commands` entry of one word (`ssh`, `python3`, `git`, `sed`) matched every call of that program. On the graded pushes of the 3 days, those lines were 9% useful and 63% noise, against 36% and 26% for longer commands and 62% and 8% for edits by path. Separately, an area written with the tools pattern `Bash` pushed at the first shell command of every session: 7 lines, none useful.
+A fact's `applies_to.commands` entry of one word (`ssh`, `python3`, `git`, `sed`) matched every call of that program. On the graded pushes of the 3 days, those lines were rarely useful and mostly noise, while pushes keyed on longer commands, and most of all on edits by path, were far more often useful. Separately, an area written with the tools pattern `Bash` pushed at the first shell command of every session, and none of those lines was useful.
 
-The rule now: a command of one word matches only when a word of the fact's name or description, other than the command's own, is in the command line too, not counting the words of the session's repository names, folder and home (every fact of the repository shares them); and an area's tools patterns match MCP tools only. Measured with `delivery/labelled_replay.py` at each call's commit, every line either arm printed graded (14-day cases whose checkout is gone left out):
+The rule now: a command of one word matches only when a word of the fact's name or description, other than the command's own, is in the command line too, not counting the words of the session's repository names, folder and home (every fact of the repository shares them); and an area's tools patterns match MCP tools only. Measured with `delivery/labelled_replay.py` at each call's commit, every line either arm printed graded (14-day cases whose checkout is gone left out), against release 0.9.14 over both windows:
 
-| arm | 3 days: lines | useful kept | noise | 14 days: lines | useful kept | noise |
-|---|---:|---:|---:|---:|---:|---:|
-| release 0.9.14 | 124 | 30 of 30 | 55 (44%) | 65 | 13 of 14 | 34 (52%) |
-| areas match MCP tools only | 117 | 30 | 49 (42%) | 64 | 13 | 33 (52%) |
-| one-word command needs a second word | 111 | 29 | 44 (40%) | 60 | 13 | 25 (42%) |
-| **both, the session's repository and folder words not counted (shipped)** | **102** | **29** | **36 (35%)** | **57** | **13** | **23 (40%)** |
-| every command needs a second word, areas MCP only | 91 | 25 | 36 (40%) | 52 | 12 | 20 (38%) |
-| one-word commands, the second word in at most 50 facts' summaries, areas MCP only | 67 | 22 | 16 (24%) | 38 | 11 | 14 (38%) |
+| arm | result |
+|---|---|
+| areas match MCP tools only | fewer lines and less noise, every useful line kept |
+| one-word command needs a second word | fewer lines and less noise, nearly every useful line kept |
+| **both, the session's repository and folder words not counted (shipped)** | **the least noise of the arms that keep nearly every useful line** |
+| every command needs a second word, areas MCP only | fewer lines, useful lines lost |
+| one-word commands, the second word in at most 50 facts' summaries, areas MCP only | the least noise, many useful lines lost |
 
-Over all 536 logged pushes of the 14 days whose checkout still exists, the shipped rule prints 458 lines where release 0.9.14 prints 523 (12% fewer). The prompt block is unchanged (its metadata line names commands by the prompt's words). The target set before measuring, noise at or below 25% with 12 of the 14 useful kept, is not met: the stricter rules reach 24% only by dropping a quarter of the useful pushes, whose second word is a common one. What is left of the noise is mostly two-word commands that are still generic (`git diff`, `gh pr`) and second words that are incidental.
+Over all logged pushes of the 14 days whose checkout still exists, the shipped rule prints fewer lines than release 0.9.14. The prompt block is unchanged (its metadata line names commands by the prompt's words). The target set before measuring, noise at or below 25% with nearly all useful pushes kept, is not met: the stricter rules reach it only by dropping useful pushes, whose second word is a common one. What is left of the noise is mostly two-word commands that are still generic (`git diff`, `gh pr`) and second words that are incidental.
 
-After the review (same cases, every changed line graded by hand, 13 of them new): the session's repository names, folders and home are left out word by word however many there are (`search.Terms` stopped near 24 terms, so in a workspace of many repositories the folder words were not left out), and a one-word command that is a script's path or file name (`scripts/release.sh`, `deploy.sh`) needs no second word. Against the rule above, over the 3-day, 14-day and all-pushes cases: 9 lines added (2 useful, 2 weak, 5 noise), 7 removed (3 weak, 4 noise); in the table, 3 days stays 102 lines, 29 useful, 36 noise, and 14 days becomes 56 lines (one weak line fewer), 13 useful, 23 noise. The fact's own name and description are read whole too (no line changes on these cases). Counting every word of the command line as well (a heredoc's prose, a script's text) added 19 lines (3 useful, 2 weak, 14 noise) and removed 13: the command's words stay its first terms.
+After the review (same cases, every changed line graded by hand): the session's repository names, folders and home are left out word by word however many there are (`search.Terms` stopped near 24 terms, so in a workspace of many repositories the folder words were not left out), and a one-word command that is a script's path or file name (`scripts/release.sh`, `deploy.sh`) needs no second word. Against the rule above, over the 3-day, 14-day and all-pushes cases, a few lines were added (some of them useful) and a few removed (none useful), and the shipped arm's results barely moved. The fact's own name and description are read whole too (no line changes on these cases). Counting every word of the command line as well (a heredoc's prose, a script's text) added mostly noise lines: the command's words stay its first terms.
 
 ## Echoes of the request (2026-10-30)
 
-A scheduled job's prompt (the tool-failure review, the wiki's daily maintenance) got its own instructions back: the dreamer had filed them as facts from earlier runs, and every run's prompt matched them word for word. Of the 34 lines the 7 graded scheduled-review blocks of the 14 days got, 32 were graded weak because they restated the prompt, 1 useful and 1 noise.
+A scheduled job's prompt (a daily review, a maintenance job) got its own instructions back: the dreamer had filed them as facts from earlier runs, and every run's prompt matched them word for word. Nearly every line the graded scheduled-review blocks of the 14 days got was graded weak because it restated the prompt.
 
 The rule: after the selection, a line whose name and description words the prompt holds for at least 7 in 10 of them is left out, and nothing takes its place. Measured with `delivery/labelled_replay.py` at each prompt's commit:
 
-| share of the line's words in the prompt | scheduled review: lines (useful) | headless prompts: lines | other program prompts | owner prompts, 3 days and 14 days |
-|---|---:|---:|---|---|
-| off (release 0.9.14) | 34 (1) | 24 | | 238 and 171 lines |
-| 0.8 | 34 (1) | 22 | unchanged | unchanged |
-| **0.7 (shipped)** | **5 (1)** | **21** | **unchanged** | **unchanged** |
-| 0.6 | 2 (0) | 19 | a harness heartbeat lost its 1 useful line | unchanged |
-| 0.5 | 1 (0) | 16 | the heartbeat's and a side note's useful lines lost | unchanged |
+| share of the line's words in the prompt | scheduled review | headless prompts | other program prompts | owner prompts, 3 days and 14 days |
+|---|---|---|---|---|
+| off (release 0.9.14) | every echo printed | baseline | baseline | baseline |
+| 0.8 | every echo still printed | a few lines fewer | unchanged | unchanged |
+| **0.7 (shipped)** | **most echoes gone, the useful line kept** | **a few lines fewer** | **unchanged** | **unchanged** |
+| 0.6 | nearly every echo gone, the useful line lost | fewer | a heartbeat prompt lost its useful line | unchanged |
+| 0.5 | nearly every echo gone, the useful line lost | fewer still | a heartbeat prompt's and a side note's useful lines lost | unchanged |
 
-At 0.6 the two useful lines lost were facts that share the request's words and add to them: the failure log's row schema the review needed, a heartbeat script's location. The lines 0.7 removes that had no grade (2, both on the wiki maintainer's prompt) say back its first sentence. No owner prompt line changes at any share from 0.5 to 0.8, and the 22-prompt recall probe stays at 10. Filtering the candidates before the selection instead let others take the echoes' places (28 new lines in the 7 scheduled blocks), so the filter runs after it.
+At 0.6 the useful lines lost were facts that share the request's words and add to them: a log's row schema the review needed, a script's location. The ungraded lines 0.7 removes say back the first sentence of a maintenance job's prompt. No owner prompt line changes at any share from 0.5 to 0.8, and the recall probe does not move. Filtering the candidates before the selection instead let others take the echoes' places (new lines in the scheduled blocks), so the filter runs after it.
 
-After the review, three guards: a line needs 5 distinct words or more (a short rule answers a request in the request's own words: "never force push to main" for "can I force push to main?"), a line that says no (`never`, `not`, `don't`, ...) where the request does not is kept, and the request is read whole (`search.Terms` stopped near 24 terms, so a long scheduled prompt's later words were not seen). On the same cases this leaves out 6 more lines, all restatements: 4 weak, 1 noise, 1 ungraded; no useful line is lost, owner prompts lose 1 noise line, and the probe stays at 10 of 22. The filter also covers every line the hook prints (the rule slot, the derived fact, the metadata and action lines), as it did; tests now pin its place after the selection and the share.
+After the review, three guards: a line needs 5 distinct words or more (a short rule answers a request in the request's own words: "never force push to main" for "can I force push to main?"), a line that says no (`never`, `not`, `don't`, ...) where the request does not is kept, and the request is read whole (`search.Terms` stopped near 24 terms, so a long scheduled prompt's later words were not seen). On the same cases this leaves out a few more lines, all restatements; no useful line is lost, owner prompts lose only a noise line, and the probe does not move. The filter also covers every line the hook prints (the rule slot, the derived fact, the metadata and action lines), as it did; tests now pin its place after the selection and the share.
 
 Not done here: the dreamer side, a fact made only from a program-written prompt. It needs dreamer runs to measure; the delivery rule removes the echo where it shows.
 
 ## Short requests (2026-10-30)
 
-A request of fewer than 3 distinct words of 3 letters or more ("deploy now?", "fix the cache") names too little to pick a rule or an action for. It now gets neither the rule slot nor the action line; its ranked and metadata lines stay. Measured with `delivery/labelled_replay.py` on the graded prompt cases (cases whose checkout is gone left out), against #72's head:
+A request of fewer than 3 distinct words of 3 letters or more ("deploy now?", "fix the cache") names too little to pick a rule or an action for. It now gets neither the rule slot nor the action line; its ranked and metadata lines stay. Measured with `delivery/labelled_replay.py` on the graded prompt cases (cases whose checkout is gone left out), against #72's head: in each set (owner prompts of the 3 days, owner prompts of the 14 days, every prompt block of the 14 days) it prints a few lines fewer, mostly noise, and loses no useful line.
 
-| set | lines | useful kept | noise |
-|---|---:|---:|---:|
-| owner prompts, 3 days | 237 to 233 | 55 of 57, unchanged | 116 to 113 |
-| owner prompts, 14 days | 171 to 169 | 39 of 40, unchanged | 85 to 83 |
-| all prompt blocks, 14 days | 282 to 280 | 65 of 74, unchanged | 109 to 107 |
-
-Over the 215 prompt cases of every origin (gone checkouts left out), 6 change, all of them short requests: noise lines -5 (95% bootstrap over cases -10 to -1), useful lines +0, and 1 weak line fewer. The 22-prompt recall probe stays at 10.
+Over the prompt cases of every origin (gone checkouts left out), only short requests change: noise lines fall (the 95% bootstrap interval over cases is below zero), useful lines do not change, and a weak line goes. The recall probe does not move.
 
 ## Tried and not shipped (2026-10-30)
 
-These changes were measured against release 0.9.14 and not shipped; their code is not in the repository. Prompt anchors and recall were measured with `delivery/labelled_replay.py` on the graded prompt cases (owner prompts only; for the 14 days, cases whose checkout is gone left out). The RULE line gate and the "used" detector were measured with scripts of their own, on the labelled lines. Noise is the share of graded lines graded noise; a change can print lines that were never graded, and their counts are given where they matter.
+These changes were measured against release 0.9.14 and not shipped; their code is not in the repository. Prompt anchors and recall were measured with `delivery/labelled_replay.py` on the graded prompt cases (owner prompts only; for the 14 days, cases whose checkout is gone left out). The RULE line gate and the "used" detector were measured with scripts of their own, on the labelled lines. Noise is the share of graded lines graded noise; a change can print lines that were never graded, and those are noted where they matter.
 
-**Prompt anchors.** Target, set before measuring: noise at or below 25%, at least 90% of the useful lines the release prints kept. Three changes, alone and together:
+**Prompt anchors.** Target, set before measuring: noise at or below 25%, at least 90% of the useful lines the release prints kept. Three changes, alone and together, against release 0.9.14 over both windows:
 
-| arm | 3 days: lines | useful (of 57) | noise | 14 days: lines | useful (of 40) | noise | probe (of 22) |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| release 0.9.14 | 238 | 55 | 50% | 171 | 39 | 53% | 10 |
-| a word in more than 1% of the owner's own turns is no anchor, no name match, no phrase | 210 | 44 | 48% | 148 | 30 | 52% | 9 |
-| the same at 0.5% | 193 | 31 | 51% | 124 | 22 | 53% | 7 |
-| a machine's fact needs a host, tool or path word matched | 203 | 45 | 48% | 133 | 30 | 50% | 9 |
-| a request of fewer than 3 distinct words gets no rule slot and no action line | 234 | 55 | 50% | 169 | 39 | 52% | 10 |
+| arm | useful lines | noise share | recall probe |
+|---|---|---|---|
+| a word in more than 1% of the owner's own turns is no anchor, no name match, no phrase | many lost | barely moved | lower |
+| the same at 0.5% | more lost | unchanged | lower |
+| a machine's fact needs a host, tool or path word matched | many lost | slightly lower | lower |
+| a request of fewer than 3 distinct words gets no rule slot and no action line | none lost | slightly lower | unchanged |
 
-The last one shipped as its own change ("Short requests", above): it removes noise and no useful line. The owner's-words arms lose useful lines because a common word of the owner's also stopped counting as a name match: of the useful lines they lost on the 3 days, 11 of 11 (1%) and 19 of 24 (0.5%) had come in on two name matches. From the 58 lines whose only coherence was the anchor, they removed almost only noise.
+The last one shipped as its own change ("Short requests", above): it removes noise and no useful line. The owner's-words arms lose useful lines because a common word of the owner's also stopped counting as a name match: nearly all the useful lines they lost on the 3 days had come in on two name matches. From the lines whose only coherence was the anchor, they removed almost only noise.
 
-So a fourth arm keeps the owner's common words as name matches and phrases and only stops them anchoring. Every line it adds was graded by hand:
+So a fourth arm keeps the owner's common words as name matches and phrases and only stops them anchoring: no anchor on a word in more than 0.2% of the owner's turns. Every line it adds was graded by hand. Over the two windows it prints fewer lines with a little less noise, and loses almost no useful line. It is not shipped: the gain is small next to one rater's noise, and the hook would need a table of the owner's word counts, built on each machine from their turns and kept current. The machine-match arm loses many useful lines.
 
-| arm | 3 days: lines | useful (of 57) | noise | 14 days: lines | useful (of 40) | noise |
-|---|---:|---:|---:|---:|---:|---:|
-| release 0.9.14 | 238 | 55 | 50% | 171 | 39 | 53% |
-| no anchor on a word in more than 0.2% of the owner's turns | 233 | 54 | 48% | 155 | 39 | 50% |
+**Recall.** No target was set. The question was whether more of the probe's owner prompts that a stored fact answers get it. Adding the end of the agent's previous message to the query lowered recall in every form tried: always (its last 1,200 characters, which also dropped most of the useful lines), always with its last 400 characters, only after a request that points back ("it", "that", "this") or a short one, and only for a short request. Matching repository names fuzzily against the catalog changed no line. The previous message brings its own subject into the query.
 
-It removes 16 noise lines and one useful one over the two windows. It is not shipped: the gain is small next to one rater's noise, and the hook would need a table of the owner's word counts, built on each machine from their turns and kept current. The machine-match arm loses a fifth of the useful lines.
+**RULE lines.** Target, set before measuring: on the graded RULE lines, at least two thirds of the one-off instructions demoted (a question, a hedge, a time-bound order, status narration, a dated approval), and under 4% of the standing rules lost. The gate tried is a set of word and phrase patterns for those shapes. It fell short of the demotion target, while staying within the limit on standing rules. The patterns were written from these same lines, so the result is in-sample, and it held unevenly on the script's two halves. Most one-offs left are plain imperatives that read like standing rules.
 
-**Recall.** No target was set. The question was whether more of the 22 owner prompts that a stored fact answers get it. Adding the end of the agent's previous message to the query: always (its last 1,200 characters), 5 of 22, with 23 of 57 useful lines kept; always, its last 400 characters, 6; only after a request that points back ("it", "that", "this") or a short one, 9, with 50 of 57 kept; only for a short request, 8. Matching repository names fuzzily against the catalog changed no line. The previous message brings its own subject into the query.
+**Relevance learned from use.** The plan was to stop unless a no-model detector of use agreed with the graded labels. The detector: a delivered fact was used when the agent opened it, or when one of its distinctive tokens (a path, a command, a flag, an identifier) shows up in the agent's next tool calls and was not in the context before. The sessions were read through tacit's own event reader (`client/pkg/evidence`). Over the graded prompt and tool-call lines, at the default settings it calls few lines used and finds few of the useful ones, and its agreement with the labels is near chance (Cohen's kappa near zero). Over 54 settings (how many calls after the delivery, owner turns crossed, the agent's own text, words rare in the store's descriptions), it stays there. For most useful lines the token test has nothing to find: the fact changed what the agent decided, not a token it typed. So no learner was replayed and no idle step was built.
 
-**RULE lines.** Target, set before measuring: of the 130 graded RULE lines, at least 25 of the 37 one-off instructions demoted (a question, a hedge, a time-bound order, status narration, a dated approval), at most 3 of the 80 standing rules lost. The gate tried is a set of word and phrase patterns for those shapes. It demoted 22 with 1 standing rule lost, or 23 with 2. The patterns were written from these same lines, so the numbers are in-sample; on the script's two halves the 22 split as 15 of 20 and 7 of 17. Most one-offs left are plain imperatives that read like standing rules.
-
-**Relevance learned from use.** The plan was to stop unless a no-model detector of use agreed with the graded labels. The detector: a delivered fact was used when the agent opened it, or when one of its distinctive tokens (a path, a command, a flag, an identifier) shows up in the agent's next tool calls and was not in the context before. The sessions were read through tacit's own event reader (`client/pkg/evidence`). Over 364 graded lines (240 prompt, 124 tool-call), at the default settings it calls 18 lines used, 6 of the 87 useful ones: recall 7%, precision 33%, Cohen's kappa 0.04. Over 54 settings (how many calls after the delivery, owner turns crossed, the agent's own text, words rare in the store's descriptions), kappa stays between 0.02 and 0.07. For 54 of the 87 useful lines the token test has nothing to find: the fact changed what the agent decided, not a token it typed. So no learner was replayed and no idle step was built.
-
-**Owner loop: closing old questions.** Not built. SPEC gives closing an agent's question to the owner. Of the 31 questions agents asked in the review files, 24 were still open on 2026-10-30, 7 of them older than 7 days.
+**Owner loop: closing old questions.** Not built. SPEC gives closing an agent's question to the owner. Most of the questions agents asked in the review files were still open, some of them older than a week.

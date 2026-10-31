@@ -4,8 +4,8 @@
 Regex grading missed paraphrases (a bare-arm answer that only promised to
 decide later was a regex pass). For each decision row in a results file, ask
 Haiku 5.5 whether the answer complies with the truth fact: yes, partial, no.
-Writes <file>.judged.jsonl and prints the per-arm tally. Cost is a few tenths
-of a cent per row.
+Writes <file>.judged.jsonl and prints the per-arm tally. It makes one cheap
+model call per row.
 
   python3 eval/ab/judge.py [--tasks-file F] [--truth F] eval/ab/results/<stamp>.jsonl [...]
 

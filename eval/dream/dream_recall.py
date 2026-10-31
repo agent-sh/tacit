@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Dreamer recall on the known gaps.
 
-The truth situations with no stored fact anywhere (80 in the author's set)
-each point at a digest window where the detour happened
+The truth situations with no stored fact anywhere each point at a digest
+window where the detour happened
 (`evidence.session`, a `path:lines` reference into the digests that
 eval/mine/digest.py writes). The dreamer's job is to read such deltas
 and write the fact nobody wrote. This measures whether it would have:
@@ -63,7 +63,7 @@ DIGEST:
 {digest}
 """
 
-# v3 (2026-10-11): v2 plus the task-only skip rule (measured, lost three owner rules and fixes: not shipped).
+# v3 (2026-10-11): v2 plus the task-only skip rule (measured: it lost owner rules and fixes, so it did not ship).
 EXTRACT_V3 = """You are the dreamer of tacit, a fact store shared by coding agents on one owner's machines.
 Below is a digest of part of an agent session (U: owner, H: harness-injected text, A: agent, T: tool call, E: tool error).
 Your job is to write down what nobody wrote down. Extract EVERY durable fact another agent would need next time, in these classes:

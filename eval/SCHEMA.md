@@ -2,17 +2,17 @@
 
 A truth set is one JSON object per line. Each line is a situation from a real session where a stored fact would have cut a detour, plus the fact itself. Retrieval is scored against this file; grep over the fact files is the baseline.
 
-Your own set goes in `eval/truth.jsonl` (gitignored: it is mined from your transcripts). The author's set of 202 situations is not published. `eval/examples/truth.sample.jsonl` holds eight invented items in this schema.
+Your own set goes in `eval/truth.jsonl` (gitignored: it is mined from your transcripts). The author's set is not published. `eval/examples/truth.sample.jsonl` holds eight invented items in this schema.
 
 ```json
 {
   "id": "t-0001",
-  "source_id": "dl-a-0004",
+  "source_id": "miner-a-0004",
   "situation": {
-    "repo": "memra",
+    "repo": "demo-api",
     "host": "workstation",
-    "paths": ["src/kv/park.rs"],
-    "command": "cargo build --features cuda",
+    "paths": ["internal/db/migrate.go"],
+    "command": "go test ./internal/db/...",
     "intent": "one line: what the agent was trying to do"
   },
   "query": "the question the agent could have asked, or null if nobody would ask (push-only)",
