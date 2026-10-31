@@ -172,13 +172,18 @@ func (a *assessor) indexPath(ix *ancestorIndex, f *fact.Fact, p string) {
 		comps = comps[1:]
 	}
 	start := 0
-	if !sysRoot && len(comps) > 1 && comps[0] == "projects" {
+	if len(comps) > 1 && comps[0] == "projects" {
 		// A folder of the projects directory under its own name (or, past a
-		// folder of checkouts, the checkout's).
-		top := strings.ToLower(comps[1])
-		a.noteOwn(ix, top, f, p)
-		if len(comps) > 2 && a.knownRepoName(top) == "" {
-			a.noteOwn(ix, strings.ToLower(comps[2]), f, p)
+		// folder of checkouts, the checkout's): own-work evidence for the
+		// home's projects directory only. Under a system root
+		// (/data/projects/<x>) it is a folder of checkouts all the same, never
+		// a repository named projects.
+		if !sysRoot {
+			top := strings.ToLower(comps[1])
+			a.noteOwn(ix, top, f, p)
+			if len(comps) > 2 && a.knownRepoName(top) == "" {
+				a.noteOwn(ix, strings.ToLower(comps[2]), f, p)
+			}
 		}
 		start = 1
 	}

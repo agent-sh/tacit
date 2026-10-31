@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,6 +55,9 @@ func TestRotationProofStatsAPathUnderData(t *testing.T) {
 	t.Cleanup(func() { rotationRun = prev })
 	runRotationStep(t, r, rotationOpts{model: "m", age: 30, batch: 1, only: map[string]bool{"weights-dir": true}})
 	want := "/data/tacit-test-no-such-dir/weights does not exist on " + host
+	if _, err := os.Stat("/data/tacit-test-no-such-dir/weights"); !errors.Is(err, os.ErrNotExist) {
+		t.Skipf("this machine's /data does not say the path is missing: %v", err)
+	}
 	if len(fr.prompts) != 1 || !strings.Contains(fr.prompts[0], want) {
 		t.Fatalf("the proof lacks %q in %d prompt(s):\n%s", want, len(fr.prompts), strings.Join(fr.prompts, "\n"))
 	}
@@ -62,7 +66,8 @@ func TestRotationProofStatsAPathUnderData(t *testing.T) {
 // The ancestor index reads a path under /data as it reads one under the
 // other roots: a folder of a known repository's tree there is inside it. The
 // root itself is no folder of a tree, so a repository named like a root
-// (data) holds nothing by it.
+// (data) holds nothing by it, and a projects directory under the root is a
+// folder of checkouts, not a repository named projects.
 func TestAncestorIndexReadsPathsUnderData(t *testing.T) {
 	home, _, _ := checkedHome(t)
 	s := &store.Store{Dir: filepath.Join(home, "store")}
@@ -75,6 +80,8 @@ func TestAncestorIndexReadsPathsUnderData(t *testing.T) {
 	}
 	add("projects/kiln-tool", "kiln-runner", "s-k1", "The kiln tool runs from /data/widget/kiln-tool/run.sh")
 	add("projects/quill-scratch", "quill-out", "s-q1", "The quill scratch output goes to /data/quill-scratch/out.log")
+	add("projects/projects", "projects-index", "s-p1", "The projects index lists every checkout by name")
+	add("projects/recipe-x", "recipe-notes", "s-r1", "The recipe notes are in /data/projects/recipe-x/notes.md")
 	facts, _, _ := fact.Walk(s.Dir)
 	writeIndexesForTest(t, s.Dir, facts)
 	gitIn(t, s.Dir, "add", "-A")
@@ -83,7 +90,9 @@ func TestAncestorIndexReadsPathsUnderData(t *testing.T) {
 	if !strings.Contains(got["projects/kiln-tool"], "ancestor=projects/widget ") {
 		t.Errorf("kiln-tool, a folder of widget's tree under /data: %q", got["projects/kiln-tool"])
 	}
-	if strings.Contains(got["projects/quill-scratch"], "ancestor=projects/data ") {
-		t.Errorf("quill-scratch is inside the root /data, no repository: %q", got["projects/quill-scratch"])
+	for _, folder := range []string{"projects/quill-scratch", "projects/recipe-x"} {
+		if got[folder] != "group= ancestor= depth=0 none=false" {
+			t.Errorf("%s is in a folder under /data, no repository: %q", folder, got[folder])
+		}
 	}
 }

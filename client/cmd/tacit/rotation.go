@@ -525,8 +525,8 @@ func clip(s string, n int) string {
 // machineRoots are the system roots a path must be under, or ~, to name a
 // place on a machine. Both of the rotation's path readers take them, the
 // place reader (machinePathRx) and the gone-path reader (gonePathRx), so
-// the paths the pick finds gone and the paths its proof stats are read the
-// same way.
+// the paths the pick finds gone and the paths its proof stats are under the
+// same roots. Each reader keeps its own boundaries and characters.
 const machineRoots = `Users|home|data|opt|etc|var|usr|srv|mnt|Library`
 
 // machinePathRx finds the paths a fact names as places on a machine: under
@@ -547,8 +547,8 @@ var pseudoPathRx = regexp.MustCompile(`^/(?:proc|sys|dev|net)(?:/|$)`)
 // repoPaths are the ~ and absolute paths text names, at most n (n < 0: all),
 // each for the repository repoid makes of it (SPEC.md, "Orgs"). Only a real
 // git root on this machine makes one, so a route names nothing, and a
-// checkout outside machinePathRx's roots (/tmp, /data, /root, /workspace)
-// is found. The places machinePathRx reads come first and each path counts
+// checkout outside machinePathRx's roots (/tmp, /root, /workspace) is
+// found. The places machinePathRx reads come first and each path counts
 // once, so routes never crowd out a path the place reader takes. Paths in
 // pseudoPathRx are left out: what they resolve to is the reading process's
 // or another host's, not the fact's.

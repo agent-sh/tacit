@@ -463,6 +463,9 @@ func TestGonePathsRules(t *testing.T) {
 	}{
 		{"The build cache lives in ~/gone/cache", "machines/devbox", "", "~/gone/cache"},
 		{"The tools live in ~/here", "machines/devbox", "", ""},
+		// A path's own words are no clause around another path, under any
+		// root the reader takes: "old" here is a file's name.
+		{"The tool in ~/gone/bin reads /Library/Preferences/old.plist", "machines/devbox", "", "~/gone/bin"},
 		{"The build cache lives in ~/gone/cache", "machines/other", "", ""},
 		{"The build cache lives in ~/gone/cache", "user", "", ""},
 		{"The build cache lives in ~/gone/cache", "user", "DEVBOX", "~/gone/cache"},
