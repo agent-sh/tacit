@@ -17,10 +17,12 @@ import (
 )
 
 // runDedupe implements `tacit dedupe`: the curated facts that only restate
-// another curated fact are retired with superseded_by the fact they restate.
+// another curated fact are retired with superseded_by the fact they restate,
+// and a name two live curated files hold is raised for review as a finding
+// about the two files (names_review.go).
 //
-//	tacit dedupe --dry-run   read the clone as it is (no sync), print the clusters, change nothing
-//	tacit dedupe             sync, supersede the copies, commit and push as curator
+//	tacit dedupe --dry-run   read the clone as it is (no sync), print the clusters and the names, change nothing
+//	tacit dedupe             sync, supersede the copies, raise the names, commit and push as curator
 //
 // No model is called. The contract is SPEC.md "Near-duplicates".
 func runDedupe(args []string) int {
@@ -45,18 +47,46 @@ func runDedupe(args []string) int {
 			fmt.Fprintln(os.Stderr, "dedupe:", err)
 			return 1
 		}
+		all, fresh, err := namesHeldTwice(s.Dir)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "dedupe:", err)
+			return 1
+		}
 		printDedupe(cs, true)
+		printNames(all, notRetiring(fresh, cs), true)
 		return writeDedupeJSON(*out, cs)
 	}
 	var cs []curate.Copies
+	var all, raised [][2]*fact.Fact
 	pushed, err := curatorWrite(ctx, s, func() (map[string][]byte, string, error) {
 		var err error
 		if cs, err = dedupePlan(s.Dir); err != nil {
 			return nil, "", err
 		}
-		files, msg, err := dedupeFiles(s.Dir, cs, time.Now())
-		if err != nil || len(files) == 0 {
+		now := time.Now()
+		files, msg, err := dedupeFiles(s.Dir, cs, now)
+		if err != nil {
 			return nil, "", err
+		}
+		var fresh [][2]*fact.Fact
+		if all, fresh, err = namesHeldTwice(s.Dir); err != nil {
+			return nil, "", err
+		}
+		raised = notRetiring(fresh, cs)
+		if files == nil {
+			files = map[string][]byte{}
+		}
+		if lines := nameFindings(s.Dir, raised, now, files); len(lines) > 0 {
+			what := fmt.Sprintf("%d name(s) two files hold raised for review", len(lines))
+			if msg == "" {
+				msg = "curator: dedupe: " + what + "\n\n" + strings.Join(lines, "\n")
+			} else {
+				subject, body, _ := strings.Cut(msg, "\n\n")
+				msg = subject + "; " + what + "\n\n" + body + "\n" + strings.Join(lines, "\n")
+			}
+		}
+		if len(files) == 0 {
+			return nil, "", nil
 		}
 		return files, msg, nil
 	})
@@ -65,10 +95,53 @@ func runDedupe(args []string) int {
 		return 1
 	}
 	if !pushed {
-		cs = nil
+		cs, raised = nil, nil
 	}
 	printDedupe(cs, false)
+	printNames(all, raised, false)
 	return writeDedupeJSON(*out, cs)
+}
+
+// notRetiring drops the name pairs one of whose files this run retires as a
+// copy: the name is then held once.
+func notRetiring(pairs [][2]*fact.Fact, cs []curate.Copies) [][2]*fact.Fact {
+	going := map[string]bool{}
+	for _, c := range cs {
+		for _, x := range c.Copies {
+			going[x.Path] = true
+		}
+	}
+	var out [][2]*fact.Fact
+	for _, p := range pairs {
+		if !going[p[0].Path] && !going[p[1].Path] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// printNames lists the names two live curated files hold, and which of them
+// this run raises (or would raise) for review.
+func printNames(all, raising [][2]*fact.Fact, dry bool) {
+	if len(all) == 0 {
+		return
+	}
+	now := map[[2]string]bool{}
+	for _, p := range raising {
+		now[[2]string{p[0].Path, p[1].Path}] = true
+	}
+	verb, already := "raised", "raised before"
+	if dry {
+		verb = "would raise"
+	}
+	for _, p := range all {
+		state := already
+		if now[[2]string{p[0].Path, p[1].Path}] {
+			state = verb
+		}
+		fmt.Printf("%s (%s)\n", nameLine(p[0].Meta.Name, p[0].Path, p[1].Path), state)
+	}
+	fmt.Printf("dedupe: %d name(s) two files hold; %s %d for review\n", len(all), verb, len(raising))
 }
 
 // dedupePlan reads the clone: the clusters of near-identical curated facts,

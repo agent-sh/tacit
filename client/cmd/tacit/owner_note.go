@@ -245,6 +245,9 @@ func (rs *reviewServer) findFinding(ctx context.Context, id string) *findingRef 
 	if st := rs.staleByID(id); st != nil {
 		return &findingRef{id: id, kind: kindStale, a: st.A.Name, b: st.Flag.Sha, scope: st.A.Scope, names: []string{st.A.Name}}
 	}
+	if it := rs.nameItemByID(id); it != nil {
+		return &findingRef{id: id, kind: kindName, a: it.A.Name, b: it.B.Name, scope: it.A.Scope, names: []string{it.A.Name}}
+	}
 	for _, it := range rs.linkItems(ctx) {
 		if it.ID == id {
 			return &findingRef{id: id, kind: kindLink, a: it.A.Name, b: it.Link.Target, scope: it.A.Scope, names: []string{it.A.Name, it.Link.Target}}

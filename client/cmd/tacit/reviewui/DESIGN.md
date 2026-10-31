@@ -68,6 +68,7 @@ Five places in one top bar, the current one in ink with an underline: Needs you 
 | ruling-change | A newer fact may change your rule. Does your rule still stand? | Keep your rule, Use the newer fact, Both are true, Mark as conflicting |
 | supersede-applied | The curator replaced the older fact with the newer one. Keep it that way? | Keep it replaced, Undo, both are true, Keep the older instead, Mark as conflicting |
 | duplicate | These two facts say the same thing. Keep one? | Keep the newer, Keep the older, Both are true, Mark as conflicting |
+| name | Two files hold this fact's name. Which one stands? | Keep the newer, Keep the older, Both are true (no Mark as conflicting or Neither is true) |
 | stale | Git says something this fact names was deleted. Is it still true? (a rule: Does your rule still hold?) | Still true, Outdated, retire it |
 | link | Your rule links to a fact that does not exist. | Apply the fix, Edit the rule |
 

@@ -1038,6 +1038,26 @@ func openQuestions(rs *reviewServer, q *agentreview.Queue) []questionRow {
 		}
 		out = append(out, r)
 	}
+	// A name two files hold waits for an agent's mark or the owner's answer:
+	// the verifier does not take it (names_review.go).
+	for _, it := range rs.nameItems() {
+		if it.State == "gone" || it.Decision != nil {
+			continue
+		}
+		r := questionRow{ID: it.ID, Closes: kindName, Finding: kindName, Asked: strings.TrimSuffix(it.Source, ".md"), Facts: []string{it.A.Path, it.B.Path},
+			Question: "Two files hold the name " + it.A.Name + ": " + it.A.Path + " and " + it.B.Path + ". Which one stands? An agent that can tell marks it with tacit review apply.",
+			Answers:  []string{"keep:" + it.A.Path, "keep:" + it.B.Path}}
+		switch {
+		case it.Ask != nil:
+			r.Closes, r.Asked, r.Question = closesAsk, it.Ask.At, it.Ask.Question
+			r.Owners = "an agent asked the owner; they answer it on the review page"
+		case owned[it.ID] || owned[it.A.Name]:
+			r.Owners = "the owner marked or reopened it, or kept a fact of this name"
+		case len(it.Notes) > 0:
+			r.Owners = "the owner left a note on it"
+		}
+		out = append(out, r)
+	}
 	if q != nil {
 		_, reopened := rs.questionRecords()
 		for _, it := range q.Open() {
@@ -1265,6 +1285,10 @@ func runQuestionsClose(args []string) int {
 			fmt.Fprintln(os.Stderr, "questions close:", note)
 		}
 		return 0
+	}
+	if rs.nameItemByID(id) != nil {
+		fmt.Fprintf(os.Stderr, "questions close: %s is a name two files hold; an agent marks it with tacit review apply (keep one path, with its evidence), and the owner answers it on the review page\n", id)
+		return 2
 	}
 	// A finding: map the answer to its mark.
 	var a, b string

@@ -74,6 +74,9 @@ const KINDS = {
     note: "Done by itself because both came from one note or say nearly the same thing." },
   "duplicate":          { label: "Duplicates", q: "These two facts say the same thing. Keep one?", dated: true,
     note: "Two facts from one curator run that read alike." },
+  // Two files hold one name: a copy a tool outside tacit left in a second folder.
+  "name":               { label: "One name, two files", q: "Two files hold this fact's name. Which one stands?", dated: true,
+    note: "A name belongs to one fact. A tool outside tacit left a second file of this one. Keeping one retires the other." },
   // tacit app only: one of your rules links to a fact that is not there.
   "link":               { label: "Broken links in your rules", q: "Your rule links to a fact that does not exist." },
   // One fact, not a pair: git deleted something it names after the day it was last current.
@@ -276,10 +279,11 @@ function apply(keepId) {
 const TYPE_WORDS = { user_standard: "preference", design_decision: "design decision", past_mistake: "past mistake", machine_fact: "machine fact", code_change: "code change", hot_spot: "hot spot", structure: "module map", history: "history", user: "fact about you", reference: "reference", result: "result", result_ref: "result, search only", unclassified: "note" };
 const typeWords = (t) => TYPE_WORDS[t] || String(t || "").replace(/_/g, " ");
 const SOURCE_WORDS = { user: "said by you", observed: "seen by an agent", web: "from the web", derived: "computed from git" };
-function card(f, side, head) {
+// byPath opens the card's own file: two cards of one name are two files.
+function card(f, side, head, byPath) {
   const rule = isRule(f);
   const dates = [f.created ? "written " + plainDate(f.created) : "", f.updated && f.updated !== f.created ? "changed " + plainDate(f.updated) : ""].filter(Boolean).join(", ");
-  const name = CALL && !f.missing ? `<button type="button" class="open-fact" data-fact="${esc(f.name)}">${esc(f.name)}</button>` : esc(f.name);
+  const name = CALL && !f.missing ? `<button type="button" class="open-fact" data-fact="${esc(byPath && f.path ? f.path : f.name)}">${esc(f.name)}</button>` : esc(f.name);
   return `<article class="card${f.missing ? " missing" : ""}" id="g-${side}" aria-label="${esc(head)}">
     <div class="card-head"><span class="who">${esc(head)}${asOf(f) ? ", " + esc(plainDate(asOf(f))) : ""}</span>${rule && head !== "Your rule" ? '<span class="tag">Your rule</span>' : ""}
       <span class="state s-dele">Stops reaching agents</span><span class="state s-dele-p">Would stop reaching agents</span><span class="state s-stet">Stays</span><span class="state s-query">Marked as conflicting</span></div>
@@ -404,7 +408,7 @@ function sheet() {
     <h2 class="question">${esc(question(it))}</h2>
     ${word.text ? `<p class="suggest">${esc(word.text)}</p>` : kindNote(it) && !d ? `<p class="suggest quiet">${esc(kindNote(it))}</p>` : ""}
     ${recordHTML(it)}${notesHTML(it)}
-    <div class="pair">${flipped(it) ? card(it.b, "b", s.bHead) + card(it.a, "a", s.aHead) : card(it.a, "a", s.aHead) + card(it.b, "b", s.bHead)}</div>
+    <div class="pair">${flipped(it) ? card(it.b, "b", s.bHead, it.kind === "name") + card(it.a, "a", s.aHead, it.kind === "name") : card(it.a, "a", s.aHead, it.kind === "name") + card(it.b, "b", s.bHead, it.kind === "name")}</div>
     ${choicesHTML(it, word.mark)}
     ${missing ? "" : '<section class="git" id="timeline" aria-labelledby="tl-h" aria-busy="true"><h3 id="tl-h">What git shows</h3><p class="tl-sub">Reading git.</p></section>'}`;
   if (why) { const c = inner.querySelector(".hint"); if (c) { c.textContent = why; c.dataset.fixed = "1"; } }

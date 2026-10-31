@@ -219,6 +219,9 @@ func (rs *reviewServer) allItems() []any {
 	for _, it := range rs.checkItems() {
 		out = append(out, it)
 	}
+	for _, it := range rs.nameItems() {
+		out = append(out, it)
+	}
 	return out
 }
 

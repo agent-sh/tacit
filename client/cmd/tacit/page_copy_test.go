@@ -80,6 +80,7 @@ func TestPageAsksEachFindingInPlainWords(t *testing.T) {
 		"ruling-change":      "A newer fact may change your rule. Does your rule still stand?",
 		"supersede-applied":  "The curator replaced the older fact with the newer one. Keep it that way?",
 		"duplicate":          "These two facts say the same thing. Keep one?",
+		"name":               "Two files hold this fact's name. Which one stands?",
 		"link":               "Your rule links to a fact that does not exist.",
 		"stale":              "Git says something this fact names was deleted. Is it still true?",
 		"check":              "The curator checked this fact against what tacit knows now and reads it differently. Is it still true?",

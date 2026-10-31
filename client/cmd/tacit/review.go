@@ -239,7 +239,10 @@ type reviewServer struct {
 	s     *store.Store
 	token string
 	facts map[string]*fact.Fact // name -> curated fact
-	inbox map[string]*fact.Fact // name -> inbox note, the source a curated fact's origin names
+	// byPath is every curated fact by its store path: a name two files
+	// hold is a finding about two files (names_review.go).
+	byPath map[string]*fact.Fact
+	inbox  map[string]*fact.Fact // name -> inbox note, the source a curated fact's origin names
 
 	// tl reads the git timeline under a proof; nil when a server has none.
 	tl        *gitev.Builder
@@ -304,15 +307,16 @@ func (rs *reviewServer) loadFacts() {
 			rs.unreadPaths = append(rs.unreadPaths, rel)
 		}
 	}
-	m, in := map[string]*fact.Fact{}, map[string]*fact.Fact{}
+	m, in, bp := map[string]*fact.Fact{}, map[string]*fact.Fact{}, map[string]*fact.Fact{}
 	for _, f := range all {
 		if !f.InInbox() {
 			m[f.Meta.Name] = f
+			bp[f.Path] = f
 		} else if old := in[f.Meta.Name]; old == nil || f.Meta.Created < old.Meta.Created {
 			in[f.Meta.Name] = f
 		}
 	}
-	rs.facts, rs.inbox = m, in
+	rs.facts, rs.inbox, rs.byPath = m, in, bp
 }
 
 func (rs *reviewServer) view(name string) *factView {
@@ -320,6 +324,11 @@ func (rs *reviewServer) view(name string) *factView {
 	if !ok {
 		return &factView{Name: name, Missing: true}
 	}
+	return viewOf(f)
+}
+
+// viewOf is one curated fact as the page and the verifier see it.
+func viewOf(f *fact.Fact) *factView {
 	return &factView{
 		Name: f.Meta.Name, Path: f.Path, Scope: f.Meta.Scope, Type: f.Meta.Type, Kind: f.Meta.Source.Kind,
 		Description: f.Meta.Description, Body: strings.TrimSpace(f.Body), Created: f.Meta.Created, Updated: f.Meta.Updated,
@@ -795,6 +804,9 @@ func (rs *reviewServer) applyOp(o *op) (string, []string, error) {
 		}
 	}
 	if it == nil {
+		if ni := rs.nameItemByID(o.ID); ni != nil {
+			return rs.applyNameOp(o, ni) // a name two files hold
+		}
 		return "", nil, errors.New("this finding is no longer in the review files")
 	}
 	// A verdict must name the finding's facts in the finding's own order;
