@@ -85,7 +85,7 @@ func (b *Builder) AddClaudeHistory(path string) error {
 		if h.SessionID != "" {
 			ref = "claude:" + h.SessionID
 		}
-		b.addTurn("claude-history", ref, pasted.ReplaceAllString(h.Display, " "), JSONTime(h.Timestamp), "", historyParts(h.Display))
+		b.addTurn("claude-history", ref, pasted.ReplaceAllString(h.Display, " "), JSONTime(h.Timestamp), turnMeta{parts: historyParts(h.Display)})
 	})
 }
 
@@ -123,7 +123,7 @@ func (b *Builder) AddCodexHistory(path string) error {
 		if h.SessionID != "" {
 			ref = "codex:" + h.SessionID
 		}
-		b.addTurn("codex-history", ref, h.Text, JSONTime(h.TS), "", historyParts(h.Text))
+		b.addTurn("codex-history", ref, h.Text, JSONTime(h.TS), turnMeta{parts: historyParts(h.Text)})
 	})
 }
 

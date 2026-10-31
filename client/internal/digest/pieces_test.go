@@ -204,7 +204,7 @@ func TestTurnPiecesPastesAndWakePrompts(t *testing.T) {
 			t.Errorf("wake prompt %q: %+v", wake, ps)
 		}
 	}
-	for _, said := range []string{"the wake nonce= line in the log is the loop, ignore it", "automated tests fail on the cache path again"} {
+	for _, said := range []string{"the wake nonce= line in the log is the loop, ignore it", "automated tests fail on the cache path again", "Automated tests must pass before any merge to main"} {
 		if own := OwnerPieces(TurnPieces(said)); len(own) != 1 {
 			t.Errorf("the words inside their own sentence %q: %q", said, own)
 		}

@@ -148,6 +148,62 @@ func TestACopysHistoryLineIsItsOwnText(t *testing.T) {
 	}
 }
 
+// A copy's history line holds the prompt as the person typed it, which the
+// corpus cuts as it cuts the turn: a slash command's name, a side agent's
+// note above their reply, agent lines they relayed. It still records the
+// turn, so the copy stays in the session it was typed in.
+func TestACopysHistoryLineIsCutAsTheTurnIs(t *testing.T) {
+	for _, c := range []struct{ name, content, display, words string }{
+		{"a slash command", "<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>keep the workers busy all night long</command-args>", "/goal keep the workers busy all night long", "keep the workers busy all night long"},
+		{"a side agent's note", "Here is a note offered by a side agent:\n> the build on main is red\n\nfix the build before the release", "Here is a note offered by a side agent:\n> the build on main is red\n\nfix the build before the release", "fix the build before the release"},
+		{"relayed agent lines", "please look at the failing build now\n## Findings\n- The cache key is stale", "please look at the failing build now\n## Findings\n- The cache key is stale", "please look at the failing build now"},
+	} {
+		home := t.TempDir()
+		proj := filepath.Join(home, ".claude", "projects", "-home-u-projects-shop")
+		writeFile(t, filepath.Join(proj, "a-fork.jsonl"), claudeTurn("a-fork", "w1", "2026-10-20T10:00:00.000Z", c.content, `,"sessionKind":"bg"`)+"\n")
+		writeFile(t, filepath.Join(proj, "b-orig.jsonl"), claudeTurn("b-orig", "w1", "2026-10-20T10:00:00.000Z", c.content, "")+"\n")
+		display, _ := json.Marshal(c.display)
+		writeFile(t, filepath.Join(home, ".claude", "history.jsonl"), `{"display":`+string(display)+`,"timestamp":1792490400000,"project":"/home/u/projects/shop","sessionId":"b-orig"}`+"\n")
+		cc, err := LoadAll(home, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := cc.SaidIn(c.words); len(got) != 1 || got[0] != "claude:b-orig" {
+			t.Errorf("%s: SaidIn = %v, want claude:b-orig alone", c.name, got)
+		}
+		for _, from := range []string{"a-fork", "b-orig"} {
+			if m, _ := cc.Find(c.words, from, true); m.Ref != "claude:b-orig" {
+				t.Errorf("%s: from %s's note the words are in %q, want claude:b-orig", c.name, from, m.Ref)
+			}
+		}
+	}
+}
+
+// A Claude Code fork says it is one (its first line, fork_inherit with the
+// fork's moment): a turn older than that was carried over. When the
+// original's transcript is gone and its prompt history line is not, the
+// copy is still one turn, in the session it was typed in.
+func TestAForkCarriesTurnsOverWhenTheOriginalIsGone(t *testing.T) {
+	home := t.TempDir()
+	proj := filepath.Join(home, ".claude", "projects", "-home-u-projects-shop")
+	said := "keep the staging database read only this week"
+	writeFile(t, filepath.Join(proj, "s-fork.jsonl"), strings.Join([]string{
+		`{"type":"history-suppression","sessionId":"s-fork","cause":"fork_inherit","ts":"2026-10-21T08:00:00.000Z"}`,
+		claudeTurn("s-fork", "u1", "2026-10-20T10:00:00.000Z", said, `,"sessionKind":"bg"`),
+	}, "\n")+"\n")
+	writeFile(t, filepath.Join(home, ".claude", "history.jsonl"), `{"display":"`+said+`","timestamp":1792490400000,"project":"/home/u/projects/shop","sessionId":"s-orig"}`+"\n")
+	c, err := LoadAll(home, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.SaidIn(said); len(got) != 1 || got[0] != "claude:s-orig" {
+		t.Errorf("SaidIn = %v, want claude:s-orig alone", got)
+	}
+	if m, _ := c.Find(said, "s-fork", true); m.Ref != "claude:s-orig" {
+		t.Errorf("from the fork's note: %+v", m)
+	}
+}
+
 // The same text in two sessions at most 2 s apart is a program's broadcast,
 // which may type into a person's sessions as it does into its own: no person
 // types one message into two sessions at once, so neither is theirs. Only a
@@ -178,6 +234,11 @@ func TestTheSameTextInTwoSessionsAtOnceIsNoTurnOfTheirs(t *testing.T) {
 	forked := "pause the nightly sync until the move is done"
 	writeFile(t, filepath.Join(proj, "f-a.jsonl"), claudeTurn("f-a", "f1", "2026-10-20T14:00:00.000Z", forked, "")+"\n")
 	writeFile(t, filepath.Join(proj, "f-b.jsonl"), claudeTurn("f-b", "f1", "2026-10-20T14:00:00.000Z", forked, "")+"\n"+claudeTurn("f-b", "f2", "2026-10-20T14:00:01.500Z", forked, "")+"\n")
+	// Two Claude Code turns of one text at one millisecond with their own
+	// uuids are two turns, a broadcast, not one turn copied.
+	same := "the deploy queue is drained and the proxy restarted"
+	writeFile(t, filepath.Join(proj, "m-a.jsonl"), claudeTurn("m-a", "m1", "2026-10-20T15:00:00.000Z", same, "")+"\n")
+	writeFile(t, filepath.Join(proj, "m-b.jsonl"), claudeTurn("m-b", "m2", "2026-10-20T15:00:00.000Z", same, "")+"\n")
 	// The prompt history's own copy of a turn, with no session named.
 	writeFile(t, filepath.Join(home, ".claude", "history.jsonl"), `{"display":"`+alone+`","timestamp":1792497600400,"project":"/home/u/projects/shop"}`+"\n")
 	c, err := LoadAll(home, "")
@@ -196,10 +257,13 @@ func TestTheSameTextInTwoSessionsAtOnceIsNoTurnOfTheirs(t *testing.T) {
 	if !c.FindIn("claude:r-a", again) || c.FindIn("claude:r-b", again) {
 		t.Errorf("typed again in one session, then once in another 1.5 s after the last: the first two stay theirs, the other session's goes")
 	}
+	if m, ok := c.Find(same, "", true); ok {
+		t.Errorf("one millisecond, two uuids: %+v", m)
+	}
 	if c.FindIn("claude:f-a", forked) || c.FindIn("claude:f-b", forked) {
 		t.Errorf("a copy and then the same text in its session 1.5 s later: a broadcast, in neither session")
 	}
-	if st := statsJSON(t, c); st["broadcast_turns"] != 6.0 || st["copied_turns"] != 1.0 {
+	if st := statsJSON(t, c); st["broadcast_turns"] != 8.0 || st["copied_turns"] != 1.0 {
 		t.Errorf("counts: %v", st)
 	}
 }

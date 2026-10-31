@@ -529,13 +529,16 @@ var InjectedNotices = []string{
 	// A wake loop's prompt, which a program types into a person's Codex
 	// session (310 in 30 days of the owner's turns, 2026-10-30).
 	"Wake nonce=",
-	// A program's prompt that says what it is ("Automated <job> wake
-	// requested ..."), typed into a person's session the same way. A person
-	// writes in lower case; no turn of theirs opens so.
-	"Automated ",
 	"The app was quit while you were working",
 	"The user moved this existing Relay conversation to you",
 }
+
+// wakePrompt is another wake loop's prompt, which says what it is and that
+// it is automated ("Automated <job> wake requested by ..."), typed into a
+// person's session as a wake loop's "Wake nonce=" is (InjectedNotices). The
+// words and their case must match: "Automated tests must pass" is a
+// sentence a person may type.
+var wakePrompt = regexp.MustCompile(`^Automated (?:\S+ ){0,5}wake requested\b`)
 
 // TurnPieces splits the text of a user turn into who wrote each part. It is
 // the one rule for what in a turn's text is the person's, for the dreamer's
@@ -562,7 +565,8 @@ var InjectedNotices = []string{
 //     frames, a delegation, a task notification, an attached file), a
 //     harness's own heading or mark (HarnessText, the rule for a turn no
 //     person typed, so an interruption mark is the harness's in every turn)
-//     or one of InjectedNotices is the harness's;
+//     or one of InjectedNotices or a wake prompt (wakePrompt) is the
+//     harness's;
 //   - an orchestrator's role prompt ("You are manager-01 ...", "You are a
 //     worker for ..."): an agent's; the person writes in lower case, and no
 //     turn of theirs opens that way;
@@ -631,6 +635,9 @@ func pieces(text string) []Piece {
 		if strings.HasPrefix(t, p) {
 			return []Piece{{Who: Harness, Text: t}}
 		}
+	}
+	if wakePrompt.MatchString(t) {
+		return []Piece{{Who: Harness, Text: t}}
 	}
 	if strings.HasPrefix(t, "You are ") {
 		return []Piece{{Who: Agent, Text: t}}

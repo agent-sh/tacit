@@ -90,15 +90,18 @@ type Builder struct {
 	c     *Corpus
 	buf   bytes.Buffer
 	known map[string]bool
-	// ms, sources, uuids and parts are each turn's time in milliseconds (0
-	// when its source records none), its source, for a Claude Code line the
-	// line's uuid, and for a prompt history line the normalized parts of its
-	// text between pastes (nil for any other turn): what Build reads to tell
-	// a copy or a broadcast (twoSessions).
+	// ms, sources, uuids, parts and older are each turn's time in
+	// milliseconds (0 when its source records none), its source, for a
+	// Claude Code line the line's uuid, for a prompt history line the
+	// normalized parts of its text between pastes (nil for any other turn),
+	// and whether the turn is older than the fork its transcript is (a
+	// turn the fork carried over): what Build reads to tell a copy or a
+	// broadcast (twoSessions).
 	ms      []int64
 	sources []string
 	uuids   []string
 	parts   [][]string
+	older   []bool
 	// agentRefs are the sessions whose transcripts are an agent's: a prompt
 	// history line of one of them (a lane a program typed into) is not theirs.
 	agentRefs map[string]bool
@@ -127,13 +130,19 @@ func (b *Builder) Add(source, ref, text string) { b.AddAt(source, ref, text, tim
 // day a statement of theirs was said is that turn's (SaidAt), never the day
 // a step read it.
 func (b *Builder) AddAt(source, ref, text string, at time.Time) {
-	b.addTurn(source, ref, text, at, "", nil)
+	b.addTurn(source, ref, text, at, turnMeta{})
 }
 
-// addTurn is AddAt for a turn whose line has an id of its own (a Claude Code
-// line's uuid; "" for none) or, for a prompt history line, the normalized
-// parts of its text between pastes (nil for none).
-func (b *Builder) addTurn(source, ref, text string, at time.Time, uuid string, parts []string) {
+// turnMeta is what a source records of a turn beyond its text and time
+// (twoSessions reads it).
+type turnMeta struct {
+	uuid  string   // a Claude Code line's uuid
+	parts []string // a prompt history line's text, normalized, between its pastes
+	older bool     // a turn older than the fork its transcript is: carried over
+}
+
+// addTurn is AddAt with what the source records of the turn besides.
+func (b *Builder) addTurn(source, ref, text string, at time.Time, m turnMeta) {
 	text, _, dropped, ok := cutWords(text, b.pastes)
 	if !ok {
 		b.c.Stats.AgentTurns++
@@ -162,8 +171,9 @@ func (b *Builder) addTurn(source, ref, text string, at time.Time, uuid string, p
 	b.c.at = append(b.c.at, sec)
 	b.ms = append(b.ms, ms)
 	b.sources = append(b.sources, source)
-	b.uuids = append(b.uuids, uuid)
-	b.parts = append(b.parts, parts)
+	b.uuids = append(b.uuids, m.uuid)
+	b.parts = append(b.parts, m.parts)
+	b.older = append(b.older, m.older)
 	b.buf.WriteString(n)
 	b.buf.WriteString(" ")
 }
@@ -265,202 +275,6 @@ func (b *Builder) Build() *Corpus {
 	return b.c
 }
 
-// timed reports a turn whose source records its time to the millisecond: a
-// transcript's line (Claude Code, Codex, pi). The prompt histories and
-// Hermes record it to the second, and a digest not at all.
-func (b *Builder) timed(i int) bool {
-	return b.ms[i] != 0 && (b.sources[i] == "transcript" || b.sources[i] == "pi")
-}
-
-// history reports a prompt history's line.
-func (b *Builder) history(i int) bool {
-	return b.sources[i] == "claude-history" || b.sources[i] == "codex-history"
-}
-
-// near reports two times known and at most BroadcastWindow apart.
-func near(x, y int64) bool {
-	d := x - y
-	return x != 0 && y != 0 && d <= BroadcastWindow.Milliseconds() && d >= -BroadcastWindow.Milliseconds()
-}
-
-// twoSessions finds, among the turns of one text, those two sessions hold.
-//
-//   - copies: one turn in two sessions. A fork, or a session resumed into a
-//     new transcript, carries its turns over with their time, and Claude
-//     Code with their uuid too: the transcript turns of one uuid, or of one
-//     text at one instant to the millisecond, are one turn. It stays in one
-//     session: the one whose prompt history has the turn's line (the session
-//     the person typed it in: at that moment, its text less the pastes the
-//     history cuts out), else the first read. In the other sessions the
-//     turn's copies are left out, and so are their history lines of it and
-//     a digest's lines of the text.
-//   - casts: the same text in another session within BroadcastWindow, at a
-//     different instant. A person types a message into one session; the
-//     same words in several at once are a program's, which may type into a
-//     person's sessions as it does into its own. Each such turn is left out,
-//     and the prompt history's lines of the text within the window of one.
-//     Only turns timed to the millisecond (timed) are one: a history line's
-//     time is cut to the second, and it may outlive its transcript while a
-//     fork's copy of the turn lives on.
-func (b *Builder) twoSessions() (copies, casts map[int]bool) {
-	copies, casts = map[int]bool{}, map[int]bool{}
-	byText := map[string][]int{}
-	histories := map[string][]int{} // a session -> its prompt history lines
-	for i, raw := range b.c.raw {
-		n := Normalize(raw)
-		byText[n] = append(byText[n], i)
-		if b.history(i) && !strings.HasSuffix(b.c.refs[i], ":history") {
-			histories[b.c.refs[i]] = append(histories[b.c.refs[i]], i)
-		}
-	}
-	for _, idx := range byText {
-		if len(idx) > 1 {
-			b.copiesOf(idx, histories, copies)
-		}
-	}
-	for _, idx := range byText {
-		if len(idx) > 1 {
-			b.castsOf(idx, copies, casts)
-		}
-	}
-	return copies, casts
-}
-
-// copiesOf marks the copies of the turns in idx, the turns of one text in
-// the order they were read, given each session's prompt history lines
-// (twoSessions).
-func (b *Builder) copiesOf(idx []int, histories map[string][]int, copies map[int]bool) {
-	byUUID, byMS := map[string]int{}, map[int64]int{}
-	members := map[int][]int{} // a group's first turn -> its turns, in read order
-	for _, i := range idx {
-		if !b.timed(i) {
-			continue
-		}
-		g, ok := -1, false
-		if id := b.uuids[i]; id != "" {
-			g, ok = byUUID[id]
-		}
-		if !ok {
-			g, ok = byMS[b.ms[i]]
-		}
-		if !ok {
-			g = i
-		}
-		members[g] = append(members[g], i)
-		if id := b.uuids[i]; id != "" {
-			if _, seen := byUUID[id]; !seen {
-				byUUID[id] = g
-			}
-		}
-		if _, seen := byMS[b.ms[i]]; !seen {
-			byMS[b.ms[i]] = g
-		}
-	}
-	// recorded is a prompt history line of the turn: at its moment (the
-	// history keeps the second only) and of its text, less the pastes the
-	// history cuts out of a prompt.
-	recorded := func(h, turn int) bool {
-		if !near(b.ms[h], b.ms[turn]) {
-			return false
-		}
-		parts := b.parts[h]
-		if len(parts) == 0 {
-			return Normalize(b.c.raw[h]) == Normalize(b.c.raw[turn])
-		}
-		rest := " " + Normalize(b.c.raw[turn]) + " "
-		for _, part := range parts {
-			i := strings.Index(rest, " "+part+" ")
-			if i < 0 {
-				return false
-			}
-			rest = rest[i+1+len(part):] // from the space after the part
-		}
-		return true
-	}
-	typedAt := func(ref string, turn int) bool {
-		for _, h := range histories[ref] {
-			if recorded(h, turn) {
-				return true
-			}
-		}
-		return false
-	}
-	for g, ms := range members {
-		refs := map[string]bool{}
-		for _, m := range ms {
-			refs[b.c.refs[m]] = true
-		}
-		if len(refs) < 2 {
-			continue
-		}
-		keep := b.c.refs[g]
-		for _, m := range ms {
-			if typedAt(b.c.refs[m], g) {
-				keep = b.c.refs[m]
-				break
-			}
-		}
-		for _, m := range ms {
-			if b.c.refs[m] != keep {
-				copies[m] = true
-			}
-		}
-		for r := range refs {
-			if r == keep {
-				continue
-			}
-			for _, h := range histories[r] {
-				if recorded(h, g) {
-					copies[h] = true
-				}
-			}
-		}
-		for _, i := range idx {
-			if r := b.c.refs[i]; b.ms[i] == 0 && r != keep && refs[r] {
-				copies[i] = true // a digest's line of the text
-			}
-		}
-	}
-}
-
-// castsOf marks the broadcasts among idx, less its copies (twoSessions).
-func (b *Builder) castsOf(idx []int, copies, casts map[int]bool) {
-	var timed []int
-	for _, i := range idx {
-		if b.timed(i) && !copies[i] {
-			timed = append(timed, i)
-		}
-	}
-	sort.SliceStable(timed, func(x, y int) bool { return b.ms[timed[x]] < b.ms[timed[y]] })
-	for x, i := range timed {
-		for _, j := range timed[x+1:] {
-			if !near(b.ms[i], b.ms[j]) {
-				break
-			}
-			if b.c.refs[i] != b.c.refs[j] && b.ms[i] != b.ms[j] {
-				casts[i], casts[j] = true, true
-			}
-		}
-	}
-	var members []int
-	for _, i := range timed {
-		if casts[i] {
-			members = append(members, i)
-		}
-	}
-	for _, h := range idx {
-		if !b.history(h) || copies[h] || casts[h] {
-			continue
-		}
-		for _, m := range members {
-			if near(b.ms[h], b.ms[m]) {
-				casts[h] = true
-				break
-			}
-		}
-	}
-}
-
 // leaveOut takes the copies and the broadcasts out of the corpus being
 // built, and out of its counts.
 func (b *Builder) leaveOut(copies, casts map[int]bool) {
@@ -474,6 +288,7 @@ func (b *Builder) leaveOut(copies, casts map[int]bool) {
 	var ms []int64
 	var sources, uuids []string
 	var parts [][]string
+	var olders []bool
 	for i, raw := range old.raw {
 		if copies[i] || casts[i] {
 			c.Stats.OwnerTurns--
@@ -497,11 +312,12 @@ func (b *Builder) leaveOut(copies, casts map[int]bool) {
 		sources = append(sources, b.sources[i])
 		uuids = append(uuids, b.uuids[i])
 		parts = append(parts, b.parts[i])
+		olders = append(olders, b.older[i])
 		buf.WriteString(Normalize(raw))
 		buf.WriteString(" ")
 	}
 	c.Stats.OwnerSessions = len(c.turns)
-	b.c, b.ms, b.sources, b.uuids, b.parts = c, ms, sources, uuids, parts
+	b.c, b.ms, b.sources, b.uuids, b.parts, b.older = c, ms, sources, uuids, parts, olders
 	b.buf.Reset()
 	b.buf.Write(buf.Bytes())
 }
@@ -1053,10 +869,14 @@ func (b *Builder) addTranscript(path string, f digest.Format) error {
 	if f == digest.Claude {
 		ref = "claude:" + transcript.Name(path)
 	}
+	var forkAt time.Time // a Claude Code fork's moment, from its first line
 	sc := bufio.NewScanner(fh)
 	sc.Buffer(make([]byte, 1<<20), 128<<20)
-	for sc.Scan() {
+	for first := true; sc.Scan(); first = false {
 		line := sc.Bytes()
+		if first && f == digest.Claude {
+			forkAt = claudeForkAt(line)
+		}
 		if f == digest.Pi {
 			if ref == "" {
 				if h, ok := digest.ReadPiHeader(line); ok && h.ID != "" {
@@ -1082,9 +902,10 @@ func (b *Builder) addTranscript(path string, f digest.Format) error {
 			turns, skipped := claudeUserTurns(line)
 			b.c.Stats.AgentTurns += skipped
 			if len(turns) > 0 {
-				at, id := LineTime(line), claudeLineUUID(line)
+				at := LineTime(line)
+				m := turnMeta{uuid: claudeLineUUID(line), older: !forkAt.IsZero() && at.Before(forkAt)}
 				for _, t := range turns {
-					b.addTurn("transcript", ref, t, at, id, nil)
+					b.addTurn("transcript", ref, t, at, m)
 				}
 			}
 			continue
@@ -1164,6 +985,24 @@ func claudeUserTurns(line []byte) (out []string, skipped int) {
 		}
 	}
 	return typedTexts(texts)
+}
+
+// claudeForkAt is the moment a Claude Code fork began, when line, its
+// transcript's first, says it is one: `{"type":"history-suppression",
+// "cause":"fork_inherit","ts":...}`, the turns it carries over older.
+func claudeForkAt(line []byte) time.Time {
+	if !bytes.Contains(line, []byte(`"fork_inherit"`)) {
+		return time.Time{}
+	}
+	var o struct {
+		Type  string          `json:"type"`
+		Cause string          `json:"cause"`
+		TS    json.RawMessage `json:"ts"`
+	}
+	if json.Unmarshal(line, &o) != nil || o.Type != "history-suppression" || o.Cause != "fork_inherit" {
+		return time.Time{}
+	}
+	return JSONTime(o.TS)
 }
 
 // claudeLineUUID is a Claude Code transcript line's uuid, "" when it has
