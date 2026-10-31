@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -92,8 +93,8 @@ func TestANameThreeFilesHoldTakesNoMark(t *testing.T) {
 		t.Fatalf("dedupe --names exited %d", code)
 	}
 	it := nameItemFor(t, r, "lantern-proxy-port")
-	if len(it.Allowed) != 0 {
-		t.Fatalf("allowed %v", it.Allowed)
+	if len(it.Allowed) != 0 || !it.Crowded || len(it.Also) != 1 || it.Also[0] == it.A.Path || it.Also[0] == it.B.Path {
+		t.Fatalf("allowed %v, crowded %v, also %v", it.Allowed, it.Crowded, it.Also)
 	}
 	if code := applyVerdicts(t, []map[string]string{{"id": it.ID, "a": it.A.Path, "b": it.B.Path, "mark": "keep", "keep": it.A.Path, "evidence": "x"}}); code == 0 {
 		t.Fatal("an agent marked a name three files hold")
@@ -273,5 +274,87 @@ func TestDedupeLeavesOutWhatItRetiresAndPointsNoChainWithNames(t *testing.T) {
 	live := &fact.Fact{Path: "user/deploy-by-tool.md", Meta: fact.Meta{Name: "deploy-by-tool", Scope: "user"}}
 	if ps := heldTwice([]*fact.Fact{derived, live}); len(ps) != 0 {
 		t.Fatalf("a derived fact made a pair: %v", ps)
+	}
+}
+
+// A copy retired into its own name never stands for the name again: not
+// when the owner then retires the file kept, and tacit resolve still takes
+// the name.
+func TestACopyRetiredIntoItsNameNeverStandsForIt(t *testing.T) {
+	r := nameFixture(t)
+	stubScrump(t)
+	if code := runDedupe([]string{"--names"}); code != 0 {
+		t.Fatalf("dedupe --names exited %d", code)
+	}
+	it := nameItemFor(t, r, "lantern-proxy-port")
+	if code := applyVerdicts(t, []map[string]string{{"id": it.ID, "a": it.A.Path, "b": it.B.Path, "mark": "keep", "keep": it.A.Path, "evidence": "Both say port 7781."}}); code != 0 {
+		t.Fatalf("review apply exited %d", code)
+	}
+	rs := &reviewServer{s: r.s}
+	if res, err := rs.setRetired(context.Background(), it.A.Path, true); err != nil || !res.Saved {
+		t.Fatalf("the owner's retire of the kept file: %+v %v", res, err)
+	}
+	if p, ok := findFact(r.clone, "lantern-proxy-port"); !ok || !strings.HasSuffix(filepath.ToSlash(p), it.A.Path) {
+		t.Errorf("the name reads as %s, want the kept file %s", p, it.A.Path)
+	}
+	rs.loadFacts()
+	if f := rs.facts["lantern-proxy-port"]; f == nil || f.Path != it.A.Path {
+		t.Errorf("the review server reads the name as %v", f)
+	}
+	if res, err := rs.undoLast(context.Background(), it.A.Path); err != nil || !res.Saved {
+		t.Errorf("the owner's undo of their retire: %+v %v", res, err)
+	}
+	if code := runResolve([]string{"conflict", "lantern-proxy-port", "deploy-by-tool"}); code == 2 {
+		t.Error("tacit resolve refuses the name after a keep")
+	}
+}
+
+// tacit app's actions on a file whose name another file holds name that
+// file: Retire sends the path the card opened, not the name.
+func TestTheAppActsOnTheFileItShowsForAName(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node")
+	}
+	r := nameFixture(t)
+	writeFact(t, r.clone, fact.Meta{Name: "solo-fact", Description: "One file holds this name", Type: "machine_fact", Scope: "user"}, "x\n")
+	r.commitIndex(r.clone, "a unique name")
+	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
+	rs := &reviewServer{s: r.s}
+	const path = "user/lantern-proxy-port.md"
+	d, err := rs.factDetail(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if solo, err := rs.factDetail(context.Background(), "solo-fact"); err != nil || solo.Ref != "solo-fact" || d.Ref != path {
+		t.Fatalf("refs %q and %q (%v)", d.Ref, solo.Ref, err)
+	}
+	raw, _ := json.Marshal(d)
+	script := `
+const fs = require("fs");
+const src = fs.readFileSync("reviewui/api.js", "utf8") + ";" + fs.readFileSync("reviewui/app.js", "utf8") + ";" + fs.readFileSync("reviewui/desk.js", "utf8");
+const els = {};
+const el = (id) => els[id] || (els[id] = { id, innerHTML: "", textContent: "", value: "", hidden: false, dataset: {}, style: {}, querySelectorAll: () => [], querySelector: () => null, contains: () => false, addEventListener() {}, removeAttribute() {}, setAttribute() {}, focus() { document.activeElement = this; }, scrollIntoView() {} });
+const document = { querySelector: () => ({ content: "tok" }), querySelectorAll: () => [], getElementById: el, addEventListener() {}, documentElement: { dataset: {} }, body: { dataset: {}, style: {} }, activeElement: null };
+const D = ` + string(raw) + `;
+const calls = [];
+const answer = (m) => m === "Queue" ? { items: [], host: "h" } : m === "Meta" ? { host: "h", scopes: ["user"], repos: [], types: [], kinds: [], owned_types: [], facts: 3, inbox: 0 }
+  : m === "Fact" ? D : m === "Retire" ? { saved: true } : { events: [], rows: [] };
+const fetchStub = async (url, opts) => { const m = String(url).split("/").pop(); calls.push({ m, args: opts && opts.body ? JSON.parse(opts.body) : null }); return { ok: true, json: async () => ({ result: answer(m) }) }; };
+const body = src + ";return (async () => {" + process.argv[1] + "})()";
+new Function("document", "localStorage", "matchMedia", "fetch", "els", "calls", body)(document, { setItem() {}, getItem() {} }, () => ({ matches: false }), fetchStub, els, calls).then((o) => console.log(o), (e) => { console.error(e); process.exit(1); });
+`
+	checks := `
+  await new Promise((r) => setTimeout(r, 30));
+  desk.detail = D; desk.mode = "show";
+  await retire(true);
+  return JSON.stringify(calls.filter((c) => c.m === "Retire").map((c) => c.args[0]));
+`
+	out, err := exec.Command(node, "-e", script, checks).CombinedOutput()
+	if err != nil {
+		t.Fatalf("node: %v\n%s", err, out)
+	}
+	if got := strings.TrimSpace(string(out)); got != `["`+path+`"]` {
+		t.Fatalf("Retire was sent %s, want the file %s", got, path)
 	}
 }

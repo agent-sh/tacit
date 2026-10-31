@@ -182,10 +182,10 @@ func (rs *reviewServer) nameItems() []reviewItem {
 	// The files each name takes part in: live, or retired into the name
 	// itself. With more than two, `superseded_by` the name no longer says
 	// which file replaced a copy.
-	held := map[string]int{}
+	held := map[string][]string{}
 	for _, f := range rs.byPath {
 		if (f.Meta.SupersededBy == "" && f.Meta.Retired == "") || f.Meta.SupersededBy == f.Meta.Name {
-			held[f.Meta.Name]++
+			held[f.Meta.Name] = append(held[f.Meta.Name], f.Path)
 		}
 	}
 	seen := map[string]bool{}
@@ -211,7 +211,15 @@ func (rs *reviewServer) nameItems() []reviewItem {
 			it.Mark = markOf(d.Action)
 			it.Stale = it.Mark != "" && it.State != it.Mark
 		}
-		it.crowded = held[r.name] > 2
+		if ps := held[r.name]; len(ps) > 2 {
+			it.Crowded = true
+			for _, p := range ps {
+				if p != r.a && p != r.b {
+					it.Also = append(it.Also, p)
+				}
+			}
+			sort.Strings(it.Also)
+		}
 		it.Allowed = rs.allowedName(it)
 		it.NeedsOwner = it.State != "gone" && (it.Decision == nil || (it.Decision.By == "agent" && it.Stale))
 		out = append(out, it)
@@ -238,7 +246,7 @@ func (rs *reviewServer) allowedName(it reviewItem) []string {
 	if it.Decision != nil && !(it.Decision.By == "agent" && it.Stale) {
 		return []string{"reopen"}
 	}
-	if it.State == "gone" || it.crowded {
+	if it.State == "gone" || it.Crowded {
 		return []string{} // a crowded name is the owner's to sort out, file by file, in tacit app
 	}
 	out := []string{"both"}

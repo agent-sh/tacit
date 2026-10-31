@@ -152,9 +152,11 @@ type reviewItem struct {
 	NeedsOwner bool `json:"needs_owner"`
 	// Notes are what the owner wrote on this finding without answering it.
 	Notes []ownerNote `json:"notes,omitempty"`
-	// crowded: a name finding whose name more than its two files hold
-	// (names_review.go). No mark can say which file replaced which.
-	crowded bool
+	// Crowded: a name finding whose name more than its two files take part
+	// in (names_review.go). No mark can say which file replaced which, so the
+	// page lists the others (Also) and offers no answer.
+	Crowded bool     `json:"crowded,omitempty"`
+	Also    []string `json:"also,omitempty"`
 }
 
 var (

@@ -366,7 +366,7 @@ func newRotator(ctx context.Context, s *store.Store, local bool) (*rotator, erro
 			continue
 		}
 		r.facts = append(r.facts, f)
-		if r.byName[f.Meta.Name] == nil || (local && overlay.IsCurated(f.Path)) {
+		if old := r.byName[f.Meta.Name]; old == nil || (local && overlay.IsCurated(f.Path)) || curatedRank(f) < curatedRank(old) {
 			r.byName[f.Meta.Name] = f
 		}
 	}

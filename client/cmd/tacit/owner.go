@@ -50,6 +50,9 @@ type factSnap struct {
 	inbox    map[string][]*fact.Fact // name -> inbox notes, oldest first
 	back     map[string][]string     // name -> curated facts that link to it
 	unparsed int
+	// held counts the curated files of each name: more than one, and a
+	// fact's actions name its file (factDetail.Ref).
+	held map[string]int
 }
 
 // snapshot reads the clone, or returns the read of the same HEAD. A write
@@ -65,7 +68,7 @@ func (rs *reviewServer) snapshot(ctx context.Context) (*factSnap, error) {
 	if err != nil {
 		return nil, err
 	}
-	sn := &factSnap{head: head, all: all, curated: map[string]*fact.Fact{}, byPath: map[string]*fact.Fact{}, inbox: map[string][]*fact.Fact{}, back: map[string][]string{}, unparsed: len(perrs)}
+	sn := &factSnap{head: head, all: all, curated: map[string]*fact.Fact{}, byPath: map[string]*fact.Fact{}, inbox: map[string][]*fact.Fact{}, back: map[string][]string{}, unparsed: len(perrs), held: map[string]int{}}
 	for _, f := range all {
 		sn.byPath[f.Path] = f
 		if f.InInbox() {
@@ -73,6 +76,7 @@ func (rs *reviewServer) snapshot(ctx context.Context) (*factSnap, error) {
 			continue
 		}
 		putByName(sn.curated, f)
+		sn.held[f.Meta.Name]++
 		for _, l := range f.Links() {
 			sn.back[l] = append(sn.back[l], f.Meta.Name)
 		}
@@ -448,6 +452,9 @@ type undoView struct {
 
 type factDetail struct {
 	factView
+	// Ref is what the page sends to act on this fact: its name, or its store
+	// path when it is an inbox note or another curated file holds its name.
+	Ref          string      `json:"ref"`
 	Host         string      `json:"host"`
 	Session      string      `json:"session,omitempty"`
 	ImportedFrom string      `json:"imported_from,omitempty"`
@@ -511,6 +518,10 @@ func (rs *reviewServer) factDetail(ctx context.Context, ref string) (*factDetail
 		CanMine:    !f.InInbox() && !isRuling(f) && !isGenerated(f) && f.Meta.Retired == "" && f.Meta.SupersededBy == "",
 		CanNotMine: believed(f) && f.Meta.Retired == "" && f.Meta.SupersededBy == "",
 		NotMine:    f.NotMine && !isRuling(f) && !f.InInbox()}
+	d.Ref = f.Meta.Name
+	if f.InInbox() || sn.held[f.Meta.Name] > 1 {
+		d.Ref = f.Path
+	}
 	if f.WordsRecorded && !isRuling(f) {
 		d.RecordedWords = f.Meta.Source.OwnerWords
 	}

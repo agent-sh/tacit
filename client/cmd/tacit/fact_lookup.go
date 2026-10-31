@@ -17,6 +17,10 @@ const (
 	rankLive = iota
 	rankSuperseded
 	rankRetired
+	// rankCopy is a curated file retired into its own name: the copy an
+	// answer to a name two files held retired (names_review.go). The name
+	// stands for the other file, whatever became of it since.
+	rankCopy
 	rankNote
 	rankUnread
 )
@@ -37,6 +41,8 @@ func (f nameFile) state() string {
 		return "superseded"
 	case rankRetired:
 		return "retired"
+	case rankCopy:
+		return "a copy retired into this name"
 	case rankNote:
 		return "an unreviewed note"
 	}
@@ -99,9 +105,11 @@ func factFiles(storeDir, localDir, name string) []nameFile {
 }
 
 // curatedRank ranks a curated fact for a map by name as rankOf does: live,
-// then superseded, then retired.
+// then superseded, then retired, then a copy retired into its own name.
 func curatedRank(f *fact.Fact) int {
 	switch {
+	case f.Meta.SupersededBy == f.Meta.Name:
+		return rankCopy
 	case f.Meta.SupersededBy != "":
 		return rankSuperseded
 	case f.Meta.Retired != "":
@@ -111,11 +119,11 @@ func curatedRank(f *fact.Fact) int {
 }
 
 // putByName sets m[f's name] to f unless m holds a file of that name that
-// ranks above it, so a name two files hold reads as its live curated file
-// (a copy retired into its own name never stands for it). Among files of one
-// rank the last one put wins, as a plain assignment did.
+// ranks as high or higher, so a name two files hold reads as factFiles reads
+// it: its live curated file, and a copy retired into the name never stands
+// for it; within a rank the first file put, in the walk's order.
 func putByName(m map[string]*fact.Fact, f *fact.Fact) {
-	if old := m[f.Meta.Name]; old == nil || curatedRank(f) <= curatedRank(old) {
+	if old := m[f.Meta.Name]; old == nil || curatedRank(f) < curatedRank(old) {
 		m[f.Meta.Name] = f
 	}
 }
@@ -133,6 +141,8 @@ func rankOf(p, rel, name string, note bool) int {
 		return rankUnread
 	case note:
 		return rankNote
+	case f.Meta.SupersededBy == name:
+		return rankCopy
 	case f.Meta.SupersededBy != "":
 		return rankSuperseded
 	case f.Meta.Retired != "":

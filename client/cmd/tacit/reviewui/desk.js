@@ -212,6 +212,9 @@ function blankSheet() {
 // --- one fact ---
 
 let openSeq = 0;
+// What to send to act on the fact open: its file when a note or another
+// curated file holds its name, else its name (factDetail.ref).
+const refOf = (d) => d.ref || (d.inbox ? d.path : d.name);
 async function openFact(ref, opts = {}) {
   const seq = ++openSeq;
   try {
@@ -303,7 +306,7 @@ function factSheet() {
     <details class="more" id="fact-more"><summary>Details</summary>${detailsHTML(d)}</details>`;
   const on = (id, fn) => { const b = $(id); if (b) b.onclick = fn; };
   on("act-edit", () => startEdit()); on("act-retire", () => retire(true)); on("act-restore", () => retire(false));
-  on("act-undo", () => undo()); on("act-promote", () => promote()); on("act-replace", () => replaceWith()); on("act-ismine", () => mine()); on("act-notmine", () => notMine()); on("act-undonotmine", () => undoNotMine(d.name));
+  on("act-undo", () => undo()); on("act-promote", () => promote()); on("act-replace", () => replaceWith()); on("act-ismine", () => mine()); on("act-notmine", () => notMine()); on("act-undonotmine", () => undoNotMine(refOf(d)));
   // What git shows is read when the details are opened: it is slow, and most visits do not need it.
   const more = $("fact-more");
   if (more && more.addEventListener) more.addEventListener("toggle", () => { if (more.open) factTimeline(d); });
@@ -315,7 +318,7 @@ async function factTimeline(d) {
   sideNouns = { A: "this fact", B: "this fact", "A,B": "this fact" };
   if (hit && Date.now() - hit.at < hit.ttl) { if (el()) paintTimeline(hit.data, hit.error, el()); return; }
   try {
-    const t = await tacitCall("FactTimeline", d.inbox ? d.path : d.name);
+    const t = await tacitCall("FactTimeline", refOf(d));
     if (!t || !Array.isArray(t.events)) throw new Error("the answer had no timeline in it");
     ftCache.set(key, { at: Date.now(), ttl: t.incomplete ? 20000 : 600000, data: t });
     if (el()) paintTimeline(t, null, el());
@@ -426,17 +429,18 @@ async function saveEdit() {
   await guarded(async () => {
     try {
       const { base, over, ...sent } = draft;
-      const r = await tacitCall("Edit", d.inbox ? d.path : d.name, sent);
+      const r = await tacitCall("Edit", refOf(d), sent);
       if (r.lint && r.lint.length) { problem("e-problem", r.note, r.lint); slip(r.note, { error: true }); return; }
       if (r.changed) {
         // Show the new version beside the draft, which keeps its own rev.
-        desk.detail = await tacitCall("Fact", d.name);
+        desk.detail = await tacitCall("Fact", refOf(d));
         slip(r.note, { error: true }); editSheet(); return;
       }
       desk.drafts.delete(d.name); desk.mode = "show";
-      const saved = r.name || d.name;
+      // A file whose name another file holds is named by its path.
+      const saved = d.ref && d.ref !== d.name ? d.ref : (r.name || d.name);
       slip(r.saved ? `Saved. ${r.note || ""}`.trim() : (r.note || "Nothing changed."), r.saved ? { undo: () => undo(saved), label: "Undo (u)" } : {});
-      await refreshAfterWrite(r.name || d.name);
+      await refreshAfterWrite(saved);
     } catch (e) { problem("e-problem", e.message + ". Your draft is kept."); fail(e); }
   });
 }
@@ -491,9 +495,9 @@ async function mine() {
   const d = desk.detail; if (!d || !d.can_mine || desk.mode !== "show") return;
   await guarded(async () => {
     try {
-      const r = await tacitCall("Mine", d.name);
+      const r = await tacitCall("Mine", refOf(d));
       slip(r.saved ? "Now your rule. Agents read it as a rule in force." : (r.note || "Nothing changed."));
-      await refreshAfterWrite(d.name);
+      await refreshAfterWrite(refOf(d));
     } catch (e) { fail(e); }
   });
 }
@@ -511,7 +515,7 @@ async function undoNotMine(name) {
 // Not mine: a fact agents believe the owner prefers is an agent's, not their rule.
 async function notMine() {
   const d = desk.detail; if (!d || !d.can_not_mine || desk.mode !== "show") return;
-  const name = d.name;
+  const name = refOf(d);
   await guarded(async () => {
     try {
       const r = await tacitCall("NotMine", name);
@@ -524,9 +528,9 @@ async function retire(yes) {
   const d = desk.detail; if (!d || d.inbox || desk.mode !== "show" || !(yes ? d.can_retire : d.can_restore)) return;
   await guarded(async () => {
     try {
-      const r = await tacitCall(yes ? "Retire" : "Restore", d.name);
-      slip(r.saved ? (yes ? "Retired. It stays in history and stops reaching agents." : "Restored. It reaches agents again.") : (r.note || "Nothing changed."), r.saved ? { undo: () => undo(d.name), label: "Undo (u)" } : {});
-      await refreshAfterWrite(d.name);
+      const r = await tacitCall(yes ? "Retire" : "Restore", refOf(d));
+      slip(r.saved ? (yes ? "Retired. It stays in history and stops reaching agents." : "Restored. It reaches agents again.") : (r.note || "Nothing changed."), r.saved ? { undo: () => undo(refOf(d)), label: "Undo (u)" } : {});
+      await refreshAfterWrite(refOf(d));
     } catch (e) { fail(e); }
   });
 }
@@ -534,7 +538,7 @@ async function retire(yes) {
 // shown for, or the one open. It asks the store first, so a slip clicked after
 // moving on never undoes another fact, and nothing runs when undo is not open.
 async function undo(name) {
-  name = name || (desk.detail && !desk.detail.inbox ? desk.detail.name : "");
+  name = name || (desk.detail && !desk.detail.inbox ? refOf(desk.detail) : "");
   if (!name) return;
   await guarded(async () => {
     try {
@@ -647,7 +651,7 @@ function cancelRuling() {
 // scope; saving replaces this fact with the new rule in one commit.
 function replaceWith() {
   const d = desk.detail; if (!d || !d.can_replace || desk.mode !== "show") return;
-  openRuling({ body: d.body || d.description, scope: d.scope, repo: repoOfScope(d.scope), replaces: d.name });
+  openRuling({ body: d.body || d.description, scope: d.scope, repo: repoOfScope(d.scope), replaces: refOf(d) });
 }
 function promote() {
   const d = desk.detail; if (!d || !d.inbox) return;
@@ -842,10 +846,10 @@ document.addEventListener("keydown", (e) => {
     case "End": if (t.closest("#facts")) { const L = desk.lists[desk.view]; L.cur = L.rows.length - 1; moveFact(0); } else return; break;
     case "e": startEdit(); break;
     case "r": if (d && d.can_restore) retire(false); else retire(true); break;
-    case "u": if (d && d.undo && d.undo.can) undo(d.name); else return; break;
+    case "u": if (d && d.undo && d.undo.can) undo(refOf(d)); else return; break;
     case "p": promote(); break;
     case "m": if (d && d.can_mine) mine(); else return; break;
-    case "x": if (d && d.can_not_mine) notMine(); else if (d && d.not_mine && desk.mode === "show") undoNotMine(d.name); else return; break;
+    case "x": if (d && d.can_not_mine) notMine(); else if (d && d.not_mine && desk.mode === "show") undoNotMine(refOf(d)); else return; break;
     case "d": lights(); break;
     case "Escape": if (desk.back && desk.back !== desk.view) setView(desk.back); else return; break;
     default: return;

@@ -76,7 +76,9 @@ const KINDS = {
     note: "Two facts from one curator run that read alike." },
   // Two files hold one name: a copy a tool outside tacit left in a second folder.
   "name":               { label: "One name, two files", q: "Two files hold this fact's name. Which one stands?", dated: true,
-    note: "A name belongs to one fact. A tool outside tacit left a second file of this one. Keeping one retires the other." },
+    note: (s, it) => it && it.crowded
+      ? `More files hold this name: ${(it.also || []).join(", ")}. No answer here can say which file replaced which. Open each file from its card and retire the copies.`
+      : "A name belongs to one fact. A tool outside tacit left a second file of this one. Keeping one retires the other." },
   // tacit app only: one of your rules links to a fact that is not there.
   "link":               { label: "Broken links in your rules", q: "Your rule links to a fact that does not exist." },
   // One fact, not a pair: git deleted something it names after the day it was last current.
@@ -113,7 +115,7 @@ function sides(it) {
   return K.roles ? { a: "older", b: "newer", aHead: "Older", bHead: "Newer" } : { a: "first", b: "second", aHead: "First", bHead: "Second" };
 }
 const question = (it) => { const K = KINDS[it.kind] || {}; return typeof K.q === "function" ? K.q(sides(it)) : K.q || ""; };
-const kindNote = (it) => { const K = KINDS[it.kind] || {}; return typeof K.note === "function" ? K.note(sides(it)) : K.note || ""; };
+const kindNote = (it) => { const K = KINDS[it.kind] || {}; return typeof K.note === "function" ? K.note(sides(it), it) : K.note || ""; };
 // The older fact is always the left card; when the data has it on the right, the cards and the arrows swap.
 const flipped = (it) => !it.single && !!KINDS[it.kind] && sides(it).a === "newer";
 // A fact as a sentence names it: "your rule", "the saved number", "the older fact".
