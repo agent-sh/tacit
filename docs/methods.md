@@ -52,7 +52,7 @@ The proof ledger preserves evidence when the original transcript disappears. The
 
 The guard is shared by curation, verification, staleness checks, results and link repair. An agent cannot retire or supersede a protected ruling. The owner reviews the proposed change in the app.
 
-Some of the owner's quoted words are instructions inside the task at hand ("lets create the bucket as a draft"): they open with a task verb or a reply, are a numbered answer or a question, and hold no word that generalizes (if, when, any, always, never, instead ...). Such a ruling stays protected, and the owner's words stay on it; at the prompt it is delivered as an ordinary fact rather than a rule, and at session start it comes right after the standing rules. A rule the owner wrote in the app is never treated this way.
+Some of the owner's quoted words are instructions inside the task at hand ("open the PR as a draft"): they open with a task verb or a reply, are a numbered answer or a question, and hold no word that generalizes (if, when, any, always, never, instead ...). Such a ruling stays protected, and the owner's words stay on it; at the prompt it is delivered as an ordinary fact rather than a rule, and at session start it comes right after the standing rules. A rule the owner wrote in the app is never treated this way.
 
 ## Retrieval and delivery
 
@@ -128,7 +128,7 @@ For a real evaluation:
 5. Measure outcomes as well as retrieval. Keep task correctness, ruling violations, tool calls, tokens, latency and cost. Repeat runs and retain each cell, not just the aggregate. Cache state can dominate per-call dollars, so token and tool counts matter too.
 6. Evaluate the dreamer against facts that were never written, and the verifier against owner-labelled findings. Report missed facts and wrong retirements as well as successes. Keep held-out agreement separate from tuning agreement.
 
-[eval/README.md](../eval/README.md) maps the scripts, flags, dependencies and model calls. [VALUE.md](../eval/VALUE.md) keeps the original measurements, sample sizes and negative results. Original store contents, transcripts and task answers stay private. You can repeat the methods on your own data; you cannot recreate those exact results from the synthetic sample.
+[eval/README.md](../eval/README.md) maps the scripts, flags, dependencies and model calls. [VALUE.md](../eval/VALUE.md) keeps each measurement's method, result and decision, the negative results included. Original store contents, transcripts, task answers and the numbers measured on them stay private. You can repeat the methods on your own data; you cannot recreate those exact results from the synthetic sample.
 
 ## Choosing the model runner
 

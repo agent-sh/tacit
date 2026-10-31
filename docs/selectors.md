@@ -6,10 +6,10 @@ Code decides first. Scope, repository, lifecycle and the per-session limits stay
 
 ## Recommendation
 
-Leave it off. No provider is the default, and the local selection is what we recommend: in 144 live agent sessions on one owner's history, the same store with Jev scored 0.80 and without a selector 0.82, and per task 2 went each way and 20 tied (eval/VALUE.md, "The prompt selector in live sessions"). A model selector adds a network call of up to 2 s and a cost per prompt. If you want one anyway:
+Leave it off. No provider is the default, and the local selection is what we recommend: in live agent sessions on one owner's history, the same store scored no better with Jev than without a selector, and nearly every task tied (eval/VALUE.md, "The prompt selector in live sessions"). A model selector adds a network call of up to 2 s and a cost per prompt. If you want one anyway:
 
 - **Jev** (TypeSafe, hosted). The most accurate and fastest model we measured for this.
-- **Amazon Nova Micro on Bedrock**, when the data should stay in your AWS account. It never selected a wrong fact in our runs, but it kept fewer useful ones than Jev (2 of 9 on the development prompts, 4 of 6 on the sealed test; Jev 8 and 5), and it was about 0.3 s slower. If 1.5-2 s per prompt is acceptable, Claude Sonnet 5.5 or Haiku 5.5 on Bedrock matched Jev on the development prompts (they were not run on the sealed test).
+- **Amazon Nova Micro on Bedrock**, when the data should stay in your AWS account. It never selected a wrong fact in our runs, but it kept fewer useful ones than Jev on both the development prompts and the sealed test, and it was about 0.3 s slower. If 1.5-2 s per prompt is acceptable, Claude Sonnet 5.5 or Haiku 5.5 on Bedrock matched Jev on the development prompts (they were not run on the sealed test).
 
 Any other model can be plugged in: a System One-compatible server, any Bedrock model, or any OpenAI-compatible chat endpoint. Pick its threshold on your own labelled prompts (see [Measure your own](#measure-your-own)).
 
@@ -64,29 +64,29 @@ Endpoints must use HTTPS, except a server on `localhost`, `127.0.0.1` or `::1`. 
 
 ## What we measured (2026-10)
 
-One owner's private store and real prompts. The data is private; the method is in [eval/JEV.md](../eval/JEV.md) and [eval/DELIVERY.md](../eval/DELIVERY.md), and the tools are in `eval/cpu` and `eval/selection`. Each prompt has a frozen pool of up to 6 curated and 1 computed candidate. Labels mark which candidates are useful and which are wrong. A threshold was picked on the calibration prompts (12), then applied unchanged to the development prompts (19). The sealed test prompts (20) were opened once, after every choice was frozen. Latency is the median round trip for one prompt, from one laptop on a corporate network, so network time is included.
+One owner's private store and real prompts. The data, the labels and the counts measured on them stay private; the method is in [eval/JEV.md](../eval/JEV.md) and [eval/DELIVERY.md](../eval/DELIVERY.md), and the tools are in `eval/cpu` and `eval/selection`. Each prompt has a frozen pool of up to 6 curated and 1 computed candidate. Labels mark which candidates are useful and which are wrong. A threshold was picked on the calibration prompts, then applied unchanged to the development prompts. The sealed test prompts were opened once, after every choice was frozen. Latency is the median round trip for one prompt, from one laptop, so network time is included.
 
-Development prompts, useful / wrong facts selected:
+Development prompts, useful and wrong facts kept:
 
 | Selector | Useful | Wrong | Median latency |
 |---|---|---|---|
-| Today's lexical selection | 9 | 8 | (local) |
-| **Jev** | 8 | 0 | 0.41 s |
-| **Amazon Nova Micro** (Bedrock) | 2 | 0 | 0.69 s |
-| Claude Sonnet 5.5 / Haiku 5.5 (Bedrock) | 9 | 0 | 1.5 / 2.0 s |
-| GPT-6 Luna (Bedrock) | 9 | 1 | 1.3 s |
-| Amazon Nova 2 Lite (Bedrock) | 9 | 1 | 1.4 s |
-| Cohere Rerank 3.5 / Amazon Rerank 1.0 (Bedrock) | 0-2 | 0-2 | 0.44 / 0.58 s |
-| Local CPU cross-encoders (ettin 68M, gte-modernbert) | 2-3 | 0-1 | 0.07-0.12 s |
-| Strands Decider 2B, d1-3B (local, laptop GPU) | 3-7 | 0-8 | 1.6-2.9 s (21 s on CPU) |
+| Today's lexical selection | most | many | (local) |
+| **Jev** | most | none | 0.41 s |
+| **Amazon Nova Micro** (Bedrock) | few | none | 0.69 s |
+| Claude Sonnet 5.5 / Haiku 5.5 (Bedrock) | most | none | 1.5 / 2.0 s |
+| GPT-6 Luna (Bedrock) | most | rare | 1.3 s |
+| Amazon Nova 2 Lite (Bedrock) | most | rare | 1.4 s |
+| Cohere Rerank 3.5 / Amazon Rerank 1.0 (Bedrock) | few | few | 0.44 / 0.58 s |
+| Local CPU cross-encoders (ettin 68M, gte-modernbert) | few | rare | 0.07-0.12 s |
+| Strands Decider 2B, d1-3B (local, laptop GPU) | some | none to many | 1.6-2.9 s (21 s on CPU) |
 
-Sealed test prompts, with the thresholds frozen beforehand (6 useful facts were findable):
+Sealed test prompts, with the thresholds frozen beforehand:
 
 | Selector | Useful | Wrong |
 |---|---|---|
-| Today's lexical selection | 5 | 2 |
-| **Jev** | **5** | **0** |
-| **Amazon Nova Micro** | 4 | 0 |
+| Today's lexical selection | most | some |
+| **Jev** | **as many** | **none** |
+| **Amazon Nova Micro** | fewer | none |
 
 What this means:
 
@@ -96,7 +96,7 @@ What this means:
 - Code rules: four were tried in front of the models. Only the "no memory needed" rule held on the sealed test and ships. Rules that restricted by repository or file mentions removed useful facts on new prompts ([eval/DELIVERY.md](../eval/DELIVERY.md#code-before-the-scorer-2026-10-17)).
 - The sets are small: one or two facts is within noise. Treat the tables as a ranking, not a guarantee for your store.
 
-Cost per million prompts, from the tokens these runs used and the published prices in October 2026: Jev about $40 (941 input tokens per prompt, $0.042 per million input tokens, output free); Nova Micro about $23 (474 input and 43 output tokens; $0.035 and $0.14 per million). Both are a few dollars a month for a busy user.
+Cost follows from the request size (the rubric, the prompt and the candidates' summaries) and the published prices in October 2026: Jev $0.042 per million input tokens, output free; Nova Micro $0.035 per million input and $0.14 per million output tokens. Both are a few dollars a month for a busy user.
 
 ## Measure your own
 

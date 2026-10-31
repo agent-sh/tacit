@@ -5,7 +5,7 @@ Issues and pull requests are welcome. A bug report with the command, what it pri
 ## Ground rules
 
 - **SPEC.md is the contract.** The client, the server and the curator follow it. A change in behavior changes SPEC.md in the same pull request.
-- **Measure before you add.** tacit's retrieval and curation choices each have a number behind them in `eval/VALUE.md`, including the ones that lost. A new ranker, prompt or delivery rule comes with its measurement against the current one, and the method in `eval/`. A change that does not beat the current behavior does not ship, and its code does not stay.
+- **Measure before you add.** tacit's retrieval and curation choices each have a measurement behind them in `eval/VALUE.md`, including the ones that lost. A new ranker, prompt or delivery rule comes with its measurement against the current one, and the method in `eval/`. A change that does not beat the current behavior does not ship, and its code does not stay.
 - **A test proves something only if it failed before the change and passes after it.** Prefer an integration test of the behavior over unit tests of internals.
 - **Fail closed on secrets, fail open on delivery.** Redaction that cannot run stops the write. A hook that cannot reach the store prints nothing and exits 0.
 - **Never put real data in the repo.** No facts from a real store, no transcripts, no hostnames, no keys. Test fixtures are synthetic.

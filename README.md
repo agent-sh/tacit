@@ -259,13 +259,13 @@ For background work, `tacit install dream` (the 4-hour dreamer and the 10-minute
 
 ### Upgrading a shared store to folder records
 
-Folder records, `areas/` and `topics/`, overviews and `last_checked` form store format 1. A binary from before it reads such a store wrong, so nothing writes them until the store holds the format marker. Install the new binary on every machine that reads the store first (`tacit doctor` shows each machine's format and the marker), then set the marker once with `tacit format --set`. The assessment, migration, overviews and rotation start with the next curate and maintain runs. The rotation checks every fact that is due unless `TACIT_ROTATION_MAX` is set; its cost per fact is logged in `rotation.jsonl` in the state directory (about $0.01 a fact with Opus in our measurement, eval/VALUE.md).
+Folder records, `areas/` and `topics/`, overviews and `last_checked` form store format 1. A binary from before it reads such a store wrong, so nothing writes them until the store holds the format marker. Install the new binary on every machine that reads the store first (`tacit doctor` shows each machine's format and the marker), then set the marker once with `tacit format --set`. The assessment, migration, overviews and rotation start with the next curate and maintain runs. The rotation checks every fact that is due unless `TACIT_ROTATION_MAX` is set; its cost per fact is logged in `rotation.jsonl` in the state directory (measured in eval/VALUE.md).
 
 ## What we measured
 
 The initial evaluation uses one owner's private store and Claude Code/Codex sessions. Results cover that workload; the original data is private. The scripts and methods are available to run on your own data.
 
-Those measurements shaped the client: lexical retrieval beat the dense variants tested, splitting notes into individual facts improved delivery, and larger context blocks cost more without helping. The verifier remains limited: in the held-out sample it agreed with the owner on 3 of 13 findings and missed 8 of 10 retirements. Human review remains part of the method.
+Those measurements shaped the client: lexical retrieval beat the dense variants tested, splitting notes into individual facts improved delivery, and larger context blocks cost more without helping. The verifier remains limited: in the held-out sample it agreed with the owner on a minority of findings and missed most of the owner's retirements. Human review remains part of the method.
 
 [Full measurements](eval/VALUE.md) · [Grep baseline](eval/BASELINE.md) · [Run the synthetic sample](eval/README.md#run-the-sample)
 
