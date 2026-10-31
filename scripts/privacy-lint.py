@@ -19,8 +19,9 @@ This checks the shapes it came in as:
                 project folder -home-<user>; placeholder users are allowed
   denied        a word of the private deny list (host names, project names),
                 read from --deny FILE, $TACIT_PRIVACY_DENY (one per line, or
-                comma separated) and privacy-deny.txt in tacit's config
-                directory when it exists. The list stays out of the
+                comma separated) and $XDG_CONFIG_HOME/tacit/privacy-deny.txt
+                (else ~/.config/tacit/privacy-deny.txt), every one that is
+                there, merged. The list stays out of the
                 repository; CI reads it from a secret. Without one the rule
                 is skipped, unless --require-deny makes that an error.
 
