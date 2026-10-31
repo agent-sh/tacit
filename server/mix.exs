@@ -24,7 +24,7 @@ defmodule TacitServer.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:bandit, "~> 1.12"},
+      {:bandit, "~> 1.14 and >= 1.14.1"},
       {:plug, "~> 1.20"},
       {:phoenix_pubsub, "~> 2.4"},
       {:exqlite, "~> 0.42"},
