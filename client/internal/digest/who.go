@@ -529,6 +529,10 @@ var InjectedNotices = []string{
 	// A wake loop's prompt, which a program types into a person's Codex
 	// session (310 in 30 days of the owner's turns, 2026-10-30).
 	"Wake nonce=",
+	// A program's prompt that says what it is ("Automated <job> wake
+	// requested ..."), typed into a person's session the same way. A person
+	// writes in lower case; no turn of theirs opens so.
+	"Automated ",
 	"The app was quit while you were working",
 	"The user moved this existing Relay conversation to you",
 }

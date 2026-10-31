@@ -198,12 +198,15 @@ func TestTurnPiecesPastesAndWakePrompts(t *testing.T) {
 	if len(lines) != 2 || !strings.HasPrefix(lines[0], "P: <pasted_content") || !strings.HasPrefix(lines[1], "U: read this") || strings.Contains(lines[1], "cache key") {
 		t.Errorf("digest of a turn with a paste: %q", lines)
 	}
-	for _, wake := range []string{"Wake nonce=7f3a9c: check the queue and report back", "  Wake nonce=1\nstill there?"} {
+	for _, wake := range []string{"Wake nonce=7f3a9c: check the queue and report back", "  Wake nonce=1\nstill there?",
+		"Automated nightly supervision wake requested by the scheduler. First write the ack file, then check the queue."} {
 		if ps := TurnPieces(wake); len(ps) != 1 || ps[0].Who != Harness {
 			t.Errorf("wake prompt %q: %+v", wake, ps)
 		}
 	}
-	if own := OwnerPieces(TurnPieces("the wake nonce= line in the log is the loop, ignore it")); len(own) != 1 {
-		t.Errorf("the words inside their own sentence: %q", own)
+	for _, said := range []string{"the wake nonce= line in the log is the loop, ignore it", "automated tests fail on the cache path again"} {
+		if own := OwnerPieces(TurnPieces(said)); len(own) != 1 {
+			t.Errorf("the words inside their own sentence %q: %q", said, own)
+		}
 	}
 }

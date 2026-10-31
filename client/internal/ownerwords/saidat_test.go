@@ -22,8 +22,10 @@ func TestSaidAtIsTheOwnersTurn(t *testing.T) {
 	t.Setenv("PI_CODING_AGENT_DIR", "")
 	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
 	proj := filepath.Join(home, ".claude", "projects", "-home-u-projects")
+	// Each line its own uuid, as Claude Code writes them: a uuid two
+	// transcripts share is one turn copied (a fork's).
 	claude := func(at, text string) string {
-		return `{"type":"user","entrypoint":"cli","sessionId":"c1","cwd":"/home/u/projects","origin":{"kind":"human"},"message":{"content":"` + text + `"},"uuid":"u","timestamp":"` + at + `"}`
+		return `{"type":"user","entrypoint":"cli","sessionId":"c1","cwd":"/home/u/projects","origin":{"kind":"human"},"message":{"content":"` + text + `"},"uuid":"u-` + at + `","timestamp":"` + at + `"}`
 	}
 	writeFile(t, filepath.Join(proj, "c1.jsonl"), strings.Join([]string{
 		claude("2026-09-03T09:00:00.000Z", "should we never cache the checkout page at the edge?"),
