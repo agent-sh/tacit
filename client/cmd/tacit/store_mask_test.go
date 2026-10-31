@@ -15,9 +15,10 @@ import (
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
-// realRedact gives the test the store's own redactor, scrump through
-// digest.RedactAllContext (the stand-in of stubScrump where scrump is
-// absent), in place of the suite's canaryRedact.
+// realRedact gives the test the store's own redactor, digest.RedactAllContext,
+// in place of the suite's canaryRedact. It runs the scrump first on PATH:
+// after stubScrump, the stand-in off Windows (internal/store's mask tests
+// run the real one).
 func realRedact(t *testing.T) {
 	t.Helper()
 	prev := store.Redact
@@ -30,8 +31,8 @@ func realRedact(t *testing.T) {
 // through a path that did not mask it, and the split copied the key into the
 // fact's body. Every store write masks what it adds (SPEC.md, "Every write is
 // masked"), so the fact the split writes holds no key, however its note came
-// in. The key is synthetic; the canary part is the one the stand-in scrump
-// masks where the real one is absent.
+// in. The key is synthetic; its canary part is what stubScrump's stand-in
+// masks, which this test runs on.
 func TestTheCuratorWritesNoKeyItsNoteBroughtIn(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell CLI fixture")
