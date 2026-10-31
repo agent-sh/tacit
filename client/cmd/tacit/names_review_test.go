@@ -231,6 +231,7 @@ func TestDedupeNamesRaisesTheNamesAlone(t *testing.T) {
 // its two files, not "no such finding".
 func TestANameFindingHasATimelineOfItsTwoFiles(t *testing.T) {
 	r := nameFixture(t)
+	stubScrump(t) // the timeline redacts what it reads
 	if code := runDedupe([]string{"--names"}); code != 0 {
 		t.Fatalf("dedupe --names exited %d", code)
 	}
