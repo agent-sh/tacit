@@ -7,7 +7,7 @@ The optional Jev selector reduced unrelated memory injections while preserving t
 - Freeze retrieval candidates from the existing scoped search. Do not use labels to retrieve, rewrite queries, or score candidates.
 - Score the printed `Name + Description`, not the body. Share the task as state and put each memory in a structured question.
 - Pin `jev-1.13.0`. Compare bare Noul, a Noul rubric, and three-way Choice. Choose the rubric using development data at a fixed 0.50 threshold before threshold selection.
-- Keep episode-disjoint development and calibration splits. Three context arms give three scorer records per query: count queries, not records, as independent observations.
+- Keep episode-disjoint development and calibration splits. Three context arms give three scorer records per query, and those records are not independent queries; each split also holds more queries than episodes, so its queries are not independent of each other either.
 - Read usefulness labels only after scoring. Keep primary labels separate from a blinded assistant review of summary usefulness. The review is subjective, not human ground truth. Leave uncertain and unlisted items out of precision/recall and report them separately.
 - Measure three repeats on every unique nonempty payload. Evaluate stored scores without new API calls. Reproduce the frozen baseline's counts before trusting the evaluator. Keep held-out cases sealed.
 

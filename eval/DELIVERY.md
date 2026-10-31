@@ -50,7 +50,8 @@ was the first tested floor with no injections on either no-memory group.
 The chosen floor was then run through the actual candidate binary, not just a
 score simulation. Floors are specific to this corpus and should be revisited
 with fresh labelled traffic. Warm-hook median latency rose from about 16 ms
-to about 91-92 ms, within the existing query budget.
+to about 91-92 ms on the one machine measured, within the existing query
+budget there.
 
 ## What changed and what remains
 
@@ -111,7 +112,7 @@ The rule now: a command of one word matches only when a word of the fact's name 
 | every command needs a second word, areas MCP only | fewer lines, useful lines lost |
 | one-word commands, the second word in at most 50 facts' summaries, areas MCP only | the least noise, many useful lines lost |
 
-Over all logged pushes of the 14 days whose checkout still exists, the shipped rule prints fewer lines than release 0.9.14. The prompt block is unchanged (its metadata line names commands by the prompt's words). The target set before measuring, noise at or below 25% with nearly all useful pushes kept, is not met: the stricter rules reach it only by dropping useful pushes, whose second word is a common one. What is left of the noise is mostly two-word commands that are still generic (`git diff`, `gh pr`) and second words that are incidental.
+Over all logged pushes of the 14 days whose checkout still exists, the shipped rule prints fewer lines than release 0.9.14. The prompt block is unchanged (its metadata line names commands by the prompt's words). The target set before measuring, noise at or below 25% with at least six in seven of the useful pushes kept, is not met: only the strictest arm (the second word in at most 50 facts' summaries) gets under the noise bound, on the 3 days only, and it does so by dropping many useful pushes, whose second word is a common one. What is left of the noise is mostly two-word commands that are still generic (`git diff`, `gh pr`) and second words that are incidental.
 
 After the review (same cases, every changed line graded by hand): the session's repository names, folders and home are left out word by word however many there are (`search.Terms` stopped near 24 terms, so in a workspace of many repositories the folder words were not left out), and a one-word command that is a script's path or file name (`scripts/release.sh`, `deploy.sh`) needs no second word. Against the rule above, over the 3-day, 14-day and all-pushes cases, a few lines were added (some of them useful) and a few removed (none useful), and the shipped arm's results barely moved. The fact's own name and description are read whole too (no line changes on these cases). Counting every word of the command line as well (a heredoc's prose, a script's text) added mostly noise lines: the command's words stay its first terms.
 

@@ -81,13 +81,14 @@ store with the actual binaries and isolated indices/overlays. Both 30-case
 groups were already inspected during development; neither is held out. Final
 runs used three repetitions and were deterministic. Each group has 15 positive
 and 15 no-memory cases. Labels were not expanded for new results. The counts
-measured on that store stay with the owner; both groups gave the same picture:
+measured on that store stay with the owner; against main, every arm moved the
+same way in both groups:
 
 | Arm | Lines | Useful | Unexpected | Positive hit | No-memory injection |
 |---|---|---|---|---|---|
 | Main 0732543 | baseline | baseline | baseline | baseline | none |
 | Weighted relationships | more | more | more | more | none |
-| Uniform known-term weights | more | more, slightly fewer than weighted | more | as weighted | none |
+| Uniform known-term weights | more | more; in one group slightly fewer than weighted, in the other as many | more | as weighted | none |
 | No marginal correction | most | as weighted | most | as weighted | some |
 
 Ablations used one repetition, separate compiled binaries and the same corpus.
