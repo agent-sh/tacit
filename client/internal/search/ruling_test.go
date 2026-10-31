@@ -11,7 +11,7 @@ import (
 // A RULE line drops the dated preamble, "Owner" or a configured name.
 func TestAsRuleStripsTheOwnerPreamble(t *testing.T) {
 	t.Setenv("TACIT_OWNER_NAMES", "")
-	if got := asRule("Owner 2026-09-10: ship on green"); got != "Ship on green" {
+	if got := asRule("Owner 2026-09-10: ship on green"); got != "Ship on green" { // privacy-lint: allow (synthetic attribution)
 		t.Errorf("owner: %q", got)
 	}
 	if got := asRule("Dana 2026-09-10: ship on green"); got != "Dana 2026-09-10: ship on green" {

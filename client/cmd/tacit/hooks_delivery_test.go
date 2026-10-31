@@ -147,7 +147,7 @@ func TestInTaskRulingIsAnOrdinaryFact(t *testing.T) {
 	specs := []fact.Meta{
 		{Name: "widget-cache-eviction-lru", Description: "widget cache eviction is lru with a widget cache size cap"},
 		{Name: "widget-cache-eviction-ttl", Description: "widget cache eviction ttl defaults to one hour for the widget cache"},
-		{Name: "clear-widget-cache-now", Description: "Owner 2026-10-01: lets clear the widget cache eviction settings now"},
+		{Name: "clear-widget-cache-now", Description: "Owner 2026-10-01: lets clear the widget cache eviction settings now"}, // privacy-lint: allow (synthetic attribution)
 		{Name: "keep-eviction-off-weekends", Description: "Never change eviction settings on a weekend"},
 	}
 	var ledger strings.Builder

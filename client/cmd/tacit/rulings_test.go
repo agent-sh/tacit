@@ -119,7 +119,7 @@ func rulingsRig(t *testing.T) (*rig, *ownerwords.Corpus) {
 		writeFact(t, r.clone, fact.Meta{Name: name, Description: desc, Type: typ, Scope: "projects/x", Source: src}, body)
 	}
 	user := fact.Source{Kind: "user"}
-	w("quoted", "user_standard", user, "Renaming a public endpoint needs the owner's approval first", "Owner, 2026-09-21: \"never rename public endpoints without asking me\".")
+	w("quoted", "user_standard", user, "Renaming a public endpoint needs the owner's approval first", "Owner, 2026-09-21: \"never rename public endpoints without asking me\".") // privacy-lint: allow (synthetic attribution)
 	w("agents-reading", "user_standard", user, "The owner prefers small pull requests", "The owner prefers small pull requests.")
 	w("observed-quoted", "user_standard", fact.Source{}, "The shared cache stays up on friday", "The owner said \"dont reset the shared cache on friday, those are mine\" on 2026-07-01.")
 	w("observed-standard", "user_standard", fact.Source{}, "Agents think the owner wants tabs", "Agents think the owner wants tabs.")
@@ -929,7 +929,7 @@ func TestRulingsAuditFindsTheQuoteOfAClaim(t *testing.T) {
 	w := func(name, desc, body string) {
 		writeFact(t, r.clone, fact.Meta{Name: name, Description: desc, Type: "design_decision", Scope: "projects/x"}, body)
 	}
-	w("claim-quoted", "The owner decided the nightly evals use the slow lane", "Owner 2026-10-01: \"the nightly evals always go through the slow lane\".")
+	w("claim-quoted", "The owner decided the nightly evals use the slow lane", "Owner 2026-10-01: \"the nightly evals always go through the slow lane\".") // privacy-lint: allow (synthetic attribution)
 	w("claim-unbacked", "The owner said jobs go through one queue", "Jobs go through one queue.")
 	r.commitIndex(r.clone, "claims")
 	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")

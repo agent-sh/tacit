@@ -151,7 +151,7 @@ func TestPlannedRenameAndForgeRename(t *testing.T) {
 	writeFactFile(t, w.s.Dir, &fact.Fact{Path: "projects/storefront/ruling-storefront-is-the-name.md", Meta: fact.Meta{Name: "ruling-storefront-is-the-name",
 		Description: "2026-09-15 owner ruling \"storefront is the name, rename what you need\": references follow the storefront name.", Type: "user_standard", Scope: "projects/storefront",
 		Source: fact.Source{Harness: "curator", Host: "box", Kind: "user", OwnerQuote: "storefront is the name, rename what you need", OwnerQuoteFrom: "claude:s9"}, Created: "2026-09-16"},
-		Body: "On 2026-09-15 the owner said \"storefront is the name, rename what you need\".\n"})
+		Body: "On 2026-09-15 the owner said \"storefront is the name, rename what you need\".\n"}) // privacy-lint: allow (synthetic attribution)
 	// A newer ruling whose words name the repository in passing, with a typo:
 	// the model misreads a canonical claim from it, which the checks refute.
 	wt := "mark the stale wt that keep piling up on storfront(shop-v2) and clean them weekly"

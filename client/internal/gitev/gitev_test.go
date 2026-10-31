@@ -415,7 +415,7 @@ func TestCacheSkipsRepoQueries(t *testing.T) {
 // Facts that name no repo get their dates and an honest note, not a guess.
 func TestNoRepoStillGivesDates(t *testing.T) {
 	f := newFixture(t)
-	fa := &fact.Fact{Meta: fact.Meta{Name: "a", Scope: "user", Created: "2026-10-08"}, Body: "Owner, 2026-09-12: always do x."}
+	fa := &fact.Fact{Meta: fact.Meta{Name: "a", Scope: "user", Created: "2026-10-08"}, Body: "Owner, 2026-09-12: always do x."} // privacy-lint: allow (synthetic attribution)
 	fb := &fact.Fact{Meta: fact.Meta{Name: "b", Scope: "user", Created: "2026-10-08"}, Body: "never do y"}
 	tl, err := f.builder().Build(context.Background(), Input{A: FactRef{Fact: fa}, B: FactRef{Fact: fb}})
 	if err != nil {

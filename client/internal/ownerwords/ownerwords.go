@@ -490,7 +490,7 @@ func Quotes(text string) []string {
 }
 
 // attributed is a clause an agent wrote down as the owner's without quote
-// marks: "Owner 2026-09-05: list the gain of every change." The clause
+// marks: "Owner <date>: list the gain of every change." The clause
 // runs to the end of its sentence.
 // The names come from $TACIT_OWNER_NAMES, read on each call so a test or a
 // long-running process sees the current value; the compiled form is kept per

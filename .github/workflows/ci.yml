@@ -25,8 +25,10 @@ concurrency:
 
 jobs:
   # Personal content never enters the repository (AGENTS.md). The private
-  # deny list of host and project names is a secret; a pull request from a
-  # fork has none, and the shape rules run alone.
+  # deny list of host and project names is a secret. In this repository the
+  # job fails without it, so a lost secret cannot pass unnoticed; a pull
+  # request from a fork, and a fork's own run, have none and run the shape
+  # rules alone.
   privacy:
     if: ${{ vars.CI_CPU_RUNNER != '' || (!github.event.repository.private && vars.CI_PUBLIC == '1') }}
     runs-on: ${{ vars.CI_CPU_RUNNER != '' && (github.event.repository.private || !github.event.pull_request.head.repo.fork) && format('{0}-{1}', vars.CI_CPU_RUNNER, github.run_id) || 'ubuntu-24.04' }}
@@ -35,7 +37,13 @@ jobs:
       - name: personal content
         env:
           TACIT_PRIVACY_DENY: ${{ secrets.TACIT_PRIVACY_DENY }}
-        run: python3 scripts/privacy-lint.py
+          REQUIRE_DENY: ${{ github.repository == 'agent-sh/tacit' && !github.event.pull_request.head.repo.fork }}
+        run: |
+          if [ "$REQUIRE_DENY" = true ]; then
+            python3 scripts/privacy-lint.py --require-deny
+          else
+            python3 scripts/privacy-lint.py
+          fi
 
   client:
     if: ${{ vars.CI_CPU_RUNNER != '' || (!github.event.repository.private && vars.CI_PUBLIC == '1') }}

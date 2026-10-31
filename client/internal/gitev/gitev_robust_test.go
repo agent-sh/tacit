@@ -104,7 +104,7 @@ func TestEvidenceIsRedactedAndFailsClosed(t *testing.T) {
 // the others show.
 func TestBadPathsDoNotHideTheRealOnes(t *testing.T) {
 	f := newFixture(t)
-	body := "Owner, 2026-09-12: the hook `tools/hooks/pre-commit` and also `../shared/notes.md` and `./../x/y.md` and `a/../b.md`."
+	body := "Owner, 2026-09-12: the hook `tools/hooks/pre-commit` and also `../shared/notes.md` and `./../x/y.md` and `a/../b.md`." // privacy-lint: allow (synthetic attribution)
 	a := &fact.Fact{Meta: fact.Meta{Name: "a", Scope: "projects/gearbox", Created: "2026-10-08", AppliesTo: fact.AppliesTo{Paths: []string{"tools/hooks/pre-commit", "../escape.md"}}}, Body: body}
 	s := f.g.SubjectOf(a)
 	for _, p := range s.Paths {

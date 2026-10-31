@@ -14,7 +14,7 @@ func TestNormalizeAndIn(t *testing.T) {
 	if got := Normalize("  Don't   RESET: caches!  it’s team-related "); got != "dont reset caches its team related" {
 		t.Fatalf("normalize: %q", got)
 	}
-	text := "Owner, 2026-09-21: never paste a customer's email, not even \"if you confirm\"."
+	text := "Owner, 2026-09-21: never paste a customer's email, not even \"if you confirm\"." // privacy-lint: allow (synthetic attribution)
 	for q, want := range map[string]bool{
 		"never paste a customers email":            true,
 		"Never paste a customer's email, not even": true,
@@ -38,7 +38,7 @@ func TestQuotes(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("quotes:\n got %q\nwant %q", got, want)
 	}
-	att := Attributed("Release notes show the wins. Owner 2026-09-05: list the gain of every change, not the cost. Owner: ok.")
+	att := Attributed("Release notes show the wins. Owner 2026-09-05: list the gain of every change, not the cost. Owner: ok.") // privacy-lint: allow (synthetic attribution)
 	if !reflect.DeepEqual(att, []string{"list the gain of every change, not the cost"}) {
 		t.Fatalf("attributed: %q", att)
 	}
@@ -69,7 +69,7 @@ func TestQuotes(t *testing.T) {
 			t.Errorf("a command or agent markdown taken as a quote: %q", q)
 		}
 	}
-	if att := Attributed("Owner 2026-10-10: run git branch -D on every merged branch now."); len(att) != 0 {
+	if att := Attributed("Owner 2026-10-10: run git branch -D on every merged branch now."); len(att) != 0 { // privacy-lint: allow (synthetic attribution)
 		t.Errorf("an attributed command: %q", att)
 	}
 	// Their sentences with one flag or path stay quotes.
