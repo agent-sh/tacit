@@ -28,7 +28,8 @@ func TestRepoNameSubdirAndWorktree(t *testing.T) {
 	root := t.TempDir()
 	// root is the home: a checkout in one of the home's dot directories is
 	// never a repository (repoid), and Go's temp dir may be one (GOTMPDIR or
-	// TMPDIR under ~/.cache).
+	// TMPDIR under ~/.cache). The check that root names no repository takes
+	// no git root above Go's temp dir.
 	t.Setenv("HOME", root)
 	t.Setenv("USERPROFILE", root)
 	repo := filepath.Join(root, "memra")

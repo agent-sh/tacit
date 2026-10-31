@@ -14,6 +14,7 @@ import (
 func TestWindowsCursorAndFreshStart(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir) // the checkout is under home: outside it, it would need work from two sessions
+	t.Setenv("USERPROFILE", dir)
 	f := filepath.Join(dir, "s1.jsonl")
 	line := func(s string) string { return s + "\n" }
 	// The session works in a real checkout: its repo is the git root's name.
@@ -50,8 +51,9 @@ func TestWindowsCursorAndFreshStart(t *testing.T) {
 	// The checkout is in Go's temp dir. Where only agents start sessions
 	// (digest.AgentCwd: GOTMPDIR or TMPDIR under ~/.cache) the session is an
 	// agent's and its prompt a P: line; the cursors are the same either way.
+	// The rule itself is digest's to test (TestAgentCwdInAHomeUnderTmp).
 	prompt := "U: commit it"
-	if digest.AgentCwd(api) {
+	if digest.AgentCwd(filepath.ToSlash(api)) {
 		prompt = "P: commit it"
 	}
 	joined := strings.Join(w.Lines, "\n")

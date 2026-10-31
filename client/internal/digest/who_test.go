@@ -19,6 +19,26 @@ func codexMeta(originator, source, threadSource, parent string) string {
 	return p + `,"model_provider":"p","base_instructions":{"text":"You are Codex."},"history_mode":"full"}}` + "\n"
 }
 
+// A directory inside the home directory is never taken for a temporary one
+// by its prefix, wherever the home is: a test's or a sandbox's home under
+// /tmp holds a person's checkouts. Outside the home /tmp is an agents'
+// place, and /.cache/ is one anywhere.
+func TestAgentCwdInAHomeUnderTmp(t *testing.T) {
+	t.Setenv("HOME", "/tmp/sandbox/home")
+	t.Setenv("USERPROFILE", "/tmp/sandbox/home")
+	for cwd, want := range map[string]bool{
+		"/tmp/sandbox/home/projects/api": false,
+		"/tmp/sandbox/home":              false,
+		"/tmp/sandbox/scratch":           true,
+		"/tmp":                           true,
+		"/tmp/sandbox/home/.cache/x":     true,
+	} {
+		if got := AgentCwd(cwd); got != want {
+			t.Errorf("AgentCwd(%s) = %v, want %v", cwd, got, want)
+		}
+	}
+}
+
 func TestSessionWhoCodex(t *testing.T) {
 	spawn := `{"subagent":{"thread_spawn":{"parent_thread_id":"019a-parent","depth":1,"agent_path":"/root/ada","agent_nickname":"Ada","agent_role":"worker"}}}`
 	for _, c := range []struct {
