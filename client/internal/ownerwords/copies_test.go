@@ -30,8 +30,10 @@ func statsJSON(t *testing.T, c *Corpus) map[string]any {
 // A fork of a Claude Code session copies the turns it carries over, uuid and
 // time and all, into its own transcript. The copy is one turn of theirs, in
 // one session, not the same words said again in a second one: the note of
-// either transcript finds its words in the one session that holds them.
-// What they type in the fork afterwards is a turn of theirs there.
+// either transcript finds its words in the one session that holds them, the
+// one the prompt history says they typed it in, else the first read. No
+// other source of the copy's session (its history line, a digest) holds it
+// again. What they type in the fork afterwards is a turn of theirs there.
 func TestAForkedCopyOfATurnIsOneTurn(t *testing.T) {
 	home := t.TempDir()
 	proj := filepath.Join(home, ".claude", "projects", "-home-u-projects-shop")
@@ -59,18 +61,20 @@ func TestAForkedCopyOfATurnIsOneTurn(t *testing.T) {
 		}
 		writeFile(t, filepath.Join(day, r.file), strings.Join(lines, "\n")+"\n")
 	}
+	// The prompt history's line of the turn, in the session it was typed in.
+	writeFile(t, filepath.Join(home, ".claude", "history.jsonl"), `{"display":"`+said+`","timestamp":1792490400000,"project":"/home/u/projects/shop","sessionId":"s-orig"}`+"\n")
 	c, err := LoadAll(home, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for words, sessions := range map[string][2]string{said: {"s-fork", "s-orig"}, codexSaid: {"cx-a", "cx-b"}} {
+	for words, want := range map[string]string{said: "claude:s-orig", codexSaid: "codex:cx-a"} {
 		if got := c.SaidIn(words); len(got) != 1 {
 			t.Errorf("SaidIn(%q) = %v, want one session", words, got)
 		}
-		one, _ := c.Find(words, sessions[0], true)
-		two, _ := c.Find(words, sessions[1], true)
-		if one.Ref == "" || one.Ref != two.Ref {
-			t.Errorf("%q is in %q from %s's note and in %q from %s's, want one session", words, one.Ref, sessions[0], two.Ref, sessions[1])
+		for _, from := range []string{"s-fork", "s-orig", "cx-a", "cx-b"} {
+			if m, _ := c.Find(words, from, true); m.Ref != want {
+				t.Errorf("%q from %s's note is in %q, want %s", words, from, m.Ref, want)
+			}
 		}
 	}
 	if m, _ := c.Find("tag the release candidate by hand", "", true); m.Ref != "claude:s-fork" {
@@ -79,17 +83,19 @@ func TestAForkedCopyOfATurnIsOneTurn(t *testing.T) {
 	if m, _ := c.Find("keep the changelog in plain words", "", true); m.Ref != "codex:cx-b" {
 		t.Errorf("their own message in the resumed thread: %+v", m)
 	}
-	if st := statsJSON(t, c); st["copied_turns"] != 2.0 || st["owner_turns"] != 4.0 || st["broadcast_turns"] != 0.0 {
+	if st := statsJSON(t, c); st["copied_turns"] != 2.0 || st["owner_turns"] != 5.0 || st["broadcast_turns"] != 0.0 {
 		t.Errorf("counts: %v", st)
 	}
 }
 
 // The same text in two sessions at most 2 s apart is a program's broadcast,
 // which may type into a person's sessions as it does into its own: no person
-// types one message into two sessions at once, so neither is theirs. The
-// same words in two sessions half a minute apart stay in each session (SaidIn
-// counts word-for-word copies once anyway), and a prompt history line that
-// names no session is no second session.
+// types one message into two sessions at once, so neither is theirs. Only a
+// turn with another session's within 2 s is one: the same words typed again
+// in one session reach no further. The same words in two sessions half a
+// minute apart stay in each session (SaidIn counts word-for-word copies once
+// anyway), and a prompt history line that names no session is no second
+// session.
 func TestTheSameTextInTwoSessionsAtOnceIsNoTurnOfTheirs(t *testing.T) {
 	home := t.TempDir()
 	proj := filepath.Join(home, ".claude", "projects", "-home-u-projects-shop")
@@ -99,6 +105,13 @@ func TestTheSameTextInTwoSessionsAtOnceIsNoTurnOfTheirs(t *testing.T) {
 	writeFile(t, filepath.Join(proj, "b-one.jsonl"), claudeTurn("b-one", "c1", "2026-10-20T10:00:00.000Z", cast, "")+"\n"+claudeTurn("b-one", "c3", "2026-10-20T11:00:00.000Z", twice, "")+"\n")
 	writeFile(t, filepath.Join(proj, "b-two.jsonl"), claudeTurn("b-two", "c2", "2026-10-20T10:00:00.050Z", cast, "")+"\n"+claudeTurn("b-two", "c4", "2026-10-20T11:00:30.000Z", twice, "")+"\n")
 	writeFile(t, filepath.Join(proj, "b-three.jsonl"), claudeTurn("b-three", "c5", "2026-10-20T12:00:00.000Z", alone, "")+"\n")
+	again := "rebuild the search index after the import"
+	writeFile(t, filepath.Join(proj, "r-a.jsonl"), strings.Join([]string{
+		claudeTurn("r-a", "r1", "2026-10-20T13:00:00.000Z", again, ""),
+		claudeTurn("r-a", "r2", "2026-10-20T13:00:01.500Z", again, ""),
+		claudeTurn("r-a", "r3", "2026-10-20T13:00:03.000Z", again, ""),
+	}, "\n")+"\n")
+	writeFile(t, filepath.Join(proj, "r-b.jsonl"), claudeTurn("r-b", "r4", "2026-10-20T13:00:04.500Z", again, "")+"\n")
 	// The prompt history's own copy of a turn, with no session named.
 	writeFile(t, filepath.Join(home, ".claude", "history.jsonl"), `{"display":"`+alone+`","timestamp":1792497600400,"project":"/home/u/projects/shop"}`+"\n")
 	c, err := LoadAll(home, "")
@@ -114,7 +127,10 @@ func TestTheSameTextInTwoSessionsAtOnceIsNoTurnOfTheirs(t *testing.T) {
 	if m, _ := c.Find(alone, "b-three", true); m.Ref != "claude:b-three" {
 		t.Errorf("a turn and the history's copy of it: %+v", m)
 	}
-	if st := statsJSON(t, c); st["broadcast_turns"] != 2.0 {
+	if !c.FindIn("claude:r-a", again) || c.FindIn("claude:r-b", again) {
+		t.Errorf("typed again in one session, then once in another 1.5 s after the last: the first two stay theirs, the other session's goes")
+	}
+	if st := statsJSON(t, c); st["broadcast_turns"] != 4.0 {
 		t.Errorf("counts: %v", st)
 	}
 }
