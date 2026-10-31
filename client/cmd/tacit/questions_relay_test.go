@@ -121,13 +121,15 @@ func TestARelayOfTheOwnersAnswerClosesAGuardedNameFinding(t *testing.T) {
 	turn := "whether the zebra cron runs nightly; - " + zebra + ".  whether to keep both lantern-proxy-port files (only you may answer, since you kept that name); - " + answer
 	// Words every name question holds ("which one stands"), and folder words
 	// of its files, name no subject; nor does an answer in a turn that does
-	// not say where its item begins.
-	const generic, folders, run = "which one stands now, keep the files that hold it", "the user files hold the old name, rename them", "retire both of them now"
+	// not say where its item begins, nor the sentence an answer above it went
+	// on with.
+	const generic, folders, run, onward = "which one stands now, keep the files that hold it", "the user files hold the old name, rename them", "retire both of them now", "retire both of those please"
 	ownerTurns(t, home, [3]string{"owner-chat", now.Format(time.RFC3339), turn}, [3]string{"owner-other", now.Format(time.RFC3339), releaseNotes},
 		[3]string{"owner-third", now.Format(time.RFC3339), generic}, [3]string{"owner-fourth", now.Format(time.RFC3339), folders},
-		[3]string{"owner-fifth", now.Format(time.RFC3339), "which lantern proxy file stands; - keep the old one; which zebra nightly cron stands; - " + run})
+		[3]string{"owner-fifth", now.Format(time.RFC3339), "which lantern proxy file stands; - keep the old one; which zebra nightly cron stands; - " + run},
+		[3]string{"owner-sixth", now.Format(time.RFC3339), "which lantern proxy port file stands?\n- keep the old one. the lantern proxy port still works.\nwhich zebra nightly cron stands?\n- " + onward})
 	head := r.serverHead()
-	for _, off := range []string{zebra, releaseNotes, generic, folders, run} {
+	for _, off := range []string{zebra, releaseNotes, generic, folders, run, onward} {
 		if c := relayOnName(it.ID, "keep:"+it.A.Path, off); c == 0 || r.serverHead() != head {
 			t.Fatalf("their words on another subject (%q) closed the name: exit %d", off, c)
 		}

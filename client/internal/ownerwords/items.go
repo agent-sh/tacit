@@ -21,19 +21,21 @@ import (
 var answerMark = regexp.MustCompile(`(?m)(?:^|\s)[-–—]\s`)
 
 // unit is a sentence or a line of a turn, the pieces an item is made of: a
-// question (no answer in it), an answer (it opens with a dash), or both (a
-// question with its answer after a dash inside it).
+// question (no answer in it), an answer (it opens with a dash), both (a
+// question with its answer after a dash inside it), or an answer's
+// continuation (a sentence after an answer on its line).
 type unit struct {
 	start, end int
-	kind       byte // 'q' a question or other text, 'a' an answer, 'b' both
+	kind       byte // 'q' a question or other text, 'a' an answer, 'b' both, 'c' an answer going on
 	marks      int  // the answers it opens
 }
 
 // ItemAround is the part of turn, as the owner wrote it, that holds quote:
 // the sentences or lines the quote is in, and when the first of them is an
 // answer (it opens with a dash) the question lines above it, back to the
-// answer before them. A dash-led line that ends with a question mark is a
-// question, its dash a bullet. A turn with no answer in it is one item,
+// answer before them; a sentence after an answer on its line is that
+// answer's. A dash-led line that ends with a question mark is a question,
+// its dash a bullet. A turn with no answer in it is one item,
 // whole. "" when the turn does not hold the quote word for word, or when the
 // item would hold more than one answer: the turn does not say where one item
 // ends and the next begins ("q; - a; q; - a"), and a caller reads the quote
@@ -98,6 +100,7 @@ func ItemAround(turn, quote string) string {
 func units(s string) []unit {
 	var out []unit
 	start := 0
+	answered := false // the line so far holds an answer
 	add := func(end int) {
 		if end <= start {
 			return
@@ -110,7 +113,12 @@ func units(s string) []unit {
 			u.marks-- // a bulleted question: its dash opens no answer
 			bullet = false
 		}
+		if start == 0 || strings.HasPrefix(t, "\n") {
+			answered = false
+		}
 		switch {
+		case u.marks == 0 && answered:
+			u.kind = 'c'
 		case u.marks == 0:
 			u.kind = 'q'
 		case bullet && u.marks == 1:
@@ -118,6 +126,7 @@ func units(s string) []unit {
 		default:
 			u.kind = 'b'
 		}
+		answered = answered || u.marks > 0
 		out = append(out, u)
 		start = end
 	}
