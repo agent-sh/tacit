@@ -312,7 +312,14 @@ func ToFact(e Entry, host string, taken map[string]bool) *fact.Fact {
 		name = importer.Slug(e.Description, 60)
 	}
 	if taken[name] {
-		name = importer.Slug(name, 70) + "-" + shortHash(e.Description)
+		// The suffix is the description's hash, so a second entry of the
+		// same name and description (one point filed in two folders) gets
+		// the suffixed name again: that one must be free too.
+		base := importer.Slug(name, 70) + "-" + shortHash(e.Description)
+		name = base
+		for i := 2; taken[name]; i++ {
+			name = fmt.Sprintf("%s-%d", base, i)
+		}
 	}
 	taken[name] = true
 	typ := e.Type

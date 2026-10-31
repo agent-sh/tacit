@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/overlay"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
@@ -676,8 +677,16 @@ func findFactOrLocal(storeDir, name string) (string, bool) {
 	return overlay.Find(overlay.Dir(), name)
 }
 
+// findFact is the file of the fact named name. Names are unique store-wide,
+// but a store can hold one twice: an agent's note named like a curated
+// fact (a note's name is checked in its own inbox folder only), or a copy a
+// tool outside tacit left in a second folder. The walk's first file is then
+// whichever sorts first, inbox/ before every curated folder, while the name
+// stands for its live curated fact. So the live curated fact comes first,
+// then a curated fact that is replaced or retired, then an inbox note, then
+// any other file of the name; within a rank, the walk's order.
 func findFact(storeDir, name string) (string, bool) {
-	var found string
+	best, rank := "", 4
 	filepath.WalkDir(storeDir, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -685,13 +694,44 @@ func findFact(storeDir, name string) (string, bool) {
 		if d.IsDir() && (d.Name() == ".git" || d.Name() == "keys") {
 			return filepath.SkipDir
 		}
-		if !d.IsDir() && d.Name() == name+".md" {
-			found = p
+		if d.IsDir() || d.Name() != name+".md" {
+			return nil
+		}
+		if r := factRank(storeDir, p); r < rank {
+			best, rank = p, r
+		}
+		if rank == 0 {
 			return filepath.SkipAll
 		}
 		return nil
 	})
-	return found, found != ""
+	return best, best != ""
+}
+
+// factRank orders the files of one name for findFact: 0 a live curated
+// fact, 1 a curated fact replaced or retired, 2 an inbox note, 3 a file
+// that does not read as a fact.
+func factRank(storeDir, p string) int {
+	rel, err := filepath.Rel(storeDir, p)
+	if err != nil {
+		return 3
+	}
+	rel = filepath.ToSlash(rel)
+	if strings.HasPrefix(rel, "inbox/") {
+		return 2
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return 3
+	}
+	f, err := fact.Parse(rel, b)
+	switch {
+	case err != nil:
+		return 3
+	case f.Meta.SupersededBy != "" || f.Meta.Retired != "":
+		return 1
+	}
+	return 0
 }
 
 func mcpArguments(harness string) string {

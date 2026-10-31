@@ -27,6 +27,14 @@ func TestParseAndToFact(t *testing.T) {
 	if h.Meta.Name == f.Meta.Name || !strings.HasPrefix(h.Meta.Name, "root-stays-on-main-") {
 		t.Fatalf("collision %q vs %q", f.Meta.Name, h.Meta.Name)
 	}
+	// A third time, the same description in another folder: the suffix is
+	// the description's, so the suffixed name is taken by then too.
+	e := es[0]
+	e.Scope = "projects/mobile"
+	k := ToFact(e, "host-a", taken)
+	if k.Meta.Name == h.Meta.Name || k.Meta.Name == f.Meta.Name || !strings.HasPrefix(k.Meta.Name, h.Meta.Name+"-") || !fact.IsSlug(k.Meta.Name) {
+		t.Fatalf("a third entry of one name and description is named %q, after %q and %q", k.Meta.Name, f.Meta.Name, h.Meta.Name)
+	}
 	if _, err := fact.Parse(f.Path, must(f.Encode())); err != nil {
 		t.Fatalf("encoded fact does not parse strictly: %v", err)
 	}
