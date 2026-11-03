@@ -6,12 +6,23 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+// hookRealBudget makes hookOut keep the PreToolUse hook's own budget.
+var hookRealBudget bool
 
 // hookOut runs `tacit hook <args>` the way a harness does: JSON on stdin,
 // the block it prints on stdout.
 func hookOut(t *testing.T, stdin string, args ...string) string {
 	t.Helper()
+	// The PreToolUse hook prints nothing after toolBudget of wall clock; a
+	// test of what it prints must not depend on the machine's load.
+	// TestPreToolMCPLatency alone runs it under the real budget.
+	if !hookRealBudget {
+		defer func(d time.Duration) { toolDeadline = d }(toolDeadline)
+		toolDeadline = time.Minute
+	}
 	in, err := os.CreateTemp(t.TempDir(), "stdin")
 	if err != nil {
 		t.Fatal(err)

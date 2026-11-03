@@ -19,6 +19,11 @@ import (
 // shell command, so it answers within this or prints nothing.
 const toolBudget = 400 * time.Millisecond
 
+// toolDeadline is what preTool runs under: toolBudget, except in tests that
+// check what the hook prints, which widen it so a loaded machine or the race
+// detector cannot turn their answer into the empty one.
+var toolDeadline = toolBudget
+
 // toolPushTools is the PreToolUse matcher `tacit install` writes: the edit
 // tools of Claude Code, Codex's apply_patch, the shell tool of both, and
 // every MCP tool (mcp__<server>__<tool>), whose calls an area's tool
@@ -116,7 +121,7 @@ func preTool(s *store.Store, in hookInput) {
 	if len(paths) == 0 && strings.TrimSpace(command) == "" && in.ToolName == "" {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), toolBudget)
+	ctx, cancel := context.WithTimeout(context.Background(), toolDeadline)
 	defer cancel()
 	var rel []string
 	var sit search.Situation

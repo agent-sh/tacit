@@ -192,6 +192,8 @@ func TestSessionStartFollowsASuppressedRepo(t *testing.T) {
 // for eval/VALUE.md; the hook keeps its budget.
 func TestPreToolMCPLatency(t *testing.T) {
 	_, _, outside := areaRig(t)
+	hookRealBudget = true
+	defer func() { hookRealBudget = false }()
 	var d []time.Duration
 	for i := 0; i < 60; i++ {
 		tool := "mcp__other__Search"
