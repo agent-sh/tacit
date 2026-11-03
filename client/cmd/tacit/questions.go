@@ -448,6 +448,17 @@ func closeMootQuestions(ctx context.Context, rs *reviewServer, owned map[string]
 			out(fmt.Sprintf("would reopen %s (%s, its ask): its fact is live again", it.ID, it.A.Name))
 		}
 	}
+	// The same for a name's ask: both files are live again.
+	for _, it := range rs.nameItems() {
+		d := it.Decision
+		if (len(only) > 0 && !only[it.ID]) || d == nil || d.Action != mootMark || d.By != "curator" || d.Closes == "" || it.State == "gone" || owned[it.ID] || owned[it.A.Name] {
+			continue
+		}
+		ops = append(ops, op{ID: it.ID, Mark: "reopen", By: "curator", A: it.A.Path, B: it.B.Path})
+		if dry {
+			out(fmt.Sprintf("would reopen %s (%s, its ask): both files are live again", it.ID, it.A.Name))
+		}
+	}
 	for _, it := range items {
 		if len(only) > 0 && !only[it.ID] {
 			continue
@@ -465,6 +476,17 @@ func closeMootQuestions(ctx context.Context, rs *reviewServer, owned map[string]
 		}
 		if why, ok := rs.staleMoot(it, owned); ok {
 			ops = append(ops, op{ID: it.ID, Mark: mootMark, By: "curator"})
+			if dry {
+				out(fmt.Sprintf("would close %s (%s, its ask): %s", it.ID, it.A.Name, why))
+			}
+		}
+	}
+	for _, it := range rs.nameItems() {
+		if len(only) > 0 && !only[it.ID] {
+			continue
+		}
+		if why, ok := rs.nameMoot(it, owned); ok {
+			ops = append(ops, op{ID: it.ID, Mark: mootMark, By: "curator", A: it.A.Path, B: it.B.Path})
 			if dry {
 				out(fmt.Sprintf("would close %s (%s, its ask): %s", it.ID, it.A.Name, why))
 			}
