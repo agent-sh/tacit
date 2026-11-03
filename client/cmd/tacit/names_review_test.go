@@ -263,3 +263,75 @@ func TestTheRotationLeavesANameTwoFilesHold(t *testing.T) {
 		t.Fatalf("open names %v", rot.open)
 	}
 }
+
+// An agent's question on a name two files hold goes moot when a file of it
+// goes away: the curator closes it by code, with its reason, as it does a
+// pair's. A question the owner left a note on stays theirs; a second run
+// closes nothing; a file that comes back asks it again.
+func TestAMootQuestionOnANameIsClosedByCode(t *testing.T) {
+	r := nameFixture(t)
+	stubScrump(t)
+	if code := runDedupe(nil); code != 0 {
+		t.Fatalf("dedupe exited %d", code)
+	}
+	it := nameItemFor(t, r, "deploy-by-tool")
+	if code := applyVerdicts(t, []map[string]string{{"id": it.ID, "a": it.A.Path, "b": it.B.Path, "mark": "keep", "keep": it.A.Path, "evidence": "The two say the same rule."}}); code != 0 {
+		t.Fatalf("review apply exited %d", code)
+	}
+	ctx := context.Background()
+	rs := &reviewServer{s: r.s}
+	rs.loadFacts()
+	var lines []string
+	out := func(l string) { lines = append(lines, l) }
+	if n, err := closeMootQuestions(ctx, rs, rs.ownerTouched(), nil, false, out); err != nil || n != 0 {
+		t.Fatalf("a question on a name held twice was closed: %d %v", n, err)
+	}
+	// The agent's copy goes away.
+	gitIn(t, r.clone, "pull", "-q", "--rebase", "origin", "main")
+	gitIn(t, r.clone, "rm", "-q", it.A.Path)
+	r.commitIndex(r.clone, "the copy goes")
+	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
+	rs = &reviewServer{s: r.s}
+	rs.loadFacts()
+	lines = nil
+	if n, err := closeMootQuestions(ctx, rs, rs.ownerTouched(), nil, true, out); err != nil || n != 0 || !strings.Contains(strings.Join(lines, "\n"), "would close "+it.ID) {
+		t.Fatalf("the dry run: %d %v\n%s", n, err, strings.Join(lines, "\n"))
+	}
+	lines = nil
+	if n, err := closeMootQuestions(ctx, rs, rs.ownerTouched(), nil, false, out); err != nil || n != 1 {
+		t.Fatalf("closed %d (%v):\n%s", n, err, strings.Join(lines, "\n"))
+	}
+	rs = &reviewServer{s: r.s}
+	rs.loadFacts()
+	d, _ := rs.decisions()
+	if got := d[it.ID]; got == nil || got.Action != mootMark || got.By != "curator" || got.Closes != closesAsk || !strings.Contains(got.Evidence, it.A.Path+" is not in the store") {
+		t.Fatalf("the closure: %+v", got)
+	}
+	for _, q := range openQuestions(rs, nil) {
+		if q.ID == it.ID {
+			t.Errorf("the closed question is still listed: %+v", q)
+		}
+	}
+	if n, err := closeMootQuestions(ctx, rs, rs.ownerTouched(), nil, false, out); err != nil || n != 0 {
+		t.Fatalf("a second run closed %d (%v)", n, err)
+	}
+	// The file comes back: the question is the owner's to answer again.
+	gitIn(t, r.clone, "pull", "-q", "--rebase", "origin", "main")
+	gitIn(t, r.clone, "checkout", "-q", "HEAD~2", "--", it.A.Path)
+	r.commitIndex(r.clone, "the copy is back")
+	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
+	rs = &reviewServer{s: r.s}
+	rs.loadFacts()
+	if _, err := closeMootQuestions(ctx, rs, rs.ownerTouched(), nil, false, out); err != nil {
+		t.Fatal(err)
+	}
+	rs = &reviewServer{s: r.s}
+	rs.loadFacts()
+	found := false
+	for _, q := range openQuestions(rs, nil) {
+		found = found || q.ID == it.ID
+	}
+	if !found {
+		t.Errorf("the question did not ask again once its file was back:\n%s", strings.Join(lines, "\n"))
+	}
+}

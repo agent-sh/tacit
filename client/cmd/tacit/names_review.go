@@ -286,6 +286,9 @@ func (rs *reviewServer) applyNameOp(o *op, it *reviewItem) (string, []string, er
 	if o.By == "agent" && o.Proof != "" {
 		return rs.applyNameRelay(o, it) // the owner's own answer, relayed
 	}
+	if o.Mark == mootMark && o.By == "curator" {
+		return rs.applyNameMoot(o, it) // an agent's question on a name that went moot
+	}
 	if o.Mark == mootMark || o.Proof != "" {
 		return "", nil, errors.New("a name two files hold takes a mark, not a closure")
 	}
@@ -520,4 +523,51 @@ func (rs *reviewServer) applyNameRelay(o *op, it *reviewItem) (string, []string,
 	}
 	rs.appendDecision(files, d)
 	return writeFiles(rs.s.Dir, "", files)
+}
+
+// nameMootWhy is why the name finding is no longer open, "" when it is open
+// or when a file of it did not read (a file that did not read is not gone).
+func (rs *reviewServer) nameMootWhy(it reviewItem) string {
+	if rs.walkErr != nil || it.State != "gone" {
+		return ""
+	}
+	for _, v := range []*factView{it.A, it.B} {
+		if v.Missing && (rs.unread[v.Name] || contains(rs.unreadPaths, v.Path)) {
+			return ""
+		}
+	}
+	for _, v := range []*factView{it.A, it.B} {
+		switch {
+		case v.Missing:
+			return "moot: " + v.Path + " is not in the store"
+		case v.Retired != "" && (v.SupersededBy == "" || v.SupersededBy == it.A.Name):
+			return "moot: " + v.Path + " is retired (" + v.Retired + ")"
+		case v.SupersededBy != "":
+			return "moot: " + v.Path + " is replaced by " + v.SupersededBy
+		}
+	}
+	return ""
+}
+
+// nameMoot is why an agent's question on a name two files hold is moot: a
+// file of it is retired, replaced or gone, so the name is not held twice. The
+// owner's findings stay theirs, as on every pair.
+func (rs *reviewServer) nameMoot(it reviewItem, owned map[string]bool) (string, bool) {
+	if it.Kind != kindName || it.Decision != nil || it.Ask == nil || it.Ask.By != "agent" || owned[it.ID] || owned[it.A.Name] || len(it.Notes) > 0 {
+		return "", false
+	}
+	why := rs.nameMootWhy(it)
+	return why, why != ""
+}
+
+// applyNameMoot closes, as the curator, an agent's question on a name finding
+// that went moot, changing no file.
+func (rs *reviewServer) applyNameMoot(o *op, it *reviewItem) (string, []string, error) {
+	why, ok := rs.nameMoot(*it, rs.ownerTouched())
+	if !ok {
+		return "", nil, errors.New("this finding carries no moot question")
+	}
+	files := map[string][]byte{}
+	rs.appendDecision(files, decision{ID: o.ID, Action: mootMark, A: it.A.Name, B: it.B.Name, At: time.Now().Format(time.RFC3339), By: "curator", Evidence: why, Closes: closesAsk, Proof: mootMark, Question: it.Ask.Question})
+	return writeFiles(rs.s.Dir, why, files)
 }
