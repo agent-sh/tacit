@@ -292,6 +292,21 @@ func (rs *reviewServer) applyNameOp(o *op, it *reviewItem) (string, []string, er
 	if o.Mark == mootMark || o.Proof != "" {
 		return "", nil, errors.New("a name two files hold takes a mark, not a closure")
 	}
+	if o.By == "curator" && o.Mark == "reopen" {
+		// On the store as it is under the lock: only the curator's own moot
+		// closure of an agent's ask, with both files live again, that the
+		// owner never touched. An answer that landed since stays.
+		d := it.Decision
+		if d == nil || d.Action != mootMark || d.By != "curator" || d.Closes == "" {
+			return "", nil, errors.New("only the curator's moot closure of a question is reopened by the curator")
+		}
+		if it.State == "gone" {
+			return "", nil, errors.New("a file of this name is still retired, replaced or gone: the closure stands")
+		}
+		if owned := rs.ownerTouched(); owned[o.ID] || owned[it.A.Name] || len(it.Notes) > 0 {
+			return "", nil, errors.New("the owner has marked, reopened or noted this finding or its name; it is theirs")
+		}
+	}
 	mark := o.Mark
 	switch mark {
 	case "left", "right", "both", "ask", "reopen":
@@ -537,9 +552,12 @@ func (rs *reviewServer) nameMootWhy(it reviewItem) string {
 		}
 	}
 	for _, v := range []*factView{it.A, it.B} {
+		if !v.Missing && v.Retired == "" && (v.SupersededBy == "" || v.SupersededBy == it.A.Name) {
+			continue // live by the finding's own rule
+		}
 		switch {
 		case v.Missing:
-			return "moot: " + v.Path + " is not in the store"
+			return "moot: " + v.Path + " is no longer in the store"
 		case v.Retired != "" && (v.SupersededBy == "" || v.SupersededBy == it.A.Name):
 			return "moot: " + v.Path + " is retired (" + v.Retired + ")"
 		case v.SupersededBy != "":

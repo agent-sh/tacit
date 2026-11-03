@@ -451,7 +451,7 @@ func closeMootQuestions(ctx context.Context, rs *reviewServer, owned map[string]
 	// The same for a name's ask: both files are live again.
 	for _, it := range rs.nameItems() {
 		d := it.Decision
-		if (len(only) > 0 && !only[it.ID]) || d == nil || d.Action != mootMark || d.By != "curator" || d.Closes == "" || it.State == "gone" || owned[it.ID] || owned[it.A.Name] {
+		if (len(only) > 0 && !only[it.ID]) || d == nil || d.Action != mootMark || d.By != "curator" || d.Closes == "" || it.State == "gone" || owned[it.ID] || owned[it.A.Name] || len(it.Notes) > 0 {
 			continue
 		}
 		ops = append(ops, op{ID: it.ID, Mark: "reopen", By: "curator", A: it.A.Path, B: it.B.Path})
@@ -511,7 +511,7 @@ func closeMootQuestions(ctx context.Context, rs *reviewServer, owned map[string]
 		d := ds[o.ID]
 		if o.Mark == "reopen" {
 			if d == nil {
-				out(fmt.Sprintf("reopened %s: its fact is live again", o.ID))
+				out(fmt.Sprintf("reopened %s: its fact is live again (a name: both files)", o.ID))
 			}
 			continue
 		}
