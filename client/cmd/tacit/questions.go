@@ -511,7 +511,7 @@ func closeMootQuestions(ctx context.Context, rs *reviewServer, owned map[string]
 		d := ds[o.ID]
 		if o.Mark == "reopen" {
 			if d == nil {
-				out(fmt.Sprintf("reopened %s: its fact is live again (a name: both files)", o.ID))
+				out(fmt.Sprintf("reopened %s: its fact is live again", o.ID))
 			}
 			continue
 		}

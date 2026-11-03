@@ -401,9 +401,12 @@ func TestTheCuratorsNameReopenLeavesAnOwnersLaterAnswer(t *testing.T) {
 	appendOwnerRecord(t, r, decision{ID: it.ID, Action: "both", A: it.A.Name, B: it.B.Name, At: time.Now().Format(time.RFC3339)})
 	rs = &reviewServer{s: r.s}
 	rs.loadFacts()
+	if _, err := os.Stat(filepath.Join(r.s.Dir, it.A.Path)); err != nil {
+		t.Fatalf("the file is not back: %v", err)
+	}
 	_, errs, err := rs.applyOps(ctx, []op{{ID: it.ID, Mark: "reopen", By: "curator", A: it.A.Path, B: it.B.Path}})
-	if err == nil && (len(errs) == 0 || errs[0] == nil) {
-		t.Fatal("the curator's reopen was applied over the owner's answer")
+	if err == nil && (len(errs) == 0 || errs[0] == nil || !strings.Contains(errs[0].Error(), "only the curator's moot closure")) {
+		t.Fatalf("the curator's reopen was not refused by the decision guard: %v %v", errs, err)
 	}
 	rs = &reviewServer{s: r.s}
 	rs.loadFacts()
