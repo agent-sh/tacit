@@ -104,19 +104,28 @@ func openIndex(ctx context.Context, s *store.Store) (*search.Index, error) {
 // With the instruction setting on (the default) the title carries the
 // instruction line instead of the bare tool names: what tacit holds and the
 // one lookup to make before an action that changes something.
-func startTitle(sit search.Situation, mcp bool) string {
+func startTitle(sit search.Situation, mcp bool) string { return startTitleWhen(sit, mcp, "") }
+
+// startTitleWhen is startTitle with when after the place (", again after
+// the compaction"), so a session that already had the block reads why it
+// has it again.
+func startTitleWhen(sit search.Situation, mcp bool, when string) string {
 	if deliveryOn("INSTRUCTION", true) {
-		detail := "`tacit fact <name>` opens one"
-		if mcp {
-			detail = "`mcp__tacit__tacit_fact <name>` opens one"
-		}
-		return fmt.Sprintf("# tacit: facts for %s on %s (read before acting; %s)\n%s", repoTitle(sit), sit.Host, detail, instruction(mcp))
+		return fmt.Sprintf("# tacit: facts for %s on %s%s (read before acting; %s)\n%s", repoTitle(sit), sit.Host, when, openDetail(mcp), instruction(mcp))
 	}
 	detail := "`tacit fact <name>` for detail"
 	if mcp {
 		detail = "`mcp__tacit__tacit_fact` for detail, `mcp__tacit__tacit_search` for more"
 	}
-	return fmt.Sprintf("# tacit: facts for %s on %s (read before acting; %s)", repoTitle(sit), sit.Host, detail)
+	return fmt.Sprintf("# tacit: facts for %s on %s%s (read before acting; %s)", repoTitle(sit), sit.Host, when, detail)
+}
+
+// openDetail names the call that opens one fact of a block.
+func openDetail(mcp bool) string {
+	if mcp {
+		return "`mcp__tacit__tacit_fact <name>` opens one"
+	}
+	return "`tacit fact <name>` opens one"
 }
 
 // runHook implements `tacit hook session-start|prompt|pre-compact`. It reads
@@ -175,10 +184,11 @@ func runHook(args []string) int {
 		// tacit's MCP server (pi's extension, cmd/tacit/pi/tacit.ts).
 		fmt.Print(questionBlock(ctx, in, sit, strings.TrimSpace(in.Prompt)))
 	case "session-start":
-		// Only a real start: resume, clear and compact re-fire this hook and
-		// the facts are already in the transcript (after a compaction, in the
-		// summary the compaction wrote).
-		if in.Source != "" && in.Source != "startup" {
+		// A start, and each way the harness starts the session again
+		// (restartOf): after a clear the context is empty and gets a start's
+		// block; after a compaction and on a resume, restartBlock.
+		restart := restartOf(in.Source)
+		if restart == restartNone {
 			return 0
 		}
 		// Best effort sync, bounded. Facts load from whatever HEAD is. A
@@ -204,8 +214,15 @@ func runHook(args []string) int {
 			return 0
 		}
 		hits = withoutClaims(hits)
-		remember(in.SessionID, hits)
 		mcp := slices.Contains(args[1:], "--mcp")
+		if restart != restartFresh {
+			fmt.Print(restartBlock(ctx, ix, s, in, sit, hits, restart, mcp))
+			return 0
+		}
+		if in.Source == "clear" {
+			forget(in.SessionID) // the context the record speaks of is gone
+		}
+		remember(in.SessionID, hits)
 		fmt.Print(search.Block(hits, startTitle(sit, mcp)))
 		fmt.Print(startTreeLine(ctx, ix, sit, len(hits), mcp))
 	case "prompt":
@@ -353,11 +370,20 @@ func selfContained(p string) bool {
 // by a repo with a thousand curated ones. At most one joins the block, after
 // the curated facts, and only if the prompt matches it above its floor.
 func promptHits(ctx context.Context, ix *search.Index, sit search.Situation, p string, seen map[string]bool) ([]search.Hit, error) {
+	return promptHitsWith(ctx, ix, sit, p, seen, false)
+}
+
+// promptHitsWith is promptHits; with local the selection is tacit's own,
+// never the utility provider's, whatever the settings: the start after a
+// compaction queries with the compaction's summary (afterCompaction), which
+// holds far more of the session than a prompt, and the provider was chosen
+// for prompts.
+func promptHitsWith(ctx context.Context, ix *search.Index, sit search.Situation, p string, seen map[string]bool, local bool) ([]search.Hit, error) {
 	sit.Query = p
 	sit.RestrictRepos, sit.PromptRelevance = true, true
 	sit.Derived, sit.OnlyDerived = false, false
 	ceiling, _ := promptCaps()
-	if utilityProvider() != "" {
+	if utilityProvider() != "" && !local {
 		ceiling = promptLimit // the scorer's pool and cap are its own (SPEC.md, Delivery)
 	}
 	// With session repositories the candidates are ranked by repoRanked
@@ -388,7 +414,12 @@ func promptHits(ctx context.Context, ix *search.Index, sit search.Situation, p s
 	if len(names) == 0 {
 		floor = repoLessPromptFloor
 	}
-	out := utilityPromptSelection(ctx, p, hits, dhits, seen, floor)
+	var out []search.Hit
+	if local {
+		out = promptSelectionFor(p, hits, dhits, seen, floor)
+	} else {
+		out = utilityPromptSelection(ctx, p, hits, dhits, seen, floor)
+	}
 	// The repo-first lines: the fact whose metadata names a path or command
 	// of the request, and the best rule or decision for it (hooks_delivery.go).
 	out = append(out, promptMetaHits(ctx, ix, sit, p, withSeen(seen, out))...)
@@ -606,6 +637,14 @@ func delivered(id string) map[string]bool {
 		}
 	}
 	return out
+}
+
+// forget drops the session's delivered set: its context no longer holds
+// what the set records (a clear, a compaction).
+func forget(id string) {
+	if p := sessionFile(id); p != "" {
+		os.Remove(p)
+	}
 }
 
 func remember(id string, hits []search.Hit) {

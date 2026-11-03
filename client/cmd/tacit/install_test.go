@@ -53,7 +53,7 @@ func TestInstallHooksMergesAndIsIdempotent(t *testing.T) {
 		t.Fatalf("prompt hook: %s", first)
 	}
 	ss := got.Hooks["SessionStart"]
-	if len(ss) != 1 || ss[0].Matcher != "startup" || ss[0].Hooks[0].Command != "/bin/tacit hook session-start" {
+	if len(ss) != 1 || ss[0].Matcher != startSources || ss[0].Hooks[0].Command != "/bin/tacit hook session-start" {
 		t.Fatalf("start hook: %s", first)
 	}
 	pc := got.Hooks["PreCompact"]
@@ -62,10 +62,12 @@ func TestInstallHooksMergesAndIsIdempotent(t *testing.T) {
 	}
 }
 
-// An install of an earlier build of this branch has a second SessionStart
-// entry, matcher compact, running `hook session-start --compact`, between
-// the startup entry and an unrelated one. A reinstall removes it and keeps
-// the others where they are; a rerun changes nothing.
+// An install of an earlier build has a second SessionStart entry, matcher
+// compact, running `hook session-start --compact`, between the startup entry
+// an earlier release wrote and an unrelated one. A reinstall removes it,
+// widens the startup entry in place to every source the hook answers
+// (Codex keys hook trust by position) and keeps the other where it is; a
+// rerun changes nothing.
 func TestInstallHooksRemovesAStaleCompactEntry(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hooks.json")
 	start := `{"hooks":{"SessionStart":[{"matcher":"startup","hooks":[{"type":"command","command":"/old/tacit hook session-start"}]},` +
@@ -95,7 +97,7 @@ func TestInstallHooksRemovesAStaleCompactEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	ss := got.Hooks["SessionStart"]
-	if len(ss) != 2 || ss[0].Matcher != "startup" || ss[0].Hooks[0].Command != "/bin/tacit hook session-start" ||
+	if len(ss) != 2 || ss[0].Matcher != startSources || ss[0].Hooks[0].Command != "/bin/tacit hook session-start" ||
 		ss[1].Hooks[0].Command != "later.sh" || strings.Contains(string(first), "--compact") {
 		t.Fatalf("entries: %s", first)
 	}

@@ -455,14 +455,16 @@ func installHooksFor(path, exe, goos string) error { return installHooksWith(pat
 // installHooksWith is installHooksFor with extra arguments for the
 // SessionStart hook (--mcp: the harness has tacit's MCP server).
 //
-// The entries: SessionStart for a real start (matcher startup: not on
-// resume, clear or compact; after a compaction the summary carries what the
-// session was given); UserPromptSubmit; PreToolUse for the edit and shell
+// The entries: SessionStart on a start, a resume, a clear and a compaction
+// (startSources; the hook answers each by what the context then holds,
+// restartOf); UserPromptSubmit; PreToolUse for the edit and shell
 // tools (toolPushTools); PreCompact, which starts the dream
 // of the session about to compact, so its facts reach the store for other
 // and later sessions. Claude Code and Codex 0.162 take the same events and
-// input. A tacit entry under a matcher none of these has (the compact entry
-// an earlier build of this branch wrote) is removed.
+// input. An entry of ours alone under a matcher an earlier release wrote
+// (legacyStartSources, legacyToolPushTools) is widened in place; any other
+// tacit entry under a matcher none of these has (the compact entry an
+// earlier build wrote) is removed.
 func installHooksWith(path, exe, goos string, startArgs []string) error {
 	settings := map[string]any{}
 	if b, err := os.ReadFile(path); err == nil {
@@ -479,7 +481,7 @@ func installHooksWith(path, exe, goos string, startArgs []string) error {
 		extra        []string
 	}
 	events := map[string][]spec{
-		"SessionStart":     {{"startup", "session-start", startArgs}},
+		"SessionStart":     {{startSources, "session-start", startArgs}},
 		"UserPromptSubmit": {{"", "prompt", nil}},
 		"PreCompact":       {{"", "pre-compact", nil}},
 		// PreToolUse: before an edit or a shell command, the one rule,
@@ -528,7 +530,9 @@ func installHooksWith(path, exe, goos string, startArgs []string) error {
 						continue
 					}
 					for i, sp := range specs {
-						if !placed[i] && (sp.matcher == matcher || (sp.sub == "pre-tool" && len(children) == 1 && slices.Contains(legacyToolPushTools, matcher))) {
+						legacy := len(children) == 1 && (sp.sub == "pre-tool" && slices.Contains(legacyToolPushTools, matcher) ||
+							sp.sub == "session-start" && matcher == legacyStartSources)
+						if !placed[i] && (sp.matcher == matcher || legacy) {
 							remaining = append(remaining, handlers[i])
 							placed[i] = true
 							if sp.matcher != matcher {

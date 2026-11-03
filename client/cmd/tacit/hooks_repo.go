@@ -53,7 +53,11 @@ func activityRepo(ctx context.Context, in hookInput, home string) string {
 // regular file under home with symlinks resolved on both sides. The file is
 // checked before it is opened and opened without blocking, so a FIFO or a
 // device in its place cannot hang the hook.
-func readTail(path, home string) string {
+func readTail(path, home string) string { return readTailN(path, home, transcriptTail) }
+
+// readTailN is readTail with the size it reads: the start after a
+// compaction reads more of the end (compactTail) for the summary.
+func readTailN(path, home string, size int64) string {
 	if path == "" || home == "" {
 		return ""
 	}
@@ -77,11 +81,11 @@ func readTail(path, home string) string {
 	if err != nil || !fi.Mode().IsRegular() {
 		return ""
 	}
-	if fi.Size() > transcriptTail {
-		if _, err := fh.Seek(fi.Size()-transcriptTail, io.SeekStart); err != nil {
+	if fi.Size() > size {
+		if _, err := fh.Seek(fi.Size()-size, io.SeekStart); err != nil {
 			return ""
 		}
 	}
-	b, _ := io.ReadAll(io.LimitReader(fh, transcriptTail))
+	b, _ := io.ReadAll(io.LimitReader(fh, size))
 	return string(b)
 }

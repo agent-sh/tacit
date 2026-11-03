@@ -60,6 +60,30 @@ func (ix *Index) Named(ctx context.Context, names []string) (map[string]Hit, err
 	return out, nil
 }
 
+// Withdrawn returns, of names, the facts no hook would deliver now: no
+// curated file of the name is live, each one retired or replaced, or held
+// back by the reviewer's verdict (HeldClause). By name, the last such file
+// the index holds; a replaced one's superseded_by is in its file. A name the
+// index does not hold is not in the answer.
+func (ix *Index) Withdrawn(ctx context.Context, names []string) (map[string]Hit, error) {
+	out := map[string]Hit{}
+	if len(names) == 0 {
+		return out, nil
+	}
+	b, _ := json.Marshal(names)
+	live := strings.ReplaceAll(HeldClause, "f.", "g.")
+	hits, err := ix.scan(ctx, `SELECT `+liveColumns+` FROM facts f WHERE f.name IN (SELECT value FROM json_each(:names)) AND f.inbox = 0
+		AND NOT EXISTS (SELECT 1 FROM facts g WHERE g.name = f.name AND g.inbox = 0 AND g.superseded = 0 AND `+live+`)
+		ORDER BY f.id`, map[string]any{"names": string(b)})
+	if err != nil {
+		return nil, err
+	}
+	for _, h := range hits {
+		out[h.Name] = h
+	}
+	return out, nil
+}
+
 // AtPaths returns the facts of the index at paths (store-relative, or a
 // local note's local/ path), by path: what tacit_fact says of whose each
 // file it shows is.
