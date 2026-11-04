@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -18,6 +19,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/search"
+	"github.com/agent-sh/tacit/client/internal/store"
 )
 
 // The delivery log (SPEC.md, "Delivery log"): for each moment a hook chose
@@ -54,9 +56,11 @@ type logEntry struct {
 	// Tool is a push's tool. Terms are the query terms of what the block
 	// answered (the prompt, the summary's query, the repositories' names, or
 	// the tool call's command and files), secret-shaped words left out
-	// (logTerms); the text itself is never kept.
-	Tool  string   `json:"tool,omitempty"`
-	Terms []string `json:"terms,omitempty"`
+	// (logTerms); the text itself is never kept. NTerms is how many terms
+	// it had before the vocabulary check.
+	Tool   string   `json:"tool,omitempty"`
+	Terms  []string `json:"terms,omitempty"`
+	NTerms int      `json:"n_terms"`
 	// Transcript is the transcript's size in bytes when the hook ran: the
 	// turn's place in the session, and where what came after it begins
 	// (-1: none to read).
@@ -135,16 +139,17 @@ var dlog *logEntry
 func deliveryLogOn() bool { return deliveryOn("LOG", true) }
 
 // beginLog opens an entry for a block of hook, writing the one before it.
-func beginLog(hook string, in hookInput, request string, repos []string) {
+func beginLog(hook string, in hookInput, request string, repos []string, ix *search.Index) {
 	endLog(nil)
 	if !deliveryLogOn() {
 		return
 	}
 	dlog = &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: hook, Session: in.SessionID, Policy: "gates",
-		Cwd: in.Cwd, Repos: repos, Terms: logTerms(request), Transcript: transcriptSize(in.TranscriptPath), TranscriptPath: in.TranscriptPath}
+		Cwd: in.Cwd, Repos: repos, Transcript: transcriptSize(in.TranscriptPath), TranscriptPath: in.TranscriptPath}
 	if hook == "prompt" || hook == "summary" {
 		dlog.full = request // the echo filter runs on these only
 	}
+	dlog.Terms, dlog.NTerms = logTerms(ix, request)
 	dlog.ID = logID(dlog)
 }
 
@@ -451,9 +456,12 @@ func (e *logEntry) echoOf(h search.Hit) float64 {
 // a line in a listing and leaving, or climbing deep and reading a fact
 // whole, is what the steps and what follows them say.
 type logNav struct {
-	Tool  string   `json:"tool"`            // tree, search, fact
-	Path  string   `json:"path,omitempty"`  // the tree's folder, a search's scope
-	Terms []string `json:"terms,omitempty"` // a search's terms (logTerms)
+	Tool   string   `json:"tool"`            // tree, search, fact
+	Path   string   `json:"path,omitempty"`  // the tree's folder, a search's scope
+	Terms  []string `json:"terms,omitempty"` // a search's terms in the store's vocabulary (logTerms)
+	NTerms int      `json:"n_terms,omitempty"`
+	// query is the search's words, read only to take its terms.
+	query string
 	Names []string `json:"names,omitempty"` // the facts read whole
 	// Depth is how many folders deep the step is (the tree's folder, a
 	// search's scope); Levels the levels below it a tree asked for (-1:
@@ -486,16 +494,16 @@ func navOf(in hookInput, command string) []logNav {
 		}
 		json.Unmarshal(in.ToolInput, &a)
 		switch {
-		case strings.HasSuffix(in.ToolName, "__tacit_fact") && fact.IsSlug(a.Name):
+		case strings.HasSuffix(in.ToolName, "__tacit_fact") && a.Name != "":
 			out = append(out, logNav{Tool: "fact", Names: []string{a.Name}, Levels: -1})
 		case strings.HasSuffix(in.ToolName, "__tacit_tree"):
-			n := logNav{Tool: "tree", Path: scopePath(a.Path), Depth: folderDepth(scopePath(a.Path)), Levels: -1}
+			n := logNav{Tool: "tree", Path: a.Path, Levels: -1}
 			if a.Depth != nil {
 				n.Levels = *a.Depth
 			}
 			out = append(out, n)
 		case strings.HasSuffix(in.ToolName, "__tacit_search"):
-			out = append(out, logNav{Tool: "search", Path: scopePath(a.Scope), Terms: logTerms(a.Query), Depth: folderDepth(scopePath(a.Scope)), Levels: -1, Offset: a.Offset})
+			out = append(out, logNav{Tool: "search", Path: a.Scope, query: a.Query, Levels: -1, Offset: a.Offset})
 		}
 		return out
 	}
@@ -565,30 +573,83 @@ func navCommand(w []string) (logNav, bool) {
 			n.Levels = d
 		}
 	case "search":
-		n.Path, n.Terms = flags["scope"], logTerms(strings.Join(words, " "))
+		n.Path, n.query = flags["scope"], strings.Join(words, " ")
 		n.Offset, _ = strconv.Atoi(flags["offset"])
 	}
-	n.Path = scopePath(n.Path)
-	n.Depth = folderDepth(n.Path)
 	return n, true
 }
 
-// scopeShape is a store folder: name segments joined by /.
-var scopeShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@-]*(?:/[A-Za-z0-9][A-Za-z0-9._@-]*)*$`)
+// logNavigation records the store steps a tool call takes, as one nav entry
+// each, read by the PreToolUse hook before the call runs. What a step names
+// is kept only when the store holds it: a fact name the index has, a folder
+// that is a directory of the store, a search's terms in the store's
+// vocabulary (logTerms). Without the index, the names and terms are left
+// out and their count kept.
+func logNavigation(s *store.Store, in hookInput, steps []logNav) {
+	if !deliveryLogOn() || len(steps) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), logVocabularyBudget)
+	defer cancel()
+	ix, err := openHookIndex(ctx, s)
+	if err != nil {
+		ix = nil
+	} else {
+		defer ix.Close()
+	}
+	for _, n := range steps {
+		n := n
+		var names []string
+		for _, name := range n.Names {
+			if ix != nil && ix.HasFact(ctx, name) {
+				names = append(names, name)
+			}
+		}
+		n.Names = names
+		n.Path = storeFolder(s.Dir, n.Path)
+		n.Depth = folderDepth(n.Path)
+		if n.Tool == "search" {
+			n.Terms, n.NTerms = logTerms(ix, n.query)
+		}
+		e := &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: "nav", Session: in.SessionID, Cwd: in.Cwd,
+			Transcript: transcriptSize(in.TranscriptPath), TranscriptPath: in.TranscriptPath, Nav: &n}
+		e.ID = logID(e)
+		logPending = append(logPending, e)
+	}
+}
 
-// scopePath is p when it is shaped as a store folder (whose segments are no
-// secret), else nothing: the log keeps no free text.
-func scopePath(p string) string {
-	p = strings.Trim(p, "/")
-	if !scopeShape.MatchString(p) || len(p) > 200 {
+// logVocabularyBudget bounds the index lookups that decide what a nav entry
+// may keep.
+const logVocabularyBudget = 150 * time.Millisecond
+
+// storeFolder is p when it names a directory of the store (a scope or a
+// folder under one), else nothing.
+func storeFolder(dir, p string) string {
+	p = strings.Trim(filepath.ToSlash(filepath.Clean("/"+p)), "/")
+	if p == "" || p == "." {
 		return ""
 	}
-	for _, seg := range strings.Split(p, "/") {
-		if secretWord(seg) || secretShaped(seg) {
-			return ""
-		}
+	fi, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(p)))
+	if err != nil || !fi.IsDir() || strings.HasPrefix(p, ".") {
+		return ""
 	}
 	return p
+}
+
+// logTerms is the query terms of text (search.Terms, as the selection reads
+// them) that the store's vocabulary holds, and how many terms text had. A
+// term no fact of the store holds is left out, whatever it is: the store
+// masks every write (store.Redact), so a term it holds is no secret it did
+// not already hold, and a term it does not hold matches no fact. Without an
+// index, none is kept.
+func logTerms(ix *search.Index, text string) ([]string, int) {
+	terms := search.Terms(text)
+	if ix == nil || len(terms) == 0 {
+		return nil, len(terms)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), logVocabularyBudget)
+	defer cancel()
+	return ix.InVocabulary(ctx, terms), len(terms)
 }
 
 // shellWords splits one part of a command line into its words as a shell
@@ -647,19 +708,4 @@ func folderDepth(p string) int {
 		return 0
 	}
 	return strings.Count(p, "/") + 1
-}
-
-// logNavigation records the store steps a tool call takes, as one nav entry
-// each, read by the PreToolUse hook before the call runs.
-func logNavigation(in hookInput, command string) {
-	if !deliveryLogOn() {
-		return
-	}
-	for _, n := range navOf(in, command) {
-		n := n
-		e := &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: "nav", Session: in.SessionID, Cwd: in.Cwd,
-			Transcript: transcriptSize(in.TranscriptPath), TranscriptPath: in.TranscriptPath, Nav: &n}
-		e.ID = logID(e)
-		logPending = append(logPending, e)
-	}
 }

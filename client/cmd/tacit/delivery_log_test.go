@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -99,7 +100,7 @@ func TestDeliveryLogRecordsEachBlockAndWhatItLeftOut(t *testing.T) {
 		t.Fatalf("entries: %d prompt, %d push, %d nav, want 2, 5, 4: %+v", len(prompts), len(pushes), len(navs), log)
 	}
 	first := prompts[0]
-	if first.V != deliveryLogVersion || first.ID == "" || first.Session != "s1" || strings.Join(first.Terms, " ") != "fix scheduler pool shard lock slot race" || first.Floor != promptFloor || first.Relative != promptRelative ||
+	if first.V != deliveryLogVersion || first.ID == "" || first.Session != "s1" || !subset(first.Terms, "scheduler", "pool", "shard", "lock", "slot") || first.NTerms != 7 || first.Floor != promptFloor || first.Relative != promptRelative ||
 		len(first.Terms) == 0 || !strings.Contains(strings.Join(first.Repos, ","), "widget") || first.Policy != "gates" || first.Nothing || first.PNothing != 0 {
 		t.Fatalf("the prompt entry: %+v", first)
 	}
@@ -112,7 +113,7 @@ func TestDeliveryLogRecordsEachBlockAndWhatItLeftOut(t *testing.T) {
 	if again == nil || again.Delivered || again.Dropped != "seen" || again.P != 0 || !prompts[1].Nothing || prompts[1].PNothing != 1 {
 		t.Fatalf("the line the session had: %+v, nothing %v %v", again, prompts[1].Nothing, prompts[1].PNothing)
 	}
-	if p := candOf(pushes[0], "lint-before-push"); p == nil || !p.Delivered || p.Via != "meta" || p.P != 1 || p.Echo != 0 || pushes[0].Tool != "Bash" || strings.Join(pushes[0].Terms, " ") != "make lint" || pushes[0].Nothing {
+	if p := candOf(pushes[0], "lint-before-push"); p == nil || !p.Delivered || p.Via != "meta" || p.P != 1 || p.Echo != 0 || pushes[0].Tool != "Bash" || pushes[0].NTerms != 2 || pushes[0].Nothing {
 		t.Fatalf("the push: %+v", pushes[0])
 	}
 	if p := pushes[1]; p.Tool != "Bash" || len(p.Terms) != 0 || !p.Nothing || p.PNothing != 1 || len(p.Cands) != 0 {
@@ -121,7 +122,7 @@ func TestDeliveryLogRecordsEachBlockAndWhatItLeftOut(t *testing.T) {
 	want := []logNav{
 		{Tool: "fact", Names: []string{"scheduler-shard-locks"}, Levels: -1},
 		{Tool: "tree", Path: "projects/widget", Depth: 2, Levels: 0},
-		{Tool: "search", Path: "projects/widget", Terms: []string{"lock", "order"}, Depth: 2, Levels: -1},
+		{Tool: "search", Path: "projects/widget", Terms: []string{"lock", "order"}, NTerms: 2, Depth: 2, Levels: -1},
 		{Tool: "fact", Names: []string{"pool-lock-order"}, Levels: -1},
 	}
 	if navs[2].ID == navs[3].ID {
@@ -243,7 +244,7 @@ func TestDeliveryLogEchoOnTheWholeRequest(t *testing.T) {
 	})
 	prompt := strings.Repeat("preamble words of a long scheduled prompt ", 60) + "Review the tool failures weekly and fix their root cause, then report"
 	t.Cleanup(func() { dlog, logPending = nil, nil })
-	beginLog("prompt", hookInput{SessionID: "s1"}, prompt, nil)
+	beginLog("prompt", hookInput{SessionID: "s1"}, prompt, nil, nil)
 	e := dlog
 	got, err := promptHits(context.Background(), ix, search.Situation{}, prompt, nil)
 	if err != nil {
@@ -263,20 +264,23 @@ func TestDeliveryLogEchoOnTheWholeRequest(t *testing.T) {
 // tacit too, and words that only mention tacit are no step.
 func TestDeliveryLogReadsTheCLIStep(t *testing.T) {
 	for cmd, want := range map[string]string{
-		"tacit search --repo widget --limit 5 --offset 10 lock order":     `[{"tool":"search","terms":["lock","order"],"depth":0,"levels":-1,"offset":10}]`,
-		"FOO=1 tacit search -scope=projects/widget -json lock":            `[{"tool":"search","path":"projects/widget","terms":["lock"],"depth":2,"levels":-1}]`,
-		"tacit tree --depth=1 projects/widget":                            `[{"tool":"tree","path":"projects/widget","depth":2,"levels":1}]`,
-		`C:\tools\tacit.exe fact pool-lock-order`:                         `[{"tool":"fact","names":["pool-lock-order"],"depth":0,"levels":-1}]`,
-		`git commit -m "use tacit fact to read one" && echo tacit tree x`: `null`,
-		"tacit search lock order --scope projects/widget":                 `[{"tool":"search","terms":["lock","order","scope","projects","widget"],"depth":0,"levels":-1}]`,
-		"tacit search -- --scope":                                         `[{"tool":"search","terms":["scope"],"depth":0,"levels":-1}]`,
-		"tacit fact one two; tacit fact Not_A_Slug; tacit tree a b":       `null`,
-		`tacit search --command "make lint" lock`:                         `[{"tool":"search","terms":["lock"],"depth":0,"levels":-1}]`,
-		`tacit search 'shard lock' --scope x`:                             `[{"tool":"search","terms":["shard","lock","scope"],"depth":0,"levels":-1}]`,
+		"tacit search --repo widget --limit 5 --offset 10 lock order":     "search||[]|-1|10|lock order",
+		"FOO=1 tacit search -scope=projects/widget -json lock":            "search|projects/widget|[]|-1|0|lock",
+		"tacit tree --depth=1 projects/widget":                            "tree|projects/widget|[]|1|0|",
+		`C:\tools\tacit.exe fact pool-lock-order`:                         "fact||[pool-lock-order]|-1|0|",
+		`git commit -m "use tacit fact to read one" && echo tacit tree x`: "",
+		"tacit search lock order --scope projects/widget":                 "search||[]|-1|0|lock order --scope projects/widget",
+		"tacit search -- --scope":                                         "search||[]|-1|0|--scope",
+		"tacit fact one two; tacit fact Not_A_Slug; tacit tree a b":       "",
+		`tacit search --command "make lint" lock`:                         "search||[]|-1|0|lock",
+		`tacit search 'shard lock' --scope x`:                             "search||[]|-1|0|shard lock --scope x",
 	} {
-		b, _ := json.Marshal(navOf(hookInput{ToolName: "Bash"}, cmd))
-		if string(b) != want {
-			t.Errorf("%s:\n got %s\nwant %s", cmd, b, want)
+		var got []string
+		for _, n := range navOf(hookInput{ToolName: "Bash"}, cmd) {
+			got = append(got, fmt.Sprintf("%s|%s|%v|%d|%d|%s", n.Tool, n.Path, n.Names, n.Levels, n.Offset, n.query))
+		}
+		if strings.Join(got, ";") != want {
+			t.Errorf("%s:\n got %q\nwant %q", cmd, strings.Join(got, ";"), want)
 		}
 	}
 }
@@ -341,7 +345,7 @@ func TestDeliveryLogNamesTheUtilityPolicy(t *testing.T) {
 	}
 	run := func() *logEntry {
 		t.Helper()
-		beginLog("prompt", hookInput{SessionID: "s1"}, "endpoint api release", nil)
+		beginLog("prompt", hookInput{SessionID: "s1"}, "endpoint api release", nil, nil)
 		e := dlog
 		dlog.pool([]search.Hit{useful, topical}, nil)
 		endLog(utilityLogged(context.Background(), "endpoint api release", []search.Hit{useful, topical}, nil, nil, promptFloor))
@@ -378,63 +382,47 @@ func TestDeliveryLogWriteIsBounded(t *testing.T) {
 	}
 }
 
-// The log keeps a request's terms, never its text, and leaves out every
-// secret before it takes them: by shape (the server's key shapes, provider
-// prefixes with a key's tail, long hex runs, random-looking runs) and by
-// place (the value after a password, token or key name, a URL's user and
-// password, a password glued onto -p). Paths, identifiers and names that
-// only start like a key stay.
-func TestDeliveryLogTermsLeaveOutSecrets(t *testing.T) {
-	for _, s := range []string{
-		"sk-Ab3dEfGh1jKlMnOpQrStUvWx", "ghp_0123456789abcdefABCDEF0123456789abcd", "AKIA" + "ABCDEFGHIJKLMNOP", // split so a scanner sees no key in the source
-		"xoxb-123456789012-abcdefABCDEF", "0123456789abcdef0123456789abcdef01234567",
-		"token=Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MEFCQ0RFRg", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln",
-		"Q8vX2mZp7LkR4tNw9YbH3sJd", "--password=hunter2", "PGPASSWORD=hunter2", "-pS3cretPass",
-		"--api-key Kq2Jd8Lw", "password is Tr0ub4dor&3", "Authorization: Bearer abcdef123456",
-		"https://alice:Sup3rS3cret@example.com/x",
-		"wJalrXUtnF3MI" + "/K7MDENG/" + "bPxRfiCY9XAMPLEKEY", "Q8vX2mZp7LkR4tN-w9YbH3sJdK2mPa1",
-		`"password":"hunter2"`, `{"password": "hunter2"}`, "SECRET_KEY=hunter2", "DJANGO_SECRET_KEY=hunter2", "ENCRYPTION_KEY=hunter2",
-		"https://example.com/cb?access_token=hunter2xyz&page=2", "-u alice:hunter2", "Cookie: session=hunter2xyz",
-	} {
-		got := strings.Join(logTerms("deploy the widget with "+s+" tonight"), " ")
-		for _, leak := range []string{"hunter2", "s3cretpass", "kq2jd8lw", "tr0ub4dor", "abcdef123456", "sup3rs3cret", "alice", "ab3d", "wjalrxutnf3mi", "k7mdeng", "q8vx2", "w9ybh3", "zm9v", "q8vx", "akia", "0123456789abcdef"} {
-			if strings.Contains(got, leak) {
-				t.Errorf("%s: terms %q hold %q", s, got, leak)
-			}
-		}
-		if !strings.HasPrefix(got, "deploy widget") || !strings.HasSuffix(got, "tonight") {
-			t.Errorf("%s: terms %q lost the words around it", s, got)
-		}
+// The log keeps a request's terms only when the store's vocabulary holds
+// them: an unindexed secret-shaped word and an unindexed ordinary word
+// both stay out, and an indexed term is kept. Without an index none is
+// kept, only how many there were. A nav step keeps a fact name the index has and a folder
+// the store has, nothing else.
+func TestDeliveryLogTermsAreTheStoresVocabulary(t *testing.T) {
+	ix := relevanceIndex(t, []fact.Meta{
+		{Name: "scheduler-shard-locks", Description: "The scheduler pool keeps one shard lock per tenant"},
+	})
+	key := "sk-" + "Ab3dEfGh1jKlMnOpQrStUvWx" // split so a scanner sees no key in the source
+	terms, n := logTerms(ix, "fix the scheduler shard with "+key+" and frobnicate the quux")
+	if strings.Join(terms, " ") != "scheduler shard" || n != 6 {
+		t.Fatalf("terms %v of %d", terms, n)
 	}
-	for text, want := range map[string]string{
-		"edit client/cmd/tacit/hooks_pretool.go and run make lint":   "edit client cmd tacit hooks_pretool run make lint",
-		"why did the otter retry loop stop":                          "otter retry loop stop",
-		"open src/components/UserProfile2.tsx":                       "open src components userprofile2 tsx",
-		"read pkg/apis/v1beta1/DeploymentSpec.go":                    "read pkg apis v1beta1 deploymentspec",
-		"rename configureHTTPClientWithRetries":                      "rename configurehttpclientwithretries",
-		"call hf_hub_download with npm_config_cache in pypi-publish": "call hf_hub_download npm_config_cache pypi publish",
-		"find . -print and fix the token refresh":                    "find print fix token refresh",
-		"the bypass is permanent and oauth: broken flow":             "bypass permanent oauth broken flow",
-		"call https://example.com/api?page=2&sort=name":              "call https example com api page sort name",
-	} {
-		if got := strings.Join(logTerms(text), " "); got != want {
-			t.Errorf("%q: terms %q, want %q", text, got, want)
+	if terms, n := logTerms(nil, "fix the scheduler shard"); terms != nil || n != 3 {
+		t.Fatalf("without an index: %v of %d", terms, n)
+	}
+	b, _ := json.Marshal(logEntry{V: 1, Terms: terms})
+	if strings.Contains(string(b), "ab3d") || strings.Contains(string(b), "frobnicate") {
+		t.Fatalf("entry: %s", b)
+	}
+	store := t.TempDir()
+	os.MkdirAll(filepath.Join(store, "projects", "widget"), 0o755)
+	for in, want := range map[string]string{"projects/widget": "projects/widget", "/projects/widget/": "projects/widget", "projects/nothere": "", "../etc": "", "free text here": ""} {
+		if got := storeFolder(store, in); got != want {
+			t.Errorf("storeFolder(%q) = %q, want %q", in, got, want)
 		}
 	}
-	// The entry holds no text field, and a nav step's folder only when it is
-	// shaped as one.
-	b, _ := json.Marshal(logEntry{V: 1, Terms: logTerms("fix it with sk-Ab3dEfGh1jKlMnOpQrStUvWx now")})
-	if strings.Contains(string(b), "Ab3d") || strings.Contains(string(b), "request") {
-		t.Errorf("entry: %s", b)
+	if !ix.HasFact(context.Background(), "scheduler-shard-locks") || ix.HasFact(context.Background(), "not-a-fact") {
+		t.Error("HasFact")
 	}
-	for in, want := range map[string]string{"projects/widget": "projects/widget", "/user/": "user", "free text here": "", "projects/Q8vX2mZp7LkR4tNw9YbH3sJd": ""} {
-		if got := scopePath(in); got != want {
-			t.Errorf("scopePath(%q) = %q, want %q", in, got, want)
+}
+
+// subset reports whether xs holds every one of want.
+func subset(xs []string, want ...string) bool {
+	for _, w := range want {
+		if !slices.Contains(xs, w) {
+			return false
 		}
 	}
-	if n := navOf(hookInput{ToolName: "mcp__tacit__tacit_fact", ToolInput: json.RawMessage(`{"name":"not a slug"}`)}, ""); len(n) != 0 {
-		t.Errorf("a fact name that is no slug: %+v", n)
-	}
+	return true
 }
 
 // With the session's repositories the prompt ranks a wider pool and cuts

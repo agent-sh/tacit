@@ -215,7 +215,7 @@ func runHook(args []string) int {
 		sit, _ = withWorkspace(withRootFolder(sit, recs, in.Cwd), in.Cwd)
 		sit = withOrgs(withRecordAliases(sit, recs), recs)
 		beginLog(startHook(restart), in,
-			strings.TrimSpace(sit.Repo+" "+strings.Join(sit.Workspace, " ")), repoNames(sit))
+			strings.TrimSpace(sit.Repo+" "+strings.Join(sit.Workspace, " ")), repoNames(sit), ix)
 		hits, err := sessionStartHits(ctx, ix, sit)
 		if err != nil {
 			return 0
@@ -284,7 +284,7 @@ func runHook(args []string) int {
 			}
 		}
 		sit = withPromptScopes(withOrgs(withRecordAliases(sit, recs), recs), recs, p)
-		beginLog("prompt", in, p, repoNames(sit))
+		beginLog("prompt", in, p, repoNames(sit), ix)
 		strong, err := promptHits(ctx, ix, sit, p, delivered(in.SessionID))
 		if err != nil {
 			return 0

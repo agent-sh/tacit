@@ -184,7 +184,7 @@ func summaryStep(ctx context.Context, ix *search.Index, in hookInput, sit search
 	}
 	sit = withPromptScopes(sit, recs, summary)
 	seen := delivered(in.SessionID)
-	beginLog("summary", in, q, repoNames(sit))
+	beginLog("summary", in, q, repoNames(sit), ix)
 	hits, err := promptHitsWith(ctx, ix, sit, q, seen, true)
 	if err != nil {
 		endLog(nil)

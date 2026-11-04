@@ -112,7 +112,7 @@ func repoRel(r repoid.Repo, cwd, p string) (string, bool) {
 // since (pendingHeld).
 func preTool(s *store.Store, in hookInput) {
 	paths, command := toolTargets(in.ToolName, in.ToolInput)
-	logNavigation(in, command) // the store's clickstream, whether pushes are on or not
+	logNavigation(s, in, navOf(in, command)) // the store's clickstream, whether pushes are on or not
 	if !deliveryOn("TOOL_PUSH", true) {
 		return
 	}
@@ -170,7 +170,7 @@ func preTool(s *store.Store, in hookInput) {
 	recs := hookRecords(ctx, ix)
 	pendingHeld(ctx, ix, in) // after a compaction: what its summary holds is in the context
 	seen := delivered(in.SessionID)
-	beginLog("push", in, strings.TrimSpace(command+" "+strings.Join(rel, " ")), repoNames(sit))
+	beginLog("push", in, strings.TrimSpace(command+" "+strings.Join(rel, " ")), repoNames(sit), ix)
 	if dlog != nil {
 		dlog.Tool = in.ToolName
 	}

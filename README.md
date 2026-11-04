@@ -161,7 +161,7 @@ Every YAML option is listed here:
 | `delivery.prompt_ceiling` | `TACIT_DELIVERY_PROMPT_CEILING` | Most curated lines of the prompt block above its floor; default `5` |
 | `delivery.prompt_relative` | `TACIT_DELIVERY_PROMPT_RELATIVE` | A prompt line also needs this share of the best line's score; default `0.7`, `0` for none |
 | `delivery.meta_ceiling` | `TACIT_DELIVERY_META_CEILING` | Most metadata lines per prompt and per tool call; default `1` |
-| `delivery.log` | `TACIT_DELIVERY_LOG` | `on` (default): each hook block, with what its gates left out, is a line of this machine's private delivery log (`delivery/` in the state directory, mode 0600, never sent; a request's terms, never its text; SPEC.md, Delivery log) |
+| `delivery.log` | `TACIT_DELIVERY_LOG` | `on` (default): each hook block, with what its gates left out, is a line of this machine's private delivery log (`delivery/` in the state directory, mode 0600, never sent; a request's terms the store's index holds, never its text; SPEC.md, Delivery log) |
 | `delivery.log_days` | `TACIT_DELIVERY_LOG_DAYS` | Days of the delivery log kept; default `30` |
 | `verify_roots` | `TACIT_VERIFY_ROOTS` | Extra permitted source directories; YAML list, `PATH` separator in environment; every directory must exist |
 | `runner` | `TACIT_RUNNER` | Default CLI for all model jobs; `claude` |
