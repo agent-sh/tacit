@@ -22,7 +22,9 @@ import (
 const dreamRangesFile = "dream-ranges.jsonl"
 
 // dreamRange is one note's window: the transcript's plain path, the session
-// id the note names, and the byte range [Start, End) of its lines.
+// id the note names, and the byte range [Start, End) of the read its window
+// was cut from (a read takes up to 4 MiB of a transcript, a window at most
+// 60,000 characters of its digest, so one read can hold several windows).
 type dreamRange struct {
 	Note    string `json:"note"`
 	File    string `json:"file"`
@@ -31,10 +33,12 @@ type dreamRange struct {
 	End     int64  `json:"end"`
 }
 
-// recordDreamRanges appends the window's range for each of its notes. It
-// fails quietly: the range is a convenience for recall, never a reason for a
-// window to fail. A Hermes window (no transcript file) records nothing.
-func recordDreamRanges(stateDir string, w dream.Window, facts []*fact.Fact) {
+// recordDreamRanges appends the window's range for each note it wrote
+// (written: the paths persisting returned; a note already there was written
+// by an earlier window, whose range stands). It fails quietly: the range is
+// a convenience for recall, never a reason for a window to fail. A Hermes
+// window records none.
+func recordDreamRanges(stateDir string, w dream.Window, facts []*fact.Fact, written []string) {
 	if len(facts) == 0 || w.File == "" || strings.HasPrefix(w.File, "hermes:") || w.End <= w.Start {
 		return
 	}
@@ -46,22 +50,30 @@ func recordDreamRanges(stateDir string, w dream.Window, facts []*fact.Fact) {
 		return
 	}
 	defer f.Close()
-	enc := json.NewEncoder(f)
+	wrote := map[string]bool{}
+	for _, p := range written {
+		wrote[strings.TrimSuffix(filepath.Base(filepath.FromSlash(p)), ".md")] = true
+	}
+	// One write for the window's lines, so a crash tears at most this one.
+	var buf strings.Builder
+	enc := json.NewEncoder(&buf)
 	for _, x := range facts {
-		if x == nil || x.Meta.Name == "" {
+		if x == nil || x.Meta.Name == "" || !wrote[x.Meta.Name] {
 			continue
 		}
 		_ = enc.Encode(dreamRange{Note: x.Meta.Name, File: transcript.Plain(w.File), Session: w.Session, Start: w.Start, End: w.End})
 	}
+	if buf.Len() > 0 {
+		_, _ = f.WriteString(buf.String())
+	}
 }
 
-// dreamRangeOf is the newest range recorded for a note, if any.
-func dreamRangeOf(stateDir, note string) (dreamRange, bool) {
-	var out dreamRange
-	found := false
+// dreamRangeOf is the first range recorded for a note in this session's
+// transcript (named name): the window that wrote it.
+func dreamRangeOf(stateDir, note, session, name string) (dreamRange, bool) {
 	f, err := os.Open(filepath.Join(stateDir, dreamRangesFile))
 	if err != nil {
-		return out, false
+		return dreamRange{}, false
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
@@ -72,9 +84,9 @@ func dreamRangeOf(stateDir, note string) (dreamRange, bool) {
 			continue
 		}
 		var r dreamRange
-		if json.Unmarshal(line, &r) == nil && r.Note == note && r.End > r.Start {
-			out, found = r, true
+		if json.Unmarshal(line, &r) == nil && r.Note == note && r.End > r.Start && r.Session == session && transcript.Name(r.File) == name {
+			return r, true
 		}
 	}
-	return out, found
+	return dreamRange{}, false
 }

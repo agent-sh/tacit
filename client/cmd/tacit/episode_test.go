@@ -785,13 +785,23 @@ func TestEpisodeFactLeadsToItsDreamedWindow(t *testing.T) {
 	if code != 0 || !strings.Contains(whole, "owner owner_text") || strings.Contains(whole, "was dreamed from") {
 		t.Fatalf("no range recorded (%d):\n%s", code, whole)
 	}
-	recordDreamRanges(platform.StateDir(home), dream.Window{File: path, Session: episodeSessionID, Start: starts[2], End: starts[4]}, []*fact.Fact{note})
+	// Another session's range for the same note name, recorded later, does
+	// not hide this one.
+	recordDreamRanges(platform.StateDir(home), dream.Window{File: path, Session: episodeSessionID, Start: starts[2], End: starts[4]}, []*fact.Fact{note}, []string{note.Path})
+	recordDreamRanges(platform.StateDir(home), dream.Window{File: "/elsewhere/other.jsonl", Session: "9a9a9a9a-0000-4000-8000-000000000000", Start: 0, End: 10}, []*fact.Fact{note}, []string{note.Path})
 	out, code := episodeOut(t, "--fact", "demo-candidates-deploy-to-staging")
-	if code != 0 || !strings.Contains(out, "the note staging-two was dreamed from the events "+strconv.FormatInt(starts[2], 10)+".") || strings.Contains(out, "owner owner_text") || !strings.Contains(out, "tool_result Bash") {
+	if code != 0 || !strings.Contains(out, "the note staging-two was dreamed from the part of this transcript from "+strconv.FormatInt(starts[2], 10)+".") || strings.Contains(out, "owner owner_text") || !strings.Contains(out, "tool_result Bash") {
 		t.Fatalf("the note's window (%d):\n%s", code, out)
 	}
+	// A read cut before the window says so, and claims no empty window.
+	episodeCutAfter = 1
+	cutOut, _ := episodeOut(t, "--fact", "demo-candidates-deploy-to-staging")
+	episodeCutAfter = -1
+	if !strings.Contains(cutOut, "stopped at its time limit before the part") || strings.Contains(cutOut, "hold no events now") {
+		t.Fatalf("a read cut before the window:\n%s", cutOut)
+	}
 	// The note itself leads there too.
-	if out, code := episodeOut(t, "--fact", "staging-two"); code != 0 || !strings.Contains(out, "was dreamed from the events") {
+	if out, code := episodeOut(t, "--fact", "staging-two"); code != 0 || !strings.Contains(out, "was dreamed from the part") {
 		t.Fatalf("the note (%d):\n%s", code, out)
 	}
 

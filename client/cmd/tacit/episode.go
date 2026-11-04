@@ -182,7 +182,7 @@ func episodeSession(s *store.Store, q episodeQuery) (episodeTarget, error) {
 			}
 			t.harness, t.path, t.format = h, path, f
 			if t.note != "" {
-				if r, ok := dreamRangeOf(platform.StateDir(home), t.note); ok && r.Session == t.session && transcript.Name(r.File) == name {
+				if r, ok := dreamRangeOf(platform.StateDir(home), t.note, t.session, name); ok {
 					t.window, t.from, t.to = true, r.Start, r.End
 				}
 			}
@@ -962,12 +962,15 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 	if cut {
 		b.WriteString("# the read stopped at its time limit: the newer events were not searched\n")
 	}
-	if window {
-		if first != nil {
-			fmt.Fprintf(&b, "# the note %s was dreamed from the events %d.%d to %d.%d of this transcript: around <ref> reads them\n", t.note, first.Offset, first.Index, last.Offset, last.Index)
-		} else {
-			fmt.Fprintf(&b, "# the note %s was dreamed from bytes %d to %d of this transcript, which hold no events now\n", t.note, t.from, t.to)
-		}
+	switch {
+	case window && cut && first == nil:
+		fmt.Fprintf(&b, "# the read stopped at its time limit before the part of this transcript the note %s was dreamed from\n", t.note)
+	case window && cut:
+		fmt.Fprintf(&b, "# the note %s was dreamed from the part of this transcript that starts at %d.%d; the read stopped at its time limit inside it\n", t.note, first.Offset, first.Index)
+	case window && first != nil:
+		fmt.Fprintf(&b, "# the note %s was dreamed from the part of this transcript from %d.%d to %d.%d: around <ref> reads it\n", t.note, first.Offset, first.Index, last.Offset, last.Index)
+	case window:
+		fmt.Fprintf(&b, "# the note %s was dreamed from bytes %d to %d of this transcript, which hold no events now\n", t.note, t.from, t.to)
 	}
 	if partial {
 		b.WriteString("# partial: not every matching event was checked (the redaction's time limit); longer words check fewer\n")
@@ -978,6 +981,8 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 	// The pager names only an event shown: never one a secret alone matched.
 	older := !anyWord && len(shown) > 0 && (more || partial || dropped)
 	switch {
+	case anyWord && more && window:
+		b.WriteString("# more events of that part hold some of the words: around <ref> reads it\n")
 	case anyWord && more:
 		b.WriteString("# more events hold some of the words: find with them lists those, newest first, and pages back\n")
 	case anyWord && dropped:
