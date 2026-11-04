@@ -62,9 +62,10 @@ func (ix *Index) Named(ctx context.Context, names []string) (map[string]Hit, err
 
 // Withdrawn returns, of names, the facts no hook would deliver now: no
 // curated file of the name is live, each one retired or replaced, or held
-// back by the reviewer's verdict (HeldClause). By name, the last such file
-// the index holds; a replaced one's superseded_by is in its file. A name the
-// index does not hold is not in the answer.
+// back by the reviewer's verdict (HeldClause). By name, its first file, a
+// store file before a local note as in Named; a replaced one's
+// superseded_by is in its file. A name the index does not hold is not in the
+// answer.
 func (ix *Index) Withdrawn(ctx context.Context, names []string) (map[string]Hit, error) {
 	out := map[string]Hit{}
 	if len(names) == 0 {
@@ -79,9 +80,27 @@ func (ix *Index) Withdrawn(ctx context.Context, names []string) (map[string]Hit,
 		return nil, err
 	}
 	for _, h := range hits {
-		out[h.Name] = h
+		if _, have := out[h.Name]; !have {
+			out[h.Name] = h
+		}
 	}
 	return out, nil
+}
+
+// SummaryFrequency is, for each of terms, how many live curated facts hold
+// it in their name or description, and how many such facts there are: the
+// counts the relationship evidence weighs (evidence_postings). A term no
+// such fact holds is not in the map.
+func (ix *Index) SummaryFrequency(ctx context.Context, terms []string) (map[string]int, int, error) {
+	df, err := ix.evidenceFrequency(ctx, 0, terms)
+	if err != nil {
+		return nil, 0, err
+	}
+	var n int
+	if err := ix.db.QueryRowContext(ctx, `SELECT count(*) FROM evidence`).Scan(&n); err != nil {
+		return nil, 0, err
+	}
+	return df, n, nil
 }
 
 // AtPaths returns the facts of the index at paths (store-relative, or a

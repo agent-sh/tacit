@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/overlay"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
@@ -55,14 +58,13 @@ func restartOf(source string) restart {
 }
 
 const (
-	// compactTail is how much of the transcript's end the start after a
-	// compaction reads for its summary: the harness writes the summary just
-	// before it starts the session again, and Claude Code attaches the files
-	// the session read after it.
-	compactTail = 4 << 20
-	// compactQueryChars is how much of the summary the query for its facts
-	// reads.
-	compactQueryChars = 12000
+	// compactRead is how much of the transcript the summary is read from:
+	// its end at the start after a compaction, or what came after the place
+	// the transcript ended then, at the next prompt.
+	compactRead = 4 << 20
+	// summaryQueryTerms is how many of the summary's terms its query takes:
+	// the prompt query's own cap (search.Terms).
+	summaryQueryTerms = 24
 	// A fact the summary holds: its name, or at least heldShare of its
 	// description's terms of four letters or more, and heldMinTerms of them.
 	heldShare    = 0.6
@@ -80,28 +82,44 @@ func restartBlock(ctx context.Context, ix *search.Index, s *store.Store, in hook
 
 // afterCompaction: the compaction's summary is all the session has of what
 // it was given, and it keeps a minority of the facts, fewer still of the
-// owner's rules (eval/VALUE.md, "After a compaction"). So the block is the
-// start block again, from the store as it is now, less the facts the summary
-// still holds, then the facts the summary's own words select (the prompt
-// hook's selection, local only). A fact given before may come again; one
-// retired, replaced or held back since is in no query. The session's
-// delivered set becomes what its context now holds: the facts the summary
-// holds and this block. Without a summary (none found in the transcript's
-// end) the block is the whole start block.
+// owner's rules (eval/VALUE.md, "After a compaction"). The block is the start
+// block again, from the store as it is now, then the facts the summary's own
+// words select (summaryStep). A fact given before may come again; one
+// retired, replaced or held back since is in no query.
+//
+// Claude Code runs the SessionStart hooks of a compaction before it writes
+// the summary to the transcript. So the summary is taken here only when the
+// transcript ends with it (no turn after it: a harness that writes it first);
+// else the block is the whole start block, and the next prompt takes the
+// summary from what the transcript gained since (pendingSummary). Either
+// way the session's delivered set becomes what its context holds.
 func afterCompaction(ctx context.Context, ix *search.Index, in hookInput, sit search.Situation, start []search.Hit, mcp bool) string {
 	home, _ := os.UserHomeDir()
-	summary := compactionSummary(in.TranscriptPath, home)
-	sum := summaryOf(summary)
-	held := map[string]bool{}
-	if given := factNames(delivered(in.SessionID)); len(given) > 0 && summary != "" {
-		if had, err := ix.Named(ctx, given); err == nil {
-			for n, h := range had {
-				if sum.holds(h) {
-					held[n] = true
-				}
-			}
+	given := factNames(delivered(in.SessionID))
+	summary, size := "", int64(-1)
+	if f, ok := transcriptFormat(home, in.TranscriptPath); ok {
+		var tail string
+		tail, size = readRange(in.TranscriptPath, home, -1, compactRead)
+		if s, after, ok := digest.LastCompaction([]byte(tail), f); ok && !after {
+			summary = s
 		}
 	}
+	forget(in.SessionID)
+	clearPending(in.SessionID)
+	title := startTitleWhen(sit, mcp, ", again after the compaction")
+	if summary == "" {
+		remember(in.SessionID, start)
+		if size >= 0 {
+			savePending(in.SessionID, pending{Offset: size, Given: given})
+		}
+		out := search.Block(start, title)
+		if out != "" {
+			out += startTreeLine(ctx, ix, sit, len(start), mcp)
+		}
+		return out
+	}
+	sum := summaryOf(summary)
+	held := heldOf(ctx, ix, sum, given)
 	var again []search.Hit
 	for _, h := range start {
 		if held[h.Name] || sum.holds(h) {
@@ -110,41 +128,15 @@ func afterCompaction(ctx context.Context, ix *search.Index, in hookInput, sit se
 		}
 		again = append(again, h)
 	}
-	seen := map[string]bool{}
-	for n := range held {
-		seen[n] = true
-	}
-	for _, h := range again {
-		seen[h.Name] = true
-	}
-	var pulled []search.Hit
-	if q := clipRunes(summary, compactQueryChars); promptWorthy(q) {
-		if hits, err := promptHitsWith(ctx, ix, sit, q, seen, true); err == nil {
-			for _, h := range withoutClaims(hits) {
-				if !seen[h.Name] {
-					seen[h.Name] = true
-					pulled = append(pulled, h)
-				}
-			}
-		}
-	}
-	forget(in.SessionID)
-	keep := make([]string, 0, len(held))
-	for n := range held {
-		keep = append(keep, n)
-	}
-	sort.Strings(keep)
-	rememberNames(in.SessionID, keep)
+	rememberNames(in.SessionID, factNames(held))
 	remember(in.SessionID, again)
-	remember(in.SessionID, pulled)
-
-	title := startTitleWhen(sit, mcp, ", again after the compaction")
+	pulled := summaryStep(ctx, ix, in, sit, sum, summary)
 	out := search.Block(again, title)
 	if len(pulled) > 0 {
 		if out == "" {
 			out = title + "\n"
 		}
-		out += search.Block(pulled, "# tacit: facts matching the compaction's summary")
+		out += search.Block(pulled, summaryTitle)
 	}
 	if out != "" {
 		out += startTreeLine(ctx, ix, sit, len(again), mcp)
@@ -152,13 +144,178 @@ func afterCompaction(ctx context.Context, ix *search.Index, in hookInput, sit se
 	return out
 }
 
+const summaryTitle = "# tacit: facts matching the compaction's summary"
+
+// summaryStep is the facts the summary's words select, which the session
+// has not got: the prompt hook's selection, local only, never the utility
+// provider's (a summary holds far more of the session than a prompt), with
+// the summary's query (summaryQuery) as the request. They join the
+// delivered set.
+func summaryStep(ctx context.Context, ix *search.Index, in hookInput, sit search.Situation, sum summaryHold, summary string) []search.Hit {
+	q := summaryQuery(ctx, ix, summary)
+	if !promptWorthy(q) {
+		return nil
+	}
+	seen := delivered(in.SessionID)
+	hits, err := promptHitsWith(ctx, ix, sit, q, seen, true)
+	if err != nil {
+		return nil
+	}
+	var out []search.Hit
+	for _, h := range withoutClaims(hits) {
+		if !seen[h.Name] {
+			seen[h.Name] = true
+			out = append(out, h)
+		}
+	}
+	remember(in.SessionID, out)
+	return out
+}
+
+// pending is what the start after a compaction leaves for the next prompt
+// when the transcript did not hold the summary yet: where the transcript
+// ended then, and the facts the session had been given before the compaction.
+type pending struct {
+	Offset int64    `json:"offset"`
+	Given  []string `json:"given"`
+}
+
+func pendingFile(id string) string {
+	if p := sessionFile(id); p != "" {
+		return p + ".compact"
+	}
+	return ""
+}
+
+func savePending(id string, p pending) {
+	path := pendingFile(id)
+	if path == "" {
+		return
+	}
+	b, _ := json.Marshal(p)
+	os.MkdirAll(filepath.Dir(path), 0o700)
+	os.WriteFile(path, b, 0o600)
+}
+
+func clearPending(id string) {
+	if path := pendingFile(id); path != "" {
+		os.Remove(path)
+	}
+}
+
+// pendingSummary is the prompt hook's part after a compaction whose summary
+// the start could not read: the first prompt after it reads the summary from
+// what the transcript gained since the place it ended at the start, adds the
+// facts given before the compaction that the summary holds to the delivered
+// set, and returns the block of the facts the summary's words select. The
+// compaction's entries are written before the next prompt, so the first
+// prompt settles it: pending is dropped whatever it finds.
+func pendingSummary(ctx context.Context, ix *search.Index, in hookInput, sit search.Situation) string {
+	path := pendingFile(in.SessionID)
+	if path == "" {
+		return ""
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	os.Remove(path)
+	var p pending
+	if json.Unmarshal(b, &p) != nil || p.Offset < 0 {
+		return ""
+	}
+	home, _ := os.UserHomeDir()
+	f, ok := transcriptFormat(home, in.TranscriptPath)
+	if !ok {
+		return ""
+	}
+	gained, size := readRange(in.TranscriptPath, home, p.Offset, compactRead)
+	if size < p.Offset {
+		return "" // the transcript was cut or replaced
+	}
+	summary, _, ok := digest.LastCompaction([]byte(gained), f)
+	if !ok {
+		return ""
+	}
+	sum := summaryOf(summary)
+	seen := delivered(in.SessionID)
+	var keep []string
+	for n := range heldOf(ctx, ix, sum, p.Given) {
+		if !seen[n] {
+			keep = append(keep, n)
+		}
+	}
+	sort.Strings(keep)
+	rememberNames(in.SessionID, keep)
+	return search.Block(summaryStep(ctx, ix, in, sit, sum, summary), summaryTitle)
+}
+
+// heldOf is, of the names the session was given, those whose facts the
+// summary holds: still in its context.
+func heldOf(ctx context.Context, ix *search.Index, sum summaryHold, given []string) map[string]bool {
+	held := map[string]bool{}
+	if len(given) == 0 || sum.text == "" {
+		return held
+	}
+	had, err := ix.Named(ctx, given)
+	if err != nil {
+		return held
+	}
+	for n, h := range had {
+		if sum.holds(h) {
+			held[n] = true
+		}
+	}
+	return held
+}
+
+// summaryQuery is the summary as a query of summaryQueryTerms terms: the
+// prompt query takes a request's first terms, and a summary opens with the
+// harness's own words. Each term live curated names and descriptions hold
+// is weighted by how often the summary says it, damped (1 + ln tf: a long
+// text repeats its common words), and how few facts hold it (log((N+1)/(df+1)),
+// the relationship evidence's weight), and the heaviest make the query, in
+// the summary's order. A term no fact holds is left out:
+// it cannot match a name or a description.
+func summaryQuery(ctx context.Context, ix *search.Index, summary string) string {
+	terms := search.AllTerms(summary)
+	df, n, err := ix.SummaryFrequency(ctx, terms)
+	if err != nil || len(df) == 0 {
+		return ""
+	}
+	lower := strings.ToLower(summary)
+	type scored struct {
+		term  string
+		at    int
+		score float64
+	}
+	var all []scored
+	for i, t := range terms {
+		d, ok := df[t]
+		if !ok {
+			continue
+		}
+		tf := 1 + math.Log(float64(max(1, strings.Count(lower, t))))
+		all = append(all, scored{t, i, tf * math.Log(float64(n+1)/float64(d+1))})
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].score > all[j].score })
+	if len(all) > summaryQueryTerms {
+		all = all[:summaryQueryTerms]
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].at < all[j].at })
+	words := make([]string, len(all))
+	for i, s := range all {
+		words[i] = s.term
+	}
+	return strings.Join(words, " ")
+}
+
 // onResume: the session's context is back as it was, with the facts it was
 // given, but the store may have moved. The block is the start block's facts
-// the session was never given, and a line for each fact it was given that no
-// hook would deliver now: retired, replaced (with the fact that replaced
-// it), or held back by the reviewer's verdict. A session with no record of
-// what it was given (none kept, or one cleaned away after a week) gets a
-// start's block.
+// the session was never given, and a line for each fact it was given that is
+// now retired, replaced (naming the fact that replaced it), or held back by
+// the reviewer's verdict. A session with no record of what it was given (none
+// kept, or one cleaned away after a week) gets a start's block.
 func onResume(ctx context.Context, ix *search.Index, s *store.Store, in hookInput, sit search.Situation, start []search.Hit, mcp bool) string {
 	given := delivered(in.SessionID)
 	if len(given) == 0 {
@@ -171,26 +328,40 @@ func onResume(ctx context.Context, ix *search.Index, s *store.Store, in hookInpu
 			fresh = append(fresh, h)
 		}
 	}
-	shown := map[string]bool{}
-	for _, h := range fresh {
-		shown[h.Name] = true
-	}
-	lines, replacing := withdrawnLines(ctx, ix, s, factNames(given), given, shown)
 	remember(in.SessionID, fresh)
-	remember(in.SessionID, replacing)
 	out := search.Block(fresh, "# tacit: new for "+repoTitle(sit)+" on "+sit.Host+" since this session was given its facts ("+openDetail(mcp)+")")
-	if len(lines) > 0 {
-		out += "# tacit: no longer holds, given to this session earlier\n" + strings.Join(lines, "\n") + "\n"
+	if lines, gone := withdrawnLines(ctx, ix, s, factNames(given)); len(lines) > 0 {
+		out += "# tacit: no longer holds, given to this session earlier (" + openDetail(mcp) + ")\n" + strings.Join(lines, "\n") + "\n"
+		unremember(in.SessionID, gone) // said once: the next resume does not say it again
 	}
 	return out
 }
 
-// withdrawnLines is a line for each of names that no hook would deliver now
-// (Index.Withdrawn), in name order: "- <name>: retired <day>", "- <name>:
-// replaced by <new>" with the new fact's description when it is live and the
-// session has not got it (that fact is returned, as delivered), or the
-// reviewer's verdict (search.ReviewMark).
-func withdrawnLines(ctx context.Context, ix *search.Index, s *store.Store, names []string, given, shown map[string]bool) ([]string, []search.Hit) {
+// unremember drops names from the session's delivered set.
+func unremember(id string, names []string) {
+	set := delivered(id)
+	if len(set) == 0 || len(names) == 0 {
+		return
+	}
+	for _, n := range names {
+		delete(set, n)
+	}
+	keep := make([]string, 0, len(set))
+	for n := range set {
+		keep = append(keep, n)
+	}
+	sort.Strings(keep)
+	forget(id)
+	rememberNames(id, keep)
+}
+
+// withdrawnLines is a line for each of names whose facts no hook would
+// deliver now (Index.Withdrawn), in name order: "- <name>: retired <day>",
+// "- <name>: replaced by <new>", or the reviewer's verdict
+// (search.ReviewMark); "retired or replaced" when the file cannot be read.
+// The new fact is only named: whether a hook would deliver it is its own
+// question. The names the lines are for are returned with them.
+func withdrawnLines(ctx context.Context, ix *search.Index, s *store.Store, names []string) ([]string, []string) {
 	gone, err := ix.Withdrawn(ctx, names)
 	if err != nil || len(gone) == 0 {
 		return nil, nil
@@ -200,62 +371,35 @@ func withdrawnLines(ctx context.Context, ix *search.Index, s *store.Store, names
 		order = append(order, n)
 	}
 	sort.Strings(order)
-	why := map[string]string{}
-	by := map[string]string{}
-	var next []string
+	var lines []string
 	for _, n := range order {
 		h := gone[n]
-		if f := storeFact(s, h.Path); f != nil && f.Meta.SupersededBy != "" {
-			by[n] = f.Meta.SupersededBy
-			next = append(next, f.Meta.SupersededBy)
-			continue
-		} else if f != nil && f.Meta.Retired != "" {
-			why[n] = "retired " + f.Meta.Retired
-			continue
+		why := "retired or replaced"
+		switch f := factAt(s, h.Path); {
+		case f != nil && f.Meta.SupersededBy != "":
+			why = "replaced by " + f.Meta.SupersededBy
+		case f != nil && f.Meta.Retired != "":
+			why = "retired " + f.Meta.Retired
+		case search.ReviewMark(h.Review) != "":
+			why = search.ReviewMark(h.Review)
 		}
-		if m := search.ReviewMark(h.Review); m != "" {
-			why[n] = m
-		} else {
-			why[n] = "no longer delivered"
-		}
+		lines = append(lines, "- "+n+": "+why)
 	}
-	live := map[string]search.Hit{}
-	if len(next) > 0 {
-		named, err1 := ix.Named(ctx, next)
-		dead, err2 := ix.Withdrawn(ctx, next)
-		if err1 == nil && err2 == nil {
-			for n, h := range named {
-				if _, out := dead[n]; !out && !h.Inbox {
-					live[n] = h
-				}
-			}
-		}
-	}
-	var lines []string
-	var replacing []search.Hit
-	for _, n := range order {
-		if b, ok := by[n]; ok {
-			line := "- " + n + ": replaced by " + b
-			if h, ok := live[b]; ok && !given[b] && !shown[b] {
-				line += ": " + strings.Join(strings.Fields(h.Description), " ")
-				shown[b] = true
-				replacing = append(replacing, h)
-			}
-			lines = append(lines, line)
-			continue
-		}
-		lines = append(lines, "- "+n+": "+why[n])
-	}
-	return lines, replacing
+	return lines, order
 }
 
-// storeFact reads the store's file at path, or nil (a local note's path, a
-// file gone since the index was built).
-func storeFact(s *store.Store, path string) *fact.Fact {
-	if s == nil || path == "" || strings.HasPrefix(path, "local/") {
+// factAt reads the file a hit names: a store path in the clone, a local
+// note's path (overlay.Prefix) in this machine's overlay; nil when it cannot
+// be read.
+func factAt(s *store.Store, path string) *fact.Fact {
+	if s == nil || path == "" {
 		return nil
 	}
-	b, err := os.ReadFile(filepath.Join(s.Dir, filepath.FromSlash(path)))
+	full := filepath.Join(s.Dir, filepath.FromSlash(path))
+	if rest, ok := strings.CutPrefix(path, overlay.Prefix); ok {
+		full = filepath.Join(overlay.Dir(), filepath.FromSlash(rest))
+	}
+	b, err := os.ReadFile(full)
 	if err != nil {
 		return nil
 	}
@@ -266,47 +410,34 @@ func storeFact(s *store.Store, path string) *fact.Fact {
 	return f
 }
 
-// compactionSummary is the summary the harness wrote for the session's last
-// compaction, read from the end of its transcript (readTailN: a regular file
-// under home), or "": no transcript, one of no known format, no summary.
-func compactionSummary(path, home string) string {
-	f, ok := transcriptFormat(home, path)
-	if !ok {
-		return ""
-	}
-	tail := readTailN(path, home, compactTail)
-	s, _ := digest.CompactSummary([]byte(tail), f)
-	return s
-}
-
 // summaryHold is what a compaction's summary holds, to tell whether it still
 // carries a fact the session was given.
 type summaryHold struct {
 	text  string          // the summary, lower case
-	terms map[string]bool // its terms, by search.TermKey
+	terms map[string]bool // all its terms, by search.TermKey
 }
 
 func summaryOf(summary string) summaryHold {
 	h := summaryHold{text: strings.ToLower(summary), terms: map[string]bool{}}
-	for _, t := range search.Terms(summary) {
+	for _, t := range search.AllTerms(summary) {
 		h.terms[search.TermKey(t)] = true
 	}
 	return h
 }
 
 // holds: the summary names the fact (its name, or the name's words in
-// order), or holds most of what its description says: at least heldShare of
-// the description's terms of four letters or more, and at least heldMinTerms
-// of them.
+// order, as whole words), or holds most of what its description says: at
+// least heldShare of the description's terms of four letters or more, and at
+// least heldMinTerms of them.
 func (s summaryHold) holds(h search.Hit) bool {
 	if s.text == "" {
 		return false
 	}
-	if strings.Contains(s.text, h.Name) || strings.Contains(s.text, strings.ReplaceAll(h.Name, "-", " ")) {
+	if wordIn(s.text, h.Name, nameRune) || wordIn(s.text, strings.ReplaceAll(h.Name, "-", " "), wordRune) {
 		return true
 	}
 	keys := map[string]bool{}
-	for _, t := range search.Terms(h.Description) {
+	for _, t := range search.AllTerms(h.Description) {
 		if utf8.RuneCountInString(t) >= 4 {
 			keys[search.TermKey(t)] = true
 		}
@@ -321,6 +452,28 @@ func (s summaryHold) holds(h search.Hit) bool {
 		}
 	}
 	return float64(n) >= heldShare*float64(len(keys))
+}
+
+func wordRune(r rune) bool { return r >= 'a' && r <= 'z' || r >= '0' && r <= '9' }
+func nameRune(r rune) bool { return wordRune(r) || r == '-' }
+
+// wordIn reports whether text holds w with no rune of in on either side:
+// "demo-note" is not in "demo-note-v2", "go test" not in "go testing".
+func wordIn(text, w string, in func(rune) bool) bool {
+	for i := 0; w != ""; {
+		j := strings.Index(text[i:], w)
+		if j < 0 {
+			return false
+		}
+		at := i + j
+		before, _ := utf8.DecodeLastRuneInString(text[:at])
+		after, _ := utf8.DecodeRuneInString(text[at+len(w):])
+		if (at == 0 || !in(before)) && (at+len(w) == len(text) || !in(after)) {
+			return true
+		}
+		i = at + 1
+	}
+	return false
 }
 
 // factNames are the fact names of a delivered set, sorted: the set also

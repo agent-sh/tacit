@@ -58,34 +58,47 @@ func readTail(path, home string) string { return readTailN(path, home, transcrip
 // readTailN is readTail with the size it reads: the start after a
 // compaction reads more of the end (compactTail) for the summary.
 func readTailN(path, home string, size int64) string {
+	b, _ := readRange(path, home, -1, size)
+	return b
+}
+
+// readRange is at most size bytes of the transcript from offset from, or its
+// last size bytes when from is below 0, with readTail's checks, and the
+// file's size; "" and -1 when a check fails.
+func readRange(path, home string, from, size int64) (string, int64) {
 	if path == "" || home == "" {
-		return ""
+		return "", -1
 	}
 	realHome, err := filepath.EvalSymlinks(home)
 	if err != nil {
-		return ""
+		return "", -1
 	}
 	p, err := filepath.EvalSymlinks(filepath.Clean(path))
 	if err != nil || !strings.HasPrefix(p, realHome+string(filepath.Separator)) {
-		return ""
+		return "", -1
 	}
 	if fi, err := os.Lstat(p); err != nil || !fi.Mode().IsRegular() {
-		return ""
+		return "", -1
 	}
 	fh, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return ""
+		return "", -1
 	}
 	defer fh.Close()
 	fi, err := fh.Stat()
 	if err != nil || !fi.Mode().IsRegular() {
-		return ""
+		return "", -1
 	}
-	if fi.Size() > size {
-		if _, err := fh.Seek(fi.Size()-size, io.SeekStart); err != nil {
-			return ""
-		}
+	start := from
+	if start < 0 {
+		start = max(0, fi.Size()-size)
+	}
+	if start > fi.Size() {
+		return "", fi.Size()
+	}
+	if _, err := fh.Seek(start, io.SeekStart); err != nil {
+		return "", -1
 	}
 	b, _ := io.ReadAll(io.LimitReader(fh, size))
-	return string(b)
+	return string(b), fi.Size()
 }

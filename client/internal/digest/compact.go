@@ -14,25 +14,29 @@ var compactKeys = map[Format][]byte{
 	Pi:     []byte(`"compaction"`),
 }
 
-// CompactSummary is the summary of the last compaction entry in transcript
+// LastCompaction is the summary of the last compaction entry in transcript
 // lines (JSONL; a tail read may leave the first line cut, which does not
 // decode), read on the entry as Compacted reads it: Claude Code's summary
 // turn (`isCompactSummary`, its message's text), Codex's `compacted` entry
-// (its payload's message), pi's `compaction` entry (its summary). ok is
+// (its payload's message), pi's `compaction` entry (its summary). turnAfter
+// says the conversation went on after it: a Claude Code user or assistant
+// line (not a meta line), a Codex `response_item`, a pi `message`. ok is
 // false when the lines hold no such entry, or its summary holds no text.
-func CompactSummary(b []byte, f Format) (string, bool) {
+func LastCompaction(b []byte, f Format) (summary string, turnAfter, ok bool) {
 	key := compactKeys[f]
 	if key == nil {
-		return "", false
+		return "", false, false
 	}
 	lines := bytes.Split(b, []byte{'\n'})
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := lines[i]
-		if !bytes.Contains(line, key) {
+		compaction := bytes.Contains(line, key)
+		if !compaction && turnAfter {
 			continue
 		}
 		var e struct {
 			Type             string `json:"type"`
+			IsMeta           bool   `json:"isMeta"`
 			IsCompactSummary bool   `json:"isCompactSummary"`
 			Message          struct {
 				Content json.RawMessage `json:"content"`
@@ -42,7 +46,7 @@ func CompactSummary(b []byte, f Format) (string, bool) {
 			} `json:"payload"`
 			Summary json.RawMessage `json:"summary"`
 		}
-		if json.Unmarshal(line, &e) != nil {
+		if len(line) == 0 || json.Unmarshal(line, &e) != nil {
 			continue
 		}
 		var raw json.RawMessage
@@ -54,12 +58,18 @@ func CompactSummary(b []byte, f Format) (string, bool) {
 		case f == Pi && e.Type == "compaction":
 			raw = e.Summary
 		default:
+			switch {
+			case f == Claude && (e.Type == "user" && !e.IsMeta || e.Type == "assistant"),
+				f == Codex && e.Type == "response_item",
+				f == Pi && e.Type == "message":
+				turnAfter = true
+			}
 			continue
 		}
 		s := strings.TrimSpace(summaryText(raw))
-		return s, s != ""
+		return s, turnAfter, s != ""
 	}
-	return "", false
+	return "", false, false
 }
 
 // summaryText is the text of a summary as a harness records it: a string,

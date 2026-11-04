@@ -236,6 +236,17 @@ func runHook(args []string) int {
 		if qb := questionBlock(ctx, in, sit, p); qb != "" {
 			defer fmt.Print(qb)
 		}
+		// The first prompt after a compaction whose summary the start could
+		// not read yet: the summary's own facts (pendingSummary), whatever
+		// the prompt ("continue" among them).
+		if _, err := os.Stat(pendingFile(in.SessionID)); err == nil {
+			if ix, err := openHookIndex(ctx, s); err == nil {
+				recs := hookRecords(ctx, ix)
+				psit, _ := withWorkspace(withRootFolder(sit, recs, in.Cwd), in.Cwd)
+				fmt.Print(pendingSummary(ctx, ix, in, withOrgs(withRecordAliases(psit, recs), recs)))
+				ix.Close()
+			}
+		}
 		if !promptWorthy(p) {
 			return 0
 		}
