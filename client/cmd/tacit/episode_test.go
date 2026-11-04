@@ -224,11 +224,17 @@ func TestEpisodeTimeLimit(t *testing.T) {
 	if out, code := episodeOut(t, "show", "999.0"); code != 1 || !strings.Contains(out, "time limit before 999.0") {
 		t.Fatalf("show past the budget (%d):\n%s", code, out)
 	}
-	cut, cancel := context.WithCancel(context.Background())
-	cancel()
-	got, err := redactFound(cut, []events.Event{{Text: "token Zq7Vx9"}})
+	// The redaction runs on its own clock, not the read's: a caller's context
+	// whose read budget is spent still redacts.
+	got, err := redactFound(context.Background(), []events.Event{{Text: "token Zq7Vx9"}})
 	if err != nil || len(got) != 1 || strings.Contains(got[0].Text, "Zq7Vx9") {
 		t.Fatalf("redaction after the read's deadline: %v %+v", err, got)
+	}
+	// A caller that went away gets nothing.
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got, err := redactFound(gone, []events.Event{{Text: "token Zq7Vx9"}}); err == nil || got != nil {
+		t.Fatalf("redaction for a caller that went away: %v %+v", err, got)
 	}
 }
 
@@ -395,6 +401,16 @@ func TestEpisodeRecallCallForms(t *testing.T) {
 		{"Bash", `{"command":"sudo --user=avi tacit episode find X"}`, true},
 		{"Bash", `{"command":"cat > brief.md <<'EOF'\nrun tacit episode find X\ntacit episode find X\nEOF\ngit add brief.md"}`, false},
 		{"Bash", `{"command":"cat <<EOF > x\nbody\nEOF\ntacit episode find X"}`, true},
+		{"Bash", `{"command":"echo \"$(tacit episode find X)\""}`, true},
+		{"Bash", `{"command":"(tacit episode find X)"}`, true},
+		{"Bash", `{"command":"{ tacit episode find X; }"}`, true},
+		{"Bash", `{"command":"if tacit episode find X; then :; fi"}`, true},
+		{"Bash", `{"command":"for w in a b; do tacit episode find $w; done"}`, true},
+		{"Bash", `{"command":"! tacit episode find X"}`, true},
+		{"Bash", `{"command":"echo a | xargs tacit episode find"}`, true},
+		{"Bash", `{"command":"stdbuf -oL tacit episode find X"}`, true},
+		{"Bash", `{"command":"echo $((1<<2))\ntacit episode find X"}`, true},
+		{"Bash", `{"command":"grep -c 'episode' notes.md"}`, false},
 		{"Edit", `{"new_string":"tacit episode find X"}`, false},
 	} {
 		ev := events.Event{Kind: events.KindToolCall, ToolName: c.tool, ToolInput: c.input}
@@ -521,5 +537,117 @@ func TestEpisodeMCPTool(t *testing.T) {
 	}
 	if out := call(map[string]any{"find": "a", "show": "1.0"}); !strings.HasPrefix(out, "# tacit: give one of") {
 		t.Fatalf("two operations through MCP:\n%s", out)
+	}
+}
+
+// A person's own `!tacit episode ...` in Claude Code's shell mode, and its
+// output, are left out like the agent's calls; other shell turns stay.
+func TestEpisodeShellModeRecall(t *testing.T) {
+	home := episodeHome(t)
+	id := "aaaa1111-1111-4222-8333-444455556666"
+	head := `"sessionId":"` + id + `","cwd":"/work/demo","entrypoint":"cli"`
+	writeTranscript(t, filepath.Join(home, ".claude", "projects", "-work-demo", id+".jsonl"),
+		`{"type":"user",`+head+`,"uuid":"u1","timestamp":"2026-11-01T10:00:00Z","message":{"role":"user","content":"ship TK-424242 today"}}`,
+		`{"type":"user",`+head+`,"uuid":"u2","timestamp":"2026-11-01T10:01:00Z","message":{"role":"user","content":"<bash-input>tacit episode find TK-424242</bash-input>"}}`,
+		`{"type":"user",`+head+`,"uuid":"u3","timestamp":"2026-11-01T10:01:01Z","message":{"role":"user","content":"<bash-stdout>- 1.0 owner owner_text: ship TK-424242 today</bash-stdout><bash-stderr></bash-stderr>"}}`,
+		`{"type":"user",`+head+`,"uuid":"u4","timestamp":"2026-11-01T10:02:00Z","message":{"role":"user","content":"<bash-input>echo TK-424242</bash-input>"}}`,
+		`{"type":"user",`+head+`,"uuid":"u5","timestamp":"2026-11-01T10:02:01Z","message":{"role":"user","content":"<bash-stdout>TK-424242</bash-stdout><bash-stderr></bash-stderr>"}}`)
+	out, code := episodeOut(t, "--session", id, "find", "TK-424242")
+	if code != 0 || !strings.Contains(out, "# tacit: 3 event(s)") || strings.Contains(out, "tacit episode") || strings.Contains(out, "- 1.0 owner") {
+		t.Fatalf("shell-mode recall (%d):\n%s", code, out)
+	}
+}
+
+// After the words only --name is a flag: a search for a command keeps its
+// short flags.
+func TestEpisodeFindWordsWithShortFlags(t *testing.T) {
+	home := episodeHome(t)
+	id := "bbbb1111-1111-4222-8333-444455556666"
+	writeClaudeSession(t, home, id, "", "ran grep -n CR-77 there")
+	if out, code := episodeOut(t, "--session", id, "find", "grep", "-n", "CR-77"); code != 0 || !strings.Contains(out, "# tacit: 1 event(s)") {
+		t.Fatalf("short flags as words (%d):\n%s", code, out)
+	}
+}
+
+// A caller that goes away while find redacts gets no answer.
+func TestEpisodeCancelledCaller(t *testing.T) {
+	episodeHome(t)
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "scrump"), []byte("#!/bin/sh\nsleep 0.4\nexec sed 's/Zq7Vx9/******/g'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	defer cancel()
+	out, err := episodeAnswer(ctx, &store.Store{Dir: t.TempDir()}, episodeQuery{Harness: "claude", Find: "CR-123456789"})
+	if err == nil || out != "" {
+		t.Fatalf("a cancelled caller: %v\n%s", err, out)
+	}
+}
+
+// More raw matches than find keeps (by count, or by bytes) and nothing real
+// to page from: a line says older events were not searched, and no ref.
+func TestEpisodeFindCandidateBounds(t *testing.T) {
+	home := episodeHome(t)
+	id := "cccc1111-1111-4222-8333-444455556666"
+	var texts []string
+	texts = append(texts, "the vxlan bridge came up")
+	for range 40 {
+		texts = append(texts, "token Zq7Vx9 used")
+	}
+	writeClaudeSession(t, home, id, "", texts...)
+	prevN, prevB := episodeCandidates, episodeCandidateBytes
+	t.Cleanup(func() { episodeCandidates, episodeCandidateBytes = prevN, prevB })
+	for _, c := range []struct{ n, b int }{{20, 64 << 20}, {5000, 300}} {
+		episodeCandidates, episodeCandidateBytes = c.n, c.b
+		out, code := episodeOut(t, "--session", id, "find", "vx")
+		if code != 0 || !strings.Contains(out, "# tacit: 0 event(s)") || !strings.Contains(out, "older events were not searched") || refRx.MatchString(out) {
+			t.Fatalf("bounds %d events, %d bytes (%d):\n%s", c.n, c.b, code, out)
+		}
+	}
+}
+
+// show cuts each part at 8,000 characters and fences it longer than any run
+// of ~ it holds; around takes at most 25 on each side.
+func TestEpisodeShowCutAndAroundCap(t *testing.T) {
+	home := episodeHome(t)
+	id := "dddd1111-1111-4222-8333-444455556666"
+	texts := []string{"long " + strings.Repeat("~", 5) + strings.Repeat("x", 9000)}
+	for i := range 60 {
+		texts = append(texts, fmt.Sprintf("step %d", i))
+	}
+	writeClaudeSession(t, home, id, "", texts...)
+	found, _ := episodeOut(t, "--session", id, "find", "long")
+	refs := refRx.FindAllStringSubmatch(found, -1)
+	if len(refs) != 1 {
+		t.Fatalf("find long:\n%s", found)
+	}
+	show, code := episodeOut(t, "--session", id, "show", refs[0][1])
+	if code != 0 || !strings.Contains(show, "\n~~~~~~\nlong ~~~~~x") || !strings.Contains(show, "(cut at 8000 characters)") || strings.Count(show, "x") > 8000 {
+		t.Fatalf("show's cut and fence (%d):\n%.300s", code, show)
+	}
+	mid, _ := episodeOut(t, "--session", id, "find", "step 30")
+	mrefs := refRx.FindAllStringSubmatch(mid, -1)
+	if len(mrefs) != 1 {
+		t.Fatalf("find step 30:\n%s", mid)
+	}
+	around, code := episodeOut(t, "--session", id, "--n", "40", "around", mrefs[0][1])
+	if code != 0 || strings.Count(around, "\n- ") != 50 {
+		t.Fatalf("around caps n at 25 (%d): %d lines", code, strings.Count(around, "\n- "))
+	}
+}
+
+// A fact whose owner's words (too few to prove a ruling) were said in a
+// session leads there too.
+func TestEpisodeFactOwnerWords(t *testing.T) {
+	r := newRig(t, rigOpts{repos: []string{"demo"}})
+	episodeHome(t)
+	t.Setenv("TACIT_STORE", r.clone)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	writeFact(t, r.clone, fact.Meta{Name: "demo-candidates", Description: "candidates are staged",
+		Type: "design_decision", Scope: "projects/demo", Source: fact.Source{OwnerWords: "release candidate", OwnerWordsFrom: "claude:" + episodeSessionID}}, "x")
+	out, code := episodeOut(t, "--fact", "demo-candidates")
+	if code != 0 || !strings.Contains(out, "owner owner_text") {
+		t.Fatalf("owner words (%d):\n%s", code, out)
 	}
 }

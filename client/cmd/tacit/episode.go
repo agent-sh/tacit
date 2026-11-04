@@ -36,18 +36,22 @@ const (
 	// find keeps the newest raw matches up to these bounds, then redacts them
 	// in batches and matches again until it has enough: a word only the
 	// unredacted text holds matches nothing, and takes no other event's place.
-	episodeCandidates     = 5000
-	episodeCandidateBytes = 64 << 20
-	episodeBatch          = 200     // events a redaction batch takes, at most
-	episodeBatchBytes     = 8 << 20 // and bytes
-	episodeAround         = 5       // around: events on each side, by default
-	episodeMaxN           = 25      // around: the most on each side
-	episodeClip           = 160     // the runes of an event an index line shows
-	episodeShow           = 8000    // the runes of each part of an event show gives
+	episodeBatch      = 200     // events a redaction batch takes, at most
+	episodeBatchBytes = 8 << 20 // and bytes
+	episodeAround     = 5       // around: events on each side, by default
+	episodeMaxN       = 25      // around: the most on each side
+	episodeClip       = 160     // the runes of an event an index line shows
+	episodeShow       = 8000    // the runes of each part of an event show gives
 )
 
 // episodeBudget is how long a read of a transcript may take; tests shorten it.
 var episodeBudget = 20 * time.Second
+
+// find keeps the newest raw matches up to these bounds; tests lower them.
+var (
+	episodeCandidates     = 5000
+	episodeCandidateBytes = 64 << 20
+)
 
 // episodeRedactWait bounds the redaction of what a read found, which runs on
 // its own clock: a read that used its budget still shows it. Tests shorten it.
@@ -75,6 +79,7 @@ type episodeQuery struct {
 	Show    string // a ref: that event whole
 	Before  string // find: only events before this ref (the next page back)
 	N       int    // around: events on each side
+	CLI     bool   // the CLI asks (its hints name its flags)
 }
 
 // episodeTarget is the session a query reads.
@@ -83,6 +88,7 @@ type episodeTarget struct {
 	format                 digest.Format
 	label                  string   // how the header names it
 	anchor                 []string // a fact's words to find when the query asks nothing else
+	cli                    bool     // the CLI asks: hints name its flags
 }
 
 // episodeAnswer runs one query and returns its text.
@@ -100,6 +106,7 @@ func episodeAnswer(ctx context.Context, s *store.Store, q episodeQuery) (string,
 	if err != nil {
 		return "", err
 	}
+	t.cli = q.CLI
 	switch {
 	case strings.TrimSpace(q.Around) != "":
 		return episodeAroundRef(ctx, t, q.Around, q.N)
@@ -254,6 +261,7 @@ func episodeRead(ctx context.Context, t episodeTarget, emit func(events.Event) b
 	defer cancel()
 	stop := errors.New("stop")
 	own := map[string]bool{} // tool ids of the session's own recall calls
+	shellRecall := false     // the last shell-mode turn ran tacit episode
 	_, err := events.ReadFile(t.path, t.format, 0, func(ev events.Event) error {
 		if err := parent.Err(); err != nil {
 			return err // the caller went: no answer
@@ -272,6 +280,23 @@ func episodeRead(ctx context.Context, t episodeTarget, emit func(events.Event) b
 		if ev.ToolID != "" && own[ev.ToolID] {
 			return nil
 		}
+		// A person's own `!tacit episode ...` (Claude Code's shell mode): the
+		// command and the output that follows it.
+		if ev.InputKind == events.InputShell {
+			if cmd, ok := tagged(ev.Text, "bash-input"); ok {
+				shellRecall = false
+				for _, argv := range shellSplit(cmd) {
+					shellRecall = shellRecall || runsEpisode(argv, 0)
+				}
+				if shellRecall {
+					return nil
+				}
+			} else if shellRecall && (strings.HasPrefix(strings.TrimSpace(ev.Text), "<bash-stdout>") || strings.HasPrefix(strings.TrimSpace(ev.Text), "<bash-stderr>")) {
+				return nil
+			}
+		} else if ev.Kind != events.KindToolResult {
+			shellRecall = false
+		}
 		if !emit(ev) {
 			return stop
 		}
@@ -281,6 +306,20 @@ func episodeRead(ctx context.Context, t episodeTarget, emit func(events.Event) b
 		return nil
 	}
 	return err
+}
+
+// tagged is the text inside <tag>...</tag> at the start of s.
+func tagged(s, tag string) (string, bool) {
+	s = strings.TrimSpace(s)
+	open, end := "<"+tag+">", "</"+tag+">"
+	if !strings.HasPrefix(s, open) {
+		return "", false
+	}
+	body := strings.TrimPrefix(s, open)
+	if i := strings.Index(body, end); i >= 0 {
+		body = body[:i]
+	}
+	return body, true
 }
 
 // held is how many of terms an event's text, tool, input and output hold
@@ -406,7 +445,17 @@ func shellSplit(cmd string) [][]string {
 			i++
 			w.WriteRune(rs[i])
 			inWord = true
-		case r == '<' && i+2 < len(rs) && rs[i+1] == '<' && rs[i+2] != '<':
+		case r == '$' && i+1 < len(rs) && rs[i+1] == '(':
+			// A command substitution (or arithmetic, $((...))): its own
+			// programs follow.
+			endPart()
+			i++
+			for i+1 < len(rs) && rs[i+1] == '(' {
+				i++
+			}
+		case r == '(' || r == ')' || r == '`':
+			endPart()
+		case r == '<' && i+2 < len(rs) && rs[i+1] == '<' && rs[i+2] != '<' && !inArith(rs, i):
 			// A here-document: its body, up to the line that is its word, is
 			// the program's input, not commands.
 			j := i + 2
@@ -464,6 +513,12 @@ func shellSplit(cmd string) [][]string {
 	return out
 }
 
+// inArith reports a position inside an unclosed $(( ... )).
+func inArith(rs []rune, i int) bool {
+	open := strings.LastIndex(string(rs[:i]), "$((")
+	return open >= 0 && !strings.Contains(string(rs[open:i]), "))")
+}
+
 // runsEpisode reports a program that runs `tacit episode`: past environment
 // assignments and the wrappers that run their arguments, and into a shell's
 // -c script.
@@ -471,13 +526,29 @@ func runsEpisode(argv []string, depth int) bool {
 	if depth > 3 {
 		return false
 	}
+	// A command substitution inside a word ("$(tacit episode ...)", or in
+	// backticks) runs its own programs.
+	for _, w := range argv {
+		for _, open := range []string{"$(", "`"} {
+			if i := strings.Index(w, open); i >= 0 {
+				inner := strings.TrimRight(w[i+len(open):], ")`")
+				for _, sub := range shellSplit(inner) {
+					if runsEpisode(sub, depth+1) {
+						return true
+					}
+				}
+			}
+		}
+	}
 	for len(argv) > 0 {
 		a := argv[0]
 		base := filepath.Base(strings.ReplaceAll(a, `\`, "/"))
 		switch {
+		case shellKeyword[a]:
+			argv = argv[1:] // a compound command's word: the program follows
 		case strings.Contains(a, "=") && !strings.HasPrefix(a, "=") && !strings.HasPrefix(a, "-"):
 			argv = argv[1:] // an environment assignment before the program
-		case base == "env" || base == "command" || base == "exec" || base == "nohup" || base == "time" || base == "sudo":
+		case base == "env" || base == "command" || base == "exec" || base == "nohup" || base == "time" || base == "sudo" || base == "xargs" || base == "stdbuf":
 			argv = argv[1:]
 			for len(argv) > 0 && strings.HasPrefix(argv[0], "-") {
 				// A flag that takes the next word as its value: sudo -u USER,
@@ -514,6 +585,11 @@ func runsEpisode(argv []string, depth int) bool {
 	return false
 }
 
+// shellKeyword are the words of a compound command a program can follow.
+var shellKeyword = map[string]bool{
+	"!": true, "if": true, "then": true, "else": true, "elif": true, "do": true, "while": true, "until": true, "{": true, "(": true,
+}
+
 // wrapperValue are a wrapper's flags whose value is the next word.
 var wrapperValue = map[string]bool{
 	"sudo -u": true, "sudo -g": true, "sudo -C": true, "sudo -h": true, "sudo -p": true, "sudo -U": true,
@@ -521,14 +597,29 @@ var wrapperValue = map[string]bool{
 	"sudo --user": true, "sudo --group": true, "sudo --chdir": true, "sudo --host": true, "sudo --prompt": true,
 	"env -u": true, "env -C": true, "env --unset": true, "env --chdir": true,
 	"time -f": true, "time -o": true, "time --format": true, "time --output": true,
+	"xargs -I": true, "xargs -n": true, "xargs -d": true, "xargs -a": true, "xargs -L": true, "xargs -P": true, "xargs -s": true, "xargs -E": true,
+	"stdbuf -i": true, "stdbuf -o": true, "stdbuf -e": true,
 }
 
 // redactFound redacts what a read found on a clock of its own: the read may
 // have used its budget.
+// A caller that goes away stops it.
 func redactFound(ctx context.Context, evs []events.Event) ([]events.Event, error) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), episodeRedactWait)
+	rctx, cancel := redactClock(ctx)
 	defer cancel()
-	return events.Redact(ctx, evs)
+	out, err := events.Redact(rctx, evs)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return out, err
+}
+
+// redactClock is the redaction's own clock, ended early when the caller
+// goes away.
+func redactClock(ctx context.Context) (context.Context, context.CancelFunc) {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), episodeRedactWait)
+	stop := context.AfterFunc(ctx, cancel)
+	return rctx, func() { stop(); cancel() }
 }
 
 // episodeFind matches every word against the redacted events only: the raw
@@ -609,6 +700,9 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 	if err != nil && !cut {
 		return "", err
 	}
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
 	// Newest first; a fact's words, the most first.
 	for i, j := 0, len(cands)-1; i < j; i, j = i+1, j-1 {
 		cands[i], cands[j] = cands[j], cands[i]
@@ -631,7 +725,7 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 			})
 		}
 	}
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), episodeRedactWait)
+	rctx, cancel := redactClock(ctx)
 	defer cancel()
 	newer := func(a, b events.Event) bool {
 		return a.Offset > b.Offset || a.Offset == b.Offset && a.Index > b.Index
@@ -660,6 +754,9 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 			size += evSize(c.ev)
 		}
 		masked, err := events.Redact(rctx, batch)
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
 		if err != nil && rctx.Err() != nil {
 			// The redaction's clock ran out: what it redacted stands.
 			partial = true
@@ -703,7 +800,11 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 		b.WriteString("# more events hold some of the words: find with them lists those, newest first, and pages back\n")
 	case older:
 		last := shown[len(shown)-1].ev
-		fmt.Fprintf(&b, "# older: the same find with --before %d.%d\n", last.Offset, last.Index)
+		flag := "before"
+		if t.cli {
+			flag = "--before"
+		}
+		fmt.Fprintf(&b, "# older: the same find with %s %d.%d\n", flag, last.Offset, last.Index)
 	case dropped:
 		fmt.Fprintf(&b, "# older events were not searched: more than %d match before redaction; longer words match fewer\n", episodeCandidates)
 	}
@@ -1020,7 +1121,7 @@ func runEpisode(args []string) int {
 	n := fs.Int("n", episodeAround, "around: events on each side")
 	before := fs.String("before", "", "find: only events before this ref, the next page back")
 	fs.Parse(args)
-	q := episodeQuery{Harness: *harness, Only: *harness != "", Session: *session, Fact: *factName, N: *n, Before: *before}
+	q := episodeQuery{Harness: *harness, Only: *harness != "", Session: *session, Fact: *factName, N: *n, Before: *before, CLI: true}
 	rest := fs.Args()
 	if len(rest) > 0 {
 		// Flags may follow the subcommand too (the pager's hint reads
@@ -1032,8 +1133,10 @@ func runEpisode(args []string) int {
 				words = append(words, rest[i+1:]...)
 				break
 			}
-			name, val, hasVal := strings.Cut(strings.TrimLeft(a, "-"), "=")
-			if strings.HasPrefix(a, "-") && fs.Lookup(name) != nil {
+			// After the words only --name is a flag: a search for a command
+			// holds short ones (grep -n).
+			name, val, hasVal := strings.Cut(strings.TrimPrefix(a, "--"), "=")
+			if strings.HasPrefix(a, "--") && fs.Lookup(name) != nil {
 				if !hasVal && i+1 < len(rest) {
 					i++
 					val = rest[i]
