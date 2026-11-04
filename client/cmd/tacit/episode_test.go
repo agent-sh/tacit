@@ -68,7 +68,7 @@ var refRx = regexp.MustCompile(`(?m)^[->] (\d+\.\d+) `)
 func TestEpisodeFindAroundShow(t *testing.T) {
 	episodeHome(t)
 	out, code := episodeOut(t, "find", "CR-123456789")
-	if code != 0 || !strings.Contains(out, "3 of 3 event(s) of this session (claude) holding") || strings.Contains(out, "tacit_episode") {
+	if code != 0 || !strings.Contains(out, "# tacit: 3 event(s) of this session (claude) holding") || strings.Contains(out, "tacit_episode") {
 		t.Fatalf("find, the session's own recall left out (%d):\n%s", code, out)
 	}
 	for _, want := range []string{"owner owner_text", "agent tool_call Bash", "tool_result Bash"} {
@@ -223,5 +223,41 @@ func TestEpisodeClipKeepsToRunes(t *testing.T) {
 	text := strings.Repeat("\u023a", 300) + " needle here"
 	if got := clipLine(text, []string{"needle"}, 40); !strings.Contains(got, "needle") {
 		t.Fatalf("clip: %q", got)
+	}
+}
+
+// find matches the redacted text only, so it confirms nothing a secret alone
+// holds: part of the masked token finds no event, and words the redactor
+// masks are not searched for.
+func TestEpisodeFindIsNoOracleForSecrets(t *testing.T) {
+	episodeHome(t)
+	if out, code := episodeOut(t, "find", "zq7"); code != 0 || !strings.Contains(out, "# tacit: 0 event(s)") {
+		t.Fatalf("part of a secret (%d):\n%s", code, out)
+	}
+	if out, code := episodeOut(t, "find", "Zq7Vx9"); code != 1 || !strings.Contains(out, "masks: not searched") || strings.Contains(out, "Zq7Vx9") {
+		t.Fatalf("the secret itself (%d):\n%s", code, out)
+	}
+}
+
+// A fact whose words are all short still has an anchor, and a curated fact
+// whose origin note is in this machine's overlay finds it there.
+func TestEpisodeFactShortWordsAndAnOverlayNote(t *testing.T) {
+	r := newRig(t, rigOpts{repos: []string{"demo"}})
+	episodeHome(t)
+	t.Setenv("TACIT_STORE", r.clone)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	local := filepath.Join(r.root, "local")
+	t.Setenv("TACIT_LOCAL", local)
+	note := &fact.Fact{Path: "inbox/dreamer@host-a/the-candidate.md", Meta: fact.Meta{Name: "the-candidate", Description: "the release candidate",
+		Type: "unclassified", Scope: "projects/demo", Created: "2026-11-01", Source: fact.Source{Harness: "dreamer", Host: "host-a", Kind: "observed", Session: episodeSessionID}}, Body: "x"}
+	b, err := note.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Join(local, "inbox", "dreamer@host-a"), 0o755)
+	os.WriteFile(filepath.Join(local, filepath.FromSlash(note.Path)), b, 0o644)
+	writeFact(t, r.clone, fact.Meta{Name: "demo-the-candidate", Description: "the RC to the stage", Type: "design_decision", Scope: "projects/demo", Origin: "the-candidate"}, "x")
+	if out, code := episodeOut(t, "--fact", "demo-the-candidate"); code != 0 || !strings.Contains(out, "came from (claude)") {
+		t.Fatalf("an overlay note's session, short words (%d):\n%s", code, out)
 	}
 }
