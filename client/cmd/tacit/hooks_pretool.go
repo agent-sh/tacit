@@ -112,7 +112,9 @@ func repoRel(r repoid.Repo, cwd, p string) (string, bool) {
 // since (pendingHeld).
 func preTool(s *store.Store, in hookInput) {
 	paths, command := toolTargets(in.ToolName, in.ToolInput)
-	logNavigation(s, in, navOf(in, command)) // the store's clickstream, whether pushes are on or not
+	// The store's clickstream, whether pushes are on or not, after the
+	// answer (its index lookups are not on the push's budget).
+	defer logNavigation(s, in, navOf(in, command))
 	if !deliveryOn("TOOL_PUSH", true) {
 		return
 	}

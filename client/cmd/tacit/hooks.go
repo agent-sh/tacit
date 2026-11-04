@@ -680,9 +680,9 @@ func utilityLogged(ctx context.Context, p string, hits, dhits []search.Hit, seen
 		return out
 	}
 	// What the provider chose on: its score for each candidate and the
-	// threshold, and the audit's query hash to join its receipt by.
+	// threshold.
 	threshold := audit.Threshold
-	dlog.Policy, dlog.UtilityThreshold, dlog.UtilityQuery = "utility", &threshold, audit.QueryHash
+	dlog.Policy, dlog.UtilityThreshold = "utility", &threshold
 	logPool(dhits[:min(1, len(dhits))], nil)
 	for _, h := range append(append([]search.Hit{}, hits...), dhits...) {
 		for _, a := range audit.Candidates {
@@ -694,9 +694,12 @@ func utilityLogged(ctx context.Context, p string, hits, dhits []search.Hit, seen
 	}
 	logChose(out, "utility")
 	for _, h := range append(append([]search.Hit{}, hits...), dhits...) {
-		if seen[h.Name] {
+		switch c := dlog.cand(h); {
+		case seen[h.Name]:
 			logDrop(h, "seen")
-		} else {
+		case c.Utility != nil && *c.Utility >= threshold:
+			logDrop(h, "ceiling") // over the threshold, past the provider's cap
+		default:
 			logDrop(h, "utility")
 		}
 	}

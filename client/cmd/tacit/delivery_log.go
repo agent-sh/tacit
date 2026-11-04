@@ -55,9 +55,9 @@ type logEntry struct {
 	Repos   []string `json:"repos,omitempty"`
 	// Tool is a push's tool. Terms are the query terms of what the block
 	// answered (the prompt, the summary's query, the repositories' names, or
-	// the tool call's command and files), secret-shaped words left out
-	// (logTerms); the text itself is never kept. NTerms is how many terms
-	// it had before the vocabulary check.
+	// the tool call's command and files)
+	// that the store's index holds (logTerms); the text itself is never
+	// kept. NTerms is how many terms it had before that check.
 	Tool   string   `json:"tool,omitempty"`
 	Terms  []string `json:"terms,omitempty"`
 	NTerms int      `json:"n_terms"`
@@ -72,11 +72,9 @@ type logEntry struct {
 	Relative float64 `json:"relative,omitempty"`
 	// Policy is what chose the block: "gates" (the deterministic gates and
 	// floors) or "utility" (the utility provider's scores, when they did),
-	// then with the threshold they were held to and the utility audit's
-	// query hash.
+	// then with the threshold they were held to.
 	Policy           string    `json:"policy,omitempty"`
 	UtilityThreshold *float64  `json:"utility_threshold,omitempty"`
-	UtilityQuery     string    `json:"utility_query,omitempty"`
 	Cands            []logCand `json:"cands,omitempty"`
 	// Nothing: the block showed no line. It is an option the policy chose
 	// like any line, with PNothing its probability.
@@ -86,9 +84,12 @@ type logEntry struct {
 	// nothing fields say nothing).
 	Nav *logNav `json:"nav,omitempty"`
 	// full is the whole request, which the echo share is measured on, and
-	// words its words, read once.
+	// words its words, read once. ix and req are the hook's index and the
+	// request, whose terms endLog takes, once the answer is printed.
 	full  string
 	words map[string]bool
+	ix    *search.Index
+	req   string
 }
 
 // logCand is one candidate of a block, delivered or not.
@@ -149,7 +150,7 @@ func beginLog(hook string, in hookInput, request string, repos []string, ix *sea
 	if hook == "prompt" || hook == "summary" {
 		dlog.full = request // the echo filter runs on these only
 	}
-	dlog.Terms, dlog.NTerms = logTerms(ix, request)
+	dlog.ix, dlog.req = ix, request
 	dlog.ID = logID(dlog)
 }
 
@@ -303,6 +304,8 @@ func endLog(printed []search.Hit) {
 			c.P = 0
 		}
 	}
+	e.Terms, e.NTerms = logTerms(e.ix, e.req)
+	e.ix = nil
 	e.Nothing = len(printed) == 0
 	e.PNothing = 0
 	if e.Nothing {

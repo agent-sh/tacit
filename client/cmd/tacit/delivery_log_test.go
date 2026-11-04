@@ -144,6 +144,31 @@ func TestDeliveryLogRecordsEachBlockAndWhatItLeftOut(t *testing.T) {
 		}
 	}
 
+	// What the store does not hold never reaches the log: a word no fact
+	// has, in a prompt, a push's command and a search, a fact name and a
+	// folder the store lacks.
+	before := len(log)
+	hookOut(t, promptPayload(cwd, "s9", "Fix the scheduler pool shard lock with zqxjvword tonight"), "prompt")
+	hookOut(t, toolPayload(cwd, "s9", "Bash", map[string]any{"command": "make lint zqxjvword"}), "pre-tool")
+	hookOut(t, toolPayload(cwd, "s9", "mcp__tacit__tacit_search", map[string]any{"query": "shard lock zqxjvword"}), "pre-tool")
+	hookOut(t, toolPayload(cwd, "s9", "mcp__tacit__tacit_fact", map[string]any{"name": "zqxjv-not-a-fact"}), "pre-tool")
+	hookOut(t, toolPayload(cwd, "s9", "mcp__tacit__tacit_tree", map[string]any{"path": "projects/zqxjvnowhere"}), "pre-tool")
+	added := readDeliveryLog(t, state)[before:]
+	b, _ := json.Marshal(added)
+	if strings.Contains(string(b), "zqxjv") {
+		t.Fatalf("a word the store lacks is in the log: %s", b)
+	}
+	kinds := map[string]int{}
+	for _, e := range added {
+		kinds[e.Hook]++
+		if e.Hook == "nav" && e.Nav.Tool == "search" && (!subset(e.Nav.Terms, "shard", "lock") || e.Nav.NTerms != 3) {
+			t.Fatalf("the search's indexed terms: %+v", e.Nav)
+		}
+	}
+	if kinds["prompt"] != 1 || kinds["push"] < 2 || kinds["nav"] != 3 {
+		t.Fatalf("entries: %v", kinds)
+	}
+
 	t.Setenv("TACIT_DELIVERY_LOG", "off")
 	n := len(readDeliveryLog(t, state))
 	hookOut(t, promptPayload(cwd, "s2", prompt), "prompt")
@@ -353,7 +378,7 @@ func TestDeliveryLogNamesTheUtilityPolicy(t *testing.T) {
 	}
 	e := run()
 	u, tp := candOf(*e, "endpoint-useful"), candOf(*e, "endpoint-topical")
-	if e.Policy != "utility" || e.UtilityThreshold == nil || *e.UtilityThreshold != 0.7 || e.UtilityQuery != "abc" || u == nil || u.Via != "utility" || !u.Delivered || u.Utility == nil || *u.Utility != 0.95 ||
+	if e.Policy != "utility" || e.UtilityThreshold == nil || *e.UtilityThreshold != 0.7 || u == nil || u.Via != "utility" || !u.Delivered || u.Utility == nil || *u.Utility != 0.95 ||
 		tp == nil || tp.Delivered || tp.Via != "" || tp.Dropped != "utility" || tp.Utility == nil || *tp.Utility != 0.1 {
 		t.Fatalf("the provider chose: %+v, %+v, %+v", e, u, tp)
 	}
@@ -455,5 +480,19 @@ func TestDeliveryLogHoldsTheRepoRankedTail(t *testing.T) {
 	}
 	if tail == 0 {
 		t.Fatalf("no candidate past the cut of 4: %+v", log[0].Cands)
+	}
+}
+
+// BenchmarkDeliveryLogWrite is one block's line of 50 candidates written
+// (eval/DELIVERY.md, "Scoring each delivery": its cost).
+func BenchmarkDeliveryLogWrite(b *testing.B) {
+	b.Setenv("TACIT_STATE_DIR", b.TempDir())
+	e := &logEntry{V: 1, Hook: "prompt", Terms: []string{"scheduler", "pool", "shard", "lock"}}
+	for i := 0; i < 50; i++ {
+		e.Cands = append(e.Cands, logCand{Name: fmt.Sprintf("fact-name-%d", i), Path: "projects/widget/x.md", Prov: "agent", Score: 12.3, Rank: i})
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		writeLogEntry(e, time.Now())
 	}
 }
