@@ -127,11 +127,17 @@ func afterCompaction(ctx context.Context, ix *search.Index, in hookInput, sit se
 	}
 	sum := summaryOf(summary)
 	held := heldOf(ctx, ix, sum, given)
+	wasGiven := map[string]bool{}
+	for _, n := range given {
+		wasGiven[n] = true
+	}
 	var again []search.Hit
 	for _, h := range start {
 		// A fact the session was never given is in the summary only by its
-		// name: a summary about the repo's work says its facts' words.
-		if held[h.Name] || sum.named(h) {
+		// name: a summary about the repo's work says its facts' words. One
+		// it was given is also held as the start block has it (a name two
+		// files hold: heldOf read the name's first file).
+		if held[h.Name] || sum.named(h) || wasGiven[h.Name] && sum.holds(h) {
 			held[h.Name] = true
 			continue
 		}
