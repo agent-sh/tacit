@@ -120,6 +120,8 @@ func afterCompaction(ctx context.Context, ix *search.Index, in hookInput, sit se
 	clearPending(in.SessionID)
 	title := startTitleWhen(sit, mcp, ", again after the compaction")
 	if summary == "" {
+		logChose(start, "again")
+		endLog(start)
 		remember(in.SessionID, start)
 		if size >= 0 {
 			savePending(in.SessionID, pending{Offset: size, Given: given})
@@ -144,10 +146,13 @@ func afterCompaction(ctx context.Context, ix *search.Index, in hookInput, sit se
 		// files hold: heldOf read the name's first file).
 		if held[h.Name] || sum.named(h) || wasGiven[h.Name] && sum.holds(h) {
 			held[h.Name] = true
+			logDrop(h, "held")
 			continue
 		}
 		again = append(again, h)
 	}
+	logChose(again, "again")
+	endLog(again)
 	rememberNames(in.SessionID, factNames(held))
 	remember(in.SessionID, again)
 	pulled := summaryStep(ctx, ix, in, sit, recs, summary)
@@ -179,8 +184,10 @@ func summaryStep(ctx context.Context, ix *search.Index, in hookInput, sit search
 	}
 	sit = withPromptScopes(sit, recs, summary)
 	seen := delivered(in.SessionID)
+	beginLog("summary", in, q, repoNames(sit))
 	hits, err := promptHitsWith(ctx, ix, sit, q, seen, true)
 	if err != nil {
+		endLog(nil)
 		return nil
 	}
 	var out []search.Hit
@@ -190,6 +197,7 @@ func summaryStep(ctx context.Context, ix *search.Index, in hookInput, sit search
 			out = append(out, h)
 		}
 	}
+	endLog(out)
 	remember(in.SessionID, out)
 	return out
 }
@@ -471,6 +479,8 @@ func wordForms(t string) []string {
 func onResume(ctx context.Context, ix *search.Index, s *store.Store, in hookInput, sit search.Situation, start []search.Hit, mcp bool) string {
 	given := delivered(in.SessionID)
 	if len(given) == 0 {
+		logChose(start, "start")
+		endLog(start)
 		remember(in.SessionID, start)
 		return search.Block(start, startTitle(sit, mcp)) + startTreeLine(ctx, ix, sit, len(start), mcp)
 	}
@@ -478,8 +488,12 @@ func onResume(ctx context.Context, ix *search.Index, s *store.Store, in hookInpu
 	for _, h := range start {
 		if !given[h.Name] {
 			fresh = append(fresh, h)
+		} else {
+			logDrop(h, "seen")
 		}
 	}
+	logChose(fresh, "resume")
+	endLog(fresh)
 	remember(in.SessionID, fresh)
 	out := search.Block(fresh, "# tacit: new for "+repoTitle(sit)+" on "+sit.Host+" since this session was given its facts ("+openDetail(mcp)+")")
 	if lines, gone := withdrawnLines(ctx, ix, s, factNames(given)); len(lines) > 0 {

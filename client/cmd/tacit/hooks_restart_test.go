@@ -103,8 +103,8 @@ func appendLines(t *testing.T, path string, lines ...string) {
 }
 
 // A harness that writes its summary before the start (Codex's compacted
-// entry, pi's compaction entry, at the transcript's end): the start block
-// comes again from the store as it is, less what the summary still holds
+// entry, pi's compaction entry, at the transcript's end), and the delivery
+// log's entries for it: the start block comes again from the store as it is, less what the summary still holds
 // (the note it names), then the facts the summary's words select (the wombat
 // history fact, which no start block shows, named past the summary's first
 // terms). Of the facts prompts gave before the compaction, the one the
@@ -167,6 +167,29 @@ func TestStartHookAfterACompaction(t *testing.T) {
 			out2 := hookOut(t, payload("s2", "compact", tr2), "session-start")
 			if !strings.Contains(out2, summaryTitle) || !strings.Contains(out2, "demo-wombat-flusher:") || strings.Contains(out2, "demo-note:") {
 				t.Fatalf("no summary selection, or the held note again:\n%s", out2)
+			}
+			// The delivery log has each block: the start again after the
+			// compaction with what the summary holds left out as held, and the
+			// summary's selection as an entry of its own.
+			hooks := map[string][]logEntry{}
+			for _, e := range readDeliveryLog(t, platform.StateDir(home)) {
+				hooks[e.Session+"/"+e.Hook] = append(hooks[e.Session+"/"+e.Hook], e)
+			}
+			if len(hooks["s1/start"]) != 1 || len(hooks["s1/prompt"]) != 2 || len(hooks["s1/compact"]) != 1 || len(hooks["s2/summary"]) != 1 {
+				t.Fatalf("log entries: %v", hooks)
+			}
+			compact := hooks["s1/compact"][0]
+			if compact.TranscriptPath != tr || compact.Transcript <= 0 {
+				t.Fatalf("the compaction's transcript: %q at %d", compact.TranscriptPath, compact.Transcript)
+			}
+			if c := candOf(compact, "demo-note"); c == nil || c.Delivered || c.Dropped != "held" {
+				t.Fatalf("the held note: %+v", c)
+			}
+			if c := candOf(compact, "demo-kestrel-reset"); c == nil || !c.Delivered || c.Via != "again" {
+				t.Fatalf("the start fact again: %+v", c)
+			}
+			if c := candOf(hooks["s2/summary"][0], "demo-wombat-flusher"); c == nil || !c.Delivered || c.Via != "ranked" || c.Rank < 0 {
+				t.Fatalf("the summary's line: %+v", c)
 			}
 		})
 	}

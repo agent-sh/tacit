@@ -115,6 +115,7 @@ func preTool(s *store.Store, in hookInput) {
 		return
 	}
 	paths, command := toolTargets(in.ToolName, in.ToolInput)
+	logNavigation(in, command)
 	if strings.HasPrefix(in.ToolName, "mcp__") {
 		// An MCP tool's input is its own: a "path" or "command" field
 		// there is no file the call writes and no shell command it runs.
@@ -169,6 +170,8 @@ func preTool(s *store.Store, in hookInput) {
 	recs := hookRecords(ctx, ix)
 	pendingHeld(ctx, ix, in) // after a compaction: what its summary holds is in the context
 	seen := delivered(in.SessionID)
+	beginLog("push", in, strings.TrimSpace(in.ToolName+" "+command+" "+strings.Join(rel, " ")), repoNames(sit))
+	defer endLog(nil) // a call that returned before printing delivered nothing
 	var hits []search.Hit
 	if (inRepo && (len(rel) > 0 || command != "")) || wsCommand {
 		sit = withRecordAliases(sit, recs)
@@ -178,11 +181,13 @@ func preTool(s *store.Store, in hookInput) {
 		}
 		home, _ := os.UserHomeDir()
 		hits = metaSelect(all, repoNames(sit), rel, command, "", in.Cwd+" "+home, seen, deliveryInt("META_CEILING", metaCeiling))
+		logChose(hits, "meta")
 	}
 	var lines, pushed []string
 	if areas && len(recs) > 0 {
 		var ah []search.Hit
 		ah, lines, pushed = areaPush(ctx, ix, recs, in.ToolName, command, withSeen(seen, hits))
+		logChose(ah, "area")
 		hits = append(hits, ah...)
 	}
 	hits = withoutClaims(hits)
@@ -206,4 +211,5 @@ func preTool(s *store.Store, in hookInput) {
 	}
 	out, _ := json.Marshal(map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse", "additionalContext": block}})
 	fmt.Println(string(out))
+	endLog(hits)
 }

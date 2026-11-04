@@ -212,6 +212,8 @@ func runHook(args []string) int {
 		recs := hookRecords(ctx, ix)
 		sit, _ = withWorkspace(withRootFolder(sit, recs, in.Cwd), in.Cwd)
 		sit = withOrgs(withRecordAliases(sit, recs), recs)
+		beginLog(startHook(restart), in,
+			strings.TrimSpace(sit.Repo+" "+strings.Join(sit.Workspace, " ")), repoNames(sit))
 		hits, err := sessionStartHits(ctx, ix, sit)
 		if err != nil {
 			return 0
@@ -222,6 +224,8 @@ func runHook(args []string) int {
 			fmt.Print(restartBlock(ctx, ix, s, in, sit, recs, hits, restart, mcp))
 			return 0
 		}
+		logChose(hits, "start")
+		defer endLog(hits)
 		if in.Source == "clear" {
 			forget(in.SessionID) // the context the record speaks of is gone
 			clearPending(in.SessionID)
@@ -276,6 +280,7 @@ func runHook(args []string) int {
 			}
 		}
 		sit = withPromptScopes(withOrgs(withRecordAliases(sit, recs), recs), recs, p)
+		beginLog("prompt", in, p, repoNames(sit))
 		strong, err := promptHits(ctx, ix, sit, p, delivered(in.SessionID))
 		if err != nil {
 			return 0
@@ -283,6 +288,7 @@ func runHook(args []string) int {
 		strong = withoutClaims(strong)
 		remember(in.SessionID, strong)
 		fmt.Print(search.Block(strong, "# tacit: facts matching this request"))
+		endLog(strong)
 	default:
 		usage()
 	}
@@ -343,6 +349,7 @@ func sessionStartHits(ctx context.Context, ix *search.Index, sit search.Situatio
 	if err != nil {
 		return nil, err
 	}
+	logPool(hits, nil)
 	return startSelection(hits, sit.Repo, startLimit), nil
 }
 
@@ -436,19 +443,33 @@ func promptHitsWith(ctx context.Context, ix *search.Index, sit search.Situation,
 	if len(names) == 0 {
 		floor = repoLessPromptFloor
 	}
+	logPool(hits, nil)
+	if dlog != nil {
+		_, dlog.Relative = promptCaps()
+		dlog.Floor = floor
+	}
 	var out []search.Hit
 	if local {
 		out = promptSelectionFor(p, hits, dhits, seen, floor)
 	} else {
+		if dlog != nil && utilityProvider() != "" {
+			dlog.Policy = "utility"
+		}
 		out = utilityPromptSelection(ctx, p, hits, dhits, seen, floor)
 	}
 	// The repo-first lines: the fact whose metadata names a path or command
 	// of the request, and the best rule or decision for it (hooks_delivery.go).
-	out = append(out, promptMetaHits(ctx, ix, sit, p, withSeen(seen, out))...)
+	meta := promptMetaHits(ctx, ix, sit, p, withSeen(seen, out))
+	logChose(meta, "meta")
+	out = append(out, meta...)
 	if !shortRequest(p) {
-		out = append(out, promptActionHits(ctx, ix, sit, p, withSeen(seen, out), out)...)
+		action := promptActionHits(ctx, ix, sit, p, withSeen(seen, out), out)
+		logChose(action, "action")
+		out = append(out, action...)
 	}
-	return withoutEchoes(out, p), nil
+	kept := withoutEchoes(out, p)
+	logDropped(out, kept, "echo")
+	return kept, nil
 }
 
 // shortRequest: a request of fewer than shortRequestTerms distinct words of
@@ -547,6 +568,7 @@ func selectPrompt(hits, derived []search.Hit, seen map[string]bool, floor float6
 	var strong []search.Hit
 	ruling := false
 	limit, relative := promptCaps()
+	abs := floor
 	if relative > 0 {
 		for _, h := range hits {
 			if !isDerived(h) {
@@ -559,12 +581,17 @@ func selectPrompt(hits, derived []search.Hit, seen map[string]bool, floor float6
 		if (h.Score >= floor || (h.Evidence != nil && h.Evidence.Supported)) && len(strong) < limit && !isDerived(h) {
 			strong = append(strong, h)
 			ruling = ruling || h.Rule()
+		} else if !isDerived(h) {
+			logDrop(h, belowWhich(h, abs, floor))
 		}
 	}
 	var out []search.Hit
 	for _, h := range strong {
 		if !seen[h.Name] {
 			out = append(out, h)
+			logChose([]search.Hit{h}, "ranked")
+		} else {
+			logDrop(h, "seen")
 		}
 	}
 	// A ruling the session already saw counts too: it is in the context. So
@@ -574,6 +601,9 @@ func selectPrompt(hits, derived []search.Hit, seen map[string]bool, floor float6
 			if h.Rule() && h.Score >= ruleSlotFloor && !isDerived(h) && !slices.ContainsFunc(strong, func(s search.Hit) bool { return s.Name == h.Name }) {
 				if !seen[h.Name] {
 					out = append(out, h)
+					logChose([]search.Hit{h}, "rule_slot")
+				} else {
+					logDrop(h, "seen")
 				}
 				break
 			}
@@ -582,10 +612,36 @@ func selectPrompt(hits, derived []search.Hit, seen map[string]bool, floor float6
 	for _, h := range derived {
 		if isDerived(h) && h.Score >= derivedPromptFloor && !seen[h.Name] {
 			out = append(out, h)
+			logChose([]search.Hit{h}, "derived")
 		}
 		break // only the best one is considered
 	}
 	return out
+}
+
+// startHook names a SessionStart block in the delivery log.
+func startHook(r restart) string {
+	switch r {
+	case restartCompact:
+		return "compact"
+	case restartResume:
+		return "resume"
+	}
+	return "start"
+}
+
+// belowWhich names the prompt gate a candidate failed: the score floor, the
+// share of the best (which raised the floor above its own), else the
+// ceiling.
+func belowWhich(h search.Hit, abs, floor float64) string {
+	supported := h.Evidence != nil && h.Evidence.Supported
+	switch {
+	case !supported && h.Score < abs:
+		return "floor"
+	case !supported && h.Score < floor:
+		return "relative"
+	}
+	return "ceiling"
 }
 
 // startSelection orders the SessionStart block: owner rules first

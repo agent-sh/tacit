@@ -235,8 +235,13 @@ func repoStartHits(ctx context.Context, ix *search.Index, sit search.Situation) 
 		}
 		return keep[i].Name < keep[j].Name
 	})
-	keep = byScore(keep, startScores(ctx, ix, sit, strings.Join(repoNames(sit), " ")))
+	scores := startScores(ctx, ix, sit, strings.Join(repoNames(sit), " "))
+	keep = byScore(keep, scores)
+	logPool(keep, scores)
 	if c := deliveryInt("START_CEILING", startCeiling); len(keep) > c {
+		for _, h := range keep[c:] {
+			logDrop(h, "ceiling")
+		}
 		keep = keep[:c]
 	}
 	// The repository's org: its rules and standards, lightly.
