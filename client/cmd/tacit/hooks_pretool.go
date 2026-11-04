@@ -170,7 +170,10 @@ func preTool(s *store.Store, in hookInput) {
 	recs := hookRecords(ctx, ix)
 	pendingHeld(ctx, ix, in) // after a compaction: what its summary holds is in the context
 	seen := delivered(in.SessionID)
-	beginLog("push", in, strings.TrimSpace(in.ToolName+" "+command+" "+strings.Join(rel, " ")), repoNames(sit))
+	beginLog("push", in, strings.TrimSpace(command+" "+strings.Join(rel, " ")), repoNames(sit))
+	if dlog != nil {
+		dlog.Tool = in.ToolName
+	}
 	defer endLog(nil) // a call that returned before printing delivered nothing
 	var hits []search.Hit
 	if (inRepo && (len(rel) > 0 || command != "")) || wsCommand {

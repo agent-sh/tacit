@@ -40,9 +40,6 @@ const (
 	// deliveryLogDayCap: a day's file stops growing here (the utility
 	// audit's cap), so a runaway loop of hook calls cannot fill the disk.
 	deliveryLogDayCap = 10 << 20
-	// deliveryLogText bounds the request and each description kept.
-	deliveryLogText = 2000
-	deliveryLogDesc = 400
 )
 
 // logEntry is one hook block.
@@ -54,10 +51,12 @@ type logEntry struct {
 	Session string   `json:"session,omitempty"`
 	Cwd     string   `json:"cwd,omitempty"`
 	Repos   []string `json:"repos,omitempty"`
-	// Request is what the block answered: the prompt, the summary's query,
-	// or the tool call (its name, then its command or files).
-	Request string   `json:"request,omitempty"`
-	Terms   []string `json:"terms,omitempty"` // the query's terms (search.Terms)
+	// Tool is a push's tool. Terms are the query terms of what the block
+	// answered (the prompt, the summary's query, the repositories' names, or
+	// the tool call's command and files), secret-shaped words left out
+	// (logTerms); the text itself is never kept.
+	Tool  string   `json:"tool,omitempty"`
+	Terms []string `json:"terms,omitempty"`
 	// Transcript is the transcript's size in bytes when the hook ran: the
 	// turn's place in the session, and where what came after it begins
 	// (-1: none to read).
@@ -88,7 +87,6 @@ type logEntry struct {
 type logCand struct {
 	Name      string  `json:"name"`
 	Path      string  `json:"path,omitempty"`
-	Desc      string  `json:"desc,omitempty"`
 	Type      string  `json:"type,omitempty"`
 	Scope     string  `json:"scope,omitempty"`
 	Tier      int     `json:"tier"`
@@ -135,7 +133,7 @@ func beginLog(hook string, in hookInput, request string, repos []string) {
 		return
 	}
 	dlog = &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: hook, Session: in.SessionID, Policy: "gates",
-		Cwd: in.Cwd, Repos: repos, Request: clipBytes(request, deliveryLogText), Terms: search.Terms(request), Transcript: transcriptSize(in.TranscriptPath), TranscriptPath: in.TranscriptPath, full: request}
+		Cwd: in.Cwd, Repos: repos, Terms: logTerms(request), Transcript: transcriptSize(in.TranscriptPath), TranscriptPath: in.TranscriptPath, full: request}
 	dlog.ID = logID(dlog)
 }
 
@@ -184,7 +182,7 @@ func (e *logEntry) cand(h search.Hit) *logCand {
 	if t, err := time.Parse("2006-01-02", firstN(h.Created, 10)); err == nil {
 		age = int(time.Since(t).Hours() / 24)
 	}
-	c := logCand{Name: h.Name, Path: h.Path, Desc: clipBytes(h.Description, deliveryLogDesc), Type: h.Type, Scope: h.Scope, Tier: tier(h),
+	c := logCand{Name: h.Name, Path: h.Path, Type: h.Type, Scope: h.Scope, Tier: tier(h),
 		Prov: h.Provenance(), Created: h.Created, AgeDays: age, Review: h.Review, Local: h.Local, Score: round3(h.Score), Rank: -1,
 		Matched: len(h.MatchedTerms), Supported: h.Evidence != nil && h.Evidence.Supported, Tied: repoTied(h, e.Repos), Echo: e.echoOf(h)}
 	e.Cands = append(e.Cands, c)
@@ -440,7 +438,7 @@ func (e *logEntry) echoOf(h search.Hit) float64 {
 type logNav struct {
 	Tool  string   `json:"tool"`            // tree, search, fact
 	Path  string   `json:"path,omitempty"`  // the tree's folder, a search's scope
-	Query string   `json:"query,omitempty"` // a search's words
+	Terms []string `json:"terms,omitempty"` // a search's terms (logTerms)
 	Names []string `json:"names,omitempty"` // the facts read whole
 	// Depth is how many folders deep the step is (the tree's folder, a
 	// search's scope); Levels the levels below it a tree asked for (-1:
@@ -482,7 +480,7 @@ func navOf(in hookInput, command string) []logNav {
 			}
 			out = append(out, n)
 		case strings.HasSuffix(in.ToolName, "__tacit_search"):
-			out = append(out, logNav{Tool: "search", Path: a.Scope, Query: clipBytes(a.Query, deliveryLogText), Depth: folderDepth(a.Scope), Levels: -1, Offset: a.Offset})
+			out = append(out, logNav{Tool: "search", Path: a.Scope, Terms: logTerms(a.Query), Depth: folderDepth(a.Scope), Levels: -1, Offset: a.Offset})
 		}
 		return out
 	}
@@ -552,7 +550,7 @@ func navCommand(w []string) (logNav, bool) {
 			n.Levels = d
 		}
 	case "search":
-		n.Path, n.Query = flags["scope"], clipBytes(strings.Join(words, " "), deliveryLogText)
+		n.Path, n.Terms = flags["scope"], logTerms(strings.Join(words, " "))
 		n.Offset, _ = strconv.Atoi(flags["offset"])
 	}
 	n.Depth = folderDepth(n.Path)

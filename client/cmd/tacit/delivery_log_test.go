@@ -101,29 +101,29 @@ func TestDeliveryLogRecordsEachBlockAndWhatItLeftOut(t *testing.T) {
 		t.Fatalf("entries: %d prompt, %d push, %d nav, want 2, 5, 4: %+v", len(prompts), len(pushes), len(navs), log)
 	}
 	first := prompts[0]
-	if first.V != deliveryLogVersion || first.ID == "" || first.Session != "s1" || first.Request != prompt || first.Floor != promptFloor || first.Relative != promptRelative ||
+	if first.V != deliveryLogVersion || first.ID == "" || first.Session != "s1" || strings.Join(first.Terms, " ") != "fix scheduler pool shard lock slot race" || first.Floor != promptFloor || first.Relative != promptRelative ||
 		len(first.Terms) == 0 || !strings.Contains(strings.Join(first.Repos, ","), "widget") || first.Policy != "gates" || first.Nothing || first.PNothing != 0 {
 		t.Fatalf("the prompt entry: %+v", first)
 	}
 	c := candOf(first, "scheduler-shard-locks")
 	if c == nil || !c.Delivered || c.Via != "ranked" || c.Dropped != "" || c.Rank < 0 || c.Share <= 0 || c.Share > 1 || c.Score <= 0 ||
-		c.Tier != 1 || c.Prov != "agent" || !c.Tied || c.AgeDays < 0 || c.Created == "" || c.Matched < 2 || c.Desc == "" || c.P != 1 {
+		c.Tier != 1 || c.Prov != "agent" || !c.Tied || c.AgeDays < 0 || c.Created == "" || c.Matched < 2 || c.P != 1 {
 		t.Fatalf("the delivered line: %+v", c)
 	}
 	again := candOf(prompts[1], "scheduler-shard-locks")
 	if again == nil || again.Delivered || again.Dropped != "seen" || again.P != 0 || !prompts[1].Nothing || prompts[1].PNothing != 1 {
 		t.Fatalf("the line the session had: %+v, nothing %v %v", again, prompts[1].Nothing, prompts[1].PNothing)
 	}
-	if p := candOf(pushes[0], "lint-before-push"); p == nil || !p.Delivered || p.Via != "meta" || p.P != 1 || pushes[0].Request != "Bash make lint" || pushes[0].Nothing {
+	if p := candOf(pushes[0], "lint-before-push"); p == nil || !p.Delivered || p.Via != "meta" || p.P != 1 || pushes[0].Tool != "Bash" || strings.Join(pushes[0].Terms, " ") != "make lint" || pushes[0].Nothing {
 		t.Fatalf("the push: %+v", pushes[0])
 	}
-	if p := pushes[1]; p.Request != "Bash ls -la" || !p.Nothing || p.PNothing != 1 || len(p.Cands) != 0 {
+	if p := pushes[1]; p.Tool != "Bash" || len(p.Terms) != 0 || !p.Nothing || p.PNothing != 1 || len(p.Cands) != 0 {
 		t.Fatalf("the push that showed nothing: %+v", p)
 	}
 	want := []logNav{
 		{Tool: "fact", Names: []string{"scheduler-shard-locks"}, Levels: -1},
 		{Tool: "tree", Path: "projects/widget", Depth: 2, Levels: 0},
-		{Tool: "search", Path: "projects/widget", Query: "lock order", Depth: 2, Levels: -1},
+		{Tool: "search", Path: "projects/widget", Terms: []string{"lock", "order"}, Depth: 2, Levels: -1},
 		{Tool: "fact", Names: []string{"pool-lock-order"}, Levels: -1},
 	}
 	if navs[2].ID == navs[3].ID {
@@ -252,8 +252,8 @@ func TestDeliveryLogEchoOnTheWholeRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	endLog(got)
-	if len(e.Request) > deliveryLogText {
-		t.Fatalf("request kept whole: %d bytes", len(e.Request))
+	if len(e.Terms) > 24 {
+		t.Fatalf("terms past the query's: %d", len(e.Terms))
 	}
 	if c := candOf(*e, "review-tool-failures-weekly"); c == nil || c.Delivered || c.Dropped != "echo" || c.Echo < echoShare {
 		t.Fatalf("the echo: %+v", c)
@@ -265,13 +265,13 @@ func TestDeliveryLogEchoOnTheWholeRequest(t *testing.T) {
 // tacit too, and words that only mention tacit are no step.
 func TestDeliveryLogReadsTheCLIStep(t *testing.T) {
 	for cmd, want := range map[string]string{
-		"tacit search --repo widget --limit 5 --offset 10 lock order":     `[{"tool":"search","query":"lock order","depth":0,"levels":-1,"offset":10}]`,
-		"FOO=1 tacit search -scope=projects/widget -json lock":            `[{"tool":"search","path":"projects/widget","query":"lock","depth":2,"levels":-1}]`,
+		"tacit search --repo widget --limit 5 --offset 10 lock order":     `[{"tool":"search","terms":["lock","order"],"depth":0,"levels":-1,"offset":10}]`,
+		"FOO=1 tacit search -scope=projects/widget -json lock":            `[{"tool":"search","path":"projects/widget","terms":["lock"],"depth":2,"levels":-1}]`,
 		"tacit tree --depth=1 projects/widget":                            `[{"tool":"tree","path":"projects/widget","depth":2,"levels":1}]`,
 		`C:\tools\tacit.exe fact pool-lock-order`:                         `[{"tool":"fact","names":["pool-lock-order"],"depth":0,"levels":-1}]`,
 		`git commit -m "use tacit fact to read one" && echo tacit tree x`: `null`,
-		"tacit search lock order --scope projects/widget":                 `[{"tool":"search","query":"lock order --scope projects/widget","depth":0,"levels":-1}]`,
-		"tacit search -- --scope":                                         `[{"tool":"search","query":"--scope","depth":0,"levels":-1}]`,
+		"tacit search lock order --scope projects/widget":                 `[{"tool":"search","terms":["lock","order","scope","projects","widget"],"depth":0,"levels":-1}]`,
+		"tacit search -- --scope":                                         `[{"tool":"search","terms":["scope"],"depth":0,"levels":-1}]`,
 		"tacit fact one two; tacit fact Not_A_Slug; tacit tree a b":       `null`,
 	} {
 		b, _ := json.Marshal(navOf(hookInput{ToolName: "Bash"}, cmd))
@@ -305,7 +305,7 @@ func TestDeliveryLogKeepsItsWindowAndCap(t *testing.T) {
 	}
 	today := filepath.Join(dir, "2026-03-10.jsonl")
 	os.Truncate(today, deliveryLogDayCap-10)
-	writeLogEntry(&logEntry{V: 1, Hook: "prompt", Request: "past the cap"}, now)
+	writeLogEntry(&logEntry{V: 1, Hook: "prompt", Terms: []string{"past", "cap"}}, now)
 	if fi, _ := os.Stat(today); fi.Size() != deliveryLogDayCap-10 {
 		t.Fatalf("grew past the cap: %d", fi.Size())
 	}
@@ -399,5 +399,38 @@ func TestDeliveryLogWriteIsBounded(t *testing.T) {
 	writeBounded(&logEntry{V: 1})
 	if d := time.Since(start); d > logWriteBudget+time.Second {
 		t.Fatalf("the hook waited %v for a stalled write", d)
+	}
+}
+
+// The log keeps a request's terms, never its text, and leaves out every
+// secret-shaped word before it takes them: the server's key shapes, known
+// key prefixes, long hex or base64 runs, high-entropy words. Paths and
+// ordinary words stay.
+func TestDeliveryLogTermsLeaveOutSecrets(t *testing.T) {
+	secrets := []string{
+		"sk-Ab3dEfGh1jKlMnOpQrStUvWx", "ghp_0123456789abcdefABCDEF0123456789abcd", "AKIAABCDEFGHIJKLMNOP",
+		"xoxb-123456789012-abcdefABCDEF", "0123456789abcdef0123456789abcdef01234567",
+		"token=Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MEFCQ0RFRg", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln",
+		"Q8vX2mZp7LkR4tNw9YbH3sJd", "--password=hunter2Hunter2hunter2X9",
+	}
+	for _, s := range secrets {
+		got := strings.Join(logTerms("deploy the widget with "+s+" tonight"), " ")
+		if got != "deploy widget tonight" {
+			t.Errorf("%s: terms %q", s, got)
+		}
+	}
+	for text, want := range map[string]string{
+		"edit client/cmd/tacit/hooks_pretool.go and run make lint": "edit client cmd tacit hooks_pretool run make lint",
+		"why did the otter retry loop stop":                        "otter retry loop stop",
+		"open src/components/UserProfile.tsx":                      "open src components userprofile tsx",
+	} {
+		if got := strings.Join(logTerms(text), " "); got != want {
+			t.Errorf("%q: terms %q, want %q", text, got, want)
+		}
+	}
+	// The entry holds no text field at all.
+	b, _ := json.Marshal(logEntry{V: 1, Terms: logTerms("fix it with sk-Ab3dEfGh1jKlMnOpQrStUvWx now")})
+	if strings.Contains(string(b), "Ab3d") || strings.Contains(string(b), "request") {
+		t.Errorf("entry: %s", b)
 	}
 }
