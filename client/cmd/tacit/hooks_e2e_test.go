@@ -18,8 +18,9 @@ func hookOut(t *testing.T, stdin string, args ...string) string {
 	t.Helper()
 	// The PreToolUse hook prints nothing after toolBudget of wall clock, and
 	// the prompt hook finds no repo by activity after activityBudget; a test
-	// of what they print must not depend on the machine's load.
-	// TestPreToolMCPLatency alone runs them under the real budgets.
+	// of what they print widens both (the prompt hook's own queryBudget still
+	// bounds it). TestPreToolMCPLatency alone runs the PreToolUse hook under
+	// its real budget.
 	if !hookRealBudget {
 		defer func(d, a time.Duration) { toolDeadline, activityDeadline = d, a }(toolDeadline, activityDeadline)
 		toolDeadline, activityDeadline = time.Minute, time.Minute

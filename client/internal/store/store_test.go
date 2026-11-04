@@ -171,6 +171,9 @@ func TestSyncBriefFetchesWithoutTheLock(t *testing.T) {
 	<-held
 	var once sync.Once
 	letGo := func() { once.Do(func() { close(release); <-holderDone }) }
+	// A failure must not leave the lock held when TempDir's cleanup removes
+	// the clone (Windows cannot remove an open file).
+	t.Cleanup(letGo)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute) // a hang guard only
 	defer cancel()
@@ -178,8 +181,8 @@ func TestSyncBriefFetchesWithoutTheLock(t *testing.T) {
 	var syncErr error
 	synced := make(chan struct{})
 	go func() { defer close(synced); syncErr = s.SyncBrief(ctx) }()
-	// A failure must not leave git running or the lock held when TempDir's
-	// cleanup removes the clone (Windows cannot remove an open file).
+	// Nor git running: cleanups run last first, so this one goes before
+	// letGo's and TempDir's.
 	t.Cleanup(func() { cancel(); letGo(); <-synced })
 
 	// The fetch lands in its private ref while the lock is held ...
@@ -196,7 +199,8 @@ func TestSyncBriefFetchesWithoutTheLock(t *testing.T) {
 		}
 	}
 	// ... and the merge waits for the lock: origin/main and the working tree
-	// stay as they were, and a caller out of time gets busy.
+	// stay as they were. The lock is still held: a second caller out of time
+	// gets busy, the error SyncBrief passes up from its lock wait.
 	select {
 	case <-synced:
 		t.Fatalf("SyncBrief returned under a held lock: %v", syncErr)
