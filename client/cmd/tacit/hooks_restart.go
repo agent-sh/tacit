@@ -129,7 +129,7 @@ func afterCompaction(ctx context.Context, ix *search.Index, in hookInput, sit se
 		return out
 	}
 	sum := summaryOf(summary)
-	held := heldOf(ctx, ix, sum, given)
+	held, _ := heldOf(ctx, ix, sum, given)
 	wasGiven := map[string]bool{}
 	for _, n := range given {
 		wasGiven[n] = true
@@ -267,7 +267,7 @@ func pendingSummary(ctx context.Context, ix *search.Index, in hookInput, sit sea
 		return ""
 	}
 	if !p.HeldDone {
-		rememberHeld(ctx, ix, in, summaryOf(summary), p.Given)
+		_ = rememberHeld(ctx, ix, in, summaryOf(summary), p.Given)
 	}
 	return search.Block(summaryStep(ctx, ix, in, sit, recs, summary), summaryTitle)
 }
@@ -286,7 +286,11 @@ func pendingHeld(ctx context.Context, ix *search.Index, in hookInput) {
 	if !ok {
 		return
 	}
-	rememberHeld(ctx, ix, in, summaryOf(summary), p.Given)
+	// A lookup the push's deadline cut leaves the flag unset: the next
+	// push, or the prompt, tries again.
+	if rememberHeld(ctx, ix, in, summaryOf(summary), p.Given) != nil || ctx.Err() != nil {
+		return
+	}
 	p.HeldDone = true
 	savePending(in.SessionID, p)
 }
@@ -308,36 +312,41 @@ func pendingText(in hookInput, p pending) (string, bool) {
 }
 
 // rememberHeld puts the facts of given that the summary holds in the
-// delivered set.
-func rememberHeld(ctx context.Context, ix *search.Index, in hookInput, sum summaryHold, given []string) {
+// delivered set; an error when the lookup failed.
+func rememberHeld(ctx context.Context, ix *search.Index, in hookInput, sum summaryHold, given []string) error {
+	held, err := heldOf(ctx, ix, sum, given)
+	if err != nil {
+		return err
+	}
 	seen := delivered(in.SessionID)
 	var keep []string
-	for n := range heldOf(ctx, ix, sum, given) {
+	for n := range held {
 		if !seen[n] {
 			keep = append(keep, n)
 		}
 	}
 	sort.Strings(keep)
 	rememberNames(in.SessionID, keep)
+	return nil
 }
 
 // heldOf is, of the names the session was given, those whose facts the
-// summary holds: still in its context.
-func heldOf(ctx context.Context, ix *search.Index, sum summaryHold, given []string) map[string]bool {
+// summary holds: still in its context. An error when the lookup failed.
+func heldOf(ctx context.Context, ix *search.Index, sum summaryHold, given []string) (map[string]bool, error) {
 	held := map[string]bool{}
 	if len(given) == 0 || sum.text == "" {
-		return held
+		return held, nil
 	}
 	had, err := ix.Named(ctx, given)
 	if err != nil {
-		return held
+		return held, err
 	}
 	for n, h := range had {
 		if sum.holds(h) {
 			held[n] = true
 		}
 	}
-	return held
+	return held, nil
 }
 
 // summaryQuery is the summary as a query of summaryQueryTerms terms: the

@@ -475,3 +475,30 @@ func TestPreToolAfterAClaudeCompactionReadsWhatTheSummaryHolds(t *testing.T) {
 		t.Fatalf("the prompt after:\n%s", got)
 	}
 }
+
+// A lookup the push's deadline cut leaves the record's flag unset, so the
+// next push or the prompt tries again.
+func TestPendingHeldRetriesAfterACutLookup(t *testing.T) {
+	r, home, payload := restartRig(t)
+	hookOut(t, payload("h1", "startup", ""), "session-start")
+	hookOut(t, payload("h1", "", otterPrompt), "prompt")
+	path := writeTranscript(t, filepath.Join(home, ".claude", "projects", "-demo", "h1.jsonl"), `{"type":"user","message":{"role":"user","content":"go"}}`)
+	hookOut(t, payload("h1", "compact", path), "session-start")
+	appendLines(t, path, `{"type":"user","isCompactSummary":true,"message":{"role":"user","content":`+jsonString("Summary: it kept demo-otter-retry in mind.")+`}}`)
+	ix, err := openHookIndex(context.Background(), r.s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ix.Close()
+	in := hookInput{SessionID: "h1", TranscriptPath: path}
+	cut, cancel := context.WithCancel(context.Background())
+	cancel()
+	pendingHeld(cut, ix, in)
+	if p, ok := loadPending("h1"); !ok || p.HeldDone {
+		t.Fatalf("a cut lookup set the flag: %+v %v", p, ok)
+	}
+	pendingHeld(context.Background(), ix, in)
+	if p, ok := loadPending("h1"); !ok || !p.HeldDone || !slices.Contains(sessionSet(t, home, "h1"), "demo-otter-retry") {
+		t.Fatalf("the retry did not hold the fact: %+v %v", p, sessionSet(t, home, "h1"))
+	}
+}
