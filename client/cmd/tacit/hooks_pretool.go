@@ -111,11 +111,11 @@ func repoRel(r repoid.Repo, cwd, p string) (string, bool) {
 // start could not read: the session's record and what its transcript gained
 // since (pendingHeld).
 func preTool(s *store.Store, in hookInput) {
+	paths, command := toolTargets(in.ToolName, in.ToolInput)
+	logNavigation(in, command) // the store's clickstream, whether pushes are on or not
 	if !deliveryOn("TOOL_PUSH", true) {
 		return
 	}
-	paths, command := toolTargets(in.ToolName, in.ToolInput)
-	logNavigation(in, command)
 	if strings.HasPrefix(in.ToolName, "mcp__") {
 		// An MCP tool's input is its own: a "path" or "command" field
 		// there is no file the call writes and no shell command it runs.

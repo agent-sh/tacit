@@ -199,6 +199,7 @@ func summaryStep(ctx context.Context, ix *search.Index, in hookInput, sit search
 			out = append(out, h)
 		}
 	}
+	logDropped(kept, out, "seen") // a second file of a name already given
 	endLog(out)
 	remember(in.SessionID, out)
 	return out

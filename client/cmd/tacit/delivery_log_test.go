@@ -126,6 +126,9 @@ func TestDeliveryLogRecordsEachBlockAndWhatItLeftOut(t *testing.T) {
 		{Tool: "search", Path: "projects/widget", Query: "lock order", Depth: 2, Levels: -1},
 		{Tool: "fact", Names: []string{"pool-lock-order"}, Levels: -1},
 	}
+	if navs[2].ID == navs[3].ID {
+		t.Fatalf("two steps of one call share an id: %s", navs[2].ID)
+	}
 	for i, w := range want {
 		got, _ := json.Marshal(navs[i].Nav)
 		exp, _ := json.Marshal(w)
@@ -217,6 +220,7 @@ func TestDeliveryLogDroppedAfterTheSelection(t *testing.T) {
 		}
 	}
 	// Two files of one name: only the one printed is delivered.
+	t.Cleanup(func() { dlog = nil })
 	dlog = &logEntry{V: deliveryLogVersion, ID: "x"}
 	t.Setenv("TACIT_STATE_DIR", t.TempDir())
 	store, overlay := search.Hit{Name: "twin", Path: "user/twin.md"}, search.Hit{Name: "twin", Path: "local/twin.md", Local: true}
@@ -240,6 +244,7 @@ func TestDeliveryLogEchoOnTheWholeRequest(t *testing.T) {
 		{Name: "tool-failures-fix-at-source", Description: "Review tool failures weekly: fix the root cause in the mods, rules or scripts that let them happen, and log what changed"},
 	})
 	prompt := strings.Repeat("preamble words of a long scheduled prompt ", 60) + "Review the tool failures weekly and fix their root cause, then report"
+	t.Cleanup(func() { dlog = nil })
 	beginLog("prompt", hookInput{SessionID: "s1"}, prompt, nil)
 	e := dlog
 	got, err := promptHits(context.Background(), ix, search.Situation{}, prompt, nil)
@@ -265,6 +270,9 @@ func TestDeliveryLogReadsTheCLIStep(t *testing.T) {
 		"tacit tree --depth=1 projects/widget":                            `[{"tool":"tree","path":"projects/widget","depth":2,"levels":1}]`,
 		`C:\tools\tacit.exe fact pool-lock-order`:                         `[{"tool":"fact","names":["pool-lock-order"],"depth":0,"levels":-1}]`,
 		`git commit -m "use tacit fact to read one" && echo tacit tree x`: `null`,
+		"tacit search lock order --scope projects/widget":                 `[{"tool":"search","query":"lock order --scope projects/widget","depth":0,"levels":-1}]`,
+		"tacit search -- --scope":                                         `[{"tool":"search","query":"--scope","depth":0,"levels":-1}]`,
+		"tacit fact one two; tacit fact Not_A_Slug; tacit tree a b":       `null`,
 	} {
 		b, _ := json.Marshal(navOf(hookInput{ToolName: "Bash"}, cmd))
 		if string(b) != want {
@@ -353,6 +361,7 @@ func TestDeliveryLogNamesTheUtilityPolicy(t *testing.T) {
 		encoded, _ := json.Marshal(map[string]any{"model": "jev-1.13.0", "answers": answers, "usage": map[string]int{"input_tokens": 100}})
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(encoded))), Header: make(http.Header)}, nil
 	})
+	t.Cleanup(func() { dlog = nil })
 	run := func() *logEntry {
 		t.Helper()
 		beginLog("prompt", hookInput{SessionID: "s1"}, "endpoint api release", []string{"demo"})
@@ -374,5 +383,21 @@ func TestDeliveryLogNamesTheUtilityPolicy(t *testing.T) {
 	useful = candOf(*e, "endpoint-useful")
 	if e.Policy != "gates" || useful == nil || useful.Via != "ranked" || !useful.Delivered {
 		t.Fatalf("the provider failed: policy %q, %+v", e.Policy, useful)
+	}
+}
+
+// The hook waits for its log line at most logWriteBudget: a write that
+// stalls (a hung state directory) leaves the hook to answer.
+func TestDeliveryLogWriteIsBounded(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	wait, write := logWriteWait, logWrite
+	t.Cleanup(func() { logWriteWait, logWrite = wait, write })
+	logWriteWait = logWriteBudget
+	logWrite = func(*logEntry, time.Time) { <-release }
+	start := time.Now()
+	writeBounded(&logEntry{V: 1})
+	if d := time.Since(start); d > logWriteBudget+time.Second {
+		t.Fatalf("the hook waited %v for a stalled write", d)
 	}
 }

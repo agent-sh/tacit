@@ -354,9 +354,15 @@ func sessionStartHits(ctx context.Context, ix *search.Index, sit search.Situatio
 		return nil, err
 	}
 	logPool(hits, nil)
+	local := 0
 	for _, h := range hits {
-		if h.Score < startFloor {
+		switch {
+		case h.Score < startFloor:
 			logDrop(h, "floor")
+		case h.Local && !overlay.IsCurated(h.Path):
+			if local++; local > startLocalLimit {
+				logDrop(h, "local") // this machine's notes past their share (startSelection)
+			}
 		}
 	}
 	chosen := startSelection(hits, sit.Repo, startLimit)
@@ -529,14 +535,35 @@ const echoMinTerms = 5
 // or too short), so the share does not see them.
 var echoNegation = regexp.MustCompile(`(?i)\b(?:no|not|never|nor|none|don'?t|doesn'?t|won'?t|can'?t|cannot|avoid|without)\b`)
 
-// withoutEchoes is hits less the lines that echo the request p: every line
-// the prompt hook would print, whatever chose it. No backfill: the line is
-// dropped, not replaced by the next candidate.
-func withoutEchoes(hits []search.Hit, p string) []search.Hit {
+// requestWords is the request's words by stem, as the echo filter reads it.
+func requestWords(p string) map[string]bool {
 	words := map[string]bool{}
 	for _, t := range search.AllTerms(p) {
 		words[search.TermKey(t)] = true
 	}
+	return words
+}
+
+// echoCount is how many of h's distinct name and description words (by
+// stem) the request's words hold, and how many it has.
+func echoCount(h search.Hit, words map[string]bool) (in, n int) {
+	keys := map[string]bool{}
+	for _, t := range search.AllTerms(h.Name + " " + h.Description) {
+		keys[search.TermKey(t)] = true
+	}
+	for k := range keys {
+		if words[k] {
+			in++
+		}
+	}
+	return in, len(keys)
+}
+
+// withoutEchoes is hits less the lines that echo the request p: every line
+// the prompt hook would print, whatever chose it. No backfill: the line is
+// dropped, not replaced by the next candidate.
+func withoutEchoes(hits []search.Hit, p string) []search.Hit {
+	words := requestWords(p)
 	said := map[string]bool{}
 	for _, w := range echoNegation.FindAllString(p, -1) {
 		said[strings.ToLower(strings.ReplaceAll(w, "'", ""))] = true
@@ -544,21 +571,12 @@ func withoutEchoes(hits []search.Hit, p string) []search.Hit {
 	out := hits[:0:0]
 	for _, h := range hits {
 		text := h.Name + " " + h.Description
-		keys := map[string]bool{}
-		for _, t := range search.AllTerms(text) {
-			keys[search.TermKey(t)] = true
-		}
-		in := 0
-		for k := range keys {
-			if words[k] {
-				in++
-			}
-		}
+		in, n := echoCount(h, words)
 		adds := false
 		for _, w := range echoNegation.FindAllString(strings.ReplaceAll(text, "-", " "), -1) {
 			adds = adds || !said[strings.ToLower(strings.ReplaceAll(w, "'", ""))]
 		}
-		if len(keys) >= echoMinTerms && float64(in) >= echoShare*float64(len(keys)) && !adds {
+		if n >= echoMinTerms && float64(in) >= echoShare*float64(n) && !adds {
 			continue
 		}
 		out = append(out, h)
@@ -641,16 +659,13 @@ func selectPrompt(hits, derived []search.Hit, seen map[string]bool, floor float6
 }
 
 // utilityLogged is utilitySelect with the delivery log told which policy
-// chose the block. The gates run inside the provider's selection, on its
-// worker too, so they log nothing there; when the provider's scores chose,
+// chose the block. The gates the provider's selection runs, on its worker
+// too, take no entry and log nothing; when the provider's scores chose,
 // its lines are "utility" and the pool's others are left out by it (or by
 // the session having them); when the gates' selection stands, it is logged
 // as the gates chose it.
 func utilityLogged(ctx context.Context, p string, hits, dhits []search.Hit, seen map[string]bool, floor float64) []search.Hit {
-	e := dlog
-	dlog = nil
 	out, status := utilitySelect(ctx, p, hits, dhits, seen, floor)
-	dlog = e
 	if dlog == nil {
 		return out
 	}

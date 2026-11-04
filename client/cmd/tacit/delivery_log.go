@@ -1,8 +1,11 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/search"
 )
@@ -74,8 +78,10 @@ type logEntry struct {
 	// Nav is a nav entry's step through the store (no block: its
 	// nothing fields say nothing).
 	Nav *logNav `json:"nav,omitempty"`
-	// full is the whole request, which the echo share is measured on.
-	full string
+	// full is the whole request, which the echo share is measured on, and
+	// words its words, read once.
+	full  string
+	words map[string]bool
 }
 
 // logCand is one candidate of a block, delivered or not.
@@ -134,7 +140,15 @@ func beginLog(hook string, in hookInput, request string, repos []string) {
 }
 
 // logID names an entry across files: its time and session, hashed short.
-func logID(e *logEntry) string { return shortHash(e.TS + "\x00" + e.Session + "\x00" + e.Hook) }
+// 64 bits of a hash of its time, session, hook and its place among this
+// process's entries (a tool call's nav steps share a time).
+func logID(e *logEntry) string {
+	logSeq++
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d", e.TS, e.Session, e.Hook, os.Getpid(), logSeq)))
+	return hex.EncodeToString(sum[:8])
+}
+
+var logSeq int
 
 func transcriptSize(p string) int64 {
 	if p == "" {
@@ -172,7 +186,7 @@ func (e *logEntry) cand(h search.Hit) *logCand {
 	}
 	c := logCand{Name: h.Name, Path: h.Path, Desc: clipBytes(h.Description, deliveryLogDesc), Type: h.Type, Scope: h.Scope, Tier: tier(h),
 		Prov: h.Provenance(), Created: h.Created, AgeDays: age, Review: h.Review, Local: h.Local, Score: round3(h.Score), Rank: -1,
-		Matched: len(h.MatchedTerms), Supported: h.Evidence != nil && h.Evidence.Supported, Tied: repoTied(h, e.Repos), Echo: echoOf(h, e.full)}
+		Matched: len(h.MatchedTerms), Supported: h.Evidence != nil && h.Evidence.Supported, Tied: repoTied(h, e.Repos), Echo: e.echoOf(h)}
 	e.Cands = append(e.Cands, c)
 	return &e.Cands[len(e.Cands)-1]
 }
@@ -275,8 +289,11 @@ func endLog(printed []search.Hit) {
 	for i := range e.Cands {
 		c := &e.Cands[i]
 		c.Delivered = slices.ContainsFunc(printed, func(h search.Hit) bool { return h.Name == c.Name && h.Path == c.Path })
-		if c.Delivered && c.Via == "" {
+		switch {
+		case c.Delivered && c.Via == "":
 			c.Via = "other" // a path that does not say what chose it
+		case !c.Delivered && c.Via != "":
+			c.Via, c.Dropped = "", "other" // chosen, then left out by a path that does not say why
 		}
 		if c.Delivered {
 			c.Dropped, c.P = "", 1
@@ -289,7 +306,33 @@ func endLog(printed []search.Hit) {
 	if e.Nothing {
 		e.PNothing = 1
 	}
-	writeLogEntry(e, time.Now())
+	writeBounded(e)
+}
+
+// logWriteBudget bounds a hook's wait for its log line: a stalled state
+// directory must not hold a hook (the utility audit's bound).
+const logWriteBudget = 100 * time.Millisecond
+
+// logWriteWait is what writeBounded waits: logWriteBudget, except in tests
+// that read the log back, which widen it so a loaded machine cannot drop
+// the line they check. logWrite is the write.
+var (
+	logWriteWait = logWriteBudget
+	logWrite     = writeLogEntry
+)
+
+// writeBounded writes e, waiting at most logWriteWait; a write still
+// running then is given up when the hook's process exits.
+func writeBounded(e *logEntry) {
+	done := make(chan struct{})
+	go func() {
+		logWrite(e, time.Now())
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(logWriteWait):
+	}
 }
 
 // deliveryLogDir is <state>/delivery.
@@ -315,7 +358,10 @@ func writeLogEntry(e *logEntry, now time.Time) {
 		os.Chmod(dir, 0o700) // a directory made wider by hand is this log's again
 	}
 	path := filepath.Join(dir, now.UTC().Format("2006-01-02")+".jsonl")
-	f, err := openDay(path, dir, now, int64(len(b)))
+	f, err := openDay(path, dir, now, int64(len(b))+1)
+	if os.IsExist(err) {
+		f, err = openDay(path, dir, now, int64(len(b))+1) // another hook made the day's file first
+	}
 	if err != nil {
 		return
 	}
@@ -370,31 +416,21 @@ func pruneDeliveryLog(dir string, now time.Time) {
 	}
 }
 
-// echoOf is the share of h's name and description words that request
-// holds, as withoutEchoes counts them; 0 when the line has fewer words than
-// an echo needs.
-func echoOf(h search.Hit, request string) float64 {
-	if request == "" {
+// echoOf is the share of h's name and description words that the request
+// holds, as withoutEchoes counts them (echoCount); 0 when the line has
+// fewer words than an echo needs.
+func (e *logEntry) echoOf(h search.Hit) float64 {
+	if e.full == "" {
 		return 0
 	}
-	words := map[string]bool{}
-	for _, t := range search.AllTerms(request) {
-		words[search.TermKey(t)] = true
+	if e.words == nil {
+		e.words = requestWords(e.full)
 	}
-	keys := map[string]bool{}
-	for _, t := range search.AllTerms(h.Name + " " + h.Description) {
-		keys[search.TermKey(t)] = true
-	}
-	if len(keys) < echoMinTerms {
+	in, n := echoCount(h, e.words)
+	if n < echoMinTerms {
 		return 0
 	}
-	in := 0
-	for k := range keys {
-		if words[k] {
-			in++
-		}
-	}
-	return round3(float64(in) / float64(len(keys)))
+	return round3(float64(in) / float64(n))
 }
 
 // logNav is one step of an agent's own way through the store: a folder of
@@ -479,9 +515,15 @@ func navCommand(w []string) (logNav, bool) {
 	var words []string
 	for i := 2; i < len(w); i++ {
 		a := w[i]
-		if !strings.HasPrefix(a, "-") || a == "-" {
-			words = append(words, strings.Trim(a, `"'`))
-			continue
+		if a == "--" || !strings.HasPrefix(a, "-") || a == "-" {
+			// Go's flag package stops at the first word that is no flag.
+			if a == "--" {
+				i++
+			}
+			for _, x := range w[i:] {
+				words = append(words, strings.Trim(x, `"'`))
+			}
+			break
 		}
 		k, v, has := strings.Cut(strings.TrimLeft(a, "-"), "=")
 		if values[k] && !has && i+1 < len(w) {
@@ -495,11 +537,14 @@ func navCommand(w []string) (logNav, bool) {
 	n := logNav{Tool: sub, Levels: -1}
 	switch sub {
 	case "fact":
-		if len(words) == 0 {
-			return logNav{}, false
+		if len(words) != 1 || !fact.IsSlug(words[0]) {
+			return logNav{}, false // runFact refuses it
 		}
-		n.Names = words[:1]
+		n.Names = words
 	case "tree":
+		if len(words) > 1 {
+			return logNav{}, false // runTree takes one folder
+		}
 		if len(words) > 0 {
 			n.Path = words[0]
 		}
@@ -533,6 +578,6 @@ func logNavigation(in hookInput, command string) {
 		e := &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: "nav", Session: in.SessionID, Cwd: in.Cwd,
 			Transcript: transcriptSize(in.TranscriptPath), TranscriptPath: in.TranscriptPath, Nav: &n}
 		e.ID = logID(e)
-		writeLogEntry(e, time.Now())
+		writeBounded(e)
 	}
 }

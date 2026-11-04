@@ -42,6 +42,9 @@ func TestMain(m *testing.M) {
 	// commits neither need scrump nor pay its start, about half a second each;
 	// the tests of the mask set the real one (store_mask_test.go).
 	store.Redact = canaryRedact
+	// A test that reads the delivery log back must not lose its line to a
+	// loaded machine; TestDeliveryLogWriteIsBounded checks the real bound.
+	logWriteWait = time.Minute
 	os.Exit(m.Run())
 }
 

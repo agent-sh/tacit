@@ -104,8 +104,9 @@ func appendLines(t *testing.T, path string, lines ...string) {
 
 // A harness that writes its summary before the start (Codex's compacted
 // entry, pi's compaction entry, at the transcript's end), and the delivery
-// log's entries for it: the start block comes again from the store as it is, less what the summary still holds
-// (the note it names), then the facts the summary's words select (the wombat
+// log's entries for it: the start block comes again from the store as it
+// is, less what the summary still holds (the note it names), then the facts
+// the summary's words select (the wombat
 // history fact, which no start block shows, named past the summary's first
 // terms). Of the facts prompts gave before the compaction, the one the
 // summary names (otter) stays in the delivered set and is not given again;
@@ -238,6 +239,27 @@ func TestStartHookAfterAClaudeCompaction(t *testing.T) {
 	if again := hookOut(t, payload("c1", "", "continue|"+path), "prompt"); strings.Contains(again, summaryTitle) {
 		t.Fatalf("a later prompt gave the summary's facts again:\n%s", again)
 	}
+	// The delivery log: the start again with no summary to read gives the
+	// whole start block, "again"; the first prompt's summary selection is an
+	// entry of its own.
+	var compact, summary []logEntry
+	for _, e := range readDeliveryLog(t, platform.StateDir(home)) {
+		switch e.Hook {
+		case "compact":
+			compact = append(compact, e)
+		case "summary":
+			summary = append(summary, e)
+		}
+	}
+	if len(compact) != 1 || len(summary) != 1 {
+		t.Fatalf("compact %d, summary %d entries", len(compact), len(summary))
+	}
+	if c := candOf(compact[0], "demo-note"); c == nil || !c.Delivered || c.Via != "again" {
+		t.Fatalf("the start fact again: %+v", c)
+	}
+	if c := candOf(summary[0], "demo-wombat-flusher"); c == nil || !c.Delivered || c.Via != "ranked" {
+		t.Fatalf("the summary's line: %+v", c)
+	}
 }
 
 // A fact counts as in the summary by its whole name (for a name of three
@@ -329,7 +351,7 @@ func TestStartHookAfterACompactionDoesNotSync(t *testing.T) {
 // it was given that is now retired or replaced (naming the new fact), said
 // once. A session with no record of what it was given gets a start's block.
 func TestStartHookOnResume(t *testing.T) {
-	r, _, payload := restartRig(t)
+	r, home, payload := restartRig(t)
 	hookOut(t, payload("r1", "startup", ""), "session-start")
 
 	writeFact(t, r.clone, fact.Meta{Name: "demo-quokka-scheduler-2", Description: "quokka scheduler zebra rule 2 for the demo repo",
@@ -366,6 +388,27 @@ func TestStartHookOnResume(t *testing.T) {
 	}
 	if fresh := hookOut(t, payload("r2", "resume", ""), "session-start"); !strings.Contains(fresh, "RULE demo-quokka-scheduler-0") || !strings.Contains(fresh, "(read before acting;") {
 		t.Fatalf("a resume with no record is not a start's block:\n%s", fresh)
+	}
+	// The delivery log: the first resume's new fact is "resume" and the
+	// start facts the session had are "seen"; the resume with no record is
+	// a start's block, "start".
+	var resumes []logEntry
+	for _, e := range readDeliveryLog(t, platform.StateDir(home)) {
+		if e.Hook == "resume" {
+			resumes = append(resumes, e)
+		}
+	}
+	if len(resumes) != 3 {
+		t.Fatalf("resume entries: %+v", resumes)
+	}
+	if c := candOf(resumes[0], "demo-note-v2"); c == nil || !c.Delivered || c.Via != "resume" {
+		t.Fatalf("the new fact: %+v", c)
+	}
+	if c := candOf(resumes[0], "demo-quokka-scheduler-0"); c == nil || c.Delivered || c.Dropped != "seen" {
+		t.Fatalf("the fact the session had: %+v", c)
+	}
+	if c := candOf(resumes[2], "demo-quokka-scheduler-0"); resumes[2].Session != "r2" || c == nil || !c.Delivered || c.Via != "start" {
+		t.Fatalf("the resume with no record: %+v", resumes[2])
 	}
 }
 
