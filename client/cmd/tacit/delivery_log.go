@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -80,6 +81,9 @@ type logEntry struct {
 	// like any line, with PNothing its probability.
 	Nothing  bool    `json:"nothing"`
 	PNothing float64 `json:"p_nothing"`
+	// Omitted is how many candidates of the block's pools the entry leaves
+	// out: past the head of the start block's pool, or past logCandCap.
+	Omitted int `json:"omitted,omitempty"`
 	// Nav is a nav entry's step through the store (no block: its
 	// nothing fields say nothing).
 	Nav *logNav `json:"nav,omitempty"`
@@ -272,6 +276,50 @@ func (e *logEntry) dropped(before, after []search.Hit, gate string) {
 	}
 }
 
+// logCandCap is the most candidates an entry holds: the prompt's widest
+// pool (promptRankPool). Past it the delivered lines stay and the others go
+// by rank, best first, counted in Omitted.
+const logCandCap = promptRankPool
+
+// capCands keeps an entry within logCandCap candidates.
+func (e *logEntry) capCands() {
+	if len(e.Cands) <= logCandCap {
+		return
+	}
+	order := make([]int, len(e.Cands))
+	for i := range order {
+		order[i] = i
+	}
+	key := func(c logCand) int {
+		switch {
+		case c.Delivered:
+			return -1
+		case c.Rank < 0:
+			return 1 << 30
+		}
+		return c.Rank
+	}
+	sort.SliceStable(order, func(a, b int) bool { return key(e.Cands[order[a]]) < key(e.Cands[order[b]]) })
+	keep := map[int]bool{}
+	for _, i := range order[:logCandCap] {
+		keep[i] = true
+	}
+	var out []logCand
+	for i, c := range e.Cands {
+		if keep[i] {
+			out = append(out, c)
+		}
+	}
+	e.Omitted += len(e.Cands) - len(out)
+	e.Cands = out
+}
+
+func logOmitted(n int) {
+	if dlog != nil && n > 0 {
+		dlog.Omitted += n
+	}
+}
+
 // The process's open entry, for the hooks' own goroutine. Code that may run
 // on another goroutine (the utility provider's worker) takes an entry, or
 // nil, as an argument instead.
@@ -304,6 +352,7 @@ func endLog(printed []search.Hit) {
 			c.P = 0
 		}
 	}
+	e.capCands()
 	e.Terms, e.NTerms = logTerms(e.ix, e.req)
 	e.ix = nil
 	e.Nothing = len(printed) == 0

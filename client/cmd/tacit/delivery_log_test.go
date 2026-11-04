@@ -512,3 +512,48 @@ func BenchmarkDeliveryLogWrite(b *testing.B) {
 		writeLogEntry(e, time.Now())
 	}
 }
+
+// A repository can tie thousands of facts to itself: the start entry holds
+// the pool's head (what was shown and as many again past the ceiling) and
+// counts the rest, and no entry holds more than logCandCap candidates, the
+// delivered lines always among them.
+func TestDeliveryLogHoldsAPoolsHeadOnly(t *testing.T) {
+	var facts []fact.Meta
+	for i := 0; i < 30; i++ {
+		facts = append(facts, fact.Meta{Name: fmt.Sprintf("widget-rule-%02d", i), Description: fmt.Sprintf("widget decision number %d about the build", i), Type: "design_decision", Scope: "projects/widget"})
+	}
+	_, cwd := repoFirstRig(t, facts...)
+	state := filepath.Join(t.TempDir(), "state")
+	t.Setenv("TACIT_STATE_DIR", state)
+	t.Setenv("TACIT_DELIVERY_START_CEILING", "3")
+	hookOut(t, startPayload(cwd, "s1"), "session-start", "--mcp")
+	var start *logEntry
+	for _, e := range readDeliveryLog(t, state) {
+		if e.Hook == "start" {
+			start = &e
+		}
+	}
+	if start == nil || len(start.Cands) != 6 || start.Omitted < 24 {
+		t.Fatalf("start entry: %d candidates, %d omitted", len(start.Cands), start.Omitted)
+	}
+	delivered := 0
+	for _, c := range start.Cands {
+		if c.Delivered {
+			delivered++
+		} else if c.Dropped != "ceiling" {
+			t.Errorf("past the ceiling: %+v", c)
+		}
+	}
+	if delivered != 3 {
+		t.Fatalf("delivered %d", delivered)
+	}
+
+	e := &logEntry{}
+	for i := 0; i < 80; i++ {
+		e.Cands = append(e.Cands, logCand{Name: fmt.Sprintf("c%02d", i), Rank: i, Delivered: i == 70})
+	}
+	e.capCands()
+	if len(e.Cands) != logCandCap || e.Omitted != 80-logCandCap || !slices.ContainsFunc(e.Cands, func(c logCand) bool { return c.Name == "c70" }) || slices.ContainsFunc(e.Cands, func(c logCand) bool { return c.Name == "c69" }) {
+		t.Fatalf("capped: %d, omitted %d", len(e.Cands), e.Omitted)
+	}
+}

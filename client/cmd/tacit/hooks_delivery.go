@@ -237,9 +237,14 @@ func repoStartHits(ctx context.Context, ix *search.Index, sit search.Situation) 
 	})
 	scores := startScores(ctx, ix, sit, strings.Join(repoNames(sit), " "))
 	keep = byScore(keep, scores)
-	logPool(keep, scores)
-	if c := deliveryInt("START_CEILING", startCeiling); len(keep) > c {
-		for _, h := range keep[c:] {
+	c := deliveryInt("START_CEILING", startCeiling)
+	// The log holds the pool's head: what was shown and as many again past
+	// the ceiling (a repository can tie thousands of facts to itself).
+	head := keep[:min(len(keep), 2*max(c, 1))]
+	logPool(head, scores)
+	logOmitted(len(keep) - len(head))
+	if len(keep) > c {
+		for _, h := range head[min(c, len(head)):] {
 			logDrop(h, "ceiling")
 		}
 		keep = keep[:c]
