@@ -488,8 +488,23 @@ func runDream(args []string) int {
 			var err error
 			if local {
 				paths, err = persistLocalDreamWindow(s, facts, catalog)
+				// The notes it wrote, an error after some of them too.
+				recordDreamRanges(stateDir, w, facts, paths)
 			} else {
+				existed := map[string]bool{}
+				for _, f := range facts {
+					existed[f.Meta.Name] = storeNoteExists(s, f.Meta.Name)
+				}
 				paths, err = persistDreamWindow(ctx, s, facts, catalog)
+				// The notes this window put on disk, whether or not the commit
+				// or push went through: recovery publishes them later.
+				var created []string
+				for _, f := range facts {
+					if !existed[f.Meta.Name] && storeNoteExists(s, f.Meta.Name) {
+						created = append(created, f.Meta.Name+".md")
+					}
+				}
+				recordDreamRanges(stateDir, w, facts, created)
 			}
 			if err != nil {
 				if paused(err) {
@@ -502,7 +517,6 @@ func runDream(args []string) int {
 				completed++
 				out.Done++
 				written = append(written, paths...)
-				recordDreamRanges(stateDir, w, facts, paths)
 				if st.Completed == nil {
 					st.Completed = map[string][]string{}
 				}

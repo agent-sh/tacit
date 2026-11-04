@@ -244,7 +244,12 @@ func factSessionOf(s *store.Store, name string) (factOrigin, error) {
 		return o, errEpisode{"the fact " + name + " does not read"}
 	}
 	src := f.Meta.Source
-	o.label, o.host = "the session "+name+" came from", src.Host
+	o.label = "the session " + name + " came from"
+	if src.Harness != "curator" {
+		// A curated fact's host is the curator's: its transcript is where
+		// its origin note was dreamed (that note's host, below).
+		o.host = src.Host
+	}
 	o.note = f.Meta.Origin
 	if o.note == "" && strings.Contains(filepath.ToSlash(path), "/inbox/dreamer@") {
 		o.note = f.Meta.Name
@@ -841,8 +846,10 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 	// from, when this machine recorded it.
 	window := anyWord && t.window
 	var first, last *events.Event
+	pageEnd := false // the read stopped at the page's ref
 	err := episodeRead(ctx, t, func(ev events.Event) bool {
 		if paged && (ev.Offset > limitOff || ev.Offset == limitOff && ev.Index >= limitIdx) {
+			pageEnd = true
 			return false
 		}
 		if window {
@@ -963,6 +970,10 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 		b.WriteString("# the read stopped at its time limit: the newer events were not searched\n")
 	}
 	switch {
+	case window && pageEnd && first == nil:
+		fmt.Fprintf(&b, "# the note %s was dreamed from a part of this transcript after this page's ref\n", t.note)
+	case window && pageEnd:
+		fmt.Fprintf(&b, "# the note %s was dreamed from the part of this transcript that starts at %d.%d; this page stops at its ref\n", t.note, first.Offset, first.Index)
 	case window && cut && first == nil:
 		fmt.Fprintf(&b, "# the read stopped at its time limit before the part of this transcript the note %s was dreamed from\n", t.note)
 	case window && cut:

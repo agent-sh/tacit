@@ -9,6 +9,7 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/dream"
 	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/store"
 	"github.com/agent-sh/tacit/client/internal/transcript"
 )
 
@@ -33,9 +34,16 @@ type dreamRange struct {
 	End     int64  `json:"end"`
 }
 
+// storeNoteExists reports a dreamer note of this machine's in the store's
+// inbox under name.
+func storeNoteExists(s *store.Store, name string) bool {
+	_, err := os.Stat(filepath.Join(s.Dir, "inbox", "dreamer@"+store.ShortHost(), name+".md"))
+	return err == nil
+}
+
 // recordDreamRanges appends the window's range for each note it wrote
-// (written: the paths persisting returned; a note already there was written
-// by an earlier window, whose range stands). It fails quietly: the range is
+// (written: the files it created; a note already there was written by an
+// earlier window, whose range stands). It fails quietly: the range is
 // a convenience for recall, never a reason for a window to fail. A Hermes
 // window records none.
 func recordDreamRanges(stateDir string, w dream.Window, facts []*fact.Fact, written []string) {
@@ -64,6 +72,16 @@ func recordDreamRanges(stateDir string, w dream.Window, facts []*fact.Fact, writ
 		_ = enc.Encode(dreamRange{Note: x.Meta.Name, File: transcript.Plain(w.File), Session: w.Session, Start: w.Start, End: w.End})
 	}
 	if buf.Len() > 0 {
+		// A line a crash tore is ended first, so it takes no record with it.
+		if fi, err := f.Stat(); err == nil && fi.Size() > 0 {
+			if r, err := os.Open(filepath.Join(stateDir, dreamRangesFile)); err == nil {
+				last := make([]byte, 1)
+				if _, err := r.ReadAt(last, fi.Size()-1); err == nil && last[0] != '\n' {
+					_, _ = f.WriteString("\n")
+				}
+				r.Close()
+			}
+		}
 		_, _ = f.WriteString(buf.String())
 	}
 }

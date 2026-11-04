@@ -107,3 +107,49 @@ func TestLocalDreamRecordsTheWrittenName(t *testing.T) {
 		t.Fatalf("no overlay note named %s", got[0].Note)
 	}
 }
+
+// A window whose commit failed still records its note's range: recovery
+// publishes the note later, and the next window that finds it there records
+// nothing.
+func TestDreamRecordsTheRangeOfANoteWhoseCommitFailed(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	dir := filepath.Join(root, "store")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("TACIT_STATE_DIR", "")
+	t.Setenv("TACIT_STORE", dir)
+	t.Setenv("TACIT_INDEX", filepath.Join(root, "index"))
+	t.Setenv("TACIT_LOCAL", filepath.Join(root, "overlay"))
+	t.Setenv("TACIT_PROJECTS", filepath.Join(root, "projects"))
+	stubScrump(t)
+	if code := runInit(nil); code != 0 {
+		t.Fatal(code)
+	}
+	hook := filepath.Join(dir, ".git", "hooks", "pre-commit")
+	os.MkdirAll(filepath.Dir(hook), 0o755)
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(home, ".claude/projects/demo/a.jsonl")
+	os.MkdirAll(filepath.Dir(p), 0o700)
+	os.WriteFile(p, []byte(`{"type":"user","message":{"content":"Check the fixture controller read mode and record what fixes its error."}}`+"\n"+`{"type":"assistant","cwd":"/home/u/projects/demo","message":{"content":[{"type":"text","text":"The fixture driver requires asynchronous reads."}]}}`+"\n"+strings.Repeat(" ", 5000)+"\n"), 0o600)
+	statePath := filepath.Join(platform.StateDir(home), "dreamer.json")
+	dream.SaveState(statePath, &dream.State{Offsets: map[string]int64{p: 0}})
+	old := dreamRun
+	t.Cleanup(func() { dreamRun = old })
+	dreamRun = func(context.Context, string, string) (string, float64, int, error) {
+		return `[{"description":"The fixture driver requires asynchronous reads.","type":"machine_fact","kind":"observed","applies_to":{}}]`, .01, 10, nil
+	}
+	runDream(nil) // the commit fails
+	if got := readRanges(t, home); len(got) != 1 || got[0].File != p {
+		t.Fatalf("after a failed commit: %+v", got)
+	}
+	os.Remove(hook)
+	if code := runDream(nil); code != 0 {
+		t.Fatalf("second dream exit %d", code)
+	}
+	if got := readRanges(t, home); len(got) != 1 {
+		t.Fatalf("after recovery: %+v", got)
+	}
+}

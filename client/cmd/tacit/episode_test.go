@@ -793,6 +793,24 @@ func TestEpisodeFactLeadsToItsDreamedWindow(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "the note staging-two was dreamed from the part of this transcript from "+strconv.FormatInt(starts[2], 10)+".") || strings.Contains(out, "owner owner_text") || !strings.Contains(out, "tool_result Bash") {
 		t.Fatalf("the note's window (%d):\n%s", code, out)
 	}
+	// A later range for the same note in the same transcript does not move
+	// it: the first, the window that wrote it, stands.
+	recordDreamRanges(platform.StateDir(home), dream.Window{File: path, Session: episodeSessionID, Start: starts[0], End: starts[2]}, []*fact.Fact{note}, []string{note.Path})
+	if again, _ := episodeOut(t, "--fact", "demo-candidates-deploy-to-staging"); again != out {
+		t.Fatalf("a later range moved the window:\n%s", again)
+	}
+	// A page before the window claims nothing about it being empty.
+	paged, _ := episodeOut(t, "--fact", "demo-candidates-deploy-to-staging", "--before", "1.0")
+	if strings.Contains(paged, "hold no events now") || !strings.Contains(paged, "after this page's ref") {
+		t.Fatalf("a page before the window:\n%s", paged)
+	}
+	// A read cut inside the window says so.
+	episodeCutAfter = 3
+	inside, _ := episodeOut(t, "--fact", "demo-candidates-deploy-to-staging")
+	episodeCutAfter = -1
+	if !strings.Contains(inside, "the read stopped at its time limit inside it") {
+		t.Fatalf("a read cut inside the window:\n%s", inside)
+	}
 	// A read cut before the window says so, and claims no empty window.
 	episodeCutAfter = 1
 	cutOut, _ := episodeOut(t, "--fact", "demo-candidates-deploy-to-staging")
