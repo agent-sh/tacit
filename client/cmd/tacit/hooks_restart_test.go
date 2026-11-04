@@ -481,6 +481,9 @@ func TestPreToolAfterAClaudeCompactionReadsWhatTheSummaryHolds(t *testing.T) {
 	if _, ok := loadPending("t1"); !ok {
 		t.Fatal("the push removed the record")
 	}
+	if p, _ := loadPending("t1"); !heldMarked("t1", p) {
+		t.Fatal("the push made no marker for the record")
+	}
 	// The prompt reads the record (its selection takes no fact the session
 	// has and is not backfilled, so here it may give nothing) and drops it.
 	if got := hookOut(t, payload("t1", "", "continue|"+path), "prompt"); strings.Contains(got, "demo-worker-lock:") {
@@ -494,8 +497,9 @@ func TestPreToolAfterAClaudeCompactionReadsWhatTheSummaryHolds(t *testing.T) {
 	}
 }
 
-// A lookup the push's deadline cut leaves the record's flag unset, so the
-// next push or the prompt tries again.
+// A lookup the push's deadline cut, or one that failed, makes no marker, so
+// the next push or the prompt tries again; a marker of another record's
+// offset does not count.
 func TestPendingHeldRetriesAfterACutLookup(t *testing.T) {
 	r, home, payload := restartRig(t)
 	hookOut(t, payload("h1", "startup", ""), "session-start")
@@ -530,5 +534,10 @@ func TestPendingHeldRetriesAfterACutLookup(t *testing.T) {
 	}
 	if _, ok := loadPending("h1"); !ok {
 		t.Fatal("the push removed the record")
+	}
+	p, _ := loadPending("h1")
+	p.Offset++
+	if heldMarked("h1", p) {
+		t.Fatal("a marker counted for a record of another offset")
 	}
 }

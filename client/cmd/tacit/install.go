@@ -455,7 +455,7 @@ func installHooksFor(path, exe, goos string) error { return installHooksWith(pat
 // installHooksWith is installHooksFor with extra arguments for the
 // SessionStart hook (--mcp: the harness has tacit's MCP server).
 //
-// The entries: SessionStart on a start, a resume, a clear and a compaction
+// The entries: SessionStart on a start, a resume, a clear, a compaction and a fork
 // (startSources; the hook answers each by what the context then holds,
 // restartOf); UserPromptSubmit; PreToolUse for the edit and shell
 // tools (toolPushTools); PreCompact, which starts the dream

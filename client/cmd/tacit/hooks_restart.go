@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -272,8 +274,7 @@ func pendingSummary(ctx context.Context, ix *search.Index, in hookInput, sit sea
 		return ""
 	}
 	p, ok := loadPending(in.SessionID)
-	_, err := os.Stat(heldFile(in.SessionID))
-	heldDone := err == nil
+	heldDone := heldMarked(in.SessionID, p)
 	os.Remove(path)
 	os.Remove(heldFile(in.SessionID))
 	if !ok || p.Offset < 0 {
@@ -299,11 +300,8 @@ func pendingHeld(ctx context.Context, ix *search.Index, in hookInput) {
 	if marker == "" || ctx.Err() != nil {
 		return
 	}
-	if _, err := os.Stat(marker); err == nil {
-		return
-	}
 	p, ok := loadPending(in.SessionID)
-	if !ok || p.Offset < 0 {
+	if !ok || p.Offset < 0 || heldMarked(in.SessionID, p) {
 		return
 	}
 	summary, ok := pendingText(in, p)
@@ -316,8 +314,17 @@ func pendingHeld(ctx context.Context, ix *search.Index, in hookInput) {
 		return
 	}
 	if f, err := os.OpenFile(marker, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600); err == nil {
+		fmt.Fprint(f, p.Offset)
 		f.Close()
 	}
+}
+
+// heldMarked reports a marker made for this record: it holds the record's
+// offset, so a marker a push made for an earlier compaction's record (made
+// while the next one's start replaced it) does not count for this one.
+func heldMarked(id string, p pending) bool {
+	b, err := os.ReadFile(heldFile(id))
+	return err == nil && strings.TrimSpace(string(b)) == strconv.FormatInt(p.Offset, 10)
 }
 
 // pendingText is the summary of the compaction a record speaks of: the last
