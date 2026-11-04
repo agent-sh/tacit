@@ -378,19 +378,39 @@ func writeLogEntry(e *logEntry, now time.Time) {
 	} else if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o700 {
 		os.Chmod(dir, 0o700) // a directory made wider by hand is this log's again
 	}
-	path := filepath.Join(dir, now.UTC().Format("2006-01-02")+".jsonl")
-	f, err := openDay(path, dir, now, int64(len(b))+1)
-	if os.IsExist(err) {
-		f, err = openDay(path, dir, now, int64(len(b))+1) // another hook made the day's file first
-	}
-	if err != nil {
-		return
+	name := now.UTC().Format("2006-01-02") + ".jsonl"
+	n := int64(len(b)) + 1
+	var f *os.File
+	if d, err := platform.OpenPrivateDirectory(dir); err == nil {
+		// Unix: relative to a pinned directory, no link, no special file,
+		// no second hard link, this user's own (the utility audit's open).
+		f, err = platform.OpenPrivateAppend(d, name)
+		d.Close()
+		if err != nil {
+			return
+		}
+		if fi, err := f.Stat(); err != nil || fi.Size()+n > deliveryLogDayCap {
+			f.Close()
+			return
+		} else if fi.Size() == 0 {
+			pruneDeliveryLog(dir, now)
+		}
+	} else {
+		path := filepath.Join(dir, name)
+		f, err = openDay(path, dir, now, n)
+		if os.IsExist(err) {
+			f, err = openDay(path, dir, now, n) // another hook made the day's file first
+		}
+		if err != nil {
+			return
+		}
 	}
 	defer f.Close()
 	f.Write(append(b, '\n'))
 }
 
-// openDay opens a day's file to append n bytes: a new one exclusively
+// openDay is the day's open where the private open is not to be had
+// (Windows): it opens a day's file to append n bytes, a new one exclusively
 // (O_EXCL never follows a link in its place), an existing one only when it
 // is the regular file that was there before the open, under the day's cap.
 func openDay(path, dir string, now time.Time, n int64) (*os.File, error) {

@@ -338,6 +338,18 @@ func TestDeliveryLogKeepsItsWindowAndCap(t *testing.T) {
 	if fi, _ := os.Stat(today); fi.Size() != deliveryLogDayCap-10 {
 		t.Fatalf("grew past the cap: %d", fi.Size())
 	}
+	// A second hard link in a day's place is not written (Unix).
+	if runtime.GOOS != "windows" {
+		os.Remove(today)
+		other := filepath.Join(t.TempDir(), "other")
+		os.WriteFile(other, nil, 0o600)
+		if os.Link(other, today) == nil {
+			writeLogEntry(&logEntry{V: 1, Hook: "prompt"}, now)
+			if b, _ := os.ReadFile(other); len(b) != 0 {
+				t.Fatalf("wrote through a hard link: %q", b)
+			}
+		}
+	}
 	// A link in a day's place is never followed.
 	os.Remove(today)
 	target := filepath.Join(t.TempDir(), "elsewhere")
@@ -359,6 +371,7 @@ func TestDeliveryLogNamesTheUtilityPolicy(t *testing.T) {
 	t.Cleanup(func() { dlog, logPending, utilitySelectFn = nil, nil, utilitySelect })
 	useful := search.Hit{Name: "endpoint-useful", Path: "user/endpoint-useful.md", Scope: "user", Score: 30}
 	topical := search.Hit{Name: "endpoint-topical", Path: "user/endpoint-topical.md", Scope: "user", Score: 29}
+	capped := search.Hit{Name: "endpoint-capped", Path: "user/endpoint-capped.md", Scope: "user", Score: 28}
 	score := func(v float64) *float64 { return &v }
 	status := "ok"
 	utilitySelectFn = func(ctx context.Context, p string, hits, derived []search.Hit, seen map[string]bool, floor float64) ([]search.Hit, utilityAudit) {
@@ -366,14 +379,14 @@ func TestDeliveryLogNamesTheUtilityPolicy(t *testing.T) {
 			return promptSelectionFor(p, hits, derived, seen, floor), utilityAudit{Status: status}
 		}
 		return []search.Hit{useful}, utilityAudit{Status: "ok", Threshold: 0.7, QueryHash: "abc", Candidates: []utilityAuditHit{
-			{ID: useful.Path, Score: score(0.95)}, {ID: topical.Path, Score: score(0.1)}}}
+			{ID: useful.Path, Score: score(0.95)}, {ID: topical.Path, Score: score(0.1)}, {ID: capped.Path, Score: score(0.9)}}}
 	}
 	run := func() *logEntry {
 		t.Helper()
 		beginLog("prompt", hookInput{SessionID: "s1"}, "endpoint api release", nil, nil)
 		e := dlog
-		dlog.pool([]search.Hit{useful, topical}, nil)
-		endLog(utilityLogged(context.Background(), "endpoint api release", []search.Hit{useful, topical}, nil, nil, promptFloor))
+		dlog.pool([]search.Hit{useful, topical, capped}, nil)
+		endLog(utilityLogged(context.Background(), "endpoint api release", []search.Hit{useful, topical, capped}, nil, nil, promptFloor))
 		return e
 	}
 	e := run()
@@ -381,6 +394,9 @@ func TestDeliveryLogNamesTheUtilityPolicy(t *testing.T) {
 	if e.Policy != "utility" || e.UtilityThreshold == nil || *e.UtilityThreshold != 0.7 || u == nil || u.Via != "utility" || !u.Delivered || u.Utility == nil || *u.Utility != 0.95 ||
 		tp == nil || tp.Delivered || tp.Via != "" || tp.Dropped != "utility" || tp.Utility == nil || *tp.Utility != 0.1 {
 		t.Fatalf("the provider chose: %+v, %+v, %+v", e, u, tp)
+	}
+	if c := candOf(*e, "endpoint-capped"); c == nil || c.Delivered || c.Dropped != "ceiling" {
+		t.Fatalf("over the threshold, past the cap: %+v", c)
 	}
 	status = "deadline"
 	e = run()
