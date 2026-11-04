@@ -53,6 +53,10 @@ var (
 	episodeCandidateBytes = 64 << 20
 )
 
+// episodeCutAfter, when not negative, cuts a read after that many events as
+// its budget would; tests set it.
+var episodeCutAfter = -1
+
 // episodeRedactWait bounds the redaction of what a read found, which runs on
 // its own clock: a read that used its budget still shows it. Tests shorten it.
 var episodeRedactWait = 15 * time.Second
@@ -266,13 +270,15 @@ func episodeRead(ctx context.Context, t episodeTarget, emit func(events.Event) b
 	stop := errors.New("stop")
 	own := map[string]bool{} // tool ids of the session's own recall calls
 	shellRecall := false     // the last shell-mode turn ran tacit episode
+	read := 0
 	_, err := events.ReadFile(t.path, t.format, 0, func(ev events.Event) error {
 		if err := parent.Err(); err != nil {
 			return err // the caller went: no answer
 		}
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || episodeCutAfter >= 0 && read >= episodeCutAfter {
 			return errCut
 		}
+		read++
 		// The session's own recall calls hold the words they looked for, and
 		// their results the lines they gave: no event of what was recalled.
 		if recallCall(ev) {
@@ -533,20 +539,102 @@ func substitution(rs []rune, i int) (string, int, bool) {
 			}
 		}
 	case rs[i] == '$' && i+1 < len(rs) && rs[i+1] == '(' && (i+2 >= len(rs) || rs[i+2] != '('):
-		depth := 0
-		for j := i + 1; j < len(rs); j++ {
-			switch rs[j] {
-			case '(':
-				depth++
-			case ')':
-				depth--
-				if depth == 0 {
-					return string(rs[i+2 : j]), j, true
-				}
-			}
+		if j := substEnd(rs, i+2); j >= 0 {
+			return string(rs[i+2 : j]), j, true
 		}
 	}
 	return "", i, false
+}
+
+// substEnd is the index of the ) that closes a $( whose command starts at
+// rs[start], or -1: parens inside quotes, escapes, backticks, nested
+// substitutions and here-document bodies do not count.
+func substEnd(rs []rune, start int) int {
+	depth := 1
+	var quote rune
+	for j := start; j < len(rs); j++ {
+		r := rs[j]
+		switch {
+		case quote == '\'':
+			if r == '\'' {
+				quote = 0
+			}
+		case quote == '"':
+			switch {
+			case r == '\\':
+				j++
+			case r == '"':
+				quote = 0
+			case r == '$' && j+1 < len(rs) && rs[j+1] == '(':
+				e := substEnd(rs, j+2)
+				if e < 0 {
+					return -1
+				}
+				j = e
+			}
+		case r == '\\':
+			j++
+		case r == '\'' || r == '"':
+			quote = r
+		case r == '`':
+			for j++; j < len(rs) && rs[j] != '`'; j++ {
+				if rs[j] == '\\' {
+					j++
+				}
+			}
+		case r == '<' && j+2 < len(rs) && rs[j+1] == '<' && rs[j+2] != '<':
+			k := j + 2
+			strip := rs[k] == '-'
+			if strip {
+				k++
+			}
+			for k < len(rs) && (rs[k] == ' ' || rs[k] == '\t') {
+				k++
+			}
+			e := k
+			for e < len(rs) && !strings.ContainsRune(" \t\n;&|<>()", rs[e]) {
+				e++
+			}
+			word := strings.Trim(string(rs[k:e]), `'"\`)
+			if word == "" {
+				continue
+			}
+			// The body: from the next line to the line that is the word.
+			nl := e
+			for nl < len(rs) && rs[nl] != '\n' {
+				nl++
+			}
+			// The rest of the here-document's line is still the command.
+			rest := substEnd(rs[:nl], e)
+			if rest >= 0 {
+				return rest
+			}
+			pos := nl + 1
+			for pos < len(rs) {
+				end := pos
+				for end < len(rs) && rs[end] != '\n' {
+					end++
+				}
+				line := string(rs[pos:end])
+				if strip {
+					line = strings.TrimLeft(line, "\t")
+				}
+				pos = end + 1
+				if line == word {
+					break
+				}
+			}
+			j = pos - 1
+		case r == '(':
+			depth++
+		case r == ')':
+			depth--
+			if depth == 0 {
+				return j
+			}
+		}
+	}
+	return -1
 }
 
 // inArith reports a position inside an unclosed $(( ... )).

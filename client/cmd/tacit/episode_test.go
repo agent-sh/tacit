@@ -415,6 +415,10 @@ func TestEpisodeRecallCallForms(t *testing.T) {
 		{"Bash", "{\"command\":\"gh pr create --body 'run `tacit episode find X` after a compaction'\"}", false},
 		{"Bash", "{\"command\":\"rg -n '`tacit episode' docs\"}", false},
 		{"Bash", `{"command":"echo 'see $(tacit episode find X)'"}`, false},
+		{"Bash", "{\"command\":\"git commit -m \\\"$(cat <<'EOF'\\n1) run `tacit episode find X`\\nEOF\\n)\\\"\"}", false},
+		{"Bash", "{\"command\":\"git commit -m \\\"$(cat <<'EOF'\\nfix (see `tacit episode find X`\\nEOF\\n)\\\"\"}", false},
+		{"Bash", "{\"command\":\"gh pr create --body \\\"$(cat <<'EOF'\\n- a) `tacit episode find` now pages\\nEOF\\n)\\\"\"}", false},
+		{"Bash", `{"command":"echo \"$(echo ')'; tacit episode find X)\""}`, true},
 		{"Bash", "{\"command\":\"echo \\\"`tacit episode find X`\\\"\"}", true},
 		{"Edit", `{"new_string":"tacit episode find X"}`, false},
 	} {
@@ -678,5 +682,63 @@ func TestEpisodeFactShortOwnerWords(t *testing.T) {
 	out, code := episodeOut(t, "--fact", "demo-do-it")
 	if code != 0 || !strings.Contains(out, "holding words of \"release candidates staged\"") || !strings.Contains(out, "owner owner_text") {
 		t.Fatalf("short owner words (%d):\n%s", code, out)
+	}
+}
+
+// A fact's lines say only what the redacted matches say: past the candidate
+// bound, that older events were not searched, and no "more" for matches a
+// secret alone holds.
+func TestEpisodeFactMoreAndDropped(t *testing.T) {
+	r := newRig(t, rigOpts{repos: []string{"demo"}})
+	home := episodeHome(t)
+	t.Setenv("TACIT_STORE", r.clone)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	id := "eeee1111-1111-4222-8333-444455556666"
+	var texts []string
+	for range 40 {
+		texts = append(texts, "token Zq7Vx9 used")
+	}
+	texts = append(texts, "deploy done")
+	writeClaudeSession(t, home, id, "", texts...)
+	writeFact(t, r.clone, fact.Meta{Name: "demo-deploy", Description: "deploys", Type: "user_standard", Scope: "projects/demo",
+		Source: fact.Source{Kind: "user", OwnerQuote: "zq7v deploy", OwnerQuoteFrom: "claude:" + id}}, "x")
+	prev := episodeCandidates
+	t.Cleanup(func() { episodeCandidates = prev })
+	episodeCandidates = 20
+	out, code := episodeOut(t, "--fact", "demo-deploy")
+	if code != 0 || !strings.Contains(out, "older events were not searched") || strings.Contains(out, "more events hold") || !strings.Contains(out, "deploy done") {
+		t.Fatalf("a fact past the bound (%d):\n%s", code, out)
+	}
+	episodeCandidates = prev
+	texts = []string{"token Zq7Vx9 used"}
+	for i := range 10 {
+		texts = append(texts, fmt.Sprintf("deploy %d", i))
+	}
+	writeClaudeSession(t, home, id, "", texts...)
+	out, code = episodeOut(t, "--fact", "demo-deploy")
+	if code != 0 || strings.Contains(out, "more events hold") || len(refRx.FindAllString(out, -1)) != 10 {
+		t.Fatalf("an 11th match a secret alone holds (%d):\n%s", code, out)
+	}
+}
+
+// around says when its read stopped after the ref.
+func TestEpisodeAroundCutAfterTheRef(t *testing.T) {
+	home := episodeHome(t)
+	id := "ffff1111-1111-4222-8333-444455556666"
+	var texts []string
+	for i := range 20 {
+		texts = append(texts, fmt.Sprintf("step %d", i))
+	}
+	writeClaudeSession(t, home, id, "", texts...)
+	found, _ := episodeOut(t, "--session", id, "find", "step 3")
+	refs := refRx.FindAllStringSubmatch(found, -1)
+	if len(refs) != 2 {
+		t.Fatalf("find step 3:\n%s", found)
+	}
+	t.Cleanup(func() { episodeCutAfter = -1 })
+	episodeCutAfter = 6
+	out, code := episodeOut(t, "--session", id, "around", refs[1][1])
+	if code != 0 || !strings.Contains(out, "stopped at its time limit after the ref") {
+		t.Fatalf("around cut after the ref (%d):\n%s", code, out)
 	}
 }
