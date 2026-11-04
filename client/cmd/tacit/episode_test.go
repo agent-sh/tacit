@@ -411,6 +411,11 @@ func TestEpisodeRecallCallForms(t *testing.T) {
 		{"Bash", `{"command":"stdbuf -oL tacit episode find X"}`, true},
 		{"Bash", `{"command":"echo $((1<<2))\ntacit episode find X"}`, true},
 		{"Bash", `{"command":"grep -c 'episode' notes.md"}`, false},
+		{"Bash", "{\"command\":\"git commit -m \\\"$(cat <<'EOF'\\nepisode: add `tacit episode find`\\nEOF\\n)\\\"\"}", false},
+		{"Bash", "{\"command\":\"gh pr create --body 'run `tacit episode find X` after a compaction'\"}", false},
+		{"Bash", "{\"command\":\"rg -n '`tacit episode' docs\"}", false},
+		{"Bash", `{"command":"echo 'see $(tacit episode find X)'"}`, false},
+		{"Bash", "{\"command\":\"echo \\\"`tacit episode find X`\\\"\"}", true},
 		{"Edit", `{"new_string":"tacit episode find X"}`, false},
 	} {
 		ev := events.Event{Kind: events.KindToolCall, ToolName: c.tool, ToolInput: c.input}
@@ -454,7 +459,7 @@ func TestEpisodeFindPartialRedaction(t *testing.T) {
 	texts = append(texts, "the vxlan bridge went down")
 	writeClaudeSession(t, home, id, "", texts...)
 	out, code := episodeOut(t, "--session", id, "find", "vx")
-	if code != 0 || !strings.Contains(out, "# partial: ") || !strings.Contains(out, "events not checked") || !strings.Contains(out, "went down") {
+	if code != 0 || !strings.Contains(out, "# partial: not every matching event was checked") || !strings.Contains(out, "went down") {
 		t.Fatalf("a partial answer (%d):\n%s", code, out)
 	}
 	refs := refRx.FindAllStringSubmatch(out, -1)
@@ -649,5 +654,29 @@ func TestEpisodeFactOwnerWords(t *testing.T) {
 	out, code := episodeOut(t, "--fact", "demo-candidates")
 	if code != 0 || !strings.Contains(out, "owner owner_text") {
 		t.Fatalf("owner words (%d):\n%s", code, out)
+	}
+}
+
+// A word of the redactor's mask is not searched for: it would list where
+// secrets are.
+func TestEpisodeFindRefusesTheMask(t *testing.T) {
+	episodeHome(t)
+	if out, code := episodeOut(t, "find", "******"); code != 1 || !strings.Contains(out, "the redactor's mask") {
+		t.Fatalf("a find of the mask (%d):\n%s", code, out)
+	}
+}
+
+// Owner's words of no word that says something: the description's words
+// anchor the fact instead.
+func TestEpisodeFactShortOwnerWords(t *testing.T) {
+	r := newRig(t, rigOpts{repos: []string{"demo"}})
+	episodeHome(t)
+	t.Setenv("TACIT_STORE", r.clone)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	writeFact(t, r.clone, fact.Meta{Name: "demo-do-it", Description: "release candidates are staged",
+		Type: "design_decision", Scope: "projects/demo", Source: fact.Source{OwnerWords: "do it so", OwnerWordsFrom: "claude:" + episodeSessionID}}, "x")
+	out, code := episodeOut(t, "--fact", "demo-do-it")
+	if code != 0 || !strings.Contains(out, "holding words of \"release candidates staged\"") || !strings.Contains(out, "owner owner_text") {
+		t.Fatalf("short owner words (%d):\n%s", code, out)
 	}
 }
