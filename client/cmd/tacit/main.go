@@ -42,9 +42,11 @@ func usage() {
   tacit follow [--url U] [--as H]  hold the server's change feed; sync on each push (a systemd user service)
   tacit search [--repo R] [--limit N] [--inbox] [--json] [--scope S] [--type T] [--rulings] [--path P] [--command C] [--offset K] [query...]  with a filter and no query: those facts, 20 a page
   tacit fact <name>                print one fact
+  tacit episode find WORDS | around REF | show REF
+                                   recall this session's own history (--session ID, --fact NAME)
   tacit add --harness H --desc "..." [--type T] [--scope S] [--kind K] <name>
   tacit hook session-start|prompt|pre-tool|pre-compact|questions  Claude Code and Codex hooks (JSON on stdin, block on stdout; pre-tool answers PreToolUse as JSON; pre-compact starts a dream of the session and returns; questions prints only the reviewer's question for the owner, for pi's extension)
-  tacit mcp [--harness H]          MCP stdio server: tacit_tree, tacit_search, tacit_fact, tacit_add
+  tacit mcp [--harness H]          MCP stdio server: tacit_tree, tacit_search, tacit_fact, tacit_add, tacit_episode
   tacit install claude|codex|hermes|grok|pi|muse|agy|follow|dream|curate|app
   tacit install claude [--no-mcp]   hooks, and the tacit MCP server in Claude Code's user config (~/.claude.json); --no-mcp: hooks only
   tacit install dream [--env-file F]   the dreamer every 4 h, and the idle job every 10 min (dream --idle 20m, then curate --quick) (systemd timers on Linux, launchd agents on macOS)
@@ -186,6 +188,8 @@ func main() {
 		os.Exit(runSearch(os.Args[2:]))
 	case "fact":
 		os.Exit(runFact(os.Args[2:]))
+	case "episode":
+		os.Exit(runEpisode(os.Args[2:]))
 	case "add":
 		os.Exit(runAdd(os.Args[2:]))
 	case "hook":
