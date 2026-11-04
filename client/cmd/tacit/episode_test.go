@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -290,5 +291,115 @@ func TestEpisodeSessionOfNestedAndHermesCallers(t *testing.T) {
 	out, err := episodeAnswer(context.Background(), s, episodeQuery{Harness: "hermes", Session: episodeSessionID, Find: "CR-123456789"})
 	if err != nil || !strings.Contains(out, "(claude)") {
 		t.Fatalf("a Hermes caller naming a Claude Code session: %v\n%s", err, out)
+	}
+}
+
+// writeClaudeSession writes a Claude Code session of agent text events
+// (and an owner's first turn when owner is not empty) under home.
+func writeClaudeSession(t *testing.T, home, id, owner string, texts ...string) {
+	t.Helper()
+	head := `"sessionId":"` + id + `","cwd":"/work/demo","entrypoint":"cli"`
+	var lines []string
+	if owner != "" {
+		lines = append(lines, `{"type":"user",`+head+`,"promptSource":"typed","uuid":"o1","timestamp":"2026-11-01T09:00:00Z","message":{"role":"user","content":"`+owner+`"}}`)
+	}
+	for i, x := range texts {
+		lines = append(lines, fmt.Sprintf(`{"type":"assistant",%s,"uuid":"x%d","timestamp":"2026-11-01T10:%02d:00Z","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}`, head, i, i%60, x))
+	}
+	writeTranscript(t, filepath.Join(home, ".claude", "projects", "-work-demo", id+".jsonl"), lines...)
+}
+
+// Events a secret alone matches take no real match's place: 20 newer events
+// whose secret holds the words do not hide 5 older ones that say them.
+func TestEpisodeFindSecretsTakeNoPlace(t *testing.T) {
+	home := episodeHome(t)
+	id := "6c6c6c6c-1111-4222-8333-444455556666"
+	var texts []string
+	for range 5 {
+		texts = append(texts, "configured the vxlan bridge")
+	}
+	for range 20 {
+		texts = append(texts, "token Zq7Vx9 used")
+	}
+	writeClaudeSession(t, home, id, "", texts...)
+	out, code := episodeOut(t, "--session", id, "find", "vx")
+	if code != 0 || !strings.Contains(out, "# tacit: 5 event(s)") || strings.Contains(out, "# older") {
+		t.Fatalf("find past secret-only matches (%d):\n%s", code, out)
+	}
+	// More real matches than a page: the next page starts at the last shown.
+	texts = nil
+	for i := range 30 {
+		texts = append(texts, fmt.Sprintf("bridge br%d up", i))
+	}
+	writeClaudeSession(t, home, id, "", texts...)
+	out, code = episodeOut(t, "--session", id, "find", "bridge")
+	refs := refRx.FindAllStringSubmatch(out, -1)
+	if code != 0 || len(refs) != 10 || !strings.Contains(out, "# older: the same find with before "+refs[9][1]+"\n") {
+		t.Fatalf("a page of 10 and the next (%d):\n%s", code, out)
+	}
+}
+
+// A fact's quote reaches the owner's turn in a long session: its common
+// words are not searched, and the events holding the most come first.
+func TestEpisodeFactQuoteInALongSession(t *testing.T) {
+	r := newRig(t, rigOpts{repos: []string{"demo"}})
+	home := episodeHome(t)
+	t.Setenv("TACIT_STORE", r.clone)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	id := "7d7d7d7d-1111-4222-8333-444455556666"
+	var texts []string
+	for i := range 30 {
+		texts = append(texts, fmt.Sprintf("step %d: checked the logs", i))
+	}
+	writeClaudeSession(t, home, id, "deploy the release candidate to staging first", texts...)
+	writeFact(t, r.clone, fact.Meta{Name: "demo-rc-staging", Description: "release candidates go to staging first",
+		Type: "user_standard", Scope: "projects/demo", Source: fact.Source{Kind: "user", OwnerQuote: "deploy the release candidate to staging first", OwnerQuoteFrom: "claude:" + id}}, "x")
+	out, code := episodeOut(t, "--fact", "demo-rc-staging")
+	if code != 0 || !strings.Contains(out, "owner owner_text") || strings.Contains(out, "checked the logs") || strings.Contains(out, "# older") {
+		t.Fatalf("a quote in a long session (%d):\n%s", code, out)
+	}
+}
+
+// A recall call is one that runs tacit episode, in the forms the shell tools
+// of Claude Code, Codex and pi give it; a mention of the words is not one.
+func TestEpisodeRecallCallForms(t *testing.T) {
+	for _, c := range []struct {
+		tool, input string
+		want        bool
+	}{
+		{"Bash", `{"command":"tacit episode find X"}`, true},
+		{"Bash", `{"command":"cd /w && TACIT_X=1 ~/.local/bin/tacit episode find X | head"}`, true},
+		{"Bash", `{"command":"env A=1 tacit episode find X"}`, true},
+		{"Bash", `{"command":"timeout 30 tacit episode find X"}`, true},
+		{"Bash", `{"command":"nice -n 10 tacit episode find X"}`, true},
+		{"Bash", `{"command":"bash -c 'tacit episode find X'"}`, true},
+		{"shell", `{"command":["bash","-lc","tacit episode find X"]}`, true},
+		{"local_shell", `{"command":["bash","-lc","cd /w; tacit episode around 1.0"]}`, true},
+		{"exec_command", `{"cmd":"tacit episode show 1.0"}`, true},
+		{"exec", `await tools.exec_command({cmd: 'tacit episode find X'})`, true},
+		{"bash", `{"command":"C:\\bin\\tacit.exe episode find X"}`, true},
+		{"mcp__tacit__tacit_episode", `{"find":"X"}`, true},
+		{"Bash", `{"command":"git commit -m \"docs; tacit episode find works\""}`, false},
+		{"Bash", `{"command":"rg 'tacit episode' docs"}`, false},
+		{"Bash", `{"command":"echo tacit episode"}`, false},
+		{"shell", `{"command":["bash","-lc","grep -n episode SPEC.md"]}`, false},
+		{"Edit", `{"new_string":"tacit episode find X"}`, false},
+	} {
+		ev := events.Event{Kind: events.KindToolCall, ToolName: c.tool, ToolInput: c.input}
+		if got := recallCall(ev); got != c.want {
+			t.Errorf("recallCall(%s %s) = %v, want %v", c.tool, c.input, got, c.want)
+		}
+	}
+}
+
+// A Hermes caller's own session is said to be not read yet, and nothing
+// about other harnesses, which were not looked in.
+func TestEpisodeHermesCallersOwnSession(t *testing.T) {
+	episodeHome(t)
+	t.Setenv("TACIT_SESSION", "hermes:20261101_100000_abcdef")
+	s := &store.Store{Dir: t.TempDir()}
+	_, err := episodeAnswer(context.Background(), s, episodeQuery{Harness: "hermes", Find: "x"})
+	if err == nil || err.Error() != "Hermes sessions are not read yet" {
+		t.Fatalf("a Hermes caller's own session: %v", err)
 	}
 }

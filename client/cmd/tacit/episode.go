@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,13 +33,16 @@ import (
 
 const (
 	episodeHits = 10 // find: the most lines it shows
-	// episodeWindow is how many of the newest raw matches find redacts and
-	// matches again: a word only the unredacted text holds matches nothing.
-	episodeWindow = 2 * episodeHits
-	episodeAround = 5    // around: events on each side, by default
-	episodeMaxN   = 25   // around: the most on each side
-	episodeClip   = 160  // the runes of an event an index line shows
-	episodeShow   = 8000 // the runes of each part of an event show gives
+	// find keeps the newest raw matches up to these bounds, then redacts them
+	// in batches and matches again until it has enough: a word only the
+	// unredacted text holds matches nothing, and takes no other event's place.
+	episodeCandidates     = 5000
+	episodeCandidateBytes = 64 << 20
+	episodeBatch          = 50
+	episodeAround         = 5    // around: events on each side, by default
+	episodeMaxN           = 25   // around: the most on each side
+	episodeClip           = 160  // the runes of an event an index line shows
+	episodeShow           = 8000 // the runes of each part of an event show gives
 	// episodeRedactWait bounds the redaction of what a read found, which
 	// runs on its own clock: a read that used its budget still shows it.
 	episodeRedactWait = 15 * time.Second
@@ -139,12 +143,13 @@ func episodeSession(s *store.Store, q episodeQuery) (episodeTarget, error) {
 	}
 	home, _ := os.UserHomeDir()
 	src := agentreview.DefaultSources(home)
-	hermes := false
+	hermes, others := false, false
 	for _, h := range harnesses {
 		if h == "hermes" {
 			hermes = true // not read yet; another harness may still have it
 			continue
 		}
+		others = true
 		if path, f, ok := src.Locate(h, t.session); ok {
 			// Locate takes a name that ends in the id (a Codex rollout, a pi
 			// session), so the list is checked on the file's own name too:
@@ -158,6 +163,9 @@ func episodeSession(s *store.Store, q episodeQuery) (episodeTarget, error) {
 			t.harness, t.path, t.format = h, path, f
 			return t, nil
 		}
+	}
+	if hermes && !others {
+		return t, errEpisode{"Hermes sessions are not read yet"}
 	}
 	if hermes {
 		return t, errEpisode{"Hermes sessions are not read yet, and no other harness's transcript of " + t.label + " is on this machine"}
@@ -197,7 +205,7 @@ func factSessionOf(s *store.Store, name string) (harness, session, label string,
 	src := f.Meta.Source
 	for _, from := range []struct{ ref, words string }{{src.OwnerQuoteFrom, src.OwnerQuote}, {src.OwnerWordsFrom, src.OwnerWords}} {
 		if h, id, ok := strings.Cut(from.ref, ":"); ok && h != "note" && id != "" {
-			return h, id, "the session " + name + " came from", firstWords(from.words, 6), nil
+			return h, id, "the session " + name + " came from", quoteWords(from.words, 6), nil
 		}
 	}
 	anchor = longWords(f.Meta.Description, 3)
@@ -285,9 +293,9 @@ func held(ev events.Event, terms []string, any bool) int {
 }
 
 // recallCall is a call of this tool: the MCP tool, or a shell command one of
-// whose parts runs `tacit episode` (a path to tacit, or tacit.exe, too). A
-// call that only mentions the words (an edit, a commit message, a brief) is
-// not one.
+// whose parts runs `tacit episode` (a path to tacit, or tacit.exe, too), also
+// behind env, timeout, nice and the like, or inside sh -c. A call that only
+// mentions the words (an edit, a commit message, a brief) is not one.
 func recallCall(ev events.Event) bool {
 	if ev.Kind != events.KindToolCall {
 		return false
@@ -296,35 +304,41 @@ func recallCall(ev events.Event) bool {
 		return true
 	}
 	switch strings.ToLower(ev.ToolName) {
-	case "bash", "exec_command", "shell", "local_shell", "exec":
+	case "bash", "exec_command", "shell", "shell_command", "local_shell", "exec":
 	default:
 		return false
 	}
-	for _, part := range shellParts(shellCommand(ev.ToolInput)) {
-		f := strings.Fields(part)
-		for len(f) > 0 && strings.Contains(f[0], "=") && !strings.HasPrefix(f[0], "=") {
-			f = f[1:] // an environment assignment before the program
-		}
-		if len(f) >= 2 && f[1] == "episode" {
-			if base := filepath.Base(strings.ReplaceAll(f[0], `\`, "/")); base == "tacit" || base == "tacit.exe" {
-				return true
-			}
+	for _, argv := range shellArgvs(ev.ToolInput) {
+		if runsEpisode(argv, 0) {
+			return true
 		}
 	}
 	return false
 }
 
-// shellCommand is the command a shell tool's input runs: its "command" or
-// "cmd", a string or a list of words.
-func shellCommand(input string) string {
+// execCmd is a command string in a code tool's input (Codex's exec:
+// `tools.exec_command({cmd: '...'})`).
+var execCmd = regexp.MustCompile(`(?:cmd|command)["']?\s*:\s*(?:'((?:\\.|[^'\\])*)'|"((?:\\.|[^"\\])*)"|` + "`([^`]*)`)")
+
+// shellArgvs are the programs a shell tool's input runs, each its words: its
+// "command" or "cmd", a string or a list of words (an argv, as Codex's
+// shell gives it), or the command strings of a code tool's input.
+func shellArgvs(input string) [][]string {
 	var in map[string]any
 	if json.Unmarshal([]byte(input), &in) != nil {
-		return input
+		var out [][]string
+		for _, m := range execCmd.FindAllStringSubmatch(input, -1) {
+			out = append(out, shellSplit(m[1]+m[2]+m[3])...)
+		}
+		if out == nil {
+			out = shellSplit(input)
+		}
+		return out
 	}
 	for _, k := range []string{"command", "cmd"} {
 		switch v := in[k].(type) {
 		case string:
-			return v
+			return shellSplit(v)
 		case []any:
 			var words []string
 			for _, w := range v {
@@ -332,16 +346,116 @@ func shellCommand(input string) string {
 					words = append(words, s)
 				}
 			}
-			return strings.Join(words, " ")
+			return [][]string{words}
 		}
 	}
-	return ""
+	return nil
 }
 
-// shellParts splits a command line where one program ends and the next
-// begins: ;, &&, ||, |, & and new lines.
-func shellParts(cmd string) []string {
-	return strings.FieldsFunc(cmd, func(r rune) bool { return r == ';' || r == '|' || r == '&' || r == '\n' })
+// shellSplit splits a command line into its programs (at ;, &, | and new
+// lines outside quotes), each a list of words with their quotes removed.
+func shellSplit(cmd string) [][]string {
+	var out [][]string
+	var argv []string
+	var w strings.Builder
+	inWord := false
+	var quote rune
+	endWord := func() {
+		if inWord {
+			argv = append(argv, w.String())
+			w.Reset()
+			inWord = false
+		}
+	}
+	endPart := func() {
+		endWord()
+		if len(argv) > 0 {
+			out = append(out, argv)
+			argv = nil
+		}
+	}
+	rs := []rune(cmd)
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		switch {
+		case quote == '\'':
+			if r == '\'' {
+				quote = 0
+			} else {
+				w.WriteRune(r)
+			}
+		case quote == '"':
+			if r == '\\' && i+1 < len(rs) {
+				i++
+				w.WriteRune(rs[i])
+			} else if r == '"' {
+				quote = 0
+			} else {
+				w.WriteRune(r)
+			}
+		case r == '\'' || r == '"':
+			quote, inWord = r, true
+		case r == '\\' && i+1 < len(rs) && strings.ContainsRune(" \t\n'\"\\;&|$", rs[i+1]):
+			// An escape; any other backslash is a character (a Windows path).
+			i++
+			w.WriteRune(rs[i])
+			inWord = true
+		case r == ';' || r == '&' || r == '|' || r == '\n':
+			endPart()
+		case r == ' ' || r == '\t' || r == '\r':
+			endWord()
+		default:
+			w.WriteRune(r)
+			inWord = true
+		}
+	}
+	endPart()
+	return out
+}
+
+// runsEpisode reports a program that runs `tacit episode`: past environment
+// assignments and the wrappers that run their arguments, and into a shell's
+// -c script.
+func runsEpisode(argv []string, depth int) bool {
+	if depth > 3 {
+		return false
+	}
+	for len(argv) > 0 {
+		a := argv[0]
+		base := filepath.Base(strings.ReplaceAll(a, `\`, "/"))
+		switch {
+		case strings.Contains(a, "=") && !strings.HasPrefix(a, "=") && !strings.HasPrefix(a, "-"):
+			argv = argv[1:] // an environment assignment before the program
+		case base == "env" || base == "command" || base == "exec" || base == "nohup" || base == "time" || base == "sudo":
+			argv = argv[1:]
+			for len(argv) > 0 && strings.HasPrefix(argv[0], "-") {
+				argv = argv[1:]
+			}
+		case base == "nice" || base == "timeout" || base == "ionice":
+			argv = argv[1:]
+			for len(argv) > 0 && (strings.HasPrefix(argv[0], "-") || base != "nice" && len(argv[0]) > 0 && argv[0][0] >= '0' && argv[0][0] <= '9') {
+				if (argv[0] == "-n" || argv[0] == "-c" || argv[0] == "-s" || argv[0] == "-k") && len(argv) > 1 {
+					argv = argv[1:]
+				}
+				argv = argv[1:]
+			}
+		case base == "sh" || base == "bash" || base == "zsh" || base == "dash":
+			for i := 1; i < len(argv)-1; i++ {
+				if f := argv[i]; strings.HasPrefix(f, "-") && !strings.HasPrefix(f, "--") && strings.Contains(f, "c") {
+					for _, inner := range shellSplit(argv[i+1]) {
+						if runsEpisode(inner, depth+1) {
+							return true
+						}
+					}
+					return false
+				}
+			}
+			return false
+		default:
+			return len(argv) >= 2 && argv[1] == "episode" && (base == "tacit" || base == "tacit.exe")
+		}
+	}
+	return false
 }
 
 // redactFound redacts what a read found on a clock of its own: the read may
@@ -353,14 +467,16 @@ func redactFound(ctx context.Context, evs []events.Event) ([]events.Event, error
 }
 
 // episodeFind matches every word against the redacted events only: the raw
-// text is a first pass, the newest episodeWindow of its matches are
-// redacted, and an event shows only when the words still match it then. A
-// word the redactor masks is not searched for at all. So find shows, counts
-// and confirms nothing a secret alone holds.
+// text is a first pass whose matches, the newest up to episodeCandidates,
+// are redacted in batches, newest first, until enough still match, so an
+// event a secret alone matches takes no other's place. A word the redactor
+// masks is not searched for at all. So find shows, counts and confirms
+// nothing a secret alone holds.
 //
 // For a fact's words (anyWord) an event needs one of them, and the events
 // holding the most come first: a fact says in its words what the session
-// said in its own.
+// said in its own. Its candidates are redacted in the order of how many of
+// the words their raw text holds.
 func episodeFind(ctx context.Context, t episodeTarget, query, before string, anyWord bool) (string, error) {
 	terms := strings.Fields(strings.ToLower(query))
 	if len(terms) == 0 {
@@ -378,17 +494,29 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 			return "", errEpisode{"not a ref: " + before}
 		}
 	}
-	var hits []events.Event
+	type cand struct {
+		ev  events.Event
+		raw int
+	}
+	var cands []cand
+	size, dropped := 0, false
+	evSize := func(ev events.Event) int {
+		return len(ev.Text) + len(ev.ToolName) + len(ev.ToolInput) + len(ev.ToolOutput)
+	}
 	err := episodeRead(ctx, t, func(ev events.Event) bool {
 		if paged && (ev.Offset > limitOff || ev.Offset == limitOff && ev.Index >= limitIdx) {
 			return false
 		}
-		if held(ev, terms, anyWord) == 0 {
+		n := held(ev, terms, anyWord)
+		if n == 0 {
 			return true
 		}
-		hits = append(hits, ev)
-		if len(hits) > episodeWindow {
-			hits = hits[1:]
+		cands = append(cands, cand{ev, n})
+		size += evSize(ev)
+		for len(cands) > episodeCandidates || size > episodeCandidateBytes && len(cands) > 1 {
+			size -= evSize(cands[0].ev)
+			cands = cands[1:]
+			dropped = true
 		}
 		return true
 	})
@@ -396,22 +524,52 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 	if err != nil && !cut {
 		return "", err
 	}
-	// Newest first.
-	for i, j := 0, len(hits)-1; i < j; i, j = i+1, j-1 {
-		hits[i], hits[j] = hits[j], hits[i]
-	}
-	masked, err := redactFound(ctx, hits)
-	if err != nil {
-		return "", fmt.Errorf("redaction failed, nothing shown: %w", err)
-	}
-	var shown []events.Event
-	for _, ev := range masked {
-		if held(ev, terms, anyWord) > 0 {
-			shown = append(shown, ev)
-		}
+	// Newest first; a fact's words, the most first.
+	for i, j := 0, len(cands)-1; i < j; i, j = i+1, j-1 {
+		cands[i], cands[j] = cands[j], cands[i]
 	}
 	if anyWord {
-		sort.SliceStable(shown, func(i, j int) bool { return held(shown[i], terms, true) > held(shown[j], terms, true) })
+		sort.SliceStable(cands, func(i, j int) bool { return cands[i].raw > cands[j].raw })
+	}
+	type hit struct {
+		ev events.Event
+		n  int
+	}
+	var shown []hit
+	rank := func() {
+		if anyWord {
+			sort.SliceStable(shown, func(i, j int) bool {
+				if shown[i].n != shown[j].n {
+					return shown[i].n > shown[j].n
+				}
+				return shown[i].ev.Offset > shown[j].ev.Offset || shown[i].ev.Offset == shown[j].ev.Offset && shown[i].ev.Index > shown[j].ev.Index
+			})
+		}
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), episodeRedactWait)
+	defer cancel()
+	checked := 0
+	for checked < len(cands) {
+		// Enough: one more than a page, and (a fact's words) no unchecked
+		// candidate could hold more of them than the page's last line does.
+		if len(shown) > episodeHits && (!anyWord || shown[episodeHits-1].n >= cands[checked].raw) {
+			break
+		}
+		batch := make([]events.Event, 0, episodeBatch)
+		for _, c := range cands[checked:min(len(cands), checked+episodeBatch)] {
+			batch = append(batch, c.ev)
+		}
+		masked, err := events.Redact(rctx, batch)
+		if err != nil || len(masked) != len(batch) {
+			return "", fmt.Errorf("redaction failed, nothing shown: %v", err)
+		}
+		checked += len(batch)
+		for _, ev := range masked {
+			if n := held(ev, terms, anyWord); n > 0 {
+				shown = append(shown, hit{ev, n})
+			}
+		}
+		rank()
 	}
 	more := len(shown) > episodeHits
 	if more {
@@ -427,11 +585,18 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 	if cut {
 		b.WriteString("# the read stopped at its time limit: the newer events were not searched\n")
 	}
-	for _, ev := range shown {
-		b.WriteString(eventLine("- ", ev, terms))
+	for _, h := range shown {
+		b.WriteString(eventLine("- ", h.ev, terms))
 	}
-	if more && len(shown) > 0 {
-		last := shown[len(shown)-1]
+	switch {
+	case anyWord && (more || dropped):
+		b.WriteString("# more events hold some of the words: find with them lists those, newest first, and pages back\n")
+	case more:
+		last := shown[len(shown)-1].ev
+		fmt.Fprintf(&b, "# older: the same find with before %d.%d\n", last.Offset, last.Index)
+	case dropped && len(cands) > 0:
+		// Every candidate kept was checked; older ones were not kept.
+		last := cands[len(cands)-1].ev
 		fmt.Fprintf(&b, "# older: the same find with before %d.%d\n", last.Offset, last.Index)
 	}
 	return b.String(), nil
@@ -649,12 +814,33 @@ func shortID(id string) string {
 	return id
 }
 
-func firstWords(s string, n int) []string {
-	w := strings.Fields(strings.ToLower(s))
+// quoteWords are the first n words of a quote that say something: three
+// letters or more and no common word, so that not every event holds one;
+// a quote of none such keeps its first words.
+func quoteWords(s string, n int) []string {
+	all := strings.Fields(strings.ToLower(s))
+	var w []string
+	for _, x := range all {
+		x = strings.Trim(x, ".,;:!?()[]\"'`")
+		if utf8.RuneCountInString(x) >= 3 && !commonWord[x] {
+			w = append(w, x)
+		}
+	}
+	if len(w) == 0 {
+		w = all
+	}
 	if len(w) > n {
 		w = w[:n]
 	}
 	return w
+}
+
+// commonWord are words nearly every event of a session holds.
+var commonWord = map[string]bool{
+	"the": true, "and": true, "for": true, "with": true, "that": true, "this": true, "from": true,
+	"are": true, "was": true, "you": true, "not": true, "but": true, "all": true, "can": true,
+	"have": true, "has": true, "will": true, "use": true, "its": true, "our": true, "one": true,
+	"any": true, "now": true, "just": true, "then": true, "than": true, "into": true, "out": true,
 }
 
 // longWords are the n longest words of s of three letters or more, lower
@@ -745,7 +931,7 @@ func runEpisode(args []string) int {
 		case "show":
 			q.Show = strings.Join(rest[1:], " ")
 		default:
-			fmt.Fprintln(os.Stderr, "usage: tacit episode [--session ID] [--fact NAME] find WORDS... | around REF | show REF")
+			fmt.Fprintln(os.Stderr, "usage: tacit episode [--harness H] [--session ID] [--fact NAME] [--before REF] [--n N] find WORDS... | around REF | show REF")
 			return 2
 		}
 	}

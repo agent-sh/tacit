@@ -42,7 +42,7 @@ func usage() {
   tacit follow [--url U] [--as H]  hold the server's change feed; sync on each push (a systemd user service)
   tacit search [--repo R] [--limit N] [--inbox] [--json] [--scope S] [--type T] [--rulings] [--path P] [--command C] [--offset K] [query...]  with a filter and no query: those facts, 20 a page
   tacit fact <name>                print one fact
-  tacit episode find WORDS | around REF | show REF
+  tacit episode [--harness H] [--session ID] [--fact NAME] [--before REF] [--n N] find WORDS | around REF | show REF
                                    recall this session's own history (--session ID, --fact NAME)
   tacit add --harness H --desc "..." [--type T] [--scope S] [--kind K] <name>
   tacit hook session-start|prompt|pre-tool|pre-compact|questions  Claude Code and Codex hooks (JSON on stdin, block on stdout; pre-tool answers PreToolUse as JSON; pre-compact starts a dream of the session and returns; questions prints only the reviewer's question for the owner, for pi's extension)
