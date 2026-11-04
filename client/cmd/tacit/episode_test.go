@@ -854,3 +854,108 @@ func TestEpisodeCuratedRulingNamesItsNotesHost(t *testing.T) {
 		t.Fatalf("a curated ruling's host (%d):\n%s", code, out)
 	}
 }
+
+// Issue #123's cases: a read across a compaction, ordering, another
+// repository's session, pi, and Codex through MCP.
+
+// An event from before a compaction is found after it, the newest first,
+// and the compaction itself is an event between them.
+func TestEpisodeAcrossACompaction(t *testing.T) {
+	home := episodeHome(t)
+	id := "1a1a1a1a-1111-4222-8333-444455556666"
+	head := `"sessionId":"` + id + `","cwd":"/work/demo","entrypoint":"cli"`
+	writeTranscript(t, filepath.Join(home, ".claude", "projects", "-work-demo", id+".jsonl"),
+		`{"type":"user",`+head+`,"promptSource":"typed","uuid":"u1","timestamp":"2026-11-01T10:00:00Z","message":{"role":"user","content":"the staging port is 54321"}}`,
+		`{"type":"assistant",`+head+`,"uuid":"a1","timestamp":"2026-11-01T10:00:05Z","message":{"role":"assistant","content":[{"type":"text","text":"Noted 54321."}]}}`,
+		`{"type":"system",`+head+`,"subtype":"compact_boundary","uuid":"cb","timestamp":"2026-11-01T11:00:00Z","content":"Conversation compacted","level":"info","compactMetadata":{"trigger":"auto","preTokens":150000}}`,
+		`{"type":"user",`+head+`,"uuid":"cs","timestamp":"2026-11-01T11:00:01Z","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":"This session is being continued from a previous conversation that ran out of context. Summary: staging work."}}`,
+		`{"type":"assistant",`+head+`,"uuid":"a2","timestamp":"2026-11-01T11:05:00Z","message":{"role":"assistant","content":[{"type":"text","text":"Which port was it?"}]}}`)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", id)
+	out, code := episodeOut(t, "find", "54321")
+	refs := refRx.FindAllStringSubmatch(out, -1)
+	if code != 0 || len(refs) != 2 || !strings.Contains(out, "owner owner_text: the staging port is 54321") {
+		t.Fatalf("find across a compaction (%d):\n%s", code, out)
+	}
+	if strings.Index(out, "Noted 54321") > strings.Index(out, "the staging port") {
+		t.Fatalf("not newest first:\n%s", out)
+	}
+	around, code := episodeOut(t, "--n", "3", "around", refs[0][1])
+	if code != 0 || !strings.Contains(around, "compaction") || !strings.Contains(around, "Which port was it?") {
+		t.Fatalf("around the last event before the compaction (%d):\n%s", code, around)
+	}
+}
+
+// The caller's own session is its own: another repository's session on this
+// machine is read only when it is named.
+func TestEpisodeAnotherRepositorysSession(t *testing.T) {
+	home := episodeHome(t)
+	other := "2b2b2b2b-1111-4222-8333-444455556666"
+	head := `"sessionId":"` + other + `","cwd":"/work/other","entrypoint":"cli"`
+	writeTranscript(t, filepath.Join(home, ".claude", "projects", "-work-other", other+".jsonl"),
+		`{"type":"user",`+head+`,"promptSource":"typed","uuid":"u1","timestamp":"2026-11-01T10:00:00Z","message":{"role":"user","content":"rotate key KX-90210"}}`)
+	if out, code := episodeOut(t, "find", "KX-90210"); code != 0 || !strings.Contains(out, "# tacit: 0 event(s) of this session") {
+		t.Fatalf("the caller's own session (%d):\n%s", code, out)
+	}
+	if out, code := episodeOut(t, "--session", other, "find", "KX-90210"); code != 0 || !strings.Contains(out, "# tacit: 1 event(s) of session 2b2b2b2b") {
+		t.Fatalf("another repository's session, named (%d):\n%s", code, out)
+	}
+}
+
+// A pi session: the caller's own by PI_SESSION_ID, its tool calls and
+// results, and its own recall calls left out.
+func TestEpisodePiSession(t *testing.T) {
+	home := episodeHome(t)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	id := "01pi0000-1111-4222-8333-444455556666"
+	t.Setenv("PI_SESSION_ID", id)
+	msg := func(sec int, mid, body string) string {
+		return fmt.Sprintf(`{"type":"message","id":"%s","parentId":null,"timestamp":"2026-11-01T08:00:%02d.000Z","message":%s}`, mid, sec, body)
+	}
+	writeTranscript(t, filepath.Join(home, ".pi", "agent", "sessions", "--work-demo--", "2026-11-01T08-00-00-000Z_"+id+".jsonl"),
+		`{"type":"session","version":3,"id":"`+id+`","timestamp":"2026-11-01T08:00:00.000Z","cwd":"/work/demo"}`,
+		msg(1, "u1", `{"role":"user","content":[{"type":"text","text":"build PR-31337"}]}`),
+		msg(2, "a1", `{"role":"assistant","model":"m","stopReason":"toolUse","content":[{"type":"toolCall","id":"c1","name":"bash","arguments":{"command":"make PR-31337"}}]}`),
+		msg(3, "r1", `{"role":"toolResult","toolCallId":"c1","toolName":"bash","content":[{"type":"text","text":"built PR-31337"}],"isError":false}`),
+		msg(4, "a2", `{"role":"assistant","model":"m","stopReason":"toolUse","content":[{"type":"toolCall","id":"c2","name":"bash","arguments":{"command":"tacit episode find PR-31337"}}]}`),
+		msg(5, "r2", `{"role":"toolResult","toolCallId":"c2","toolName":"bash","content":[{"type":"text","text":"- 1.0 owner owner_text: build PR-31337"}],"isError":false}`))
+	out, code := episodeOut(t, "find", "PR-31337")
+	if code != 0 || !strings.Contains(out, "# tacit: 3 event(s) of this session (pi)") || strings.Contains(out, "tacit episode") || !strings.Contains(out, "tool_result bash") {
+		t.Fatalf("a pi session (%d):\n%s", code, out)
+	}
+}
+
+// A Codex caller through MCP: its own session by CODEX_THREAD_ID.
+func TestEpisodeMCPCodexCaller(t *testing.T) {
+	home := episodeHome(t)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	id := "019a0000-aaaa-7bbb-8ccc-ffffffffffff"
+	t.Setenv("CODEX_THREAD_ID", id)
+	writeTranscript(t, filepath.Join(home, ".codex", "sessions", "2026", "11", "04", "rollout-2026-11-04T10-00-00-"+id+".jsonl"),
+		`{"timestamp":"2026-11-04T10:00:00Z","type":"session_meta","payload":{"id":"`+id+`","cwd":"/work/demo","originator":"codex_cli_rs","source":"cli"}}`,
+		`{"timestamp":"2026-11-04T10:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"look up ticket TK-777000"}]}}`)
+	ctx := context.Background()
+	st, ct := mcp.NewInMemoryTransports()
+	ss, err := storeServer(&store.Store{Dir: t.TempDir()}, "codex").Connect(ctx, st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ss.Close()
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "tacit_episode", Arguments: map[string]any{"find": "TK-777000"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			b.WriteString(tc.Text)
+		}
+	}
+	if !strings.Contains(b.String(), "# tacit: 1 event(s) of this session (codex)") {
+		t.Fatalf("a Codex caller through MCP:\n%s", b.String())
+	}
+}
