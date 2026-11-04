@@ -502,6 +502,7 @@ func runDream(args []string) int {
 				completed++
 				out.Done++
 				written = append(written, paths...)
+				recordDreamRanges(stateDir, w, facts)
 				if st.Completed == nil {
 					st.Completed = map[string][]string{}
 				}

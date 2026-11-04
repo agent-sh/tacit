@@ -7,13 +7,16 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/agent-sh/tacit/client/internal/dream"
 	"github.com/agent-sh/tacit/client/internal/events"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
+	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -740,5 +743,61 @@ func TestEpisodeAroundCutAfterTheRef(t *testing.T) {
 	out, code := episodeOut(t, "--session", id, "around", refs[1][1])
 	if code != 0 || !strings.Contains(out, "stopped at its time limit after the ref") {
 		t.Fatalf("around cut after the ref (%d):\n%s", code, out)
+	}
+}
+
+// The dreamer keeps the transcript range each note was dreamed from, on this
+// machine: a fact made from that note finds its words in that window only,
+// and says which events the window holds. A fact whose transcript is on
+// another machine says which.
+func TestEpisodeFactLeadsToItsDreamedWindow(t *testing.T) {
+	r := newRig(t, rigOpts{repos: []string{"demo"}})
+	home := episodeHome(t)
+	t.Setenv("TACIT_STORE", r.clone)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	path := filepath.Join(home, ".claude", "projects", "-work-demo", episodeSessionID+".jsonl")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The window: the deploy's result and the reply (the third and fourth
+	// lines), not the owner's request, which holds the same words.
+	var starts []int64
+	for i, off := 0, int64(0); i < len(raw); i++ {
+		if i == 0 || raw[i-1] == '\n' {
+			starts = append(starts, off)
+		}
+		off++
+	}
+	note := &fact.Fact{Path: "inbox/dreamer@host-a/staging-two.md", Meta: fact.Meta{Name: "staging-two", Description: "release candidates deploy to staging",
+		Type: "unclassified", Scope: "projects/demo", Created: "2026-11-01", Source: fact.Source{Harness: "dreamer", Host: "host-a", Kind: "observed", Session: episodeSessionID}}, Body: "staging"}
+	b, err := note.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Join(r.clone, "inbox", "dreamer@host-a"), 0o755)
+	os.WriteFile(filepath.Join(r.clone, filepath.FromSlash(note.Path)), b, 0o644)
+	writeFact(t, r.clone, fact.Meta{Name: "demo-candidates-deploy-to-staging", Description: "release candidates deploy to staging",
+		Type: "design_decision", Scope: "projects/demo", Origin: "staging-two"}, "staging")
+
+	// Without a recorded range: the whole session, the owner's request too.
+	whole, code := episodeOut(t, "--fact", "demo-candidates-deploy-to-staging")
+	if code != 0 || !strings.Contains(whole, "owner owner_text") || strings.Contains(whole, "was dreamed from") {
+		t.Fatalf("no range recorded (%d):\n%s", code, whole)
+	}
+	recordDreamRanges(platform.StateDir(home), dream.Window{File: path, Session: episodeSessionID, Start: starts[2], End: starts[4]}, []*fact.Fact{note})
+	out, code := episodeOut(t, "--fact", "demo-candidates-deploy-to-staging")
+	if code != 0 || !strings.Contains(out, "the note staging-two was dreamed from the events "+strconv.FormatInt(starts[2], 10)+".") || strings.Contains(out, "owner owner_text") || !strings.Contains(out, "tool_result Bash") {
+		t.Fatalf("the note's window (%d):\n%s", code, out)
+	}
+	// The note itself leads there too.
+	if out, code := episodeOut(t, "--fact", "staging-two"); code != 0 || !strings.Contains(out, "was dreamed from the events") {
+		t.Fatalf("the note (%d):\n%s", code, out)
+	}
+
+	writeFactFile(t, r.clone, &fact.Fact{Path: "projects/demo/demo-elsewhere.md", Meta: fact.Meta{Name: "demo-elsewhere", Description: "made on another machine", Type: "design_decision", Scope: "projects/demo", Created: "2026-11-01",
+		Source: fact.Source{Harness: "claude", Host: "host-b", Kind: "observed", Session: "7c7c7c7c-0000-4000-8000-000000000000"}}, Body: "x"})
+	if out, code := episodeOut(t, "--fact", "demo-elsewhere"); code != 1 || !strings.Contains(out, "not on this machine: it is on host-b") {
+		t.Fatalf("a transcript on another machine (%d):\n%s", code, out)
 	}
 }

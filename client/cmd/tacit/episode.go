@@ -21,6 +21,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
 	"github.com/agent-sh/tacit/client/internal/overlay"
+	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/store"
 	"github.com/agent-sh/tacit/client/internal/transcript"
 )
@@ -92,7 +93,13 @@ type episodeTarget struct {
 	format                 digest.Format
 	label                  string   // how the header names it
 	anchor                 []string // a fact's words to find when the query asks nothing else
-	cli                    bool     // the CLI asks: hints name its flags
+	// A fact's: the dreamer note it came from and the host it was made on.
+	note, host string
+	// window: the byte range [from, to) of the transcript the note was
+	// dreamed from (dream-ranges.jsonl), when this machine recorded it.
+	window   bool
+	from, to int64
+	cli      bool // the CLI asks: hints name its flags
 }
 
 // episodeAnswer runs one query and returns its text.
@@ -131,12 +138,12 @@ func episodeSession(s *store.Store, q episodeQuery) (episodeTarget, error) {
 	harnesses := []string{q.Harness}
 	switch {
 	case q.Fact != "":
-		h, id, label, anchor, err := factSessionOf(s, q.Fact)
+		o, err := factSessionOf(s, q.Fact)
 		if err != nil {
 			return t, err
 		}
-		t.session, t.label, t.anchor = id, label, anchor
-		harnesses = transcriptHarnesses(h)
+		t.session, t.label, t.anchor, t.note, t.host = o.session, o.label, o.anchor, o.note, o.host
+		harnesses = transcriptHarnesses(o.harness)
 	case q.Session != "":
 		t.session, t.label = q.Session, "session "+shortID(q.Session)
 		if !q.Only {
@@ -174,16 +181,25 @@ func episodeSession(s *store.Store, q episodeQuery) (episodeTarget, error) {
 				}
 			}
 			t.harness, t.path, t.format = h, path, f
+			if t.note != "" {
+				if r, ok := dreamRangeOf(platform.StateDir(home), t.note); ok && r.Session == t.session && transcript.Name(r.File) == name {
+					t.window, t.from, t.to = true, r.Start, r.End
+				}
+			}
 			return t, nil
 		}
 	}
 	if hermes && !others {
 		return t, errEpisode{"Hermes sessions are not read yet"}
 	}
-	if hermes {
-		return t, errEpisode{"Hermes sessions are not read yet, and no other harness's transcript of " + t.label + " is on this machine"}
+	where := ""
+	if t.host != "" && t.host != store.ShortHost() {
+		where = ": it is on " + t.host + ", where the fact was made"
 	}
-	return t, errEpisode{"the transcript of " + t.label + " is not on this machine"}
+	if hermes {
+		return t, errEpisode{"Hermes sessions are not read yet, and no other harness's transcript of " + t.label + " is on this machine" + where}
+	}
+	return t, errEpisode{"the transcript of " + t.label + " is not on this machine" + where}
 }
 
 // transcriptHarnesses are the harnesses a session's transcript may be of,
@@ -202,32 +218,50 @@ func transcriptHarnesses(first string) []string {
 	return out
 }
 
+// factOrigin is where a fact came from: the harness and session, how the
+// header names it, the words to find, the dreamer note it was made from
+// (itself, when it is one) and the host.
+type factOrigin struct {
+	harness, session, label string
+	anchor                  []string
+	note, host              string
+}
+
 // factSessionOf is the session a fact came from: where its owner's quote or
 // words were said (owner_quote_from, owner_words_from: <harness>:<session>),
 // else its own source.session, else its inbox note's (origin); the anchor
-// is the quote's words, else the description's longest words.
-func factSessionOf(s *store.Store, name string) (harness, session, label string, anchor []string, err error) {
+// is the quote's words, else the description's longest words. The note is
+// the fact itself when it is a dreamer's note, else its origin: the note
+// whose window the dreamer recorded (dream-ranges.jsonl).
+func factSessionOf(s *store.Store, name string) (factOrigin, error) {
+	var o factOrigin
 	path, ok := findFactOrLocal(s.Dir, name)
 	if !ok {
-		return "", "", "", nil, errEpisode{"no fact named " + name}
+		return o, errEpisode{"no fact named " + name}
 	}
 	f := readFactFile(path)
 	if f == nil {
-		return "", "", "", nil, errEpisode{"the fact " + name + " does not read"}
+		return o, errEpisode{"the fact " + name + " does not read"}
 	}
 	src := f.Meta.Source
+	o.label, o.host = "the session "+name+" came from", src.Host
+	o.note = f.Meta.Origin
+	if o.note == "" && strings.Contains(filepath.ToSlash(path), "/inbox/dreamer@") {
+		o.note = f.Meta.Name
+	}
 	for _, from := range []struct{ ref, words string }{{src.OwnerQuoteFrom, src.OwnerQuote}, {src.OwnerWordsFrom, src.OwnerWords}} {
 		if h, id, ok := strings.Cut(from.ref, ":"); ok && h != "note" && id != "" {
-			words := quoteWords(from.words, 6)
-			if len(words) == 0 {
-				words = longWords(f.Meta.Description, 3)
+			o.harness, o.session, o.anchor = h, id, quoteWords(from.words, 6)
+			if len(o.anchor) == 0 {
+				o.anchor = longWords(f.Meta.Description, 3)
 			}
-			return h, id, "the session " + name + " came from", words, nil
+			return o, nil
 		}
 	}
-	anchor = longWords(f.Meta.Description, 3)
+	o.anchor = longWords(f.Meta.Description, 3)
 	if src.Session != "" {
-		return src.Harness, src.Session, "the session " + name + " came from", anchor, nil
+		o.harness, o.session = src.Harness, src.Session
+		return o, nil
 	}
 	if f.Meta.Origin != "" {
 		// The note by its frontmatter name: a note's file takes a suffix
@@ -242,11 +276,15 @@ func factSessionOf(s *store.Store, name string) (harness, session, label string,
 		}
 		for _, p := range notes {
 			if n := readFactFile(p); n != nil && n.Meta.Name == f.Meta.Origin && n.Meta.Source.Session != "" {
-				return n.Meta.Source.Harness, n.Meta.Source.Session, "the session " + name + " came from", anchor, nil
+				o.harness, o.session = n.Meta.Source.Harness, n.Meta.Source.Session
+				if n.Meta.Source.Host != "" {
+					o.host = n.Meta.Source.Host
+				}
+				return o, nil
 			}
 		}
 	}
-	return "", "", "", nil, errEpisode{"the fact " + name + " names no session"}
+	return o, errEpisode{"the fact " + name + " names no session"}
 }
 
 func readFactFile(path string) *fact.Fact {
@@ -799,9 +837,26 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 	evSize := func(ev events.Event) int {
 		return len(ev.Text) + len(ev.ToolName) + len(ev.ToolInput) + len(ev.ToolOutput)
 	}
+	// A fact's own words are looked for in the window its note was dreamed
+	// from, when this machine recorded it.
+	window := anyWord && t.window
+	var first, last *events.Event
 	err := episodeRead(ctx, t, func(ev events.Event) bool {
 		if paged && (ev.Offset > limitOff || ev.Offset == limitOff && ev.Index >= limitIdx) {
 			return false
+		}
+		if window {
+			if ev.Offset >= t.to {
+				return false
+			}
+			if ev.Offset < t.from {
+				return true
+			}
+			e := ev
+			if first == nil {
+				first = &e
+			}
+			last = &e
 		}
 		n := held(ev, terms, anyWord)
 		if n == 0 {
@@ -906,6 +961,13 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 		len(shown), t.label, t.harness, holding, strings.Join(terms, " "), order)
 	if cut {
 		b.WriteString("# the read stopped at its time limit: the newer events were not searched\n")
+	}
+	if window {
+		if first != nil {
+			fmt.Fprintf(&b, "# the note %s was dreamed from the events %d.%d to %d.%d of this transcript: around <ref> reads them\n", t.note, first.Offset, first.Index, last.Offset, last.Index)
+		} else {
+			fmt.Fprintf(&b, "# the note %s was dreamed from bytes %d to %d of this transcript, which hold no events now\n", t.note, t.from, t.to)
+		}
 	}
 	if partial {
 		b.WriteString("# partial: not every matching event was checked (the redaction's time limit); longer words check fewer\n")
