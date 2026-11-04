@@ -152,28 +152,55 @@ func pushCommit(t *testing.T, server, name string) string {
 
 // The follower's network leg takes no store lock: a fetch runs while another
 // process holds it, and only the merge waits.
+//
+// No wall clock decides the result: SyncBrief runs while the lock is held
+// until its fetch has landed, then the lock is let go and the merge follows.
+// (A short deadline that SyncBrief had to hit in the lock wait also covered
+// the fetch, which a loaded runner can take longer than.)
 func TestSyncBriefFetchesWithoutTheLock(t *testing.T) {
 	s, server := seedPair(t)
 	pushed := pushCommit(t, server, "a.md")
 	holder := &Store{Dir: s.Dir} // a second process's view: its own flock
 	release := make(chan struct{})
 	held := make(chan struct{})
-	go holder.WithLock(context.Background(), func() error { close(held); <-release; return nil })
+	holderDone := make(chan struct{})
+	go func() {
+		defer close(holderDone)
+		holder.WithLock(context.Background(), func() error { close(held); <-release; return nil })
+	}()
 	<-held
+	var once sync.Once
+	letGo := func() { once.Do(func() { close(release); <-holderDone }) }
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute) // a hang guard only
 	defer cancel()
 	before := strings.TrimSpace(run(t, s.Dir, "rev-parse", "origin/main"))
-	// The merge needs the lock: with a short deadline SyncBrief reports busy,
-	// but the fetch before it has already run, into its private ref, leaving
-	// origin/main and the working tree alone.
-	short, cancelShort := context.WithTimeout(ctx, 400*time.Millisecond)
-	defer cancelShort()
-	if err := s.SyncBrief(short); err == nil || !strings.Contains(err.Error(), "busy") {
-		t.Fatalf("SyncBrief under a held lock: %v", err)
+	var syncErr error
+	synced := make(chan struct{})
+	go func() { defer close(synced); syncErr = s.SyncBrief(ctx) }()
+	// A failure must not leave git running or the lock held when TempDir's
+	// cleanup removes the clone (Windows cannot remove an open file).
+	t.Cleanup(func() { cancel(); letGo(); <-synced })
+
+	// The fetch lands in its private ref while the lock is held ...
+	for {
+		if got, err := git(ctx, s.Dir, "rev-parse", "--verify", "-q", followRef); err == nil && strings.TrimSpace(got) == pushed {
+			break
+		}
+		select {
+		case <-synced:
+			t.Fatalf("SyncBrief returned under a held lock before its fetch landed: %v", syncErr)
+		case <-ctx.Done():
+			t.Fatal("no fetch landed under a held lock")
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
-	if got := strings.TrimSpace(run(t, s.Dir, "rev-parse", followRef)); got != pushed {
-		t.Fatalf("private ref %s, want the server's %s", got, pushed)
+	// ... and the merge waits for the lock: origin/main and the working tree
+	// stay as they were, and a caller out of time gets busy.
+	select {
+	case <-synced:
+		t.Fatalf("SyncBrief returned under a held lock: %v", syncErr)
+	default:
 	}
 	if got := strings.TrimSpace(run(t, s.Dir, "rev-parse", "origin/main")); got != before {
 		t.Fatalf("an unlocked fetch moved origin/main: %s -> %s", before, got)
@@ -181,9 +208,16 @@ func TestSyncBriefFetchesWithoutTheLock(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(s.Dir, "a.md")); err == nil {
 		t.Fatal("fetch must not touch the working tree")
 	}
-	close(release)
-	if err := s.SyncBrief(ctx); err != nil {
-		t.Fatal(err)
+	done, stop := context.WithCancel(ctx)
+	stop()
+	if err := (&Store{Dir: s.Dir}).WithLock(done, func() error { return nil }); err == nil || !strings.Contains(err.Error(), "busy") {
+		t.Fatalf("the lock under a held lock: %v", err)
+	}
+
+	letGo()
+	<-synced
+	if syncErr != nil {
+		t.Fatal(syncErr)
 	}
 	if _, err := os.Stat(filepath.Join(s.Dir, "a.md")); err != nil {
 		t.Fatalf("merge did not happen: %v", err)
