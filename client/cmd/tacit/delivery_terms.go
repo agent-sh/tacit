@@ -12,14 +12,26 @@ import (
 // The delivery log keeps a request's terms, never its text (SPEC.md,
 // "Delivery log"). logTerms is those terms with every secret left out
 // first, in this process, by two kinds of test: where a word stands (the
-// value after a password, token or key name, a URL's user and password, a
-// password glued onto -p) and its shape (the server's own key shapes, known
+// value after a password, token or key name, a URL's user and password or
+// secret query value, curl's -u, a password glued onto -p) and its shape (the server's own key shapes, known
 // key prefixes, long hex runs, random-looking runs of letters and digits).
 // No redaction process runs in a hook.
 
-// secretNameRx is a name whose value is a secret: PGPASSWORD=, --api-key,
-// "Authorization: Bearer", "the password is".
-var secretNameRx = regexp.MustCompile(`(?i)(pass(word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|auth(orization)?|bearer|credentials?)$`)
+// secretNameRx is a name whose value is a secret, at a word boundary:
+// password, --api-key, secret_key, "Authorization", session (not bypass,
+// oauth). envSecretRx is an environment variable's name that ends in one
+// (PGPASSWORD, DJANGO_SECRET_KEY).
+var (
+	secretNameRx = regexp.MustCompile(`(?i)(?:^|[_-])(?:pass(?:word|wd|phrase)?|pwd|secrets?|tokens?|(?:api|access|secret|signing|encryption|master|client|private)[_-]?keys?|auth(?:orization)?|bearer|credentials?|cookie|session(?:id)?)$`)
+	envSecretRx  = regexp.MustCompile(`^[A-Z0-9_]*(?:PASSWORD|PASSWD|PASS|PWD|SECRET|TOKEN|KEY)$`)
+)
+
+// isSecretName reports a name (quotes, dashes and a trailing = or : aside)
+// whose value is a secret.
+func isSecretName(n string) bool {
+	n = strings.Trim(n, "\"'`{[(,-=:")
+	return n != "" && (secretNameRx.MatchString(n) || envSecretRx.MatchString(n))
+}
 
 // keyPrefix starts a word that is a provider's key, with a tail of key
 // characters long enough to be one (a name like hf_hub_download is no key).
@@ -30,6 +42,11 @@ var (
 	// keyRun is a run of key characters with no path or file separator.
 	keyRun   = regexp.MustCompile(`[A-Za-z0-9+_=]{20,}`)
 	userinfo = regexp.MustCompile(`://[^/@\s]*@`)
+	// queryParam is a URL query's name=value (?access_token=...).
+	queryParam = regexp.MustCompile(`([?&;])([A-Za-z0-9_.-]+)=([^&;#\s]*)`)
+	// wordRun is a run of key characters, path and URL separators included,
+	// judged whole: a base64 key split at / or - is still one key.
+	wordRun = regexp.MustCompile(`[A-Za-z0-9+/_=-]{20,}`)
 	// connective words between a secret's name and its value.
 	connective = map[string]bool{"is": true, "was": true, "=": true, ":": true, "to": true, "of": true, "be": true}
 )
@@ -66,6 +83,16 @@ func randomLooking(s string) bool {
 	return up > 0 && low > 0 && dig >= 2 && entropy(s) >= 4.0
 }
 
+func digits(s string) int {
+	n := 0
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			n++
+		}
+	}
+	return n
+}
+
 // entropy is s's Shannon entropy in bits per character.
 func entropy(s string) float64 {
 	n := map[rune]float64{}
@@ -91,8 +118,19 @@ func secretWord(w string) bool {
 	if secretscan.MatchString(w) || keyPrefix.MatchString(w) {
 		return true
 	}
-	if i := strings.IndexAny(w, "=:"); i > 0 && i+1 < len(w) && secretNameRx.MatchString(strings.TrimLeft(w[:i], "-")) {
+	if i := strings.IndexAny(w, "=:"); i > 0 && i+1 < len(w) && isSecretName(w[:i]) {
 		return true
+	}
+	// A key in base64 or base64url is one run, however / and - split it.
+	for _, m := range wordRun.FindAllString(w, -1) {
+		if k := strings.Map(func(r rune) rune {
+			if strings.ContainsRune("+/_=-", r) {
+				return -1
+			}
+			return r
+		}, m); len(k) >= 20 && randomLooking(k) && digits(k) >= 3 {
+			return true
+		}
 	}
 	// mysql -pS3cret, a password glued onto a short -p (not -print).
 	return len(w) > 2 && strings.HasPrefix(w, "-p") && !strings.HasPrefix(w, "--") && strings.ContainsAny(w[2:], "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*")
@@ -102,6 +140,12 @@ func secretWord(w string) bool {
 // them) once its secrets are left out.
 func logTerms(text string) []string {
 	text = userinfo.ReplaceAllString(text, "://")
+	text = queryParam.ReplaceAllStringFunc(text, func(m string) string {
+		if p := queryParam.FindStringSubmatch(m); isSecretName(p[2]) {
+			return p[1] + p[2] + "="
+		}
+		return m
+	})
 	words := strings.Fields(text)
 	var kept []string
 	for i := 0; i < len(words); i++ {
@@ -109,14 +153,20 @@ func logTerms(text string) []string {
 		if secretWord(w) {
 			continue
 		}
+		// curl -u user:password: the credentials go.
+		if t := trimWord(w); (t == "-u" || t == "--user") && i+1 < len(words) {
+			kept = append(kept, w)
+			i++
+			continue
+		}
 		// A secret's name: the value after it (and after "is", ":", "=") goes.
-		if name := strings.TrimRight(strings.TrimLeft(trimWord(w), "-"), "=:"); secretNameRx.MatchString(name) {
+		if name := trimWord(w); isSecretName(name) {
 			kept = append(kept, w)
 			j := i + 1
 			for j < len(words) && connective[strings.ToLower(trimWord(words[j]))] {
 				j++
 			}
-			if j < len(words) && (strings.HasSuffix(w, "=") || strings.HasSuffix(w, ":") || strings.HasPrefix(w, "-") || j > i+1 || strings.EqualFold(name, "bearer")) {
+			if j < len(words) && (strings.HasSuffix(strings.Trim(w, "\"'"), "=") || strings.HasSuffix(strings.Trim(w, "\"'"), ":") || strings.HasPrefix(w, "-") || j > i+1 || strings.EqualFold(strings.Trim(name, "\"'"), "bearer")) {
 				i = j
 				// "Authorization: Bearer <token>": the scheme, then the value.
 				if s := strings.ToLower(trimWord(words[j])); (s == "bearer" || s == "basic" || s == "token") && j+1 < len(words) {

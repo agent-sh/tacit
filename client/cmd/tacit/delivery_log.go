@@ -71,7 +71,7 @@ type logEntry struct {
 	// then with the threshold they were held to and the utility audit's
 	// query hash.
 	Policy           string    `json:"policy,omitempty"`
-	UtilityThreshold float64   `json:"utility_threshold,omitempty"`
+	UtilityThreshold *float64  `json:"utility_threshold,omitempty"`
 	UtilityQuery     string    `json:"utility_query,omitempty"`
 	Cands            []logCand `json:"cands,omitempty"`
 	// Nothing: the block showed no line. It is an option the policy chose
@@ -500,7 +500,7 @@ func navOf(in hookInput, command string) []logNav {
 		return out
 	}
 	for _, part := range cmdBoundary.Split(command, -1) {
-		if n, ok := navCommand(strings.Fields(part)); ok {
+		if n, ok := navCommand(shellWords(part)); ok {
 			out = append(out, n)
 		}
 	}
@@ -589,6 +589,56 @@ func scopePath(p string) string {
 		}
 	}
 	return p
+}
+
+// shellWords splits one part of a command line into its words as a shell
+// does: quotes (single, or double with backslash escapes) keep a value
+// whole and are removed; a backslash before a space, a quote or another
+// backslash escapes it, and any other stays (a Windows path).
+func shellWords(s string) []string {
+	var out []string
+	var b strings.Builder
+	in, quote := false, byte(0)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quote == '\'':
+			if c == '\'' {
+				quote = 0
+			} else {
+				b.WriteByte(c)
+			}
+		case quote == '"':
+			if c == '"' {
+				quote = 0
+			} else if c == '\\' && i+1 < len(s) && strings.IndexByte(`"\\$`+"`", s[i+1]) >= 0 {
+				i++
+				b.WriteByte(s[i])
+			} else {
+				b.WriteByte(c)
+			}
+		case c == '\'' || c == '"':
+			quote, in = c, true
+		case c == '\\' && i+1 < len(s) && strings.IndexByte(" \t\"'\\", s[i+1]) >= 0:
+			// An escape; any other backslash is a Windows path's.
+			i++
+			b.WriteByte(s[i])
+			in = true
+		case c == ' ' || c == '\t' || c == '\r':
+			if in {
+				out = append(out, b.String())
+				b.Reset()
+				in = false
+			}
+		default:
+			b.WriteByte(c)
+			in = true
+		}
+	}
+	if in {
+		out = append(out, b.String())
+	}
+	return out
 }
 
 func folderDepth(p string) int {

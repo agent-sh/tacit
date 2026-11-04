@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -111,7 +112,7 @@ func TestDeliveryLogRecordsEachBlockAndWhatItLeftOut(t *testing.T) {
 	if again == nil || again.Delivered || again.Dropped != "seen" || again.P != 0 || !prompts[1].Nothing || prompts[1].PNothing != 1 {
 		t.Fatalf("the line the session had: %+v, nothing %v %v", again, prompts[1].Nothing, prompts[1].PNothing)
 	}
-	if p := candOf(pushes[0], "lint-before-push"); p == nil || !p.Delivered || p.Via != "meta" || p.P != 1 || pushes[0].Tool != "Bash" || strings.Join(pushes[0].Terms, " ") != "make lint" || pushes[0].Nothing {
+	if p := candOf(pushes[0], "lint-before-push"); p == nil || !p.Delivered || p.Via != "meta" || p.P != 1 || p.Echo != 0 || pushes[0].Tool != "Bash" || strings.Join(pushes[0].Terms, " ") != "make lint" || pushes[0].Nothing {
 		t.Fatalf("the push: %+v", pushes[0])
 	}
 	if p := pushes[1]; p.Tool != "Bash" || len(p.Terms) != 0 || !p.Nothing || p.PNothing != 1 || len(p.Cands) != 0 {
@@ -270,6 +271,8 @@ func TestDeliveryLogReadsTheCLIStep(t *testing.T) {
 		"tacit search lock order --scope projects/widget":                 `[{"tool":"search","terms":["lock","order","scope","projects","widget"],"depth":0,"levels":-1}]`,
 		"tacit search -- --scope":                                         `[{"tool":"search","terms":["scope"],"depth":0,"levels":-1}]`,
 		"tacit fact one two; tacit fact Not_A_Slug; tacit tree a b":       `null`,
+		`tacit search --command "make lint" lock`:                         `[{"tool":"search","terms":["lock"],"depth":0,"levels":-1}]`,
+		`tacit search 'shard lock' --scope x`:                             `[{"tool":"search","terms":["shard","lock","scope"],"depth":0,"levels":-1}]`,
 	} {
 		b, _ := json.Marshal(navOf(hookInput{ToolName: "Bash"}, cmd))
 		if string(b) != want {
@@ -346,7 +349,7 @@ func TestDeliveryLogNamesTheUtilityPolicy(t *testing.T) {
 	}
 	e := run()
 	u, tp := candOf(*e, "endpoint-useful"), candOf(*e, "endpoint-topical")
-	if e.Policy != "utility" || e.UtilityThreshold != 0.7 || e.UtilityQuery != "abc" || u == nil || u.Via != "utility" || !u.Delivered || u.Utility == nil || *u.Utility != 0.95 ||
+	if e.Policy != "utility" || e.UtilityThreshold == nil || *e.UtilityThreshold != 0.7 || e.UtilityQuery != "abc" || u == nil || u.Via != "utility" || !u.Delivered || u.Utility == nil || *u.Utility != 0.95 ||
 		tp == nil || tp.Delivered || tp.Via != "" || tp.Dropped != "utility" || tp.Utility == nil || *tp.Utility != 0.1 {
 		t.Fatalf("the provider chose: %+v, %+v, %+v", e, u, tp)
 	}
@@ -383,15 +386,18 @@ func TestDeliveryLogWriteIsBounded(t *testing.T) {
 // only start like a key stay.
 func TestDeliveryLogTermsLeaveOutSecrets(t *testing.T) {
 	for _, s := range []string{
-		"sk-Ab3dEfGh1jKlMnOpQrStUvWx", "ghp_0123456789abcdefABCDEF0123456789abcd", "AKIAABCDEFGHIJKLMNOP",
+		"sk-Ab3dEfGh1jKlMnOpQrStUvWx", "ghp_0123456789abcdefABCDEF0123456789abcd", "AKIA" + "ABCDEFGHIJKLMNOP", // split so a scanner sees no key in the source
 		"xoxb-123456789012-abcdefABCDEF", "0123456789abcdef0123456789abcdef01234567",
 		"token=Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MEFCQ0RFRg", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln",
 		"Q8vX2mZp7LkR4tNw9YbH3sJd", "--password=hunter2", "PGPASSWORD=hunter2", "-pS3cretPass",
 		"--api-key Kq2Jd8Lw", "password is Tr0ub4dor&3", "Authorization: Bearer abcdef123456",
 		"https://alice:Sup3rS3cret@example.com/x",
+		"wJalrXUtnF3MI" + "/K7MDENG/" + "bPxRfiCY9XAMPLEKEY", "Q8vX2mZp7LkR4tN-w9YbH3sJdK2mPa1",
+		`"password":"hunter2"`, `{"password": "hunter2"}`, "SECRET_KEY=hunter2", "DJANGO_SECRET_KEY=hunter2", "ENCRYPTION_KEY=hunter2",
+		"https://example.com/cb?access_token=hunter2xyz&page=2", "-u alice:hunter2", "Cookie: session=hunter2xyz",
 	} {
 		got := strings.Join(logTerms("deploy the widget with "+s+" tonight"), " ")
-		for _, leak := range []string{"hunter2", "s3cretpass", "kq2jd8lw", "tr0ub4dor", "abcdef123456", "sup3rs3cret", "alice", "ab3d", "zm9v", "q8vx", "akia", "0123456789abcdef"} {
+		for _, leak := range []string{"hunter2", "s3cretpass", "kq2jd8lw", "tr0ub4dor", "abcdef123456", "sup3rs3cret", "alice", "ab3d", "wjalrxutnf3mi", "k7mdeng", "q8vx2", "w9ybh3", "zm9v", "q8vx", "akia", "0123456789abcdef"} {
 			if strings.Contains(got, leak) {
 				t.Errorf("%s: terms %q hold %q", s, got, leak)
 			}
@@ -408,6 +414,8 @@ func TestDeliveryLogTermsLeaveOutSecrets(t *testing.T) {
 		"rename configureHTTPClientWithRetries":                      "rename configurehttpclientwithretries",
 		"call hf_hub_download with npm_config_cache in pypi-publish": "call hf_hub_download npm_config_cache pypi publish",
 		"find . -print and fix the token refresh":                    "find print fix token refresh",
+		"the bypass is permanent and oauth: broken flow":             "bypass permanent oauth broken flow",
+		"call https://example.com/api?page=2&sort=name":              "call https example com api page sort name",
 	} {
 		if got := strings.Join(logTerms(text), " "); got != want {
 			t.Errorf("%q: terms %q, want %q", text, got, want)
@@ -426,5 +434,38 @@ func TestDeliveryLogTermsLeaveOutSecrets(t *testing.T) {
 	}
 	if n := navOf(hookInput{ToolName: "mcp__tacit__tacit_fact", ToolInput: json.RawMessage(`{"name":"not a slug"}`)}, ""); len(n) != 0 {
 		t.Errorf("a fact name that is no slug: %+v", n)
+	}
+}
+
+// With the session's repositories the prompt ranks a wider pool and cuts
+// it to twice the ceiling; the log holds the whole pool, its tail past the
+// cut "ceiling" with its rank.
+func TestDeliveryLogHoldsTheRepoRankedTail(t *testing.T) {
+	var facts []fact.Meta
+	for i := 0; i < 14; i++ {
+		facts = append(facts, fact.Meta{Name: fmt.Sprintf("queue-retry-note-%02d", i), Description: fmt.Sprintf("queue retry backoff note %d for the worker pool jitter", i), Type: "design_decision", Scope: "projects/widget"})
+	}
+	_, cwd := repoFirstRig(t, facts...)
+	state := filepath.Join(t.TempDir(), "state")
+	t.Setenv("TACIT_STATE_DIR", state)
+	t.Setenv("TACIT_DELIVERY_REPO_START", "off")
+	t.Setenv("TACIT_DELIVERY_PROMPT_ACTION", "off")
+	t.Setenv("TACIT_DELIVERY_PROMPT_CEILING", "2")
+	hookOut(t, promptPayload(cwd, "s1", "queue retry backoff jitter for the worker pool"), "prompt")
+	log := readDeliveryLog(t, state)
+	if len(log) != 1 {
+		t.Fatalf("entries: %d", len(log))
+	}
+	tail := 0
+	for _, c := range log[0].Cands {
+		if c.Rank >= 4 {
+			if c.Dropped != "ceiling" || c.Delivered {
+				t.Errorf("past the cut: %+v", c)
+			}
+			tail++
+		}
+	}
+	if tail == 0 {
+		t.Fatalf("no candidate past the cut of 4: %+v", log[0].Cands)
 	}
 }

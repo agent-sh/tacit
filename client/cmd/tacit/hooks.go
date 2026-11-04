@@ -681,7 +681,8 @@ func utilityLogged(ctx context.Context, p string, hits, dhits []search.Hit, seen
 	}
 	// What the provider chose on: its score for each candidate and the
 	// threshold, and the audit's query hash to join its receipt by.
-	dlog.Policy, dlog.UtilityThreshold, dlog.UtilityQuery = "utility", audit.Threshold, audit.QueryHash
+	threshold := audit.Threshold
+	dlog.Policy, dlog.UtilityThreshold, dlog.UtilityQuery = "utility", &threshold, audit.QueryHash
 	logPool(dhits[:min(1, len(dhits))], nil)
 	for _, h := range append(append([]search.Hit{}, hits...), dhits...) {
 		for _, a := range audit.Candidates {
