@@ -67,9 +67,13 @@ type logEntry struct {
 	Floor    float64 `json:"floor,omitempty"`
 	Relative float64 `json:"relative,omitempty"`
 	// Policy is what chose the block: "gates" (the deterministic gates and
-	// floors) or "utility" (the utility provider's scores, when they did).
-	Policy string    `json:"policy,omitempty"`
-	Cands  []logCand `json:"cands,omitempty"`
+	// floors) or "utility" (the utility provider's scores, when they did),
+	// then with the threshold they were held to and the utility audit's
+	// query hash.
+	Policy           string    `json:"policy,omitempty"`
+	UtilityThreshold float64   `json:"utility_threshold,omitempty"`
+	UtilityQuery     string    `json:"utility_query,omitempty"`
+	Cands            []logCand `json:"cands,omitempty"`
 	// Nothing: the block showed no line. It is an option the policy chose
 	// like any line, with PNothing its probability.
 	Nothing  bool    `json:"nothing"`
@@ -110,12 +114,16 @@ type logCand struct {
 	// Dropped is the gate that left it out: floor, relative, ceiling,
 	// seen, echo, held (a compaction's summary holds it), utility (the
 	// provider's scores), withheld (a claim of the owner's authority, or a
-	// note the reviewer turned down: withoutClaims).
+	// note the reviewer turned down: withoutClaims), local (this machine's
+	// notes past their share of the start block), other (a path that does
+	// not say why).
 	Dropped   string `json:"dropped,omitempty"`
 	Delivered bool   `json:"delivered"`
 	// P is the probability the policy had of showing it: 1 or 0 while the
 	// policy is deterministic.
 	P float64 `json:"p"`
+	// Utility is the utility provider's score, when its scores chose.
+	Utility *float64 `json:"utility,omitempty"`
 }
 
 // dlog is this process's open entry; nil when the log is off or no block
@@ -133,7 +141,10 @@ func beginLog(hook string, in hookInput, request string, repos []string) {
 		return
 	}
 	dlog = &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: hook, Session: in.SessionID, Policy: "gates",
-		Cwd: in.Cwd, Repos: repos, Terms: logTerms(request), Transcript: transcriptSize(in.TranscriptPath), TranscriptPath: in.TranscriptPath, full: request}
+		Cwd: in.Cwd, Repos: repos, Terms: logTerms(request), Transcript: transcriptSize(in.TranscriptPath), TranscriptPath: in.TranscriptPath}
+	if hook == "prompt" || hook == "summary" {
+		dlog.full = request // the echo filter runs on these only
+	}
 	dlog.ID = logID(dlog)
 }
 
@@ -158,18 +169,6 @@ func transcriptSize(p string) int64 {
 	}
 	return fi.Size()
 }
-
-func clipBytes(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	for n > 0 && !utf8Start(s[n]) {
-		n--
-	}
-	return s[:n]
-}
-
-func utf8Start(b byte) bool { return b&0xC0 != 0x80 }
 
 // cand is the candidate entry for h, or a new one.
 func (e *logEntry) cand(h search.Hit) *logCand {
@@ -304,7 +303,20 @@ func endLog(printed []search.Hit) {
 	if e.Nothing {
 		e.PNothing = 1
 	}
-	writeBounded(e)
+	logPending = append(logPending, e)
+}
+
+// logPending are the process's entries not yet written: a hook writes them
+// all at once, after its answer is printed (flushLog).
+var logPending []*logEntry
+
+// flushLog writes the pending entries in one bounded write.
+func flushLog() {
+	es := logPending
+	logPending = nil
+	if len(es) > 0 {
+		writeBounded(es...)
+	}
 }
 
 // logWriteBudget bounds a hook's wait for its log line: a stalled state
@@ -319,12 +331,15 @@ var (
 	logWrite     = writeLogEntry
 )
 
-// writeBounded writes e, waiting at most logWriteWait; a write still
-// running then is given up when the hook's process exits.
-func writeBounded(e *logEntry) {
+// writeBounded writes es, waiting at most logWriteWait for all of them; a
+// write still running then is given up when the hook's process exits.
+func writeBounded(es ...*logEntry) {
 	done := make(chan struct{})
+	write := logWrite
 	go func() {
-		logWrite(e, time.Now())
+		for _, e := range es {
+			write(e, time.Now())
+		}
 		close(done)
 	}()
 	select {
@@ -471,16 +486,16 @@ func navOf(in hookInput, command string) []logNav {
 		}
 		json.Unmarshal(in.ToolInput, &a)
 		switch {
-		case strings.HasSuffix(in.ToolName, "__tacit_fact") && a.Name != "":
+		case strings.HasSuffix(in.ToolName, "__tacit_fact") && fact.IsSlug(a.Name):
 			out = append(out, logNav{Tool: "fact", Names: []string{a.Name}, Levels: -1})
 		case strings.HasSuffix(in.ToolName, "__tacit_tree"):
-			n := logNav{Tool: "tree", Path: a.Path, Depth: folderDepth(a.Path), Levels: -1}
+			n := logNav{Tool: "tree", Path: scopePath(a.Path), Depth: folderDepth(scopePath(a.Path)), Levels: -1}
 			if a.Depth != nil {
 				n.Levels = *a.Depth
 			}
 			out = append(out, n)
 		case strings.HasSuffix(in.ToolName, "__tacit_search"):
-			out = append(out, logNav{Tool: "search", Path: a.Scope, Terms: logTerms(a.Query), Depth: folderDepth(a.Scope), Levels: -1, Offset: a.Offset})
+			out = append(out, logNav{Tool: "search", Path: scopePath(a.Scope), Terms: logTerms(a.Query), Depth: folderDepth(scopePath(a.Scope)), Levels: -1, Offset: a.Offset})
 		}
 		return out
 	}
@@ -553,8 +568,27 @@ func navCommand(w []string) (logNav, bool) {
 		n.Path, n.Terms = flags["scope"], logTerms(strings.Join(words, " "))
 		n.Offset, _ = strconv.Atoi(flags["offset"])
 	}
+	n.Path = scopePath(n.Path)
 	n.Depth = folderDepth(n.Path)
 	return n, true
+}
+
+// scopeShape is a store folder: name segments joined by /.
+var scopeShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@-]*(?:/[A-Za-z0-9][A-Za-z0-9._@-]*)*$`)
+
+// scopePath is p when it is shaped as a store folder (whose segments are no
+// secret), else nothing: the log keeps no free text.
+func scopePath(p string) string {
+	p = strings.Trim(p, "/")
+	if !scopeShape.MatchString(p) || len(p) > 200 {
+		return ""
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if secretWord(seg) || secretShaped(seg) {
+			return ""
+		}
+	}
+	return p
 }
 
 func folderDepth(p string) int {
@@ -576,6 +610,6 @@ func logNavigation(in hookInput, command string) {
 		e := &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: "nav", Session: in.SessionID, Cwd: in.Cwd,
 			Transcript: transcriptSize(in.TranscriptPath), TranscriptPath: in.TranscriptPath, Nav: &n}
 		e.ID = logID(e)
-		writeBounded(e)
+		logPending = append(logPending, e)
 	}
 }

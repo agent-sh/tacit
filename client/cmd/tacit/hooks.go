@@ -150,6 +150,8 @@ func runHook(args []string) int {
 	if len(args) < 1 {
 		usage()
 	}
+	// The delivery log's lines, after the answer is printed (flushLog).
+	defer flushLog()
 	var in hookInput
 	raw, _ := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
 	_ = json.Unmarshal(raw, &in)
@@ -448,6 +450,10 @@ func promptHitsWith(ctx context.Context, ix *search.Index, sit search.Situation,
 	if ranked {
 		hits = repoRanked(hits, names)
 		if len(hits) > ceiling*2 {
+			logPool(hits, nil) // the whole ranked pool, its tail past the cut
+			for _, h := range hits[ceiling*2:] {
+				logDrop(h, "ceiling")
+			}
 			hits = hits[:ceiling*2]
 		}
 	}
@@ -665,16 +671,26 @@ func selectPrompt(hits, derived []search.Hit, seen map[string]bool, floor float6
 // the session having them); when the gates' selection stands, it is logged
 // as the gates chose it.
 func utilityLogged(ctx context.Context, p string, hits, dhits []search.Hit, seen map[string]bool, floor float64) []search.Hit {
-	out, status := utilitySelect(ctx, p, hits, dhits, seen, floor)
+	out, audit := utilitySelectFn(ctx, p, hits, dhits, seen, floor)
 	if dlog == nil {
 		return out
 	}
-	if status != "ok" {
+	if audit.Status != "ok" {
 		promptSelectionLogged(p, hits, dhits, seen, floor, dlog) // the gates' labels, as they chose
 		return out
 	}
-	dlog.Policy = "utility"
+	// What the provider chose on: its score for each candidate and the
+	// threshold, and the audit's query hash to join its receipt by.
+	dlog.Policy, dlog.UtilityThreshold, dlog.UtilityQuery = "utility", audit.Threshold, audit.QueryHash
 	logPool(dhits[:min(1, len(dhits))], nil)
+	for _, h := range append(append([]search.Hit{}, hits...), dhits...) {
+		for _, a := range audit.Candidates {
+			if a.ID == h.Path && a.Score != nil {
+				v := round3(*a.Score)
+				dlog.cand(h).Utility = &v
+			}
+		}
+	}
 	logChose(out, "utility")
 	for _, h := range append(append([]search.Hit{}, hits...), dhits...) {
 		if seen[h.Name] {
@@ -685,6 +701,10 @@ func utilityLogged(ctx context.Context, p string, hits, dhits []search.Hit, seen
 	}
 	return out
 }
+
+// utilitySelectFn is utilitySelect; the log's tests stand in for the
+// provider without a redactor.
+var utilitySelectFn = utilitySelect
 
 // startHook names a SessionStart block in the delivery log.
 func startHook(r restart) string {

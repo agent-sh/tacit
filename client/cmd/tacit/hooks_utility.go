@@ -239,13 +239,14 @@ func utilityPromptSelection(ctx context.Context, p string, hits, derived []searc
 	return out
 }
 
-// utilitySelect is utilityPromptSelection with the audit's status: "ok"
-// when the provider's scores chose the block, empty when no provider was
-// asked, else why the gates' selection stands.
-func utilitySelect(ctx context.Context, p string, hits, derived []search.Hit, seen map[string]bool, floor float64) ([]search.Hit, string) {
+// utilitySelect is utilityPromptSelection with its audit: Status "ok" when
+// the provider's scores chose the block, empty when no provider was asked,
+// else why the gates' selection stands; the candidates' scores and the
+// threshold they were held to.
+func utilitySelect(ctx context.Context, p string, hits, derived []search.Hit, seen map[string]bool, floor float64) ([]search.Hit, utilityAudit) {
 	fallback := promptSelectionFor(p, hits, derived, seen, floor)
 	if utilityProvider() == "" || len(hits)+len(derived) == 0 {
-		return fallback, ""
+		return fallback, utilityAudit{}
 	}
 	cfg, _ := utilityConfiguration()
 	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
@@ -292,7 +293,7 @@ func utilitySelect(ctx context.Context, p string, hits, derived []search.Hit, se
 		}
 	}
 	out.audit.ElapsedMS = float64(time.Since(start).Microseconds()) / 1000
-	return finishUtilitySelection(out.hits, out.audit, cfg.AuditDir, appendUtilityAudit), out.audit.Status
+	return finishUtilitySelection(out.hits, out.audit, cfg.AuditDir, appendUtilityAudit), out.audit
 }
 
 // The selected result is final before best-effort logging starts. Slow audit

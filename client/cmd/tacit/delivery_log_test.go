@@ -4,10 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"io"
-	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -220,7 +217,7 @@ func TestDeliveryLogDroppedAfterTheSelection(t *testing.T) {
 		}
 	}
 	// Two files of one name: only the one printed is delivered.
-	t.Cleanup(func() { dlog = nil })
+	t.Cleanup(func() { dlog, logPending = nil, nil })
 	dlog = &logEntry{V: deliveryLogVersion, ID: "x"}
 	t.Setenv("TACIT_STATE_DIR", t.TempDir())
 	store, overlay := search.Hit{Name: "twin", Path: "user/twin.md"}, search.Hit{Name: "twin", Path: "local/twin.md", Local: true}
@@ -235,7 +232,7 @@ func TestDeliveryLogDroppedAfterTheSelection(t *testing.T) {
 }
 
 // The echo share is measured on the whole request, as the echo filter
-// reads it, not on the 2,000 bytes the log keeps; the echo filter's lines
+// reads it; the echo filter's lines
 // are logged "echo".
 func TestDeliveryLogEchoOnTheWholeRequest(t *testing.T) {
 	t.Setenv("TACIT_STATE_DIR", t.TempDir())
@@ -244,7 +241,7 @@ func TestDeliveryLogEchoOnTheWholeRequest(t *testing.T) {
 		{Name: "tool-failures-fix-at-source", Description: "Review tool failures weekly: fix the root cause in the mods, rules or scripts that let them happen, and log what changed"},
 	})
 	prompt := strings.Repeat("preamble words of a long scheduled prompt ", 60) + "Review the tool failures weekly and fix their root cause, then report"
-	t.Cleanup(func() { dlog = nil })
+	t.Cleanup(func() { dlog, logPending = nil, nil })
 	beginLog("prompt", hookInput{SessionID: "s1"}, prompt, nil)
 	e := dlog
 	got, err := promptHits(context.Background(), ix, search.Situation{}, prompt, nil)
@@ -322,72 +319,48 @@ func TestDeliveryLogKeepsItsWindowAndCap(t *testing.T) {
 }
 
 // With a utility provider the log says which policy chose the block: the
-// provider's scores ("utility", its lines chosen by it and the pool's
-// others left out by it), or the gates when the provider failed and their
-// selection stands. The gates the provider's selection runs inside log
-// nothing of their own there.
+// provider's scores ("utility": its lines chosen by it with their scores and
+// threshold, the pool's others left out by it), or the gates when the
+// provider failed and their selection stands.
 func TestDeliveryLogNamesTheUtilityPolicy(t *testing.T) {
-	if _, err := exec.LookPath("scrump"); err != nil {
-		t.Skip("scrump required for the live redaction integration")
-	}
 	t.Setenv("TACIT_STATE_DIR", t.TempDir())
-	t.Setenv("TACIT_UTILITY_PROVIDER", "jev")
-	t.Setenv("TYPESAFE_API_KEY", "test-placeholder")
-	ix := relevanceIndex(t, []fact.Meta{
-		{Name: "endpoint-useful", Description: "endpoint api requires a schema validation step before release"},
-		{Name: "endpoint-topical", Description: "endpoint api is a common networking topic"},
-	})
-	original := http.DefaultTransport
-	t.Cleanup(func() { http.DefaultTransport = original })
-	fail := false
-	http.DefaultTransport = utilityTransport(func(r *http.Request) (*http.Response, error) {
-		if fail {
-			return &http.Response{StatusCode: 500, Body: io.NopCloser(strings.NewReader("{}")), Header: make(http.Header)}, nil
+	t.Cleanup(func() { dlog, logPending, utilitySelectFn = nil, nil, utilitySelect })
+	useful := search.Hit{Name: "endpoint-useful", Path: "user/endpoint-useful.md", Scope: "user", Score: 30}
+	topical := search.Hit{Name: "endpoint-topical", Path: "user/endpoint-topical.md", Scope: "user", Score: 29}
+	score := func(v float64) *float64 { return &v }
+	status := "ok"
+	utilitySelectFn = func(ctx context.Context, p string, hits, derived []search.Hit, seen map[string]bool, floor float64) ([]search.Hit, utilityAudit) {
+		if status != "ok" {
+			return promptSelectionFor(p, hits, derived, seen, floor), utilityAudit{Status: status}
 		}
-		var body struct {
-			Questions map[string]struct {
-				Instructions map[string]string `json:"instructions"`
-			} `json:"questions"`
-		}
-		json.NewDecoder(r.Body).Decode(&body)
-		answers := map[string]any{}
-		for id, q := range body.Questions {
-			score := 0.1
-			if strings.Contains(q.Instructions["memory"], "schema validation") {
-				score = 0.95
-			}
-			answers[id] = map[string]any{"type": "noul", "noul": score}
-		}
-		encoded, _ := json.Marshal(map[string]any{"model": "jev-1.13.0", "answers": answers, "usage": map[string]int{"input_tokens": 100}})
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(encoded))), Header: make(http.Header)}, nil
-	})
-	t.Cleanup(func() { dlog = nil })
+		return []search.Hit{useful}, utilityAudit{Status: "ok", Threshold: 0.7, QueryHash: "abc", Candidates: []utilityAuditHit{
+			{ID: useful.Path, Score: score(0.95)}, {ID: topical.Path, Score: score(0.1)}}}
+	}
 	run := func() *logEntry {
 		t.Helper()
-		beginLog("prompt", hookInput{SessionID: "s1"}, "endpoint api release", []string{"demo"})
+		beginLog("prompt", hookInput{SessionID: "s1"}, "endpoint api release", nil)
 		e := dlog
-		got, err := promptHits(context.Background(), ix, search.Situation{Repo: "demo"}, "endpoint api release", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		endLog(got)
+		dlog.pool([]search.Hit{useful, topical}, nil)
+		endLog(utilityLogged(context.Background(), "endpoint api release", []search.Hit{useful, topical}, nil, nil, promptFloor))
 		return e
 	}
 	e := run()
-	useful, topical := candOf(*e, "endpoint-useful"), candOf(*e, "endpoint-topical")
-	if e.Policy != "utility" || useful == nil || useful.Via != "utility" || !useful.Delivered || topical == nil || topical.Delivered || topical.Via != "" || topical.Dropped != "utility" {
-		t.Fatalf("the provider chose: policy %q, %+v, %+v", e.Policy, useful, topical)
+	u, tp := candOf(*e, "endpoint-useful"), candOf(*e, "endpoint-topical")
+	if e.Policy != "utility" || e.UtilityThreshold != 0.7 || e.UtilityQuery != "abc" || u == nil || u.Via != "utility" || !u.Delivered || u.Utility == nil || *u.Utility != 0.95 ||
+		tp == nil || tp.Delivered || tp.Via != "" || tp.Dropped != "utility" || tp.Utility == nil || *tp.Utility != 0.1 {
+		t.Fatalf("the provider chose: %+v, %+v, %+v", e, u, tp)
 	}
-	fail = true
+	status = "deadline"
 	e = run()
-	useful = candOf(*e, "endpoint-useful")
-	if e.Policy != "gates" || useful == nil || useful.Via != "ranked" || !useful.Delivered {
-		t.Fatalf("the provider failed: policy %q, %+v", e.Policy, useful)
+	u = candOf(*e, "endpoint-useful")
+	if e.Policy != "gates" || u == nil || u.Via != "ranked" || !u.Delivered || u.Utility != nil {
+		t.Fatalf("the provider failed: policy %q, %+v", e.Policy, u)
 	}
 }
 
-// The hook waits for its log line at most logWriteBudget: a write that
-// stalls (a hung state directory) leaves the hook to answer.
+// The hook waits for its log lines at most logWriteBudget, all of them
+// together: a write that stalls (a hung state directory) leaves the hook to
+// answer.
 func TestDeliveryLogWriteIsBounded(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
@@ -396,41 +369,62 @@ func TestDeliveryLogWriteIsBounded(t *testing.T) {
 	logWriteWait = logWriteBudget
 	logWrite = func(*logEntry, time.Time) { <-release }
 	start := time.Now()
-	writeBounded(&logEntry{V: 1})
+	writeBounded(&logEntry{V: 1}, &logEntry{V: 1}, &logEntry{V: 1})
 	if d := time.Since(start); d > logWriteBudget+time.Second {
 		t.Fatalf("the hook waited %v for a stalled write", d)
 	}
 }
 
 // The log keeps a request's terms, never its text, and leaves out every
-// secret-shaped word before it takes them: the server's key shapes, known
-// key prefixes, long hex or base64 runs, high-entropy words. Paths and
-// ordinary words stay.
+// secret before it takes them: by shape (the server's key shapes, provider
+// prefixes with a key's tail, long hex runs, random-looking runs) and by
+// place (the value after a password, token or key name, a URL's user and
+// password, a password glued onto -p). Paths, identifiers and names that
+// only start like a key stay.
 func TestDeliveryLogTermsLeaveOutSecrets(t *testing.T) {
-	secrets := []string{
+	for _, s := range []string{
 		"sk-Ab3dEfGh1jKlMnOpQrStUvWx", "ghp_0123456789abcdefABCDEF0123456789abcd", "AKIAABCDEFGHIJKLMNOP",
 		"xoxb-123456789012-abcdefABCDEF", "0123456789abcdef0123456789abcdef01234567",
 		"token=Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MEFCQ0RFRg", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln",
-		"Q8vX2mZp7LkR4tNw9YbH3sJd", "--password=hunter2Hunter2hunter2X9",
-	}
-	for _, s := range secrets {
+		"Q8vX2mZp7LkR4tNw9YbH3sJd", "--password=hunter2", "PGPASSWORD=hunter2", "-pS3cretPass",
+		"--api-key Kq2Jd8Lw", "password is Tr0ub4dor&3", "Authorization: Bearer abcdef123456",
+		"https://alice:Sup3rS3cret@example.com/x",
+	} {
 		got := strings.Join(logTerms("deploy the widget with "+s+" tonight"), " ")
-		if got != "deploy widget tonight" {
-			t.Errorf("%s: terms %q", s, got)
+		for _, leak := range []string{"hunter2", "s3cretpass", "kq2jd8lw", "tr0ub4dor", "abcdef123456", "sup3rs3cret", "alice", "ab3d", "zm9v", "q8vx", "akia", "0123456789abcdef"} {
+			if strings.Contains(got, leak) {
+				t.Errorf("%s: terms %q hold %q", s, got, leak)
+			}
+		}
+		if !strings.HasPrefix(got, "deploy widget") || !strings.HasSuffix(got, "tonight") {
+			t.Errorf("%s: terms %q lost the words around it", s, got)
 		}
 	}
 	for text, want := range map[string]string{
-		"edit client/cmd/tacit/hooks_pretool.go and run make lint": "edit client cmd tacit hooks_pretool run make lint",
-		"why did the otter retry loop stop":                        "otter retry loop stop",
-		"open src/components/UserProfile.tsx":                      "open src components userprofile tsx",
+		"edit client/cmd/tacit/hooks_pretool.go and run make lint":   "edit client cmd tacit hooks_pretool run make lint",
+		"why did the otter retry loop stop":                          "otter retry loop stop",
+		"open src/components/UserProfile2.tsx":                       "open src components userprofile2 tsx",
+		"read pkg/apis/v1beta1/DeploymentSpec.go":                    "read pkg apis v1beta1 deploymentspec",
+		"rename configureHTTPClientWithRetries":                      "rename configurehttpclientwithretries",
+		"call hf_hub_download with npm_config_cache in pypi-publish": "call hf_hub_download npm_config_cache pypi publish",
+		"find . -print and fix the token refresh":                    "find print fix token refresh",
 	} {
 		if got := strings.Join(logTerms(text), " "); got != want {
 			t.Errorf("%q: terms %q, want %q", text, got, want)
 		}
 	}
-	// The entry holds no text field at all.
+	// The entry holds no text field, and a nav step's folder only when it is
+	// shaped as one.
 	b, _ := json.Marshal(logEntry{V: 1, Terms: logTerms("fix it with sk-Ab3dEfGh1jKlMnOpQrStUvWx now")})
 	if strings.Contains(string(b), "Ab3d") || strings.Contains(string(b), "request") {
 		t.Errorf("entry: %s", b)
+	}
+	for in, want := range map[string]string{"projects/widget": "projects/widget", "/user/": "user", "free text here": "", "projects/Q8vX2mZp7LkR4tNw9YbH3sJd": ""} {
+		if got := scopePath(in); got != want {
+			t.Errorf("scopePath(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if n := navOf(hookInput{ToolName: "mcp__tacit__tacit_fact", ToolInput: json.RawMessage(`{"name":"not a slug"}`)}, ""); len(n) != 0 {
+		t.Errorf("a fact name that is no slug: %+v", n)
 	}
 }
