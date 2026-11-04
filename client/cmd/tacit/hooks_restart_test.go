@@ -427,3 +427,22 @@ func TestSummaryQueryTakesItsHeaviestTerms(t *testing.T) {
 		t.Fatalf("query %q", q)
 	}
 }
+
+// The summary's selection reaches the scopes a request reaches: a topic the
+// summary names, as the prompt hook's does for a prompt (withPromptScopes).
+func TestSummarySelectionReachesANamedTopic(t *testing.T) {
+	r, cwd, _ := areaRig(t)
+	prev := startIndexBuild
+	startIndexBuild = func() {}
+	t.Cleanup(func() { startIndexBuild = prev })
+	home := filepath.Join(r.root, "home")
+	start := `{"session_id":"z1","cwd":"` + cwd + `","source":"%s","transcript_path":"%s"}`
+	hookOut(t, fmt.Sprintf(start, "startup", ""), "session-start")
+	path := writeTranscript(t, filepath.Join(home, ".claude", "projects", "-widget", "z1.jsonl"), `{"type":"user","message":{"role":"user","content":"go"}}`)
+	hookOut(t, fmt.Sprintf(start, "compact", path), "session-start")
+	appendLines(t, path, `{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"Summary: the session planned the zebra cutover; the queue work waits for Saturday."}}`)
+	got := hookOut(t, `{"session_id":"z1","cwd":"`+cwd+`","prompt":"continue","transcript_path":"`+path+`"}`, "prompt")
+	if !strings.Contains(got, summaryTitle) || !strings.Contains(got, "tickets-q4-cutover:") {
+		t.Fatalf("the summary did not reach the topic it names:\n%s", got)
+	}
+}

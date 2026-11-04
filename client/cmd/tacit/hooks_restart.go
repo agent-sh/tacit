@@ -15,6 +15,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/overlay"
+	"github.com/agent-sh/tacit/client/internal/record"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
@@ -74,9 +75,9 @@ const (
 
 // restartBlock is the start hook's block after a compaction (afterCompaction)
 // and on a resume (onResume).
-func restartBlock(ctx context.Context, ix *search.Index, s *store.Store, in hookInput, sit search.Situation, start []search.Hit, r restart, mcp bool) string {
+func restartBlock(ctx context.Context, ix *search.Index, s *store.Store, in hookInput, sit search.Situation, recs map[string]*record.Record, start []search.Hit, r restart, mcp bool) string {
 	if r == restartCompact {
-		return afterCompaction(ctx, ix, in, sit, start, mcp)
+		return afterCompaction(ctx, ix, in, sit, recs, start, mcp)
 	}
 	return onResume(ctx, ix, s, in, sit, start, mcp)
 }
@@ -94,7 +95,7 @@ func restartBlock(ctx context.Context, ix *search.Index, s *store.Store, in hook
 // else the block is the whole start block, and the next prompt takes the
 // summary from what the transcript gained since (pendingSummary). Either
 // way the session's delivered set becomes what its context holds.
-func afterCompaction(ctx context.Context, ix *search.Index, in hookInput, sit search.Situation, start []search.Hit, mcp bool) string {
+func afterCompaction(ctx context.Context, ix *search.Index, in hookInput, sit search.Situation, recs map[string]*record.Record, start []search.Hit, mcp bool) string {
 	home, _ := os.UserHomeDir()
 	given := factNames(delivered(in.SessionID))
 	if old, ok := loadPending(in.SessionID); ok {
@@ -138,7 +139,7 @@ func afterCompaction(ctx context.Context, ix *search.Index, in hookInput, sit se
 	}
 	rememberNames(in.SessionID, factNames(held))
 	remember(in.SessionID, again)
-	pulled := summaryStep(ctx, ix, in, sit, sum, summary)
+	pulled := summaryStep(ctx, ix, in, sit, recs, summary)
 	out := search.Block(again, title)
 	if len(pulled) > 0 {
 		if out == "" {
@@ -157,13 +158,15 @@ const summaryTitle = "# tacit: facts matching the compaction's summary"
 // summaryStep is the facts the summary's words select, which the session
 // has not got: the prompt hook's selection, local only, never the utility
 // provider's (a summary holds far more of the session than a prompt), with
-// the summary's query (summaryQuery) as the request. They join the
-// delivered set.
-func summaryStep(ctx context.Context, ix *search.Index, in hookInput, sit search.Situation, sum summaryHold, summary string) []search.Hit {
+// the summary's query (summaryQuery) as the request and the scopes a request
+// reaches (withPromptScopes: the topics the summary names, the session's
+// orgs). They join the delivered set.
+func summaryStep(ctx context.Context, ix *search.Index, in hookInput, sit search.Situation, recs map[string]*record.Record, summary string) []search.Hit {
 	q := summaryQuery(ctx, ix, summary)
 	if !promptWorthy(q) {
 		return nil
 	}
+	sit = withPromptScopes(sit, recs, summary)
 	seen := delivered(in.SessionID)
 	hits, err := promptHitsWith(ctx, ix, sit, q, seen, true)
 	if err != nil {
@@ -237,7 +240,7 @@ func clearPending(id string) {
 // set, and returns the block of the facts the summary's words select. The
 // compaction's entries are written before the next prompt, so the first
 // prompt settles it: pending is dropped whatever it finds.
-func pendingSummary(ctx context.Context, ix *search.Index, in hookInput, sit search.Situation) string {
+func pendingSummary(ctx context.Context, ix *search.Index, in hookInput, sit search.Situation, recs map[string]*record.Record) string {
 	path := pendingFile(in.SessionID)
 	if path == "" {
 		return ""
@@ -270,7 +273,7 @@ func pendingSummary(ctx context.Context, ix *search.Index, in hookInput, sit sea
 	}
 	sort.Strings(keep)
 	rememberNames(in.SessionID, keep)
-	return search.Block(summaryStep(ctx, ix, in, sit, sum, summary), summaryTitle)
+	return search.Block(summaryStep(ctx, ix, in, sit, recs, summary), summaryTitle)
 }
 
 // heldOf is, of the names the session was given, those whose facts the

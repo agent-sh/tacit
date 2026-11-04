@@ -20,6 +20,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/follow"
 	"github.com/agent-sh/tacit/client/internal/overlay"
+	"github.com/agent-sh/tacit/client/internal/record"
 	"github.com/agent-sh/tacit/client/internal/repoid"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
@@ -218,7 +219,7 @@ func runHook(args []string) int {
 		hits = withoutClaims(hits)
 		mcp := slices.Contains(args[1:], "--mcp")
 		if restart != restartFresh {
-			fmt.Print(restartBlock(ctx, ix, s, in, sit, hits, restart, mcp))
+			fmt.Print(restartBlock(ctx, ix, s, in, sit, recs, hits, restart, mcp))
 			return 0
 		}
 		if in.Source == "clear" {
@@ -246,7 +247,7 @@ func runHook(args []string) int {
 			if ix, err := openHookIndex(ctx, s); err == nil {
 				recs := hookRecords(ctx, ix)
 				psit, _ := withWorkspace(withRootFolder(sit, recs, in.Cwd), in.Cwd)
-				fmt.Print(pendingSummary(ctx, ix, in, withOrgs(withRecordAliases(psit, recs), recs)))
+				fmt.Print(pendingSummary(ctx, ix, in, withOrgs(withRecordAliases(psit, recs), recs), recs))
 				ix.Close()
 			}
 		}
@@ -274,13 +275,7 @@ func runHook(args []string) int {
 				sit = narrowTo(sit, r)
 			}
 		}
-		sit = withOrgs(withRecordAliases(sit, recs), recs)
-		if deliveryOn("TOPICS", true) {
-			sit.ExtraScopes = topicScopes(recs, p)
-		}
-		// The org's rules, standards and decisions are eligible at the prompt,
-		// by match like the repository's.
-		sit.ExtraScopes = append(sit.ExtraScopes, sit.Orgs...)
+		sit = withPromptScopes(withOrgs(withRecordAliases(sit, recs), recs), recs, p)
 		strong, err := promptHits(ctx, ix, sit, p, delivered(in.SessionID))
 		if err != nil {
 			return 0
@@ -349,6 +344,19 @@ func sessionStartHits(ctx context.Context, ix *search.Index, sit search.Situatio
 		return nil, err
 	}
 	return startSelection(hits, sit.Repo, startLimit), nil
+}
+
+// withPromptScopes is sit with the scopes a request reaches beyond the
+// session's own: the live topics it names (TOPICS) and the session's orgs,
+// whose rules, standards and decisions are eligible by match like the
+// repository's. The prompt hook's, and the compaction summary's selection's.
+func withPromptScopes(sit search.Situation, recs map[string]*record.Record, request string) search.Situation {
+	sit.ExtraScopes = nil
+	if deliveryOn("TOPICS", true) {
+		sit.ExtraScopes = topicScopes(recs, request)
+	}
+	sit.ExtraScopes = append(sit.ExtraScopes, sit.Orgs...)
+	return sit
 }
 
 // promptWorthy: harness-injected turns (notifications, command echoes,
