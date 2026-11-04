@@ -418,6 +418,8 @@ func TestEpisodeRecallCallForms(t *testing.T) {
 		{"Bash", "{\"command\":\"gh pr create --body 'run `tacit episode find X` after a compaction'\"}", false},
 		{"Bash", "{\"command\":\"rg -n '`tacit episode' docs\"}", false},
 		{"Bash", `{"command":"echo 'see $(tacit episode find X)'"}`, false},
+		{"Bash", `{"command":"echo \"$(echo $((1<<2)); tacit episode find X)\""}`, true},
+		{"Bash", `{"command":"echo \"$( (cat <<EOF)\nbody\nEOF\ntacit episode find X)\""}`, true},
 		{"Bash", "{\"command\":\"git commit -m \\\"$(cat <<'EOF'\\n1) run `tacit episode find X`\\nEOF\\n)\\\"\"}", false},
 		{"Bash", "{\"command\":\"git commit -m \\\"$(cat <<'EOF'\\nfix (see `tacit episode find X`\\nEOF\\n)\\\"\"}", false},
 		{"Bash", "{\"command\":\"gh pr create --body \\\"$(cat <<'EOF'\\n- a) `tacit episode find` now pages\\nEOF\\n)\\\"\"}", false},

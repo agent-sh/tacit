@@ -536,7 +536,7 @@ func shellSplit(cmd string) [][]string {
 				j++
 			}
 			k := j
-			for k < len(rs) && !strings.ContainsRune(" \t\n;&|<>", rs[k]) {
+			for k < len(rs) && !strings.ContainsRune(" \t\n;&|<>()", rs[k]) {
 				k++
 			}
 			word := strings.Trim(string(rs[j:k]), `'"\`)
@@ -604,7 +604,13 @@ func substitution(rs []rune, i int) (string, int, bool) {
 // rs[start], or -1: parens inside quotes, escapes, backticks, nested
 // substitutions and here-document bodies do not count.
 func substEnd(rs []rune, start int) int {
-	depth := 1
+	end, _ := substScan(rs, start, 1)
+	return end
+}
+
+// substScan scans rs from start with depth parens open: the index of the )
+// that closes the last of them, or -1 and the depth still open at the end.
+func substScan(rs []rune, start, depth int) (int, int) {
 	var quote rune
 	for j := start; j < len(rs); j++ {
 		r := rs[j]
@@ -622,7 +628,7 @@ func substEnd(rs []rune, start int) int {
 			case r == '$' && j+1 < len(rs) && rs[j+1] == '(':
 				e := substEnd(rs, j+2)
 				if e < 0 {
-					return -1
+					return -1, depth
 				}
 				j = e
 			}
@@ -634,6 +640,19 @@ func substEnd(rs []rune, start int) int {
 			for j++; j < len(rs) && rs[j] != '`'; j++ {
 				if rs[j] == '\\' {
 					j++
+				}
+			}
+		case r == '$' && j+2 < len(rs) && rs[j+1] == '(' && rs[j+2] == '(':
+			// Arithmetic: its << is a shift, its parens its own.
+			d := 0
+			for j++; j < len(rs); j++ {
+				if rs[j] == '(' {
+					d++
+				} else if rs[j] == ')' {
+					d--
+					if d == 0 {
+						break
+					}
 				}
 			}
 		case r == '<' && j+2 < len(rs) && rs[j+1] == '<' && rs[j+2] != '<':
@@ -659,10 +678,11 @@ func substEnd(rs []rune, start int) int {
 				nl++
 			}
 			// The rest of the here-document's line is still the command.
-			rest := substEnd(rs[:nl], e)
-			if rest >= 0 {
-				return rest
+			end, d := substScan(rs[:nl], e, depth)
+			if end >= 0 {
+				return end, 0
 			}
+			depth = d
 			pos := nl + 1
 			for pos < len(rs) {
 				end := pos
@@ -684,11 +704,11 @@ func substEnd(rs []rune, start int) int {
 		case r == ')':
 			depth--
 			if depth == 0 {
-				return j
+				return j, 0
 			}
 		}
 	}
-	return -1
+	return -1, depth
 }
 
 // inArith reports a position inside an unclosed $(( ... )).
