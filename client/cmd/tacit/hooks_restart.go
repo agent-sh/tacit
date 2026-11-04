@@ -198,9 +198,6 @@ func summaryStep(ctx context.Context, ix *search.Index, in hookInput, sit search
 type pending struct {
 	Offset int64    `json:"offset"`
 	Given  []string `json:"given"`
-	// HeldDone: a PreToolUse push read the summary already and put the
-	// facts it holds of Given in the delivered set (pendingHeld).
-	HeldDone bool `json:"held_done,omitempty"`
 }
 
 func pendingFile(id string) string {
@@ -210,6 +207,19 @@ func pendingFile(id string) string {
 	return ""
 }
 
+// heldFile marks that a PreToolUse push read the record's summary and put
+// the facts it holds of Given in the delivered set (pendingHeld). It is a
+// file of its own, made once (O_EXCL), so a push never rewrites the record
+// a prompt may be reading or removing.
+func heldFile(id string) string {
+	if p := pendingFile(id); p != "" {
+		return p + ".held"
+	}
+	return ""
+}
+
+// savePending writes the record whole or not at all (a temporary file
+// renamed over it), so a prompt never reads it half written.
 func savePending(id string, p pending) {
 	path := pendingFile(id)
 	if path == "" {
@@ -217,7 +227,10 @@ func savePending(id string, p pending) {
 	}
 	b, _ := json.Marshal(p)
 	os.MkdirAll(filepath.Dir(path), 0o700)
-	os.WriteFile(path, b, 0o600)
+	tmp := path + ".tmp"
+	if os.WriteFile(tmp, b, 0o600) == nil {
+		os.Rename(tmp, path)
+	}
 }
 
 func loadPending(id string) (pending, bool) {
@@ -242,6 +255,7 @@ func mergeNames(a, b []string) []string {
 func clearPending(id string) {
 	if path := pendingFile(id); path != "" {
 		os.Remove(path)
+		os.Remove(heldFile(id))
 	}
 }
 
@@ -258,7 +272,10 @@ func pendingSummary(ctx context.Context, ix *search.Index, in hookInput, sit sea
 		return ""
 	}
 	p, ok := loadPending(in.SessionID)
+	_, err := os.Stat(heldFile(in.SessionID))
+	heldDone := err == nil
 	os.Remove(path)
+	os.Remove(heldFile(in.SessionID))
 	if !ok || p.Offset < 0 {
 		return ""
 	}
@@ -266,7 +283,7 @@ func pendingSummary(ctx context.Context, ix *search.Index, in hookInput, sit sea
 	if !ok {
 		return ""
 	}
-	if !p.HeldDone {
+	if !heldDone {
 		_ = rememberHeld(ctx, ix, in, summaryOf(summary), p.Given)
 	}
 	return search.Block(summaryStep(ctx, ix, in, sit, recs, summary), summaryTitle)
@@ -278,21 +295,29 @@ func pendingSummary(ctx context.Context, ix *search.Index, in hookInput, sit sea
 // push before the next prompt does not give them again. The record stays
 // for that prompt, which gives the summary's selection (pendingSummary).
 func pendingHeld(ctx context.Context, ix *search.Index, in hookInput) {
+	marker := heldFile(in.SessionID)
+	if marker == "" || ctx.Err() != nil {
+		return
+	}
+	if _, err := os.Stat(marker); err == nil {
+		return
+	}
 	p, ok := loadPending(in.SessionID)
-	if !ok || p.HeldDone || p.Offset < 0 {
+	if !ok || p.Offset < 0 {
 		return
 	}
 	summary, ok := pendingText(in, p)
 	if !ok {
 		return
 	}
-	// A lookup the push's deadline cut leaves the flag unset: the next
-	// push, or the prompt, tries again.
+	// A lookup the push's deadline cut makes no marker: the next push, or
+	// the prompt, tries again.
 	if rememberHeld(ctx, ix, in, summaryOf(summary), p.Given) != nil || ctx.Err() != nil {
 		return
 	}
-	p.HeldDone = true
-	savePending(in.SessionID, p)
+	if f, err := os.OpenFile(marker, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600); err == nil {
+		f.Close()
+	}
 }
 
 // pendingText is the summary of the compaction a record speaks of: the last

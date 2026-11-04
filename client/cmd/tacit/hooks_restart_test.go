@@ -450,29 +450,47 @@ func TestSummarySelectionReachesANamedTopic(t *testing.T) {
 }
 
 // Between a Claude Code compaction and its first prompt a PreToolUse push
-// reads the summary once the transcript holds it: the facts given before the
-// compaction that it holds (the otter fact it names) join the delivered set
-// then, not only at the prompt, and the record stays for the prompt's
-// selection.
+// reads the summary once the transcript holds it: a fact given before the
+// compaction that it holds (the worker-lock decision a push gave, which the
+// summary names and the smaller start block left out) joins the delivered
+// set before the push picks, so the push does not give it again; the record
+// stays for the prompt, which drops it with the marker.
 func TestPreToolAfterAClaudeCompactionReadsWhatTheSummaryHolds(t *testing.T) {
 	r, home, payload := restartRig(t)
-	hookOut(t, payload("t1", "startup", ""), "session-start")
-	hookOut(t, payload("t1", "", otterPrompt), "prompt")
-	path := writeTranscript(t, filepath.Join(home, ".claude", "projects", "-demo", "t1.jsonl"), `{"type":"user","message":{"role":"user","content":"go"}}`)
-	hookOut(t, payload("t1", "compact", path), "session-start")
-	appendLines(t, path, `{"type":"user","isCompactSummary":true,"message":{"role":"user","content":`+jsonString(compactSummaryText+" It kept demo-otter-retry in mind.")+`}}`)
-	if slices.Contains(sessionSet(t, home, "t1"), "demo-otter-retry") {
-		t.Fatal("setup: the otter fact is in the set before the push")
-	}
+	t.Setenv("TACIT_DELIVERY_START_CEILING", "4")
+	writeFact(t, r.clone, fact.Meta{Name: "demo-worker-lock", Description: "the scheduler worker takes the pool lock before it writes",
+		Type: "design_decision", Scope: "projects/demo", AppliesTo: fact.AppliesTo{Paths: []string{"src/scheduler/worker.go"}}}, "lock")
+	r.commitIndex(r.clone, "a decision on the worker")
+	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
+	buildIndexForHooks(r.s)
+	path := filepath.Join(home, ".claude", "projects", "-demo", "t1.jsonl")
 	file := filepath.Join(r.projects, "demo", "src", "scheduler", "worker.go")
 	tool := `{"session_id":"t1","cwd":"` + filepath.Join(r.projects, "demo") + `","hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"` + file + `"},"transcript_path":"` + path + `"}`
-	hookOut(t, tool, "pre-tool")
-	if !slices.Contains(sessionSet(t, home, "t1"), "demo-otter-retry") {
-		t.Fatalf("the push did not read what the summary holds: %v", sessionSet(t, home, "t1"))
+	if start := hookOut(t, payload("t1", "startup", ""), "session-start"); strings.Contains(start, "demo-worker-lock") {
+		t.Fatalf("setup: the start block holds the worker decision:\n%s", start)
 	}
-	got := hookOut(t, payload("t1", "", "continue|"+path), "prompt")
-	if !strings.Contains(got, summaryTitle) || strings.Contains(got, "demo-otter-retry:") {
-		t.Fatalf("the prompt after:\n%s", got)
+	if got := hookOut(t, tool, "pre-tool"); !strings.Contains(got, "demo-worker-lock") {
+		t.Fatalf("setup: the push gave no worker decision:\n%s", got)
+	}
+	writeTranscript(t, path, `{"type":"user","message":{"role":"user","content":"go"}}`)
+	hookOut(t, payload("t1", "compact", path), "session-start")
+	appendLines(t, path, `{"type":"user","isCompactSummary":true,"message":{"role":"user","content":`+jsonString(compactSummaryText+" It kept demo-worker-lock in mind.")+`}}`)
+	if got := hookOut(t, tool, "pre-tool"); strings.Contains(got, "demo-worker-lock") {
+		t.Fatalf("the push gave again a fact the summary holds:\n%s", got)
+	}
+	if _, ok := loadPending("t1"); !ok {
+		t.Fatal("the push removed the record")
+	}
+	// The prompt reads the record (its selection takes no fact the session
+	// has and is not backfilled, so here it may give nothing) and drops it.
+	if got := hookOut(t, payload("t1", "", "continue|"+path), "prompt"); strings.Contains(got, "demo-worker-lock:") {
+		t.Fatalf("the prompt gave the held fact:\n%s", got)
+	}
+	if _, ok := loadPending("t1"); ok {
+		t.Fatal("the prompt left the record")
+	}
+	if _, err := os.Stat(heldFile("t1")); err == nil {
+		t.Fatal("the prompt left the marker")
 	}
 }
 
@@ -494,11 +512,23 @@ func TestPendingHeldRetriesAfterACutLookup(t *testing.T) {
 	cut, cancel := context.WithCancel(context.Background())
 	cancel()
 	pendingHeld(cut, ix, in)
-	if p, ok := loadPending("h1"); !ok || p.HeldDone {
-		t.Fatalf("a cut lookup set the flag: %+v %v", p, ok)
+	if _, err := os.Stat(heldFile("h1")); err == nil {
+		t.Fatal("a push past its deadline made the marker")
+	}
+	closed, err := openHookIndex(context.Background(), r.s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed.Close()
+	pendingHeld(context.Background(), closed, in) // the lookup itself fails
+	if _, err := os.Stat(heldFile("h1")); err == nil {
+		t.Fatal("a failed lookup made the marker")
 	}
 	pendingHeld(context.Background(), ix, in)
-	if p, ok := loadPending("h1"); !ok || !p.HeldDone || !slices.Contains(sessionSet(t, home, "h1"), "demo-otter-retry") {
-		t.Fatalf("the retry did not hold the fact: %+v %v", p, sessionSet(t, home, "h1"))
+	if _, err := os.Stat(heldFile("h1")); err != nil || !slices.Contains(sessionSet(t, home, "h1"), "demo-otter-retry") {
+		t.Fatalf("the retry did not hold the fact (%v): %v", err, sessionSet(t, home, "h1"))
+	}
+	if _, ok := loadPending("h1"); !ok {
+		t.Fatal("the push removed the record")
 	}
 }

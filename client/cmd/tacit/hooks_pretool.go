@@ -107,7 +107,9 @@ func repoRel(r repoid.Repo, cwd, p string) (string, bool) {
 // It answers as JSON additionalContext, the only PreToolUse output both
 // harnesses give the model, never blocks or changes the call, and prints
 // nothing on any failure or after toolBudget. It reads no file beyond the
-// index (the records are in it).
+// index (the records are in it), but after a compaction whose summary the
+// start could not read: the session's record and what its transcript gained
+// since (pendingHeld).
 func preTool(s *store.Store, in hookInput) {
 	if !deliveryOn("TOOL_PUSH", true) {
 		return
