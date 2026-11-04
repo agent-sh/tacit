@@ -73,8 +73,10 @@ func (ix *Index) Withdrawn(ctx context.Context, names []string) (map[string]Hit,
 	}
 	b, _ := json.Marshal(names)
 	live := strings.ReplaceAll(HeldClause, "f.", "g.")
+	// Uncorrelated: facts has no index on name, and a subquery per row
+	// would scan it once for each name.
 	hits, err := ix.scan(ctx, `SELECT `+liveColumns+` FROM facts f WHERE f.name IN (SELECT value FROM json_each(:names)) AND f.inbox = 0
-		AND NOT EXISTS (SELECT 1 FROM facts g WHERE g.name = f.name AND g.inbox = 0 AND g.superseded = 0 AND `+live+`)
+		AND f.name NOT IN (SELECT g.name FROM facts g WHERE g.name IN (SELECT value FROM json_each(:names)) AND g.inbox = 0 AND g.superseded = 0 AND `+live+`)
 		ORDER BY f.id`, map[string]any{"names": string(b)})
 	if err != nil {
 		return nil, err

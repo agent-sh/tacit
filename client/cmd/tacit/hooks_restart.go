@@ -128,7 +128,9 @@ func afterCompaction(ctx context.Context, ix *search.Index, in hookInput, sit se
 	held := heldOf(ctx, ix, sum, given)
 	var again []search.Hit
 	for _, h := range start {
-		if held[h.Name] || sum.holds(h) {
+		// A fact the session was never given is in the summary only by its
+		// name: a summary about the repo's work says its facts' words.
+		if held[h.Name] || sum.named(h) {
 			held[h.Name] = true
 			continue
 		}
@@ -496,6 +498,19 @@ func summaryOf(summary string) summaryHold {
 	return h
 }
 
+// named: the summary names the fact, by its name as a whole name, or for a
+// name of three words or more by its words in order as whole words.
+func (s summaryHold) named(h search.Hit) bool {
+	if s.text == "" {
+		return false
+	}
+	if wordIn(s.text, h.Name, nameRune) {
+		return true
+	}
+	words := strings.Split(h.Name, "-")
+	return len(words) >= 3 && wordIn(s.text, strings.Join(words, " "), wordRune)
+}
+
 // holds: the summary names the fact (its name as a whole name, or for a
 // name of three words or more its words in order as whole words), or, for a
 // fact that is no ruling, one of its sentences or lines holds most of what
@@ -504,16 +519,10 @@ func summaryOf(summary string) summaryHold {
 // holds most words somewhere, and a rule's words are the work's words: a
 // ruling counts as held only by its name.
 func (s summaryHold) holds(h search.Hit) bool {
-	if s.text == "" {
-		return false
-	}
-	if wordIn(s.text, h.Name, nameRune) {
+	if s.named(h) {
 		return true
 	}
-	if words := strings.Split(h.Name, "-"); len(words) >= 3 && wordIn(s.text, strings.Join(words, " "), wordRune) {
-		return true
-	}
-	if h.Ruling {
+	if s.text == "" || h.Ruling {
 		return false
 	}
 	keys := map[string]bool{}

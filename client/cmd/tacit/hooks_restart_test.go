@@ -38,6 +38,8 @@ func restartRig(t *testing.T) (r *rig, home string, payload func(session, source
 		Type: "history", Scope: "projects/demo"}, "wombat")
 	writeFact(t, r.clone, fact.Meta{Name: "demo-otter-retry", Description: "the otter retry loop in demo backs off twice before it gives up",
 		Type: "history", Scope: "projects/demo"}, "otter")
+	writeFact(t, r.clone, fact.Meta{Name: "demo-heron-uploader", Description: "the heron uploader in demo retries each chunk three times",
+		Type: "history", Scope: "projects/demo"}, "heron")
 	r.commitIndex(r.clone, "add the history facts")
 	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
 	cwd := filepath.Join(r.projects, "demo")
@@ -50,6 +52,9 @@ func restartRig(t *testing.T) (r *rig, home string, payload func(session, source
 	}
 	return r, home, payload
 }
+
+// heronPrompt is a request the heron fact answers, without saying it back.
+const heronPrompt = "why did the heron uploader give up on a chunk"
 
 // otterPrompt is a request the otter fact answers and the summary does not
 // name. It does not say the fact back, which the prompt's echo filter would
@@ -102,43 +107,66 @@ func appendLines(t *testing.T, path string, lines ...string) {
 // comes again from the store as it is, less what the summary still holds
 // (the note it names), then the facts the summary's words select (the wombat
 // history fact, which no start block shows, named past the summary's first
-// terms). The session's delivered set is then what its context holds: a fact
-// a prompt gave before the compaction (the otter one) that the summary does
-// not hold is in it no more.
+// terms). Of the facts prompts gave before the compaction, the one the
+// summary names (otter) stays in the delivered set and is not given again;
+// the other (heron) is in it no more. A start fact the session was never
+// given (a decision written since its start) is given, though a sentence of
+// the summary says its words. The selection takes no fact the session has
+// and is not backfilled (the prompt's rule), so the facts it gives are shown
+// on a second session whose summary names nothing it was given.
 func TestStartHookAfterACompaction(t *testing.T) {
-	_, home, payload := restartRig(t)
+	text := compactSummaryText + " It kept demo-otter-retry in mind. We tuned the kestrel retry budget so it resets every hour."
 	for _, c := range []struct {
-		harness, session, path, line string
+		harness, path string
+		line          func(string) string
 	}{
-		{"codex", "x1", filepath.Join(home, ".codex", "sessions", "2026", "11", "04", "rollout-2026-11-04T10-00-00-x1.jsonl"),
-			`{"timestamp":"2026-11-04T10:00:00Z","type":"compacted","payload":{"message":` + jsonString(compactSummaryText) + `,"replacement_history":[]}}`},
-		{"pi", "p1", filepath.Join(home, ".pi", "agent", "sessions", "--demo--", "2026-11-04T10-00-00_p1.jsonl"),
-			`{"type":"compaction","id":"a1","summary":` + jsonString(compactSummaryText) + `}`},
+		{"codex", filepath.Join(".codex", "sessions", "2026", "11", "04", "rollout-2026-11-04T10-00-00-x%d.jsonl"),
+			func(s string) string {
+				return `{"timestamp":"2026-11-04T10:00:00Z","type":"compacted","payload":{"message":` + jsonString(s) + `,"replacement_history":[]}}`
+			}},
+		{"pi", filepath.Join(".pi", "agent", "sessions", "--demo--", "2026-11-04T10-00-00_p%d.jsonl"),
+			func(s string) string { return `{"type":"compaction","id":"a1","summary":` + jsonString(s) + `}` }},
 	} {
 		t.Run(c.harness, func(t *testing.T) {
-			start := hookOut(t, payload(c.session, "startup", ""), "session-start")
+			r, home, payload := restartRig(t)
+			start := hookOut(t, payload("s1", "startup", ""), "session-start")
 			for _, want := range []string{"RULE demo-quokka-scheduler-0", "demo-note:"} {
 				if !strings.Contains(start, want) {
 					t.Fatalf("start block lacks %q:\n%s", want, start)
 				}
 			}
-			if got := hookOut(t, payload(c.session, "", otterPrompt), "prompt"); !strings.Contains(got, "demo-otter-retry:") {
-				t.Fatalf("the prompt gave no otter fact:\n%s", got)
+			for prompt, name := range map[string]string{otterPrompt: "demo-otter-retry:", heronPrompt: "demo-heron-uploader:"} {
+				if got := hookOut(t, payload("s1", "", prompt), "prompt"); !strings.Contains(got, name) {
+					t.Fatalf("the prompt gave no %s fact:\n%s", name, got)
+				}
 			}
-			tr := writeTranscript(t, c.path, `{"type":"response_item","payload":{"type":"message","role":"user"}}`, `{"type":"message","message":{"role":"user"}}`, c.line)
-			out := hookOut(t, payload(c.session, "compact", tr), "session-start")
-			for _, want := range []string{", again after the compaction", "RULE demo-quokka-scheduler-0", "demo-quokka-scheduler-1:",
-				summaryTitle, "demo-wombat-flusher:"} {
+			writeFact(t, r.clone, fact.Meta{Name: "demo-kestrel-reset", Description: "the kestrel retry budget in demo resets every hour",
+				Type: "design_decision", Scope: "projects/demo"}, "kestrel")
+			r.commitIndex(r.clone, "a decision written since the session started")
+			gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
+			buildIndexForHooks(r.s)
+			turns := []string{`{"type":"response_item","payload":{"type":"message","role":"user"}}`, `{"type":"message","message":{"role":"user"}}`}
+			tr := writeTranscript(t, filepath.Join(home, fmt.Sprintf(c.path, 1)), append(turns, c.line(text))...)
+			out := hookOut(t, payload("s1", "compact", tr), "session-start")
+			for _, want := range []string{", again after the compaction", "RULE demo-quokka-scheduler-0", "demo-quokka-scheduler-1:", "demo-kestrel-reset:"} {
 				if !strings.Contains(out, want) {
 					t.Fatalf("after the compaction, no %q:\n%s", want, out)
 				}
 			}
-			if strings.Contains(out, "demo-note:") {
-				t.Fatalf("the note the summary holds came again:\n%s", out)
+			for _, not := range []string{"demo-note:", "demo-otter-retry:"} {
+				if strings.Contains(out, not) {
+					t.Fatalf("a fact the summary holds came again (%s):\n%s", not, out)
+				}
 			}
-			want := []string{"demo-note", "demo-quokka-scheduler-0", "demo-quokka-scheduler-1", "demo-quokka-scheduler-2", "demo-wombat-flusher"}
-			if got := sessionSet(t, home, c.session); !slices.Equal(got, want) {
-				t.Fatalf("delivered set %v, want %v", got, want)
+			if got := sessionSet(t, home, "s1"); !slices.Contains(got, "demo-otter-retry") || slices.Contains(got, "demo-heron-uploader") || !slices.Contains(got, "demo-kestrel-reset") {
+				t.Fatalf("delivered set %v", got)
+			}
+
+			hookOut(t, payload("s2", "startup", ""), "session-start")
+			tr2 := writeTranscript(t, filepath.Join(home, fmt.Sprintf(c.path, 2)), append(turns, c.line(compactSummaryText))...)
+			out2 := hookOut(t, payload("s2", "compact", tr2), "session-start")
+			if !strings.Contains(out2, summaryTitle) || !strings.Contains(out2, "demo-wombat-flusher:") || strings.Contains(out2, "demo-note:") {
+				t.Fatalf("no summary selection, or the held note again:\n%s", out2)
 			}
 		})
 	}
@@ -342,8 +370,9 @@ func TestStartHookOnClearAndFork(t *testing.T) {
 
 // The summary's own selection is tacit's, never the utility provider's: a
 // summary holds far more of the session than a prompt. With a provider set
-// up, the start after a compaction makes no call to it; a prompt in the same
-// session does.
+// up, neither the start after a compaction nor the first prompt after it,
+// where Claude Code's summary is read, makes a call to it; a request in the
+// same session does.
 func TestStartHookAfterACompactionKeepsTheSummaryLocal(t *testing.T) {
 	_, home, payload := restartRig(t)
 	stubScrump(t)
@@ -358,13 +387,14 @@ func TestStartHookAfterACompactionKeepsTheSummaryLocal(t *testing.T) {
 		return 200, map[string]any{"model": "strands-decider-0.1.0", "answers": answers}
 	})
 	hookOut(t, payload("u1", "startup", ""), "session-start")
-	tr := writeTranscript(t, filepath.Join(home, ".claude", "projects", "-demo", "u1.jsonl"),
-		`{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"`+compactSummaryText+`"}}`)
-	if out := hookOut(t, payload("u1", "compact", tr), "session-start"); !strings.Contains(out, "demo-wombat-flusher:") {
+	path := writeTranscript(t, filepath.Join(home, ".claude", "projects", "-demo", "u1.jsonl"), `{"type":"user","message":{"role":"user","content":"go"}}`)
+	hookOut(t, payload("u1", "compact", path), "session-start")
+	appendLines(t, path, `{"type":"user","isCompactSummary":true,"message":{"role":"user","content":`+jsonString(compactSummaryText)+`}}`)
+	if out := hookOut(t, payload("u1", "", "continue|"+path), "prompt"); !strings.Contains(out, "demo-wombat-flusher:") {
 		t.Fatalf("no summary selection:\n%s", out)
 	}
 	if *calls != 0 {
-		t.Fatalf("the start after a compaction called the provider %d time(s)", *calls)
+		t.Fatalf("the summary's selection called the provider %d time(s)", *calls)
 	}
 	hookOut(t, payload("u1", "", otterPrompt), "prompt")
 	if *calls == 0 {
