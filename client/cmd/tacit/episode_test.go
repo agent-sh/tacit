@@ -13,6 +13,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/events"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
+	"github.com/agent-sh/tacit/client/internal/store"
 )
 
 const episodeSessionID = "5b1e0c3a-1111-4222-8333-444455556666"
@@ -35,6 +36,11 @@ func episodeHome(t *testing.T) string {
 		`{"type":"assistant",`+head+`,"uuid":"a1","timestamp":"2026-11-01T10:00:05Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"./deploy.sh CR-123456789 --token Zq7Vx9"}}]}}`,
 		`{"type":"user",`+head+`,"uuid":"u2","timestamp":"2026-11-01T10:00:09Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"deployed CR-123456789 with Zq7Vx9 to staging-2"}]}}`,
 		`{"type":"assistant",`+head+`,"uuid":"a2","timestamp":"2026-11-01T10:00:12Z","message":{"role":"assistant","content":[{"type":"text","text":"Deployed to staging-2."}]}}`,
+		// An edit that mentions the tool and the id: an event like any other.
+		`{"type":"assistant",`+head+`,"uuid":"a4","timestamp":"2026-11-01T10:01:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t3","name":"Edit","input":{"file_path":"/work/demo/NOTES.md","new_string":"tacit episode found CR-123456789"}}]}}`,
+		// A recall run in a shell, and its answer: no events of what was recalled.
+		`{"type":"assistant",`+head+`,"uuid":"a5","timestamp":"2026-11-01T10:02:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t4","name":"Bash","input":{"command":"cd /work && TACIT_X=1 ~/.local/bin/tacit episode find CR-123456789 | head"}}]}}`,
+		`{"type":"user",`+head+`,"uuid":"u4","timestamp":"2026-11-01T10:02:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t4","content":"- 1.0 owner owner_text: deploy the release candidate CR-123456789"}]}}`,
 		// An earlier recall of the same words and its answer: no event of what was recalled.
 		`{"type":"assistant",`+head+`,"uuid":"a3","timestamp":"2026-11-01T10:05:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"mcp__tacit__tacit_episode","input":{"find":"CR-123456789"}}]}}`,
 		`{"type":"user",`+head+`,"uuid":"u3","timestamp":"2026-11-01T10:05:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"- 1.0 11-01 10:00 owner owner_text: deploy the release candidate CR-123456789"}]}}`,
@@ -68,7 +74,7 @@ var refRx = regexp.MustCompile(`(?m)^[->] (\d+\.\d+) `)
 func TestEpisodeFindAroundShow(t *testing.T) {
 	episodeHome(t)
 	out, code := episodeOut(t, "find", "CR-123456789")
-	if code != 0 || !strings.Contains(out, "# tacit: 3 event(s) of this session (claude) holding") || strings.Contains(out, "tacit_episode") {
+	if code != 0 || !strings.Contains(out, "# tacit: 4 event(s) of this session (claude) holding") || strings.Contains(out, "tacit_episode") || !strings.Contains(out, "tool_call Edit") || strings.Contains(out, "| head") {
 		t.Fatalf("find, the session's own recall left out (%d):\n%s", code, out)
 	}
 	for _, want := range []string{"owner owner_text", "agent tool_call Bash", "tool_result Bash"} {
@@ -88,9 +94,15 @@ func TestEpisodeFindAroundShow(t *testing.T) {
 	if code != 0 || !strings.Contains(around, "> "+oldest+" ") || strings.Count(around, "\n- ") != 1 {
 		t.Fatalf("around %s (%d):\n%s", oldest, code, around)
 	}
-	show, code := episodeOut(t, "show", newest)
+	var secretRef string // the deploy command's event, which holds the secret
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "agent tool_call Bash") {
+			secretRef = strings.Fields(l)[1]
+		}
+	}
+	show, code := episodeOut(t, "show", secretRef)
 	if code != 0 || !strings.Contains(show, "## ") || !strings.Contains(show, "\n~~~\n") || strings.Contains(show, "Zq7Vx9") || !strings.Contains(show, "******") {
-		t.Fatalf("show %s (%d):\n%s", newest, code, show)
+		t.Fatalf("show %s (%d):\n%s", secretRef, code, show)
 	}
 	if out, code := episodeOut(t, "show", "1.99"); code != 1 || !strings.Contains(out, "no event 1.99") {
 		t.Fatalf("an unknown ref (%d):\n%s", code, out)
@@ -151,7 +163,7 @@ func TestEpisodeFactLeadsToItsSession(t *testing.T) {
 	writeFact(t, r.clone, fact.Meta{Name: "demo-release-candidates-go-to-staging", Description: "release candidates are deployed to staging first",
 		Type: "user_standard", Scope: "projects/demo", Source: fact.Source{Kind: "user", OwnerQuote: "deploy the release candidate", OwnerQuoteFrom: "claude:" + episodeSessionID}}, "staging first")
 	out, code := episodeOut(t, "--fact", "demo-release-candidates-go-to-staging")
-	if code != 0 || !strings.Contains(out, "the session demo-release-candidates-go-to-staging came from") || !strings.Contains(out, "owner owner_text") {
+	if code != 0 || !strings.Contains(out, "the session demo-release-candidates-go-to-staging came from") || !strings.Contains(out, "\n- ") || !strings.Contains(out, "owner owner_text") {
 		t.Fatalf("fact (%d):\n%s", code, out)
 	}
 }
@@ -175,8 +187,8 @@ func TestEpisodeFactFromADreamerNote(t *testing.T) {
 	writeFact(t, r.clone, fact.Meta{Name: "demo-candidates-go-to-staging", Description: "release candidates are deployed to staging first",
 		Type: "design_decision", Scope: "projects/demo", Origin: "staging-first"}, "staging first")
 	out, code := episodeOut(t, "--fact", "demo-candidates-go-to-staging")
-	if code != 0 || !strings.Contains(out, "came from (claude)") {
-		t.Fatalf("a dreamer note's session (%d):\n%s", code, out)
+	if code != 0 || !strings.Contains(out, "came from (claude)") || !strings.Contains(out, "\n- ") {
+		t.Fatalf("a dreamer note's session, a hit by its words (%d):\n%s", code, out)
 	}
 }
 
@@ -259,5 +271,24 @@ func TestEpisodeFactShortWordsAndAnOverlayNote(t *testing.T) {
 	writeFact(t, r.clone, fact.Meta{Name: "demo-the-candidate", Description: "the RC to the stage", Type: "design_decision", Scope: "projects/demo", Origin: "the-candidate"}, "x")
 	if out, code := episodeOut(t, "--fact", "demo-the-candidate"); code != 0 || !strings.Contains(out, "came from (claude)") {
 		t.Fatalf("an overlay note's session, short words (%d):\n%s", code, out)
+	}
+}
+
+// A harness started from another's shell inherits that one's session id:
+// with two set, the caller names its harness. A Hermes caller (whose own
+// sessions are not read yet) names another harness's session.
+func TestEpisodeSessionOfNestedAndHermesCallers(t *testing.T) {
+	episodeHome(t)
+	t.Setenv("CODEX_THREAD_ID", "019a0000-aaaa-7bbb-8ccc-eeeeeeeeeeee")
+	if out, code := episodeOut(t, "find", "CR-123456789"); code != 1 || !strings.Contains(out, "pass --harness") {
+		t.Fatalf("two harnesses' ids (%d):\n%s", code, out)
+	}
+	if out, code := episodeOut(t, "--harness", "claude", "find", "CR-123456789"); code != 0 || !strings.Contains(out, "(claude)") {
+		t.Fatalf("--harness claude (%d):\n%s", code, out)
+	}
+	s := &store.Store{Dir: t.TempDir()}
+	out, err := episodeAnswer(context.Background(), s, episodeQuery{Harness: "hermes", Session: episodeSessionID, Find: "CR-123456789"})
+	if err != nil || !strings.Contains(out, "(claude)") {
+		t.Fatalf("a Hermes caller naming a Claude Code session: %v\n%s", err, out)
 	}
 }
