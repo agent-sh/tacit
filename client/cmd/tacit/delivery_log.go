@@ -276,32 +276,38 @@ func (e *logEntry) dropped(before, after []search.Hit, gate string) {
 	}
 }
 
-// logCandCap is the most candidates an entry holds: the prompt's widest
-// pool (promptRankPool). Past it the delivered lines stay and the others go
-// by rank, best first, counted in Omitted.
-const logCandCap = promptRankPool
+// logCandCap bounds the candidates an entry holds: twice the prompt's
+// widest pool (promptRankPool), so a prompt's whole pool with its derived,
+// metadata and action lines always fits and only a runaway pool is cut.
+// Past it every delivered line stays and the others go by rank, best
+// first, counted in Omitted.
+const logCandCap = 2 * promptRankPool
 
 // capCands keeps an entry within logCandCap candidates.
 func (e *logEntry) capCands() {
 	if len(e.Cands) <= logCandCap {
 		return
 	}
-	order := make([]int, len(e.Cands))
-	for i := range order {
-		order[i] = i
+	var rest []int
+	keep := map[int]bool{}
+	for i, c := range e.Cands {
+		if c.Delivered {
+			keep[i] = true
+		} else {
+			rest = append(rest, i)
+		}
 	}
-	key := func(c logCand) int {
-		switch {
-		case c.Delivered:
-			return -1
-		case c.Rank < 0:
+	rank := func(c logCand) int {
+		if c.Rank < 0 {
 			return 1 << 30
 		}
 		return c.Rank
 	}
-	sort.SliceStable(order, func(a, b int) bool { return key(e.Cands[order[a]]) < key(e.Cands[order[b]]) })
-	keep := map[int]bool{}
-	for _, i := range order[:logCandCap] {
+	sort.SliceStable(rest, func(a, b int) bool { return rank(e.Cands[rest[a]]) < rank(e.Cands[rest[b]]) })
+	for _, i := range rest {
+		if len(keep) >= logCandCap {
+			break
+		}
 		keep[i] = true
 	}
 	var out []logCand

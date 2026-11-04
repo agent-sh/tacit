@@ -533,7 +533,10 @@ func TestDeliveryLogHoldsAPoolsHeadOnly(t *testing.T) {
 			start = &e
 		}
 	}
-	if start == nil || len(start.Cands) != 6 || start.Omitted < 24 {
+	if start == nil {
+		t.Fatal("no start entry")
+	}
+	if len(start.Cands) != 6 || start.Omitted < 24 {
 		t.Fatalf("start entry: %d candidates, %d omitted", len(start.Cands), start.Omitted)
 	}
 	delivered := 0
@@ -548,12 +551,24 @@ func TestDeliveryLogHoldsAPoolsHeadOnly(t *testing.T) {
 		t.Fatalf("delivered %d", delivered)
 	}
 
+	// A prompt's whole pool with its derived, metadata and action lines
+	// fits; a runaway one is cut by rank, every delivered line kept.
 	e := &logEntry{}
-	for i := 0; i < 80; i++ {
-		e.Cands = append(e.Cands, logCand{Name: fmt.Sprintf("c%02d", i), Rank: i, Delivered: i == 70})
+	for i := 0; i < promptRankPool+3; i++ {
+		e.Cands = append(e.Cands, logCand{Name: fmt.Sprintf("p%03d", i), Rank: i})
+	}
+	if e.capCands(); len(e.Cands) != promptRankPool+3 || e.Omitted != 0 {
+		t.Fatalf("a full prompt pool was cut: %d, omitted %d", len(e.Cands), e.Omitted)
+	}
+	e = &logEntry{}
+	n := logCandCap + 30
+	for i := 0; i < n; i++ {
+		e.Cands = append(e.Cands, logCand{Name: fmt.Sprintf("c%03d", i), Rank: i, Delivered: i == n-1})
 	}
 	e.capCands()
-	if len(e.Cands) != logCandCap || e.Omitted != 80-logCandCap || !slices.ContainsFunc(e.Cands, func(c logCand) bool { return c.Name == "c70" }) || slices.ContainsFunc(e.Cands, func(c logCand) bool { return c.Name == "c69" }) {
+	last := fmt.Sprintf("c%03d", n-1)
+	cut := fmt.Sprintf("c%03d", logCandCap-1)
+	if len(e.Cands) != logCandCap || e.Omitted != 30 || !slices.ContainsFunc(e.Cands, func(c logCand) bool { return c.Name == last }) || slices.ContainsFunc(e.Cands, func(c logCand) bool { return c.Name == cut }) {
 		t.Fatalf("capped: %d, omitted %d", len(e.Cands), e.Omitted)
 	}
 }
