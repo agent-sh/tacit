@@ -34,6 +34,10 @@ func episodeHome(t *testing.T) string {
 	t.Setenv("TACIT_STATE_DIR", "")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", episodeSessionID)
 	t.Setenv("TACIT_SESSION", "")
+	// The runner's own harness ids are not the fixture's.
+	t.Setenv("CODEX_THREAD_ID", "")
+	t.Setenv("CODEX_SESSION_ID", "")
+	t.Setenv("PI_SESSION_ID", "")
 	stubScrump(t)
 	head := `"sessionId":"` + episodeSessionID + `","cwd":"/work/demo","entrypoint":"cli"`
 	writeTranscript(t, filepath.Join(home, ".claude", "projects", "-work-demo", episodeSessionID+".jsonl"),
@@ -878,7 +882,7 @@ func TestEpisodeAcrossACompaction(t *testing.T) {
 	if code != 0 || len(refs) != 2 || !strings.Contains(out, "owner owner_text: the staging port is 54321") {
 		t.Fatalf("find across a compaction (%d):\n%s", code, out)
 	}
-	if strings.Index(out, "Noted 54321") > strings.Index(out, "the staging port") {
+	if !strings.Contains(out, "Noted 54321") || strings.Index(out, "Noted 54321") > strings.Index(out, "the staging port") {
 		t.Fatalf("not newest first:\n%s", out)
 	}
 	around, code := episodeOut(t, "--n", "3", "around", refs[0][1])
