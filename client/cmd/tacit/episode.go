@@ -38,18 +38,20 @@ const (
 	// unredacted text holds matches nothing, and takes no other event's place.
 	episodeCandidates     = 5000
 	episodeCandidateBytes = 64 << 20
-	episodeBatch          = 50
-	episodeAround         = 5    // around: events on each side, by default
-	episodeMaxN           = 25   // around: the most on each side
-	episodeClip           = 160  // the runes of an event an index line shows
-	episodeShow           = 8000 // the runes of each part of an event show gives
-	// episodeRedactWait bounds the redaction of what a read found, which
-	// runs on its own clock: a read that used its budget still shows it.
-	episodeRedactWait = 15 * time.Second
+	episodeBatch          = 200     // events a redaction batch takes, at most
+	episodeBatchBytes     = 8 << 20 // and bytes
+	episodeAround         = 5       // around: events on each side, by default
+	episodeMaxN           = 25      // around: the most on each side
+	episodeClip           = 160     // the runes of an event an index line shows
+	episodeShow           = 8000    // the runes of each part of an event show gives
 )
 
 // episodeBudget is how long a read of a transcript may take; tests shorten it.
 var episodeBudget = 20 * time.Second
+
+// episodeRedactWait bounds the redaction of what a read found, which runs on
+// its own clock: a read that used its budget still shows it. Tests shorten it.
+var episodeRedactWait = 15 * time.Second
 
 // errCut is a read the budget stopped: what it read stands, the rest of the
 // transcript (the newer events) was not read.
@@ -247,11 +249,15 @@ func readFactFile(path string) *fact.Fact {
 // episodeRead streams the target's events in order; emit returns false to
 // stop. The budget's end stops it too.
 func episodeRead(ctx context.Context, t episodeTarget, emit func(events.Event) bool) error {
+	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, episodeBudget)
 	defer cancel()
 	stop := errors.New("stop")
 	own := map[string]bool{} // tool ids of the session's own recall calls
 	_, err := events.ReadFile(t.path, t.format, 0, func(ev events.Event) error {
+		if err := parent.Err(); err != nil {
+			return err // the caller went: no answer
+		}
 		if ctx.Err() != nil {
 			return errCut
 		}
@@ -400,6 +406,51 @@ func shellSplit(cmd string) [][]string {
 			i++
 			w.WriteRune(rs[i])
 			inWord = true
+		case r == '<' && i+2 < len(rs) && rs[i+1] == '<' && rs[i+2] != '<':
+			// A here-document: its body, up to the line that is its word, is
+			// the program's input, not commands.
+			j := i + 2
+			strip := j < len(rs) && rs[j] == '-'
+			if strip {
+				j++
+			}
+			for j < len(rs) && (rs[j] == ' ' || rs[j] == '\t') {
+				j++
+			}
+			k := j
+			for k < len(rs) && !strings.ContainsRune(" \t\n;&|<>", rs[k]) {
+				k++
+			}
+			word := strings.Trim(string(rs[j:k]), `'"\`)
+			if word == "" {
+				w.WriteRune(r)
+				inWord = true
+				continue
+			}
+			endWord()
+			// The rest of this line stays a command line; the body starts
+			// after its new line.
+			nl := k
+			for nl < len(rs) && rs[nl] != '\n' {
+				nl++
+			}
+			endPart()
+			out = append(out, shellSplit(string(rs[k:nl]))...)
+			body := strings.Split(string(rs[min(nl+1, len(rs)):]), "\n")
+			end := len(body)
+			for li, line := range body {
+				if strip {
+					line = strings.TrimLeft(line, "\t")
+				}
+				if line == word {
+					end = li
+					break
+				}
+			}
+			if end >= len(body)-1 {
+				return out
+			}
+			return append(out, shellSplit(strings.Join(body[end+1:], "\n"))...)
 		case r == ';' || r == '&' || r == '|' || r == '\n':
 			endPart()
 		case r == ' ' || r == '\t' || r == '\r':
@@ -429,6 +480,11 @@ func runsEpisode(argv []string, depth int) bool {
 		case base == "env" || base == "command" || base == "exec" || base == "nohup" || base == "time" || base == "sudo":
 			argv = argv[1:]
 			for len(argv) > 0 && strings.HasPrefix(argv[0], "-") {
+				// A flag that takes the next word as its value: sudo -u USER,
+				// env -u VAR (--user=USER carries its own).
+				if wrapperValue[base+" "+argv[0]] && len(argv) > 1 {
+					argv = argv[1:]
+				}
 				argv = argv[1:]
 			}
 		case base == "nice" || base == "timeout" || base == "ionice":
@@ -458,6 +514,15 @@ func runsEpisode(argv []string, depth int) bool {
 	return false
 }
 
+// wrapperValue are a wrapper's flags whose value is the next word.
+var wrapperValue = map[string]bool{
+	"sudo -u": true, "sudo -g": true, "sudo -C": true, "sudo -h": true, "sudo -p": true, "sudo -U": true,
+	"sudo -r": true, "sudo -t": true, "sudo -D": true, "sudo -R": true, "sudo -T": true,
+	"sudo --user": true, "sudo --group": true, "sudo --chdir": true, "sudo --host": true, "sudo --prompt": true,
+	"env -u": true, "env -C": true, "env --unset": true, "env --chdir": true,
+	"time -f": true, "time -o": true, "time --format": true, "time --output": true,
+}
+
 // redactFound redacts what a read found on a clock of its own: the read may
 // have used its budget.
 func redactFound(ctx context.Context, evs []events.Event) ([]events.Event, error) {
@@ -482,7 +547,27 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 	if len(terms) == 0 {
 		return "", errEpisode{"find needs words"}
 	}
-	if masked, err := redactFound(ctx, []events.Event{{Text: query}}); err != nil || len(masked) != 1 {
+	if anyWord {
+		// A fact's words: one the redactor masks is not searched for.
+		probe := make([]events.Event, len(terms))
+		for i, w := range terms {
+			probe[i] = events.Event{Text: w}
+		}
+		masked, err := redactFound(ctx, probe)
+		if err != nil || len(masked) != len(terms) {
+			return "", fmt.Errorf("redaction failed, nothing searched: %v", err)
+		}
+		var kept []string
+		for i, w := range terms {
+			if masked[i].Text == w {
+				kept = append(kept, w)
+			}
+		}
+		if len(kept) == 0 {
+			return "", errEpisode{"the fact's words are all ones the redactor masks: not searched"}
+		}
+		terms = kept
+	} else if masked, err := redactFound(ctx, []events.Event{{Text: query}}); err != nil || len(masked) != 1 {
 		return "", fmt.Errorf("redaction failed, nothing searched: %v", err)
 	} else if masked[0].Text != query {
 		return "", errEpisode{"the words hold what the redactor masks: not searched"}
@@ -548,18 +633,38 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 	}
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), episodeRedactWait)
 	defer cancel()
-	checked := 0
+	newer := func(a, b events.Event) bool {
+		return a.Offset > b.Offset || a.Offset == b.Offset && a.Index > b.Index
+	}
+	checked, partial := 0, false
 	for checked < len(cands) {
 		// Enough: one more than a page, and (a fact's words) no unchecked
-		// candidate could hold more of them than the page's last line does.
-		if len(shown) > episodeHits && (!anyWord || shown[episodeHits-1].n >= cands[checked].raw) {
-			break
+		// candidate could stand before the page's last line: it holds fewer
+		// of the words before redaction, or as many and is older.
+		if len(shown) > episodeHits {
+			if !anyWord {
+				break
+			}
+			last, next := shown[episodeHits-1], cands[checked]
+			if last.n > next.raw || last.n == next.raw && newer(last.ev, next.ev) {
+				break
+			}
 		}
-		batch := make([]events.Event, 0, episodeBatch)
-		for _, c := range cands[checked:min(len(cands), checked+episodeBatch)] {
+		var batch []events.Event
+		size := 0
+		for _, c := range cands[checked:] {
+			if len(batch) > 0 && (len(batch) == episodeBatch || size+evSize(c.ev) > episodeBatchBytes) {
+				break
+			}
 			batch = append(batch, c.ev)
+			size += evSize(c.ev)
 		}
 		masked, err := events.Redact(rctx, batch)
+		if err != nil && rctx.Err() != nil {
+			// The redaction's clock ran out: what it redacted stands.
+			partial = true
+			break
+		}
 		if err != nil || len(masked) != len(batch) {
 			return "", fmt.Errorf("redaction failed, nothing shown: %v", err)
 		}
@@ -585,19 +690,22 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 	if cut {
 		b.WriteString("# the read stopped at its time limit: the newer events were not searched\n")
 	}
+	if partial {
+		fmt.Fprintf(&b, "# partial: %d events not checked (the redaction's time limit); longer words check fewer\n", len(cands)-checked)
+	}
 	for _, h := range shown {
 		b.WriteString(eventLine("- ", h.ev, terms))
 	}
+	// The pager names only an event shown: never one a secret alone matched.
+	older := !anyWord && len(shown) > 0 && (more || partial || dropped)
 	switch {
-	case anyWord && (more || dropped):
+	case anyWord && (more || dropped || partial):
 		b.WriteString("# more events hold some of the words: find with them lists those, newest first, and pages back\n")
-	case more:
+	case older:
 		last := shown[len(shown)-1].ev
-		fmt.Fprintf(&b, "# older: the same find with before %d.%d\n", last.Offset, last.Index)
-	case dropped && len(cands) > 0:
-		// Every candidate kept was checked; older ones were not kept.
-		last := cands[len(cands)-1].ev
-		fmt.Fprintf(&b, "# older: the same find with before %d.%d\n", last.Offset, last.Index)
+		fmt.Fprintf(&b, "# older: the same find with --before %d.%d\n", last.Offset, last.Index)
+	case dropped:
+		fmt.Fprintf(&b, "# older events were not searched: more than %d match before redaction; longer words match fewer\n", episodeCandidates)
 	}
 	return b.String(), nil
 }
@@ -913,23 +1021,47 @@ func runEpisode(args []string) int {
 	before := fs.String("before", "", "find: only events before this ref, the next page back")
 	fs.Parse(args)
 	q := episodeQuery{Harness: *harness, Only: *harness != "", Session: *session, Fact: *factName, N: *n, Before: *before}
-	if q.Harness == "" && q.Session == "" && q.Fact == "" {
-		h, err := sessionHarness()
-		if err != nil {
-			fmt.Println("# tacit: " + err.Error())
-			return 1
-		}
-		q.Harness = h
-	}
 	rest := fs.Args()
 	if len(rest) > 0 {
+		// Flags may follow the subcommand too (the pager's hint reads
+		// "find X --before <ref>").
+		var words []string
+		for i := 1; i < len(rest); i++ {
+			a := rest[i]
+			if a == "--" {
+				words = append(words, rest[i+1:]...)
+				break
+			}
+			name, val, hasVal := strings.Cut(strings.TrimLeft(a, "-"), "=")
+			if strings.HasPrefix(a, "-") && fs.Lookup(name) != nil {
+				if !hasVal && i+1 < len(rest) {
+					i++
+					val = rest[i]
+				}
+				if err := fs.Set(name, val); err != nil {
+					fmt.Fprintln(os.Stderr, "episode:", err)
+					return 2
+				}
+				continue
+			}
+			words = append(words, a)
+		}
+		q.Harness, q.Only, q.Session, q.Fact, q.N, q.Before = *harness, *harness != "", *session, *factName, *n, *before
+		if q.Harness == "" && q.Session == "" && q.Fact == "" {
+			h, err := sessionHarness()
+			if err != nil {
+				fmt.Println("# tacit: " + err.Error())
+				return 1
+			}
+			q.Harness = h
+		}
 		switch rest[0] {
 		case "find":
-			q.Find = strings.Join(rest[1:], " ")
+			q.Find = strings.Join(words, " ")
 		case "around":
-			q.Around = strings.Join(rest[1:], " ")
+			q.Around = strings.Join(words, " ")
 		case "show":
-			q.Show = strings.Join(rest[1:], " ")
+			q.Show = strings.Join(words, " ")
 		default:
 			fmt.Fprintln(os.Stderr, "usage: tacit episode [--harness H] [--session ID] [--fact NAME] [--before REF] [--n N] find WORDS... | around REF | show REF")
 			return 2

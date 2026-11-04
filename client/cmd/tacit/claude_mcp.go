@@ -13,8 +13,8 @@ import (
 )
 
 // claudeMCPName is the server name in Claude Code's config; the tools reach
-// the model as mcp__tacit__tacit_search, mcp__tacit__tacit_fact and
-// mcp__tacit__tacit_add.
+// the model as mcp__tacit__tacit_tree, mcp__tacit__tacit_search,
+// mcp__tacit__tacit_fact, mcp__tacit__tacit_add and mcp__tacit__tacit_episode.
 const claudeMCPName = "tacit"
 
 // claudeUserConfig is the file Claude Code reads user-scope MCP servers from

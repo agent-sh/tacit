@@ -15,6 +15,7 @@ import (
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/modelrun"
 	"github.com/agent-sh/tacit/client/internal/store"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const episodeSessionID = "5b1e0c3a-1111-4222-8333-444455556666"
@@ -334,8 +335,14 @@ func TestEpisodeFindSecretsTakeNoPlace(t *testing.T) {
 	writeClaudeSession(t, home, id, "", texts...)
 	out, code = episodeOut(t, "--session", id, "find", "bridge")
 	refs := refRx.FindAllStringSubmatch(out, -1)
-	if code != 0 || len(refs) != 10 || !strings.Contains(out, "# older: the same find with before "+refs[9][1]+"\n") {
+	if code != 0 || len(refs) != 10 || !strings.Contains(out, "# older: the same find with --before "+refs[9][1]+"\n") {
 		t.Fatalf("a page of 10 and the next (%d):\n%s", code, out)
+	}
+	// The hint followed as written: the flag after the words.
+	next, code := episodeOut(t, "--session", id, "find", "bridge", "--before", refs[9][1])
+	nrefs := refRx.FindAllStringSubmatch(next, -1)
+	if code != 0 || len(nrefs) != 10 || strings.Contains(next, "- "+refs[9][1]+" ") || !strings.Contains(next, "br19 up") {
+		t.Fatalf("the next page, --before after the words (%d):\n%s", code, next)
 	}
 }
 
@@ -383,6 +390,11 @@ func TestEpisodeRecallCallForms(t *testing.T) {
 		{"Bash", `{"command":"rg 'tacit episode' docs"}`, false},
 		{"Bash", `{"command":"echo tacit episode"}`, false},
 		{"shell", `{"command":["bash","-lc","grep -n episode SPEC.md"]}`, false},
+		{"Bash", `{"command":"sudo -u avi tacit episode find X"}`, true},
+		{"Bash", `{"command":"env -u FOO tacit episode find X"}`, true},
+		{"Bash", `{"command":"sudo --user=avi tacit episode find X"}`, true},
+		{"Bash", `{"command":"cat > brief.md <<'EOF'\nrun tacit episode find X\ntacit episode find X\nEOF\ngit add brief.md"}`, false},
+		{"Bash", `{"command":"cat <<EOF > x\nbody\nEOF\ntacit episode find X"}`, true},
 		{"Edit", `{"new_string":"tacit episode find X"}`, false},
 	} {
 		ev := events.Event{Kind: events.KindToolCall, ToolName: c.tool, ToolInput: c.input}
@@ -401,5 +413,113 @@ func TestEpisodeHermesCallersOwnSession(t *testing.T) {
 	_, err := episodeAnswer(context.Background(), s, episodeQuery{Harness: "hermes", Find: "x"})
 	if err == nil || err.Error() != "Hermes sessions are not read yet" {
 		t.Fatalf("a Hermes caller's own session: %v", err)
+	}
+}
+
+// When the redaction's clock runs out, find answers with what it redacted and
+// says how many events it did not check: no failure, and a pager that names
+// only an event it showed.
+func TestEpisodeFindPartialRedaction(t *testing.T) {
+	home := episodeHome(t)
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "scrump"), []byte("#!/bin/sh\nsleep 0.3\nexec sed 's/Zq7Vx9/******/g'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	prev := episodeRedactWait
+	episodeRedactWait = time.Second
+	t.Cleanup(func() { episodeRedactWait = prev })
+	id := "8e8e8e8e-1111-4222-8333-444455556666"
+	var texts []string
+	texts = append(texts, "the vxlan bridge came up")
+	for range 1500 {
+		texts = append(texts, "token Zq7Vx9 used")
+	}
+	texts = append(texts, "the vxlan bridge went down")
+	writeClaudeSession(t, home, id, "", texts...)
+	out, code := episodeOut(t, "--session", id, "find", "vx")
+	if code != 0 || !strings.Contains(out, "# partial: ") || !strings.Contains(out, "events not checked") || !strings.Contains(out, "went down") {
+		t.Fatalf("a partial answer (%d):\n%s", code, out)
+	}
+	refs := refRx.FindAllStringSubmatch(out, -1)
+	if len(refs) != 1 || !strings.Contains(out, "# older: the same find with --before "+refs[0][1]+"\n") {
+		t.Fatalf("the pager names the event shown (%d):\n%s", code, out)
+	}
+}
+
+// A fact's words: one the redactor masks is left out, not the query, and of
+// events holding as many words the newest come first, whatever a secret in
+// older ones holds.
+func TestEpisodeFactTiesAndMaskedWords(t *testing.T) {
+	r := newRig(t, rigOpts{repos: []string{"demo"}})
+	home := episodeHome(t)
+	t.Setenv("TACIT_STORE", r.clone)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	id := "9f9f9f9f-1111-4222-8333-444455556666"
+	var texts []string
+	for i := range 50 {
+		texts = append(texts, fmt.Sprintf("release Zq7Vx9 old%d", i))
+	}
+	for i := range 12 {
+		texts = append(texts, fmt.Sprintf("release done new%d", i))
+	}
+	writeClaudeSession(t, home, id, "", texts...)
+	writeFact(t, r.clone, fact.Meta{Name: "demo-release-token", Description: "release with the token",
+		Type: "user_standard", Scope: "projects/demo", Source: fact.Source{Kind: "user", OwnerQuote: "release Zq7Vx9", OwnerQuoteFrom: "claude:" + id}}, "x")
+	out, code := episodeOut(t, "--fact", "demo-release-token")
+	if code != 0 || strings.Contains(out, " old") || !strings.Contains(out, "new11") || !strings.Contains(out, "new2") || strings.Contains(out, "Zq7Vx9") {
+		t.Fatalf("ties by recency, the masked word left out (%d):\n%s", code, out)
+	}
+}
+
+// The MCP server lists tacit_episode and answers through it: a find in the
+// session whose id the server's environment gives, and a refusal as text.
+func TestEpisodeMCPTool(t *testing.T) {
+	episodeHome(t)
+	ctx := context.Background()
+	st, ct := mcp.NewInMemoryTransports()
+	ss, err := storeServer(&store.Store{Dir: t.TempDir()}, "claude").Connect(ctx, st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ss.Close()
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	tools, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := false
+	for _, tl := range tools.Tools {
+		listed = listed || tl.Name == "tacit_episode"
+	}
+	if !listed {
+		t.Fatal("tacit_episode is not listed")
+	}
+	call := func(args map[string]any) string {
+		t.Helper()
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "tacit_episode", Arguments: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b strings.Builder
+		for _, c := range res.Content {
+			if tc, ok := c.(*mcp.TextContent); ok {
+				b.WriteString(tc.Text)
+			}
+		}
+		return b.String()
+	}
+	if out := call(map[string]any{"find": "CR-123456789"}); !strings.Contains(out, "event(s) of this session (claude)") || strings.Contains(out, "Zq7Vx9") {
+		t.Fatalf("find through MCP:\n%s", out)
+	}
+	if out := call(map[string]any{"session": "9f9f9f9f-0000-4000-8000-000000000000", "find": "x"}); !strings.HasPrefix(out, "# tacit: the transcript of") {
+		t.Fatalf("an absent session through MCP:\n%s", out)
+	}
+	if out := call(map[string]any{"find": "a", "show": "1.0"}); !strings.HasPrefix(out, "# tacit: give one of") {
+		t.Fatalf("two operations through MCP:\n%s", out)
 	}
 }
