@@ -191,7 +191,9 @@ func summaryStep(ctx context.Context, ix *search.Index, in hookInput, sit search
 		return nil
 	}
 	var out []search.Hit
-	for _, h := range withoutClaims(hits) {
+	kept := withoutClaims(hits)
+	logDropped(hits, kept, "withheld")
+	for _, h := range kept {
 		if !seen[h.Name] {
 			seen[h.Name] = true
 			out = append(out, h)

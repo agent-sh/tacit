@@ -190,7 +190,9 @@ func preTool(s *store.Store, in hookInput) {
 		logChose(ah, "area")
 		hits = append(hits, ah...)
 	}
-	hits = withoutClaims(hits)
+	kept := withoutClaims(hits)
+	logDropped(hits, kept, "withheld")
+	hits = kept
 	if ctx.Err() != nil || (len(hits) == 0 && len(pushed) == 0) {
 		return
 	}

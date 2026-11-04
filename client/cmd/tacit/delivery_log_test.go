@@ -2,8 +2,12 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -11,6 +15,7 @@ import (
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/search"
 )
 
 // readDeliveryLog is every entry of the delivery log under state.
@@ -146,34 +151,125 @@ func TestDeliveryLogRecordsEachBlockAndWhatItLeftOut(t *testing.T) {
 	}
 }
 
-// A prompt candidate the floor, the share of the best or the ceiling left
-// out is in the entry with that gate.
-func TestDeliveryLogNamesThePromptGate(t *testing.T) {
-	_, cwd := repoFirstRig(t,
-		fact.Meta{Name: "queue-retry-backoff", Description: "Queue retries back off exponentially with jitter in the queue worker", Type: "design_decision", Scope: "projects/widget"},
-		fact.Meta{Name: "queue-retry-cap", Description: "Queue retries stop after five attempts in the queue worker", Type: "design_decision", Scope: "projects/widget"},
-		fact.Meta{Name: "queue-worker-name", Description: "The queue worker binary is called qw", Type: "reference", Scope: "projects/widget"},
-	)
-	state := filepath.Join(t.TempDir(), "state")
-	t.Setenv("TACIT_STATE_DIR", state)
-	t.Setenv("TACIT_DELIVERY_REPO_START", "off")
-	t.Setenv("TACIT_DELIVERY_PROMPT_ACTION", "off")
-	t.Setenv("TACIT_DELIVERY_PROMPT_CEILING", "1")
-	hookOut(t, promptPayload(cwd, "s1", "queue worker retries: backoff jitter and attempts"), "prompt")
-	log := readDeliveryLog(t, state)
-	if len(log) != 1 {
-		t.Fatalf("entries: %+v", log)
+// Each prompt candidate the selection leaves out is logged with the gate
+// that did it: the floor, the share of the best (which raised the floor),
+// the ceiling, the session having it; a rule the slot adds is "rule_slot",
+// a derived fact under its floor "floor". The worker that runs the gates
+// for the utility provider passes no entry and logs nothing.
+func TestDeliveryLogNamesEachPromptGate(t *testing.T) {
+	t.Setenv("TACIT_DELIVERY_PROMPT_CEILING", "2")
+	rule := search.Hit{Name: "rule", Path: "user/rule.md", Score: 12, Ruling: true}
+	hits := []search.Hit{
+		{Name: "best", Path: "user/best.md", Score: 40},
+		{Name: "seen", Path: "user/seen.md", Score: 39},
+		{Name: "second", Path: "user/second.md", Score: 36},
+		{Name: "third", Path: "user/third.md", Score: 33},
+		{Name: "under-share", Path: "user/under-share.md", Score: 25},
+		rule,
 	}
-	delivered, gates := 0, map[string]int{}
-	for _, c := range log[0].Cands {
-		if c.Delivered {
-			delivered++
-		} else {
-			gates[c.Dropped]++
+	derived := []search.Hit{{Name: "hot", Path: "derived/demo/hot.md", Scope: "derived/demo", Score: derivedPromptFloor - 1}}
+	rec := &logEntry{}
+	rec.pool(hits, nil)
+	got := promptSelectionLogged("fix the widget queue retries now", hits, derived, map[string]bool{"seen": true}, promptFloor, rec)
+	if names(got) != "best,rule" {
+		t.Fatalf("selected %s", names(got))
+	}
+	want := map[string][2]string{
+		"best": {"ranked", ""}, "seen": {"", "seen"}, "second": {"", "ceiling"}, "third": {"", "ceiling"},
+		"under-share": {"", "relative"}, "rule": {"rule_slot", ""}, "hot": {"", "floor"},
+	}
+	for name, w := range want {
+		c := candOf(*rec, name)
+		if c == nil || c.Via != w[0] || c.Dropped != w[1] {
+			t.Errorf("%s: %+v, want via %q dropped %q", name, c, w[0], w[1])
 		}
 	}
-	if delivered != 1 || gates["ceiling"]+gates["relative"]+gates["floor"] != len(log[0].Cands)-1 || gates[""] != 0 {
-		t.Fatalf("ceiling 1: %d delivered, gates %v: %+v", delivered, gates, log[0].Cands)
+	if c := candOf(*rec, "best"); c.Rank != 0 || c.Share != 1 {
+		t.Errorf("best: rank %d share %v", c.Rank, c.Share)
+	}
+	t.Setenv("TACIT_DELIVERY_PROMPT_RELATIVE", "0")
+	rec = &logEntry{}
+	promptSelectionLogged("fix the widget queue retries now", []search.Hit{{Name: "low", Path: "user/low.md", Score: promptFloor - 1}}, nil, nil, promptFloor, rec)
+	if c := candOf(*rec, "low"); c == nil || c.Dropped != "floor" {
+		t.Errorf("under the floor: %+v", c)
+	}
+	// No entry, nothing logged and no panic: the provider's worker.
+	if names(promptSelectionLogged("fix the widget queue retries now", hits, nil, nil, promptFloor, nil)) == "" {
+		t.Error("nothing selected without an entry")
+	}
+}
+
+// A gate after the selection (the echo filter, withoutClaims) takes a line
+// back from what chose it: its via is cleared and the gate named, and a
+// line no gate had named yet gets it too.
+func TestDeliveryLogDroppedAfterTheSelection(t *testing.T) {
+	a, b, c := search.Hit{Name: "a", Path: "user/a.md"}, search.Hit{Name: "b", Path: "user/b.md"}, search.Hit{Name: "c", Path: "user/c.md"}
+	rec := &logEntry{}
+	rec.chose([]search.Hit{a, b}, "ranked")
+	rec.cand(c)
+	rec.dropped([]search.Hit{a, b, c}, []search.Hit{a}, "withheld")
+	if x := candOf(*rec, "a"); x.Via != "ranked" || x.Dropped != "" {
+		t.Errorf("kept: %+v", x)
+	}
+	for _, n := range []string{"b", "c"} {
+		if x := candOf(*rec, n); x.Via != "" || x.Dropped != "withheld" {
+			t.Errorf("%s: %+v", n, x)
+		}
+	}
+	// Two files of one name: only the one printed is delivered.
+	dlog = &logEntry{V: deliveryLogVersion, ID: "x"}
+	t.Setenv("TACIT_STATE_DIR", t.TempDir())
+	store, overlay := search.Hit{Name: "twin", Path: "user/twin.md"}, search.Hit{Name: "twin", Path: "local/twin.md", Local: true}
+	logChose([]search.Hit{store, overlay}, "ranked")
+	e := dlog
+	endLog([]search.Hit{store})
+	for _, x := range e.Cands {
+		if x.Delivered != (x.Path == store.Path) {
+			t.Errorf("%s delivered %v", x.Path, x.Delivered)
+		}
+	}
+}
+
+// The echo share is measured on the whole request, as the echo filter
+// reads it, not on the 2,000 bytes the log keeps; the echo filter's lines
+// are logged "echo".
+func TestDeliveryLogEchoOnTheWholeRequest(t *testing.T) {
+	t.Setenv("TACIT_STATE_DIR", t.TempDir())
+	ix := relevanceIndex(t, []fact.Meta{
+		{Name: "review-tool-failures-weekly", Description: "Review the tool failures weekly and fix their root cause"},
+		{Name: "tool-failures-fix-at-source", Description: "Review tool failures weekly: fix the root cause in the mods, rules or scripts that let them happen, and log what changed"},
+	})
+	prompt := strings.Repeat("preamble words of a long scheduled prompt ", 60) + "Review the tool failures weekly and fix their root cause, then report"
+	beginLog("prompt", hookInput{SessionID: "s1"}, prompt, nil)
+	e := dlog
+	got, err := promptHits(context.Background(), ix, search.Situation{}, prompt, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endLog(got)
+	if len(e.Request) > deliveryLogText {
+		t.Fatalf("request kept whole: %d bytes", len(e.Request))
+	}
+	if c := candOf(*e, "review-tool-failures-weekly"); c == nil || c.Delivered || c.Dropped != "echo" || c.Echo < echoShare {
+		t.Fatalf("the echo: %+v", c)
+	}
+}
+
+// The CLI's store steps are read as the command reads its flags: a flag's
+// value is no search word, --k=v and -k v both count, a Windows path runs
+// tacit too, and words that only mention tacit are no step.
+func TestDeliveryLogReadsTheCLIStep(t *testing.T) {
+	for cmd, want := range map[string]string{
+		"tacit search --repo widget --limit 5 --offset 10 lock order":     `[{"tool":"search","query":"lock order","depth":0,"levels":-1,"offset":10}]`,
+		"FOO=1 tacit search -scope=projects/widget -json lock":            `[{"tool":"search","path":"projects/widget","query":"lock","depth":2,"levels":-1}]`,
+		"tacit tree --depth=1 projects/widget":                            `[{"tool":"tree","path":"projects/widget","depth":2,"levels":1}]`,
+		`C:\tools\tacit.exe fact pool-lock-order`:                         `[{"tool":"fact","names":["pool-lock-order"],"depth":0,"levels":-1}]`,
+		`git commit -m "use tacit fact to read one" && echo tacit tree x`: `null`,
+	} {
+		b, _ := json.Marshal(navOf(hookInput{ToolName: "Bash"}, cmd))
+		if string(b) != want {
+			t.Errorf("%s:\n got %s\nwant %s", cmd, b, want)
+		}
 	}
 }
 
@@ -214,5 +310,69 @@ func TestDeliveryLogKeepsItsWindowAndCap(t *testing.T) {
 		if b, _ := os.ReadFile(target); len(b) != 0 {
 			t.Fatalf("wrote through a link: %q", b)
 		}
+	}
+}
+
+// With a utility provider the log says which policy chose the block: the
+// provider's scores ("utility", its lines chosen by it and the pool's
+// others left out by it), or the gates when the provider failed and their
+// selection stands. The gates the provider's selection runs inside log
+// nothing of their own there.
+func TestDeliveryLogNamesTheUtilityPolicy(t *testing.T) {
+	if _, err := exec.LookPath("scrump"); err != nil {
+		t.Skip("scrump required for the live redaction integration")
+	}
+	t.Setenv("TACIT_STATE_DIR", t.TempDir())
+	t.Setenv("TACIT_UTILITY_PROVIDER", "jev")
+	t.Setenv("TYPESAFE_API_KEY", "test-placeholder")
+	ix := relevanceIndex(t, []fact.Meta{
+		{Name: "endpoint-useful", Description: "endpoint api requires a schema validation step before release"},
+		{Name: "endpoint-topical", Description: "endpoint api is a common networking topic"},
+	})
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	fail := false
+	http.DefaultTransport = utilityTransport(func(r *http.Request) (*http.Response, error) {
+		if fail {
+			return &http.Response{StatusCode: 500, Body: io.NopCloser(strings.NewReader("{}")), Header: make(http.Header)}, nil
+		}
+		var body struct {
+			Questions map[string]struct {
+				Instructions map[string]string `json:"instructions"`
+			} `json:"questions"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		answers := map[string]any{}
+		for id, q := range body.Questions {
+			score := 0.1
+			if strings.Contains(q.Instructions["memory"], "schema validation") {
+				score = 0.95
+			}
+			answers[id] = map[string]any{"type": "noul", "noul": score}
+		}
+		encoded, _ := json.Marshal(map[string]any{"model": "jev-1.13.0", "answers": answers, "usage": map[string]int{"input_tokens": 100}})
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(encoded))), Header: make(http.Header)}, nil
+	})
+	run := func() *logEntry {
+		t.Helper()
+		beginLog("prompt", hookInput{SessionID: "s1"}, "endpoint api release", []string{"demo"})
+		e := dlog
+		got, err := promptHits(context.Background(), ix, search.Situation{Repo: "demo"}, "endpoint api release", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		endLog(got)
+		return e
+	}
+	e := run()
+	useful, topical := candOf(*e, "endpoint-useful"), candOf(*e, "endpoint-topical")
+	if e.Policy != "utility" || useful == nil || useful.Via != "utility" || !useful.Delivered || topical == nil || topical.Delivered || topical.Via != "" || topical.Dropped != "utility" {
+		t.Fatalf("the provider chose: policy %q, %+v, %+v", e.Policy, useful, topical)
+	}
+	fail = true
+	e = run()
+	useful = candOf(*e, "endpoint-useful")
+	if e.Policy != "gates" || useful == nil || useful.Via != "ranked" || !useful.Delivered {
+		t.Fatalf("the provider failed: policy %q, %+v", e.Policy, useful)
 	}
 }

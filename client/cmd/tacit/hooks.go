@@ -218,7 +218,9 @@ func runHook(args []string) int {
 		if err != nil {
 			return 0
 		}
-		hits = withoutClaims(hits)
+		kept := withoutClaims(hits)
+		logDropped(hits, kept, "withheld")
+		hits = kept
 		mcp := slices.Contains(args[1:], "--mcp")
 		if restart != restartFresh {
 			fmt.Print(restartBlock(ctx, ix, s, in, sit, recs, hits, restart, mcp))
@@ -285,7 +287,9 @@ func runHook(args []string) int {
 		if err != nil {
 			return 0
 		}
-		strong = withoutClaims(strong)
+		kept := withoutClaims(strong)
+		logDropped(strong, kept, "withheld")
+		strong = kept
 		remember(in.SessionID, strong)
 		fmt.Print(search.Block(strong, "# tacit: facts matching this request"))
 		endLog(strong)
@@ -350,7 +354,14 @@ func sessionStartHits(ctx context.Context, ix *search.Index, sit search.Situatio
 		return nil, err
 	}
 	logPool(hits, nil)
-	return startSelection(hits, sit.Repo, startLimit), nil
+	for _, h := range hits {
+		if h.Score < startFloor {
+			logDrop(h, "floor")
+		}
+	}
+	chosen := startSelection(hits, sit.Repo, startLimit)
+	logDropped(hits, chosen, "ceiling")
+	return chosen, nil
 }
 
 // withPromptScopes is sit with the scopes a request reaches beyond the
@@ -450,12 +461,9 @@ func promptHitsWith(ctx context.Context, ix *search.Index, sit search.Situation,
 	}
 	var out []search.Hit
 	if local {
-		out = promptSelectionFor(p, hits, dhits, seen, floor)
+		out = promptSelectionLogged(p, hits, dhits, seen, floor, dlog)
 	} else {
-		if dlog != nil && utilityProvider() != "" {
-			dlog.Policy = "utility"
-		}
-		out = utilityPromptSelection(ctx, p, hits, dhits, seen, floor)
+		out = utilityLogged(ctx, p, hits, dhits, seen, floor)
 	}
 	// The repo-first lines: the fact whose metadata names a path or command
 	// of the request, and the best rule or decision for it (hooks_delivery.go).
@@ -494,7 +502,13 @@ const shortRequestTerms = 3
 // promptSelectionFor is promptSelection for the request p: a short request
 // gets no rule slot.
 func promptSelectionFor(p string, hits, derived []search.Hit, seen map[string]bool, floor float64) []search.Hit {
-	return selectPrompt(hits, derived, seen, floor, !shortRequest(p))
+	return selectPrompt(hits, derived, seen, floor, !shortRequest(p), nil)
+}
+
+// promptSelectionLogged is promptSelectionFor, recording in rec what chose
+// each line and which gate left out the others.
+func promptSelectionLogged(p string, hits, derived []search.Hit, seen map[string]bool, floor float64, rec *logEntry) []search.Hit {
+	return selectPrompt(hits, derived, seen, floor, !shortRequest(p), rec)
 }
 
 // echoShare: a line whose name and description words the request holds for
@@ -560,11 +574,11 @@ func withoutEchoes(hits []search.Hit, p string) []search.Hit {
 // saw, then adds the best derived fact if it clears its separate floor. No
 // backfill: repeated requests must not pull weaker facts into the context.
 func promptSelection(hits, derived []search.Hit, seen map[string]bool, floor float64) []search.Hit {
-	return selectPrompt(hits, derived, seen, floor, true)
+	return selectPrompt(hits, derived, seen, floor, true, nil)
 }
 
 // selectPrompt is promptSelection, with the rule slot only when slot is set.
-func selectPrompt(hits, derived []search.Hit, seen map[string]bool, floor float64, slot bool) []search.Hit {
+func selectPrompt(hits, derived []search.Hit, seen map[string]bool, floor float64, slot bool, rec *logEntry) []search.Hit {
 	var strong []search.Hit
 	ruling := false
 	limit, relative := promptCaps()
@@ -582,16 +596,16 @@ func selectPrompt(hits, derived []search.Hit, seen map[string]bool, floor float6
 			strong = append(strong, h)
 			ruling = ruling || h.Rule()
 		} else if !isDerived(h) {
-			logDrop(h, belowWhich(h, abs, floor))
+			rec.drop(h, belowWhich(h, abs, floor))
 		}
 	}
 	var out []search.Hit
 	for _, h := range strong {
 		if !seen[h.Name] {
 			out = append(out, h)
-			logChose([]search.Hit{h}, "ranked")
+			rec.chose([]search.Hit{h}, "ranked")
 		} else {
-			logDrop(h, "seen")
+			rec.drop(h, "seen")
 		}
 	}
 	// A ruling the session already saw counts too: it is in the context. So
@@ -601,20 +615,58 @@ func selectPrompt(hits, derived []search.Hit, seen map[string]bool, floor float6
 			if h.Rule() && h.Score >= ruleSlotFloor && !isDerived(h) && !slices.ContainsFunc(strong, func(s search.Hit) bool { return s.Name == h.Name }) {
 				if !seen[h.Name] {
 					out = append(out, h)
-					logChose([]search.Hit{h}, "rule_slot")
+					rec.chose([]search.Hit{h}, "rule_slot")
 				} else {
-					logDrop(h, "seen")
+					rec.drop(h, "seen")
 				}
 				break
 			}
 		}
 	}
+	rec.pool(derived[:min(1, len(derived))], nil)
 	for _, h := range derived {
-		if isDerived(h) && h.Score >= derivedPromptFloor && !seen[h.Name] {
+		switch {
+		case !isDerived(h):
+		case h.Score < derivedPromptFloor:
+			rec.drop(h, "floor")
+		case seen[h.Name]:
+			rec.drop(h, "seen")
+		default:
 			out = append(out, h)
-			logChose([]search.Hit{h}, "derived")
+			rec.chose([]search.Hit{h}, "derived")
 		}
 		break // only the best one is considered
+	}
+	return out
+}
+
+// utilityLogged is utilitySelect with the delivery log told which policy
+// chose the block. The gates run inside the provider's selection, on its
+// worker too, so they log nothing there; when the provider's scores chose,
+// its lines are "utility" and the pool's others are left out by it (or by
+// the session having them); when the gates' selection stands, it is logged
+// as the gates chose it.
+func utilityLogged(ctx context.Context, p string, hits, dhits []search.Hit, seen map[string]bool, floor float64) []search.Hit {
+	e := dlog
+	dlog = nil
+	out, status := utilitySelect(ctx, p, hits, dhits, seen, floor)
+	dlog = e
+	if dlog == nil {
+		return out
+	}
+	if status != "ok" {
+		promptSelectionLogged(p, hits, dhits, seen, floor, dlog) // the gates' labels, as they chose
+		return out
+	}
+	dlog.Policy = "utility"
+	logPool(dhits[:min(1, len(dhits))], nil)
+	logChose(out, "utility")
+	for _, h := range append(append([]search.Hit{}, hits...), dhits...) {
+		if seen[h.Name] {
+			logDrop(h, "seen")
+		} else {
+			logDrop(h, "utility")
+		}
 	}
 	return out
 }

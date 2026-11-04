@@ -2,10 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,7 +64,7 @@ type logEntry struct {
 	Floor    float64 `json:"floor,omitempty"`
 	Relative float64 `json:"relative,omitempty"`
 	// Policy is what chose the block: "gates" (the deterministic gates and
-	// floors) or "utility" (the utility provider's scores).
+	// floors) or "utility" (the utility provider's scores, when they did).
 	Policy string    `json:"policy,omitempty"`
 	Cands  []logCand `json:"cands,omitempty"`
 	// Nothing: the block showed no line. It is an option the policy chose
@@ -71,6 +74,8 @@ type logEntry struct {
 	// Nav is a nav entry's step through the store (no block: its
 	// nothing fields say nothing).
 	Nav *logNav `json:"nav,omitempty"`
+	// full is the whole request, which the echo share is measured on.
+	full string
 }
 
 // logCand is one candidate of a block, delivered or not.
@@ -96,10 +101,12 @@ type logCand struct {
 	// (withoutEchoes's measure; 0 under its minimum of words).
 	Echo float64 `json:"echo"`
 	// Via is what chose a delivered line: ranked, rule_slot, derived,
-	// utility, meta, action, start, again, summary, area, resume.
+	// utility, meta, action, start, again, area, resume.
 	Via string `json:"via,omitempty"`
 	// Dropped is the gate that left it out: floor, relative, ceiling,
-	// seen, echo, held (a compaction's summary holds it).
+	// seen, echo, held (a compaction's summary holds it), utility (the
+	// provider's scores), withheld (a claim of the owner's authority, or a
+	// note the reviewer turned down: withoutClaims).
 	Dropped   string `json:"dropped,omitempty"`
 	Delivered bool   `json:"delivered"`
 	// P is the probability the policy had of showing it: 1 or 0 while the
@@ -122,7 +129,7 @@ func beginLog(hook string, in hookInput, request string, repos []string) {
 		return
 	}
 	dlog = &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: hook, Session: in.SessionID, Policy: "gates",
-		Cwd: in.Cwd, Repos: repos, Request: clipBytes(request, deliveryLogText), Terms: search.Terms(request), Transcript: transcriptSize(in.TranscriptPath), TranscriptPath: in.TranscriptPath}
+		Cwd: in.Cwd, Repos: repos, Request: clipBytes(request, deliveryLogText), Terms: search.Terms(request), Transcript: transcriptSize(in.TranscriptPath), TranscriptPath: in.TranscriptPath, full: request}
 	dlog.ID = logID(dlog)
 }
 
@@ -165,7 +172,7 @@ func (e *logEntry) cand(h search.Hit) *logCand {
 	}
 	c := logCand{Name: h.Name, Path: h.Path, Desc: clipBytes(h.Description, deliveryLogDesc), Type: h.Type, Scope: h.Scope, Tier: tier(h),
 		Prov: h.Provenance(), Created: h.Created, AgeDays: age, Review: h.Review, Local: h.Local, Score: round3(h.Score), Rank: -1,
-		Matched: len(h.MatchedTerms), Supported: h.Evidence != nil && h.Evidence.Supported, Tied: repoTied(h, e.Repos), Echo: echoOf(h, e.Request)}
+		Matched: len(h.MatchedTerms), Supported: h.Evidence != nil && h.Evidence.Supported, Tied: repoTied(h, e.Repos), Echo: echoOf(h, e.full)}
 	e.Cands = append(e.Cands, c)
 	return &e.Cands[len(e.Cands)-1]
 }
@@ -179,11 +186,12 @@ func firstN(s string, n int) string {
 
 func round3(f float64) float64 { return float64(int64(f*1000+0.5)) / 1000 }
 
-// logPool records a ranked pool: each hit's rank and share of the best.
+// pool records a ranked pool: each hit's rank and share of the best.
 // score, when given, is the pool's own order (the start block ranks by the
-// repository's names, not by Hit.Score).
-func logPool(hits []search.Hit, score map[string]float64) {
-	if dlog == nil {
+// repository's names, not by Hit.Score). A nil entry records nothing, as
+// do all of its methods.
+func (e *logEntry) pool(hits []search.Hit, score map[string]float64) {
+	if e == nil {
 		return
 	}
 	best := 0.0
@@ -195,7 +203,7 @@ func logPool(hits []search.Hit, score map[string]float64) {
 		best = max(best, s)
 	}
 	for i, h := range hits {
-		c := dlog.cand(h)
+		c := e.cand(h)
 		if c.Rank < 0 {
 			c.Rank = i
 		}
@@ -208,42 +216,52 @@ func logPool(hits []search.Hit, score map[string]float64) {
 	}
 }
 
-// logChose marks hits as chosen by via (delivered, if the block prints them).
-func logChose(hits []search.Hit, via string) {
-	if dlog == nil {
+// chose marks hits as chosen by via (delivered, if the block prints them).
+func (e *logEntry) chose(hits []search.Hit, via string) {
+	if e == nil {
 		return
 	}
 	for _, h := range hits {
-		c := dlog.cand(h)
+		c := e.cand(h)
 		if c.Via == "" {
 			c.Via, c.Dropped = via, ""
 		}
 	}
 }
 
-// logDrop marks h as left out by gate, unless something chose it.
-func logDrop(h search.Hit, gate string) {
-	if dlog == nil {
+// drop marks h as left out by gate, unless something chose it or an
+// earlier gate left it out.
+func (e *logEntry) drop(h search.Hit, gate string) {
+	if e == nil {
 		return
 	}
-	if c := dlog.cand(h); c.Via == "" && c.Dropped == "" {
+	if c := e.cand(h); c.Via == "" && c.Dropped == "" {
 		c.Dropped = gate
 	}
 }
 
-// logDropped marks the hits of before that after no longer holds.
-func logDropped(before, after []search.Hit, gate string) {
-	if dlog == nil {
+// dropped marks the hits of before that after no longer holds as left out
+// by gate, whatever had chosen them.
+func (e *logEntry) dropped(before, after []search.Hit, gate string) {
+	if e == nil {
 		return
 	}
 	for _, h := range before {
-		if !slices.ContainsFunc(after, func(a search.Hit) bool { return a.Name == h.Name }) {
-			if c := dlog.cand(h); c.Via != "" {
+		if !slices.ContainsFunc(after, func(a search.Hit) bool { return a.Name == h.Name && a.Path == h.Path }) {
+			if c := e.cand(h); c.Via != "" || c.Dropped == "" {
 				c.Via, c.Dropped = "", gate
 			}
 		}
 	}
 }
+
+// The process's open entry, for the hooks' own goroutine. Code that may run
+// on another goroutine (the utility provider's worker) takes an entry, or
+// nil, as an argument instead.
+func logPool(hits []search.Hit, score map[string]float64) { dlog.pool(hits, score) }
+func logChose(hits []search.Hit, via string)              { dlog.chose(hits, via) }
+func logDrop(h search.Hit, gate string)                   { dlog.drop(h, gate) }
+func logDropped(before, after []search.Hit, gate string)  { dlog.dropped(before, after, gate) }
 
 // endLog writes the open entry with printed as what the block delivered,
 // and closes it. A block that showed nothing is written too: showing
@@ -256,9 +274,9 @@ func endLog(printed []search.Hit) {
 	}
 	for i := range e.Cands {
 		c := &e.Cands[i]
-		c.Delivered = slices.ContainsFunc(printed, func(h search.Hit) bool { return h.Name == c.Name })
+		c.Delivered = slices.ContainsFunc(printed, func(h search.Hit) bool { return h.Name == c.Name && h.Path == c.Path })
 		if c.Delivered && c.Via == "" {
-			c.Via = "utility" // chosen by the utility provider's scores
+			c.Via = "other" // a path that does not say what chose it
 		}
 		if c.Delivered {
 			c.Dropped, c.P = "", 1
@@ -293,18 +311,11 @@ func writeLogEntry(e *logEntry, now time.Time) {
 	}
 	if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
 		return
+	} else if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o700 {
+		os.Chmod(dir, 0o700) // a directory made wider by hand is this log's again
 	}
 	path := filepath.Join(dir, now.UTC().Format("2006-01-02")+".jsonl")
-	fi, err := os.Lstat(path)
-	switch {
-	case err == nil && !fi.Mode().IsRegular():
-		return // never follow a link someone put in its place
-	case err == nil && fi.Size()+int64(len(b)) > deliveryLogDayCap:
-		return
-	case err != nil:
-		pruneDeliveryLog(dir, now)
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := openDay(path, dir, now, int64(len(b)))
 	if err != nil {
 		return
 	}
@@ -312,15 +323,45 @@ func writeLogEntry(e *logEntry, now time.Time) {
 	f.Write(append(b, '\n'))
 }
 
+// openDay opens a day's file to append n bytes: a new one exclusively
+// (O_EXCL never follows a link in its place), an existing one only when it
+// is the regular file that was there before the open, under the day's cap.
+func openDay(path, dir string, now time.Time, n int64) (*os.File, error) {
+	fi, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		pruneDeliveryLog(dir, now)
+		return os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	}
+	if err != nil || !fi.Mode().IsRegular() || fi.Size()+n > deliveryLogDayCap {
+		return nil, errors.New("not this log's day file, or full")
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	if got, err := f.Stat(); err != nil || !os.SameFile(fi, got) {
+		f.Close()
+		return nil, errors.New("the day's file changed under the open")
+	}
+	if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
+		f.Chmod(0o600)
+	}
+	return f, nil
+}
+
 var logDay = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})\.jsonl$`)
+
+// logDays is the window the log keeps: log_days, 1 to 366, else 30.
+func logDays() int {
+	if d := deliveryInt("LOG_DAYS", deliveryLogDays); d >= 1 && d <= 366 {
+		return d
+	}
+	return deliveryLogDays
+}
 
 // pruneDeliveryLog removes the days' files older than the window.
 func pruneDeliveryLog(dir string, now time.Time) {
-	days := deliveryInt("LOG_DAYS", deliveryLogDays)
-	if days < 1 {
-		days = deliveryLogDays
-	}
-	cut := now.UTC().AddDate(0, 0, -days).Format("2006-01-02")
+	cut := now.UTC().AddDate(0, 0, -logDays()).Format("2006-01-02")
 	entries, _ := os.ReadDir(dir)
 	for _, x := range entries {
 		if m := logDay.FindStringSubmatch(x.Name()); m != nil && m[1] < cut {
@@ -373,9 +414,13 @@ type logNav struct {
 	Offset int `json:"offset,omitempty"`
 }
 
-// navCommandRx finds `tacit tree|search|fact ...` in one part of a shell
-// command; its arguments run to the part's end.
-var navCommandRx = regexp.MustCompile(`(?:^|[\s;&|(])(?:\S*/)?tacit(?:\.exe)?\s+(tree|search|fact)\b([^;&|)\n]*)`)
+// navValueFlags are the flags of `tacit tree|search|fact` that take a
+// value (client/cmd/tacit: runTree, runSearch); the others are switches.
+var navValueFlags = map[string]map[string]bool{
+	"search": {"repo": true, "host": true, "limit": true, "scope": true, "type": true, "path": true, "command": true, "offset": true},
+	"tree":   {"depth": true, "repo": true, "host": true},
+	"fact":   {},
+}
 
 // navOf reads the store step a tool call takes: tacit's MCP tools (under
 // any server name the harness gave tacit), or the CLI in a shell command.
@@ -405,39 +450,68 @@ func navOf(in hookInput, command string) []logNav {
 		}
 		return out
 	}
-	for _, m := range navCommandRx.FindAllStringSubmatch(command, -1) {
-		args := strings.Fields(m[2])
-		var words []string
-		scope := ""
-		for i := 0; i < len(args); i++ {
-			switch {
-			case args[i] == "--scope" && i+1 < len(args):
-				scope = args[i+1]
-				i++
-			case strings.HasPrefix(args[i], "-"):
-				if !strings.Contains(args[i], "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") && m[1] != "search" {
-					i++
-				}
-			default:
-				words = append(words, strings.Trim(args[i], `"'`))
-			}
-		}
-		switch m[1] {
-		case "fact":
-			if len(words) > 0 {
-				out = append(out, logNav{Tool: "fact", Names: words[:1], Levels: -1})
-			}
-		case "tree":
-			path := ""
-			if len(words) > 0 {
-				path = words[0]
-			}
-			out = append(out, logNav{Tool: "tree", Path: path, Depth: folderDepth(path), Levels: -1})
-		case "search":
-			out = append(out, logNav{Tool: "search", Path: scope, Query: clipBytes(strings.Join(words, " "), deliveryLogText), Depth: folderDepth(scope), Levels: -1})
+	for _, part := range cmdBoundary.Split(command, -1) {
+		if n, ok := navCommand(strings.Fields(part)); ok {
+			out = append(out, n)
 		}
 	}
 	return out
+}
+
+// navCommand reads one part of a shell command that runs tacit's tree,
+// search or fact (environment assignments before it skipped, the program
+// by base name, `/` or `\` paths): its flags as Go's flag package reads them
+// (-k v, --k v, -k=v), the rest its words.
+func navCommand(w []string) (logNav, bool) {
+	for len(w) > 0 && strings.Contains(w[0], "=") && !strings.HasPrefix(w[0], "-") {
+		w = w[1:]
+	}
+	if len(w) < 2 {
+		return logNav{}, false
+	}
+	prog := w[0][strings.LastIndexAny(w[0], `/\`)+1:]
+	sub := w[1]
+	values, ok := navValueFlags[sub]
+	if (prog != "tacit" && prog != "tacit.exe") || !ok {
+		return logNav{}, false
+	}
+	flags := map[string]string{}
+	var words []string
+	for i := 2; i < len(w); i++ {
+		a := w[i]
+		if !strings.HasPrefix(a, "-") || a == "-" {
+			words = append(words, strings.Trim(a, `"'`))
+			continue
+		}
+		k, v, has := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if values[k] && !has && i+1 < len(w) {
+			v, has = w[i+1], true
+			i++
+		}
+		if has {
+			flags[k] = strings.Trim(v, `"'`)
+		}
+	}
+	n := logNav{Tool: sub, Levels: -1}
+	switch sub {
+	case "fact":
+		if len(words) == 0 {
+			return logNav{}, false
+		}
+		n.Names = words[:1]
+	case "tree":
+		if len(words) > 0 {
+			n.Path = words[0]
+		}
+		if d, err := strconv.Atoi(flags["depth"]); err == nil {
+			n.Levels = d
+		}
+	case "search":
+		n.Path, n.Query = flags["scope"], clipBytes(strings.Join(words, " "), deliveryLogText)
+		n.Offset, _ = strconv.Atoi(flags["offset"])
+	}
+	n.Depth = folderDepth(n.Path)
+	return n, true
 }
 
 func folderDepth(p string) int {
