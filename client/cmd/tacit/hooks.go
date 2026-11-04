@@ -195,7 +195,9 @@ func runHook(args []string) int {
 		// healthy `tacit follow` has just confirmed the clone matches the
 		// server (and holds no announced push it has not merged), so the
 		// network round trip is skipped; without one, sync as before.
-		if !follow.Current(follow.StatePath(s.Dir), s.Dir, time.Now()) {
+		// Not inside a compaction, which the harness holds until the hook
+		// answers: the clone is as the session's start or its follower left it.
+		if restart != restartCompact && !follow.Current(follow.StatePath(s.Dir), s.Dir, time.Now()) {
 			sctx, scancel := context.WithTimeout(ctx, syncBudget)
 			_ = s.Sync(sctx)
 			scancel()
@@ -221,6 +223,7 @@ func runHook(args []string) int {
 		}
 		if in.Source == "clear" {
 			forget(in.SessionID) // the context the record speaks of is gone
+			clearPending(in.SessionID)
 		}
 		remember(in.SessionID, hits)
 		fmt.Print(search.Block(hits, startTitle(sit, mcp)))

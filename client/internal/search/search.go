@@ -829,6 +829,21 @@ func Terms(text string) []string { return terms(text, 3, 24) }
 // words (a command line, a fact's description), not for building a query.
 func AllTerms(text string) []string { return terms(text, 3, 0) }
 
+// TermCounts is how many times text says each of its AllTerms, by the same
+// tokenizer: a term inside another word ("cli" in "client") is not one.
+func TermCounts(text string) map[string]int {
+	out := map[string]int{}
+	for _, t := range tokenRe.FindAllString(strings.ToLower(text), -1) {
+		for _, piece := range strings.FieldsFunc(t, func(r rune) bool { return r == '.' || r == '/' || r == '-' }) {
+			if len([]rune(piece)) < 2 || (len([]rune(piece)) < 3 && !hasNonASCII(piece)) || stop[piece] {
+				continue
+			}
+			out[piece]++
+		}
+	}
+	return out
+}
+
 // terms is Terms with words of minLen letters or more (non-ASCII words of
 // two letters always count), at most about limit of them (0: all).
 func terms(text string, minLen, limit int) []string {

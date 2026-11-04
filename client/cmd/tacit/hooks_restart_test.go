@@ -189,35 +189,87 @@ func TestStartHookAfterAClaudeCompaction(t *testing.T) {
 	}
 }
 
-// A fact's name counts as in the summary only as a whole name, or its words
-// in order as whole words.
+// A fact counts as in the summary by its whole name (for a name of three
+// words or more, also its words in order), or, when it is no ruling, by one
+// sentence or line that holds most of its description; a ruling only by its
+// name.
 func TestSummaryHoldsWholeNamesOnly(t *testing.T) {
-	sum := summaryOf("We shipped demo-note-v2, ran go testing, then read the demo note.")
+	sum := summaryOf("We shipped demo-note-v2, ran go testing, read the demo note.\nThen we read the wombat cache flusher notes.\nThe nightly job drops stale entries. The wombat cache is cold.")
 	for _, c := range []struct {
-		name string
+		hit  search.Hit
 		want bool
-	}{{"demo-note-v2", true}, {"demo-note", true}, {"note-v2", false}, {"go-test", false}, {"shipped-v3", false}} {
-		if got := sum.holds(search.Hit{Name: c.name}); got != c.want {
-			t.Errorf("%s: holds %v, want %v", c.name, got, c.want)
+	}{
+		{search.Hit{Name: "demo-note-v2"}, true},
+		{search.Hit{Name: "demo-note"}, false}, // inside a longer name; two words are no name
+		{search.Hit{Name: "note-v2"}, false},
+		{search.Hit{Name: "go-test"}, false},
+		{search.Hit{Name: "wombat-cache-flusher"}, true},
+		{search.Hit{Name: "a", Description: "the wombat cache flusher notes"}, true},
+		{search.Hit{Name: "b", Description: "the wombat cache flusher notes", Ruling: true}, false},
+		{search.Hit{Name: "c", Description: "the nightly wombat flusher purges cold caches"}, false}, // its words across sentences
+	} {
+		if got := sum.holds(c.hit); got != c.want {
+			t.Errorf("%+v: holds %v, want %v", c.hit.Name, got, c.want)
 		}
 	}
 }
 
-// With no summary in the transcript's end (none written yet, a transcript
-// tacit cannot read) the start after a compaction is the whole start block
-// again, the note among it.
-func TestStartHookAfterACompactionWithoutASummary(t *testing.T) {
+// A clear drops a compaction's record for the next prompt, and a second
+// compaction before that prompt keeps what the session had been given before
+// the first: the otter fact a prompt gave, which the second summary names,
+// joins the delivered set at the prompt as held, not given again.
+func TestStartHookCompactionRecordAcrossClearAndASecondCompaction(t *testing.T) {
 	_, home, payload := restartRig(t)
-	hookOut(t, payload("c2", "startup", ""), "session-start")
-	tr := writeTranscript(t, filepath.Join(home, ".claude", "projects", "-demo", "c2.jsonl"), `{"type":"user","message":{"role":"user","content":"hello"}}`)
-	out := hookOut(t, payload("c2", "compact", tr), "session-start")
-	for _, want := range []string{", again after the compaction", "RULE demo-quokka-scheduler-0", "demo-note:"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("no %q:\n%s", want, out)
-		}
+	path := filepath.Join(home, ".claude", "projects", "-demo", "q1.jsonl")
+	turn := `{"type":"user","message":{"role":"user","content":"go on"}}`
+	summary := func(text string) string {
+		return `{"type":"user","isCompactSummary":true,"message":{"role":"user","content":` + jsonString(text) + `}}`
 	}
-	if strings.Contains(out, "facts matching the compaction's summary") {
-		t.Fatalf("a summary block with no summary:\n%s", out)
+	hookOut(t, payload("q1", "startup", ""), "session-start")
+	hookOut(t, payload("q1", "", otterPrompt), "prompt")
+	writeTranscript(t, path, turn)
+	hookOut(t, payload("q1", "compact", path), "session-start")
+	appendLines(t, path, summary("Summary: the session looked at demo-otter-retry."), turn)
+	hookOut(t, payload("q1", "compact", path), "session-start")
+	appendLines(t, path, summary(compactSummaryText+" It also kept demo-otter-retry in mind."))
+	got := hookOut(t, payload("q1", "", "continue|"+path), "prompt")
+	if set := sessionSet(t, home, "q1"); !slices.Contains(set, "demo-otter-retry") || strings.Contains(got, "demo-otter-retry:") {
+		t.Fatalf("the fact given before the first compaction, which the summary holds, is not held (set %v):\n%s", set, got)
+	}
+
+	hookOut(t, payload("q2", "startup", ""), "session-start")
+	p2 := writeTranscript(t, filepath.Join(home, ".claude", "projects", "-demo", "q2.jsonl"), turn)
+	hookOut(t, payload("q2", "compact", p2), "session-start")
+	hookOut(t, payload("q2", "clear", ""), "session-start")
+	appendLines(t, p2, summary(compactSummaryText))
+	if got := hookOut(t, payload("q2", "", "continue|"+p2), "prompt"); strings.Contains(got, summaryTitle) {
+		t.Fatalf("a clear left the compaction's record:\n%s", got)
+	}
+}
+
+// The start after a compaction does not sync: the harness holds the
+// compaction until the hook answers. A resume does (the hooks read the index
+// they have and build the new one after, so its block is the next one's).
+func TestStartHookAfterACompactionDoesNotSync(t *testing.T) {
+	r, home, payload := restartRig(t)
+	hookOut(t, payload("n1", "startup", ""), "session-start")
+	other := filepath.Join(r.root, "other")
+	gitIn(t, r.root, "clone", "-q", r.bare, other)
+	gitIn(t, other, "config", "user.email", "curator@tacit")
+	gitIn(t, other, "config", "user.name", "curator")
+	writeFact(t, other, fact.Meta{Name: "demo-pelican-gate", Description: "the pelican gate in demo holds a deploy until its canary passes",
+		Type: "design_decision", Scope: "projects/demo"}, "pelican")
+	r.commitIndex(other, "a fact from another machine")
+	gitIn(t, other, "push", "-q", "origin", "HEAD:main")
+	tr := writeTranscript(t, filepath.Join(home, ".claude", "projects", "-demo", "n1.jsonl"), `{"type":"user","message":{"role":"user","content":"go"}}`)
+	before := gitIn(t, r.clone, "rev-parse", "HEAD")
+	hookOut(t, payload("n1", "compact", tr), "session-start")
+	if got := gitIn(t, r.clone, "rev-parse", "HEAD"); got != before {
+		t.Fatal("the start after a compaction synced")
+	}
+	hookOut(t, payload("n1", "resume", ""), "session-start")
+	if got := gitIn(t, r.clone, "rev-parse", "HEAD"); got != r.serverHead() {
+		t.Fatalf("a resume did not sync: clone at %s, server at %s", got, r.serverHead())
 	}
 }
 
@@ -337,6 +389,11 @@ func TestSummaryQueryTakesItsHeaviestTerms(t *testing.T) {
 	q := summaryQuery(context.Background(), ix, "Summary: "+strings.Join(lorems, " ")+". The wombat flusher broke; the wombat flusher is fixed.")
 	terms := strings.Fields(q)
 	if len(terms) != summaryQueryTerms || !slices.Contains(terms, "wombat") || !slices.Contains(terms, "flusher") {
+		t.Fatalf("query %q", q)
+	}
+	// A fact's words in another form, looked up by their forms and stems;
+	// one term per stem.
+	if q := summaryQuery(context.Background(), ix, "Summary: the wombats and their flushers, and a wombat."); !strings.Contains(q, "wombats") || !strings.Contains(q, "flushers") || strings.Count(q, "wombat") != 1 {
 		t.Fatalf("query %q", q)
 	}
 }
