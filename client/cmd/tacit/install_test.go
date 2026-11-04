@@ -451,3 +451,31 @@ func TestInstallWidensTheOldPreToolMatcherInPlace(t *testing.T) {
 		t.Fatalf("a shared entry: %s", b)
 	}
 }
+
+// An entry this branch's first build wrote, matcher startup|resume|clear|compact,
+// is widened to every source in place, as a startup entry is.
+func TestInstallHooksWidensAnEarlierStartMatcher(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hooks.json")
+	start := `{"hooks":{"SessionStart":[{"matcher":"startup|resume|clear|compact","hooks":[{"type":"command","command":"/old/tacit hook session-start"}]},` +
+		`{"hooks":[{"type":"command","command":"later.sh"}]}]}}`
+	if err := os.WriteFile(path, []byte(start), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := installHooks(path, "/bin/tacit"); err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Hooks map[string][]struct {
+			Matcher string
+			Hooks   []struct{ Command string } `json:"hooks"`
+		} `json:"hooks"`
+	}
+	b, _ := os.ReadFile(path)
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	ss := got.Hooks["SessionStart"]
+	if len(ss) != 2 || ss[0].Matcher != startSources || ss[0].Hooks[0].Command != "/bin/tacit hook session-start" || ss[1].Hooks[0].Command != "later.sh" {
+		t.Fatalf("entries: %s", b)
+	}
+}

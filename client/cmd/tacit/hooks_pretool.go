@@ -165,6 +165,7 @@ func preTool(s *store.Store, in hookInput) {
 	}
 	defer ix.Close()
 	recs := hookRecords(ctx, ix)
+	pendingHeld(ctx, ix, in) // after a compaction: what its summary holds is in the context
 	seen := delivered(in.SessionID)
 	var hits []search.Hit
 	if (inRepo && (len(rel) > 0 || command != "")) || wsCommand {

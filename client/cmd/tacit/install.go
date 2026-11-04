@@ -531,7 +531,7 @@ func installHooksWith(path, exe, goos string, startArgs []string) error {
 					}
 					for i, sp := range specs {
 						legacy := len(children) == 1 && (sp.sub == "pre-tool" && slices.Contains(legacyToolPushTools, matcher) ||
-							sp.sub == "session-start" && matcher == legacyStartSources)
+							sp.sub == "session-start" && slices.Contains(legacyStartSources, matcher))
 						if !placed[i] && (sp.matcher == matcher || legacy) {
 							remaining = append(remaining, handlers[i])
 							placed[i] = true

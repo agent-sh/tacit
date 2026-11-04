@@ -17,6 +17,7 @@ func TestOpenIndexSurvivesPrune(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "store")
 	write(t, root, "machines/host-a/findproc-loose-match.md", "findproc-loose-match", "machines/host-a", "zapproc -f and findproc -f match the runner's own shell", "body", "")
 	t.Setenv("TACIT_INDEX", filepath.Join(filepath.Dir(root), "index"))
+	t.Setenv("TACIT_LOCAL", filepath.Join(filepath.Dir(root), "local")) // not the machine's own overlay
 	ctx := context.Background()
 
 	held, err := Open(ctx, root, "aaa111") // the curator's index, held across the split

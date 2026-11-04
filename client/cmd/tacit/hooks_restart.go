@@ -26,26 +26,26 @@ import (
 type restart int
 
 const (
-	// restartNone: a fork, or a source tacit does not know. Nothing.
+	// restartNone: a source tacit does not know. Nothing.
 	restartNone restart = iota
 	// restartFresh: a start (startup, or no source) or a clear. The context
 	// holds no facts; the block is a start's.
 	restartFresh
 	// restartCompact: the compaction's summary took the context's place.
 	restartCompact
-	// restartResume: the session's old context is back; the store may have
-	// moved since it was given its facts.
+	// restartResume: the session's old context is back (a resume), or a
+	// copy of another session's (a fork); the store may have moved since it
+	// was given its facts.
 	restartResume
 )
 
 // startSources is the SessionStart matcher install writes: every source the
-// hook answers (restartOf). legacyStartSources is the one earlier releases
-// wrote; install widens its entry in place (Codex keys hook trust by
+// hook answers (restartOf). legacyStartSources are the ones earlier builds
+// wrote; install widens such an entry in place (Codex keys hook trust by
 // position).
-const (
-	startSources       = "startup|resume|clear|compact"
-	legacyStartSources = "startup"
-)
+const startSources = "startup|resume|clear|compact|fork"
+
+var legacyStartSources = []string{"startup", "startup|resume|clear|compact"}
 
 func restartOf(source string) restart {
 	switch source {
@@ -53,7 +53,10 @@ func restartOf(source string) restart {
 		return restartFresh
 	case "compact":
 		return restartCompact
-	case "resume":
+	case "resume", "fork":
+		// A fork is a new session with the old one's context and no
+		// delivered set of its own: a start's block, as a resume with no
+		// record. The hook is not told which session it forked.
 		return restartResume
 	}
 	return restartNone
@@ -195,6 +198,9 @@ func summaryStep(ctx context.Context, ix *search.Index, in hookInput, sit search
 type pending struct {
 	Offset int64    `json:"offset"`
 	Given  []string `json:"given"`
+	// HeldDone: a PreToolUse push read the summary already and put the
+	// facts it holds of Given in the delivered set (pendingHeld).
+	HeldDone bool `json:"held_done,omitempty"`
 }
 
 func pendingFile(id string) string {
@@ -256,30 +262,63 @@ func pendingSummary(ctx context.Context, ix *search.Index, in hookInput, sit sea
 	if !ok || p.Offset < 0 {
 		return ""
 	}
+	summary, ok := pendingText(in, p)
+	if !ok {
+		return ""
+	}
+	if !p.HeldDone {
+		rememberHeld(ctx, ix, in, summaryOf(summary), p.Given)
+	}
+	return search.Block(summaryStep(ctx, ix, in, sit, recs, summary), summaryTitle)
+}
+
+// pendingHeld is the PreToolUse hook's part of a compaction whose summary
+// the start could not read: once the transcript holds the summary, the facts
+// given before the compaction that it holds join the delivered set, so a
+// push before the next prompt does not give them again. The record stays
+// for that prompt, which gives the summary's selection (pendingSummary).
+func pendingHeld(ctx context.Context, ix *search.Index, in hookInput) {
+	p, ok := loadPending(in.SessionID)
+	if !ok || p.HeldDone || p.Offset < 0 {
+		return
+	}
+	summary, ok := pendingText(in, p)
+	if !ok {
+		return
+	}
+	rememberHeld(ctx, ix, in, summaryOf(summary), p.Given)
+	p.HeldDone = true
+	savePending(in.SessionID, p)
+}
+
+// pendingText is the summary of the compaction a record speaks of: the last
+// one in what the transcript gained since the place the record holds.
+func pendingText(in hookInput, p pending) (string, bool) {
 	home, _ := os.UserHomeDir()
 	f, ok := transcriptFormat(home, in.TranscriptPath)
 	if !ok {
-		return ""
+		return "", false
 	}
 	gained, size := readRange(in.TranscriptPath, home, p.Offset, compactRead)
 	if size < p.Offset {
-		return "" // the transcript was cut or replaced
+		return "", false // the transcript was cut or replaced
 	}
 	summary, _, ok := digest.LastCompaction([]byte(gained), f)
-	if !ok {
-		return ""
-	}
-	sum := summaryOf(summary)
+	return summary, ok
+}
+
+// rememberHeld puts the facts of given that the summary holds in the
+// delivered set.
+func rememberHeld(ctx context.Context, ix *search.Index, in hookInput, sum summaryHold, given []string) {
 	seen := delivered(in.SessionID)
 	var keep []string
-	for n := range heldOf(ctx, ix, sum, p.Given) {
+	for n := range heldOf(ctx, ix, sum, given) {
 		if !seen[n] {
 			keep = append(keep, n)
 		}
 	}
 	sort.Strings(keep)
 	rememberNames(in.SessionID, keep)
-	return search.Block(summaryStep(ctx, ix, in, sit, recs, summary), summaryTitle)
 }
 
 // heldOf is, of the names the session was given, those whose facts the

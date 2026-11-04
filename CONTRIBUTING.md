@@ -19,10 +19,10 @@ Client (Go 1.27):
 cd client
 gofmt -l .          # must print nothing
 go vet ./...
-go test -timeout 20m ./...
+go test -timeout 30m ./...
 ```
 
-`cmd/tacit` is the slowest package: about 3 minutes on a hosted runner. `go test` stops a test binary after 10 minutes by default, so the command allows 20 for a slower or busier machine.
+`cmd/tacit` is the slowest package: about 3 minutes on a hosted runner. `go test` stops a test binary after 10 minutes by default, so the command allows 30 for a slower or busier machine: on a laptop running other work it ran past 20.
 
 Tests that need [scrump](https://github.com/avifenesh/scrump) with its text profile skip when it is not on `PATH`. Install it to run them (see [redaction setup](docs/portable.md#redaction)).
 

@@ -347,8 +347,9 @@ func TestStartHookOnResume(t *testing.T) {
 }
 
 // After a clear the context is empty: the start block again, whole, and a
-// fact a prompt gave before the clear may come again. A fork, and a source
-// tacit does not know, print nothing.
+// fact a prompt gave before the clear may come again. A fork is a new
+// session with no record of what it was given: a start's block. A source
+// tacit does not know prints nothing.
 func TestStartHookOnClearAndFork(t *testing.T) {
 	_, _, payload := restartRig(t)
 	hookOut(t, payload("k1", "startup", ""), "session-start")
@@ -361,10 +362,11 @@ func TestStartHookOnClearAndFork(t *testing.T) {
 	if got := hookOut(t, payload("k1", "", otterPrompt), "prompt"); !strings.Contains(got, "demo-otter-retry:") {
 		t.Fatalf("after a clear the prompt's fact did not come again:\n%s", got)
 	}
-	for _, source := range []string{"fork", "elsewhere"} {
-		if out := hookOut(t, payload("k2", source, ""), "session-start"); out != "" {
-			t.Fatalf("source %s printed:\n%s", source, out)
-		}
+	if out := hookOut(t, payload("k2", "fork", ""), "session-start"); !strings.Contains(out, "RULE demo-quokka-scheduler-0") || !strings.Contains(out, "(read before acting;") {
+		t.Fatalf("a fork is not a start's block:\n%s", out)
+	}
+	if out := hookOut(t, payload("k3", "elsewhere", ""), "session-start"); out != "" {
+		t.Fatalf("an unknown source printed:\n%s", out)
 	}
 }
 
@@ -444,5 +446,32 @@ func TestSummarySelectionReachesANamedTopic(t *testing.T) {
 	got := hookOut(t, `{"session_id":"z1","cwd":"`+cwd+`","prompt":"continue","transcript_path":"`+path+`"}`, "prompt")
 	if !strings.Contains(got, summaryTitle) || !strings.Contains(got, "tickets-q4-cutover:") {
 		t.Fatalf("the summary did not reach the topic it names:\n%s", got)
+	}
+}
+
+// Between a Claude Code compaction and its first prompt a PreToolUse push
+// reads the summary once the transcript holds it: the facts given before the
+// compaction that it holds (the otter fact it names) join the delivered set
+// then, not only at the prompt, and the record stays for the prompt's
+// selection.
+func TestPreToolAfterAClaudeCompactionReadsWhatTheSummaryHolds(t *testing.T) {
+	r, home, payload := restartRig(t)
+	hookOut(t, payload("t1", "startup", ""), "session-start")
+	hookOut(t, payload("t1", "", otterPrompt), "prompt")
+	path := writeTranscript(t, filepath.Join(home, ".claude", "projects", "-demo", "t1.jsonl"), `{"type":"user","message":{"role":"user","content":"go"}}`)
+	hookOut(t, payload("t1", "compact", path), "session-start")
+	appendLines(t, path, `{"type":"user","isCompactSummary":true,"message":{"role":"user","content":`+jsonString(compactSummaryText+" It kept demo-otter-retry in mind.")+`}}`)
+	if slices.Contains(sessionSet(t, home, "t1"), "demo-otter-retry") {
+		t.Fatal("setup: the otter fact is in the set before the push")
+	}
+	file := filepath.Join(r.projects, "demo", "src", "scheduler", "worker.go")
+	tool := `{"session_id":"t1","cwd":"` + filepath.Join(r.projects, "demo") + `","hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"` + file + `"},"transcript_path":"` + path + `"}`
+	hookOut(t, tool, "pre-tool")
+	if !slices.Contains(sessionSet(t, home, "t1"), "demo-otter-retry") {
+		t.Fatalf("the push did not read what the summary holds: %v", sessionSet(t, home, "t1"))
+	}
+	got := hookOut(t, payload("t1", "", "continue|"+path), "prompt")
+	if !strings.Contains(got, summaryTitle) || strings.Contains(got, "demo-otter-retry:") {
+		t.Fatalf("the prompt after:\n%s", got)
 	}
 }
