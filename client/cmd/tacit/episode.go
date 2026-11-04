@@ -27,11 +27,11 @@ import (
 // per event, details only on request.
 
 const (
-	episodeHits   = 20   // find: the most lines it shows
+	episodeHits   = 10   // find: the most lines it shows
 	episodeKeep   = 200  // find: the matches it keeps while it reads, the newest
 	episodeAround = 5    // around: events on each side, by default
 	episodeMaxN   = 25   // around: the most on each side
-	episodeClip   = 200  // the runes of an event an index line shows
+	episodeClip   = 160  // the runes of an event an index line shows
 	episodeShow   = 8000 // the runes of each part of an event show gives
 	episodeBudget = 20 * time.Second
 )
@@ -49,6 +49,7 @@ type episodeQuery struct {
 	Find    string // words every event shown holds
 	Around  string // a ref: the events before and after it
 	Show    string // a ref: that event whole
+	Before  string // find: only events before this ref (the next page back)
 	N       int    // around: events on each side
 }
 
@@ -83,9 +84,9 @@ func episodeAnswer(ctx context.Context, s *store.Store, q episodeQuery) (string,
 	case strings.TrimSpace(q.Show) != "":
 		return episodeShowRef(ctx, t, q.Show)
 	case strings.TrimSpace(q.Find) != "":
-		return episodeFind(ctx, t, strings.Fields(strings.ToLower(q.Find)))
+		return episodeFind(ctx, t, strings.Fields(strings.ToLower(q.Find)), q.Before)
 	}
-	return episodeFind(ctx, t, t.anchor)
+	return episodeFind(ctx, t, t.anchor, q.Before)
 }
 
 // episodeSession finds the session a query reads, on this machine: a
@@ -210,13 +211,23 @@ func episodeRead(ctx context.Context, t episodeTarget, emit func(events.Event) b
 	return err
 }
 
-func episodeFind(ctx context.Context, t episodeTarget, terms []string) (string, error) {
+func episodeFind(ctx context.Context, t episodeTarget, terms []string, before string) (string, error) {
 	if len(terms) == 0 {
 		return "", errEpisode{"find needs words"}
+	}
+	limitOff, limitIdx, paged := int64(-1), 0, strings.TrimSpace(before) != ""
+	if paged {
+		var ok bool
+		if limitOff, limitIdx, ok = parseRef(before); !ok {
+			return "", errEpisode{"not a ref: " + before}
+		}
 	}
 	var hits []events.Event
 	total := 0
 	err := episodeRead(ctx, t, func(ev events.Event) bool {
+		if paged && (ev.Offset > limitOff || ev.Offset == limitOff && ev.Index >= limitIdx) {
+			return false
+		}
 		hay := strings.ToLower(ev.Text + "\n" + ev.ToolName + "\n" + ev.ToolInput + "\n" + ev.ToolOutput)
 		for _, w := range terms {
 			if !strings.Contains(hay, w) {
@@ -237,7 +248,8 @@ func episodeFind(ctx context.Context, t episodeTarget, terms []string) (string, 
 	for i, j := 0, len(hits)-1; i < j; i, j = i+1, j-1 {
 		hits[i], hits[j] = hits[j], hits[i]
 	}
-	if len(hits) > episodeHits {
+	more := len(hits) > episodeHits
+	if more {
 		hits = hits[:episodeHits]
 	}
 	shown, err := events.Redact(ctx, hits)
@@ -252,6 +264,10 @@ func episodeFind(ctx context.Context, t episodeTarget, terms []string) (string, 
 	}
 	for _, ev := range shown {
 		b.WriteString(eventLine("- ", ev, terms))
+	}
+	if more && len(shown) > 0 {
+		last := shown[len(shown)-1]
+		fmt.Fprintf(&b, "# older: the same find with before %d.%d\n", last.Offset, last.Index)
 	}
 	return b.String(), nil
 }
@@ -504,8 +520,9 @@ func runEpisode(args []string) int {
 	session := fs.String("session", "", "another session of this machine (default: this one)")
 	factName := fs.String("fact", "", "the session a fact came from")
 	n := fs.Int("n", episodeAround, "around: events on each side")
+	before := fs.String("before", "", "find: only events before this ref, the next page back")
 	fs.Parse(args)
-	q := episodeQuery{Harness: *harness, Session: *session, Fact: *factName, N: *n}
+	q := episodeQuery{Harness: *harness, Session: *session, Fact: *factName, N: *n, Before: *before}
 	if q.Harness == "" {
 		q.Harness = sessionHarness()
 	}

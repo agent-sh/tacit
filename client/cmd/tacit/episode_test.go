@@ -89,6 +89,11 @@ func TestEpisodeFindAroundShow(t *testing.T) {
 	if out, code := episodeOut(t, "show", "1.99"); code != 1 || !strings.Contains(out, "no event 1.99") {
 		t.Fatalf("an unknown ref (%d):\n%s", code, out)
 	}
+	// before pages back: only events before the ref.
+	older, code := episodeOut(t, "--before", newest, "find", "CR-123456789")
+	if code != 0 || strings.Contains(older, "- "+newest+" ") || len(refRx.FindAllString(older, -1)) != len(refs)-1 {
+		t.Fatalf("before %s (%d):\n%s", newest, code, older)
+	}
 }
 
 // Without a redactor nothing of the session is shown.
