@@ -254,6 +254,31 @@ func factSessionOf(s *store.Store, name string) (factOrigin, error) {
 	if o.note == "" && strings.Contains(filepath.ToSlash(path), "/inbox/dreamer@") {
 		o.note = f.Meta.Name
 	}
+	originNote := func() *fact.Fact {
+		if f.Meta.Origin == "" {
+			return nil
+		}
+		// The note by its frontmatter name: a note's file takes a suffix
+		// when its name was taken.
+		// In the store's inbox, and the local layer's for a fact of its.
+		notes, _ := filepath.Glob(filepath.Join(s.Dir, "inbox", "*", f.Meta.Origin+"*.md"))
+		local, _ := filepath.Glob(filepath.Join(overlay.Dir(), "inbox", "*", f.Meta.Origin+"*.md"))
+		if strings.HasPrefix(path, overlay.Dir()) {
+			notes = append(local, notes...)
+		} else {
+			notes = append(notes, local...)
+		}
+		for _, p := range notes {
+			if n := readFactFile(p); n != nil && n.Meta.Name == f.Meta.Origin && n.Meta.Source.Session != "" {
+				return n
+			}
+		}
+		return nil
+	}
+	origin := originNote()
+	if origin != nil && origin.Meta.Source.Host != "" && src.Harness == "curator" {
+		o.host = origin.Meta.Source.Host
+	}
 	for _, from := range []struct{ ref, words string }{{src.OwnerQuoteFrom, src.OwnerQuote}, {src.OwnerWordsFrom, src.OwnerWords}} {
 		if h, id, ok := strings.Cut(from.ref, ":"); ok && h != "note" && id != "" {
 			o.harness, o.session, o.anchor = h, id, quoteWords(from.words, 6)
@@ -268,26 +293,12 @@ func factSessionOf(s *store.Store, name string) (factOrigin, error) {
 		o.harness, o.session = src.Harness, src.Session
 		return o, nil
 	}
-	if f.Meta.Origin != "" {
-		// The note by its frontmatter name: a note's file takes a suffix
-		// when its name was taken.
-		// In the store's inbox, and the local layer's for a fact of its.
-		notes, _ := filepath.Glob(filepath.Join(s.Dir, "inbox", "*", f.Meta.Origin+"*.md"))
-		local, _ := filepath.Glob(filepath.Join(overlay.Dir(), "inbox", "*", f.Meta.Origin+"*.md"))
-		if strings.HasPrefix(path, overlay.Dir()) {
-			notes = append(local, notes...)
-		} else {
-			notes = append(notes, local...)
+	if origin != nil {
+		o.harness, o.session = origin.Meta.Source.Harness, origin.Meta.Source.Session
+		if origin.Meta.Source.Host != "" {
+			o.host = origin.Meta.Source.Host
 		}
-		for _, p := range notes {
-			if n := readFactFile(p); n != nil && n.Meta.Name == f.Meta.Origin && n.Meta.Source.Session != "" {
-				o.harness, o.session = n.Meta.Source.Harness, n.Meta.Source.Session
-				if n.Meta.Source.Host != "" {
-					o.host = n.Meta.Source.Host
-				}
-				return o, nil
-			}
-		}
+		return o, nil
 	}
 	return o, errEpisode{"the fact " + name + " names no session"}
 }
@@ -848,14 +859,15 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 	var first, last *events.Event
 	pageEnd := false // the read stopped at the page's ref
 	err := episodeRead(ctx, t, func(ev events.Event) bool {
+		// The part's end first: a page whose ref is past it read it whole.
+		if window && ev.Offset >= t.to {
+			return false
+		}
 		if paged && (ev.Offset > limitOff || ev.Offset == limitOff && ev.Index >= limitIdx) {
 			pageEnd = true
 			return false
 		}
 		if window {
-			if ev.Offset >= t.to {
-				return false
-			}
 			if ev.Offset < t.from {
 				return true
 			}

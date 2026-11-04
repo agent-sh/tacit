@@ -12,6 +12,8 @@ import (
 	"github.com/agent-sh/tacit/client/internal/dream"
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/platform"
+	"github.com/agent-sh/tacit/client/internal/repoid"
+	"github.com/agent-sh/tacit/client/internal/store"
 )
 
 // readRanges is dream-ranges.jsonl's lines.
@@ -151,5 +153,37 @@ func TestDreamRecordsTheRangeOfANoteWhoseCommitFailed(t *testing.T) {
 	}
 	if got := readRanges(t, home); len(got) != 1 {
 		t.Fatalf("after recovery: %+v", got)
+	}
+}
+
+// The local layer records the notes it wrote though persisting then failed
+// (here: the catalog beside them could not be written).
+func TestLocalDreamRecordsNotesWrittenBeforeAnError(t *testing.T) {
+	r := newLocalRig(t)
+	previous := dreamRun
+	defer func() { dreamRun = previous }()
+	dreamRun = func(context.Context, string, string) (string, float64, int, error) {
+		return `[{"description":"The walrus fixture driver listens on port 7790","type":"machine_fact","kind":"observed","applies_to":{}}]`, .01, 10, nil
+	}
+	// A directory where the catalog goes: its write fails after the note's.
+	os.MkdirAll(filepath.Join(r.local, "inbox", "dreamer@"+store.ShortHost(), repoid.CatalogFile), 0o755)
+	runDream(nil)
+	notes, _ := filepath.Glob(filepath.Join(r.local, "inbox", "*", "*.md"))
+	got := readRanges(t, r.home)
+	if len(notes) != 1 || len(got) != 1 || got[0].Note+".md" != filepath.Base(notes[0]) {
+		t.Fatalf("notes %v, ranges %+v", notes, got)
+	}
+}
+
+// A line a crash tore takes no record with it: the next is found.
+func TestDreamRangesAfterATornLine(t *testing.T) {
+	state := t.TempDir()
+	if err := os.WriteFile(filepath.Join(state, dreamRangesFile), []byte(`{"note":"torn","file":"/x/a.jsonl","ses`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n := &fact.Fact{Meta: fact.Meta{Name: "after-the-tear"}}
+	recordDreamRanges(state, dream.Window{File: "/x/b.jsonl", Session: "s1", Start: 0, End: 9}, []*fact.Fact{n}, []string{"after-the-tear.md"})
+	if _, ok := dreamRangeOf(state, "after-the-tear", "s1", "b"); !ok {
+		t.Fatal("the record after a torn line is lost")
 	}
 }

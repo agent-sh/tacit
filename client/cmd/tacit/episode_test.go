@@ -804,6 +804,11 @@ func TestEpisodeFactLeadsToItsDreamedWindow(t *testing.T) {
 	if strings.Contains(paged, "hold no events now") || !strings.Contains(paged, "after this page's ref") {
 		t.Fatalf("a page before the window:\n%s", paged)
 	}
+	// A page whose ref is the first event past the part read all of it.
+	past, _ := episodeOut(t, "--fact", "demo-candidates-deploy-to-staging", "--before", strconv.FormatInt(starts[4], 10)+".0")
+	if strings.Contains(past, "this page stops at its ref") || !strings.Contains(past, "from "+strconv.FormatInt(starts[2], 10)+".0 to ") {
+		t.Fatalf("a page whose ref is just past the part:\n%s", past)
+	}
 	// A read cut inside the window says so.
 	episodeCutAfter = 3
 	inside, _ := episodeOut(t, "--fact", "demo-candidates-deploy-to-staging")
@@ -827,5 +832,25 @@ func TestEpisodeFactLeadsToItsDreamedWindow(t *testing.T) {
 		Source: fact.Source{Harness: "claude", Host: "host-b", Kind: "observed", Session: "7c7c7c7c-0000-4000-8000-000000000000"}}, Body: "x"})
 	if out, code := episodeOut(t, "--fact", "demo-elsewhere"); code != 1 || !strings.Contains(out, "not on this machine: it is on host-b") {
 		t.Fatalf("a transcript on another machine (%d):\n%s", code, out)
+	}
+}
+
+// A curated ruling whose transcript is on another machine names its origin
+// note's host, not the curator's.
+func TestEpisodeCuratedRulingNamesItsNotesHost(t *testing.T) {
+	r := newRig(t, rigOpts{repos: []string{"demo"}})
+	episodeHome(t)
+	t.Setenv("TACIT_STORE", r.clone)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	absent := "3c3c3c3c-0000-4000-8000-000000000000"
+	note := &fact.Fact{Path: "inbox/dreamer@host-b/never-on-fridays.md", Meta: fact.Meta{Name: "never-on-fridays", Description: "never deploy on fridays",
+		Type: "unclassified", Scope: "projects/demo", Created: "2026-11-01", Source: fact.Source{Harness: "dreamer", Host: "host-b", Kind: "user", Session: absent}}, Body: "x"}
+	writeFactFile(t, r.clone, note)
+	writeFactFile(t, r.clone, &fact.Fact{Path: "projects/demo/demo-never-on-fridays.md", Meta: fact.Meta{Name: "demo-never-on-fridays", Description: "never deploy on fridays",
+		Type: "user_standard", Scope: "projects/demo", Created: "2026-11-01", Origin: "never-on-fridays",
+		Source: fact.Source{Harness: "curator", Host: "curator-box", Kind: "user", OwnerQuote: "never deploy on fridays", OwnerQuoteFrom: "claude:" + absent}}, Body: "x"})
+	out, code := episodeOut(t, "--fact", "demo-never-on-fridays")
+	if code != 1 || !strings.Contains(out, "it is on host-b") || strings.Contains(out, "curator-box") {
+		t.Fatalf("a curated ruling's host (%d):\n%s", code, out)
 	}
 }
