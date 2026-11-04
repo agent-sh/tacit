@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestActivityRepoFromPromptAndTranscript(t *testing.T) {
@@ -30,6 +31,10 @@ func TestActivityRepoFromPromptAndTranscript(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// The answer, not the budget, is under test here: the inference gives up
+	// after activityBudget of wall clock by design.
+	defer func(d time.Duration) { activityDeadline = d }(activityDeadline)
+	activityDeadline = time.Minute
 	ctx := context.Background()
 	repo := func(prompt string) string {
 		return activityRepo(ctx, hookInput{Cwd: home, Prompt: prompt, TranscriptPath: transcript}, home)

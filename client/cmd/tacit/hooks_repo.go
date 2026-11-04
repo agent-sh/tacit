@@ -30,11 +30,16 @@ const (
 	activityMin      = 3
 )
 
+// activityDeadline is what activityRepo runs under: activityBudget, except in
+// tests that check the repo it finds, which widen it so a loaded machine or
+// the race detector cannot turn their answer into the empty one.
+var activityDeadline = activityBudget
+
 // activityRepo is the repo a session works in when its cwd is in none: an
 // agent started in the home directory or a folder of checkouts reaches its
 // repo by path. "" when nothing points at one repo, or the time ran out.
 func activityRepo(ctx context.Context, in hookInput, home string) string {
-	ctx, cancel := context.WithTimeout(ctx, activityBudget)
+	ctx, cancel := context.WithTimeout(ctx, activityDeadline)
 	defer cancel()
 	r := repoinfer.NewResolver(home)
 	r.MaxDirs = activityDirs
