@@ -564,15 +564,22 @@ func readJudgeDays(since time.Time) []logEntry {
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 1<<20), 1<<26)
 		for sc.Scan() {
-			// Only the moments a pool reads are decoded and kept: a day's
-			// file is mostly push lines, and the pool keeps only delivered
-			// candidates.
+			// Only the prompt and push moments a pool reads are decoded,
+			// each kept with its delivered candidates only: a day's file
+			// is mostly lines the pool reads nothing of.
 			line := sc.Bytes()
-			if !bytes.Contains(line, []byte(`"delivered":true`)) {
+			if !bytes.Contains(line, []byte(`"hook":"prompt"`)) && !bytes.Contains(line, []byte(`"hook":"push"`)) {
 				continue
 			}
 			var e logEntry
 			if json.Unmarshal(line, &e) == nil && e.ID != "" && (e.Hook == "prompt" || e.Hook == "push") {
+				kept := e.Cands[:0]
+				for _, c := range e.Cands {
+					if c.Delivered {
+						kept = append(kept, c)
+					}
+				}
+				e.Cands = kept
 				out = append(out, e)
 			}
 		}
@@ -838,13 +845,21 @@ func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int,
 				v := v
 				e := &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: "judge", Judge: &v}
 				e.ID = logID(e)
+				st.Count++ // the call was paid either way
 				if appendLogEntry(e, time.Now()) == nil {
 					pass.Judged++
-					st.Count++
+					continue
+				}
+				// A label the log could not take: the line waits for a later
+				// pass, counted as a failed try, and is given up (named
+				// lost and failed) after judgeTries.
+				m := moments[i+k]
+				if m.Tries++; m.Tries >= judgeTries {
+					pass.Dropped++
+					pass.Lost = append(pass.Lost, m.Block+"/"+m.Fact)
+					pass.Failed = append(pass.Failed, m.Block+"/"+m.Fact)
 				} else {
-					// A label the log could not take: the line waits for a
-					// later pass, so no draw comes to no label unnamed.
-					waiting = append(waiting, moments[i+k])
+					waiting = append(waiting, m)
 				}
 			}
 		}

@@ -151,6 +151,9 @@ func newJudgeFixture(t *testing.T, n int) *judgeFixture {
 	// A moment whose transcript no harness of this machine writes: never drawn.
 	writeLogEntry(&logEntry{V: 1, ID: "00000000000000a6", TS: old, Hook: "prompt", Session: "s1", TranscriptPath: filepath.Join(home, "elsewhere", "x.jsonl"), Transcript: 1,
 		Cands: []logCand{{Name: "unreadable-note", Delivered: true}}}, f.now)
+	// One that showed nothing is named too.
+	writeLogEntry(&logEntry{V: 1, ID: "00000000000000a7", TS: old, Hook: "prompt", Session: "s1", TranscriptPath: filepath.Join(home, "elsewhere", "y.jsonl"), Transcript: 1,
+		Cands: []logCand{{Name: "not-shown-either"}}}, f.now)
 	call, red, rnd := judgeCall, judgeRedactTexts, judgeRand
 	t.Cleanup(func() { judgeCall, judgeRedactTexts, judgeRand = call, red, rnd })
 	judgeRedactTexts = func(ctx context.Context, texts []string) ([]string, error) {
@@ -211,7 +214,7 @@ func TestDeliveryJudgePass(t *testing.T) {
 	if len(passes) != 1 || passes[0].Pool != 6 || passes[0].Drawn != 6 || passes[0].Judged != 3 || passes[0].Waiting != 3 {
 		t.Fatalf("pass: %+v", passes)
 	}
-	if strings.Join(passes[0].UnreadBlocks, ",") != "00000000000000a6" || passes[0].From == "" || passes[0].To == "" || strings.Join(passes[0].Answered, ",") != "claude-test-model" {
+	if strings.Join(passes[0].UnreadBlocks, ",") != "00000000000000a6,00000000000000a7" || passes[0].From == "" || passes[0].To == "" || strings.Join(passes[0].Answered, ",") != "claude-test-model" {
 		t.Fatalf("the pass's window: %+v", passes[0])
 	}
 	// The cap is spent: nothing more today, and no line is drawn twice.
@@ -568,5 +571,41 @@ func TestJudgeOutcome(t *testing.T) {
 	text, by, err := judgeOutcome([]byte(`{"result":"{}","modelUsage":{"claude-x":{}}}`), "", nil, "m")
 	if err != nil || text != "{}" || by != "claude-x" {
 		t.Fatalf("%q %q %v", text, by, err)
+	}
+}
+
+// A label the log cannot take: the paid call counts against the day, the
+// line waits as a failed try, and is written by a later pass.
+func TestJudgeLabelTheLogCannotTake(t *testing.T) {
+	f := newJudgeFixture(t, 1)
+	day := filepath.Join(f.state, "delivery", f.now.UTC().Format("2006-01-02")+".jsonl")
+	b, err := os.ReadFile(day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := func() {
+		if err := os.Truncate(day, deliveryLogDayCap+judgeLogHeadroom); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The pool is read before the file fills: judgeCall fills it.
+	call := judgeCall
+	judgeCall = func(ctx context.Context, model, prompt string) (string, string, error) {
+		full()
+		return call(ctx, model, prompt)
+	}
+	n, err := deliveryJudgePass(context.Background(), nil, f.now)
+	if n != 0 {
+		t.Fatalf("judged %d into a full log (%v)", n, err)
+	}
+	st := readJudgeState(f.now.UTC().Format("2006-01-02"))
+	if st.Count != 2 || len(st.Pending) != 2 || st.Pending[0].Tries != 1 {
+		t.Fatalf("count %d, pending %+v", st.Count, st.Pending)
+	}
+	// The log has room again: the waiting lines are written.
+	judgeCall = call
+	os.WriteFile(day, b, 0o600)
+	if n, err := deliveryJudgePass(context.Background(), nil, f.now.Add(time.Minute)); err != nil || n != 2 {
+		t.Fatalf("the waiting labels: %d %v", n, err)
 	}
 }
