@@ -90,6 +90,8 @@ type logEntry struct {
 	PMark     *float64     `json:"p_mark,omitempty"`
 	MarkAsked bool         `json:"mark_asked,omitempty"`
 	Mark      *logMarkStep `json:"mark,omitempty"`
+	// Judge is a judge entry's labels (the dreamer's judge).
+	Judge *judgeVerdict `json:"judge,omitempty"`
 	// Nav is a nav entry's step through the store (no block: its
 	// nothing fields say nothing).
 	Nav *logNav `json:"nav,omitempty"`

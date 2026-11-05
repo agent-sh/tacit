@@ -180,6 +180,11 @@ func runDream(args []string) int {
 			return 2
 		}
 	}
+	// A full run ends with the delivery judge's pass over a sample of the
+	// lines the hooks delivered (delivery_judge.go), on its own route.
+	if !selecting && !*dry {
+		defer runDreamJudge()
+	}
 	recover := func() int {
 		if local {
 			return 0 // nothing is pushed from the local layer, so nothing waits for a push

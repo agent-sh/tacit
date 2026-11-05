@@ -171,6 +171,9 @@ Every YAML option is listed here:
 | `delivery.log_days` | `TACIT_DELIVERY_LOG_DAYS` | Days of the delivery log kept; default `30` |
 | `delivery.titles` | `TACIT_DELIVERY_TITLES` | `on` (default): in a harness with tacit's MCP server (`tacit install claude`), the start, prompt and shell-command push blocks print an agent's note as a title (name, whose, type) the agent opens with `tacit_fact`; the owner's rules, rulings, statements and the notes holding their words or confirmed by them stay whole; `off` prints whole lines everywhere (SPEC.md, Titles) |
 | (environment only) | `TACIT_DELIVERY_MARK_RATE` | Share of prompt blocks that ask the agent to mark which lines helped (`tacit_mark`); default `0.05`, `0` for none (SPEC.md, Self-marks) |
+| (environment only) | `TACIT_DELIVERY_JUDGE` | `on` (default): at the end of a full dream run, a model judges a sample of the delivered lines with hindsight (relevant, confused, novel) on the owner's Claude subscription through `claude -p`, never Bedrock; `off` for none (SPEC.md, The dreamer's judge) |
+| (environment only) | `TACIT_DELIVERY_JUDGE_DAILY` | Lines judged a day at most; default `36` |
+| (environment only) | `TACIT_DELIVERY_JUDGE_MODEL` | The judge's model for `claude -p`; default `opus` |
 | `verify_roots` | `TACIT_VERIFY_ROOTS` | Extra permitted source directories; YAML list, `PATH` separator in environment; every directory must exist |
 | `runner` | `TACIT_RUNNER` | Default CLI for all model jobs; `claude` |
 | `runners` | `TACIT_<ROLE>_RUNNER` | Per-role CLI overrides |

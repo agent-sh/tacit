@@ -228,6 +228,8 @@ func main() {
 		os.Exit(runApp(os.Args[2:]))
 	case "timeline":
 		os.Exit(runTimeline(os.Args[2:]))
+	case "delivery-judge":
+		os.Exit(runDeliveryJudge(os.Args[2:]))
 	default:
 		usage()
 	}
