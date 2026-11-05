@@ -13,6 +13,7 @@ Run a local store on your laptop, or share one across machines. Works with **Cla
 
 - **Files you own.** One fact per Markdown file, with its source, scope and git history.
 - **Context that fits.** Local full-text search and small context blocks. Hooks avoid repeating facts within a session.
+- **Recall after a compaction.** `tacit episode` and the MCP tool `tacit_episode` find the ids, commands, paths and errors a session already had, redacted.
 - **Decisions with proof.** Your own words and recorded review decisions establish your rulings. Agents leave changes to those rulings for you.
 
 ## Quick start
@@ -47,7 +48,7 @@ Choose the integration for your agent:
 
 | Agent | Install | Connection |
 |---|---|---|
-| Claude Code | `tacit install claude` | Session-start, prompt and pre-compact hooks, and the MCP tools (`--no-mcp`: hooks only) |
+| Claude Code | `tacit install claude` | Session-start, prompt, pre-tool and pre-compact hooks, and the MCP tools (`--no-mcp`: hooks only) |
 | Codex | `tacit install codex` | The same hooks; trust them once in `/hooks` |
 | Hermes | `tacit install hermes` | Memory provider; follow the printed configuration steps |
 | Grok / pi / Muse | `tacit install grok` / `pi` / `muse` | Prints the MCP configuration |
@@ -81,7 +82,7 @@ Open **Inbox** to inspect the note and its source. After curation, installed int
 
 1. **Collect.** Agents write short inbox notes. Imports bring in existing memory files. An optional dreamer extracts candidates from redacted transcript deltas: from the prompt hook once a session's undreamed part fills a dream window, before a compaction, every 10 minutes for the sessions that went quiet, and every 4 hours as a backstop. It saves each successful window before the next call and recovers pending notes after interrupted runs.
 2. **Curate.** Notes become individual facts with sources and scopes. Contradictions and uncertain changes become review items. A quick run after the idle dream curates the last day's notes, so a session's fact reaches other sessions within about an hour.
-3. **Deliver.** A local SQLite FTS5 index matches facts to the repo, host and prompt. Hooks supply up to 10 facts at session start and 3 curated facts per prompt, with a separate match for a computed fact. Explicit search can return the full text.
+3. **Deliver.** A local SQLite FTS5 index matches facts to the repo, host and prompt. Hooks supply up to 6 of a repo's facts (10 for a host outside a repo) at session start, again after a compaction, resume, clear or fork, and up to 5 curated facts per prompt, with a separate match for a computed fact. Explicit search can return the full text.
 4. **Check.** A verifier reads code, git, docs and permitted machine sources. It records evidence for its decisions and leaves unresolved questions for you; a question that went moot is closed, and an agent that can prove the answer to one closes it (`tacit questions close`), so you see only the ones no source settles. An answer you type in a session, under the question's own words, is your answer: an agent relays it (`tacit questions close --proof words`). A daily rotation sends the facts unchecked longest back to the curator's model with the proof code gathers, stamps each `last_checked`, and retires, redirects, notes or compresses only what the proof shows; it asks you about your own facts instead of changing them.
 5. **Organize.** Every project folder has a record that code checks: what it is (a repository, a folder, an area of ongoing work, a bounded topic), its status and its history, decided by the curator's model on evidence from git and sessions, or by you on the Folders page. A folder suppressed into another moves its facts there. Dead and shipped folders go quiet in the hooks and stay searchable. An area's facts arrive before its tools are used, a topic's when the prompt names it, and each folder can carry an overview whose every line cites its facts.
 
