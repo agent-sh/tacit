@@ -81,10 +81,11 @@ const markCap = logCandCap
 // no agent grades.
 var ownerProv = map[string]bool{"rule": true, "owner": true, "statement": true, "words": true, "confirmed": true}
 
-// markedBlock finds, in the window a mark can follow its block (today and
-// the day before), the block of this id that asked for a self-mark, and
-// whether a mark of it is logged already.
-func markedBlock(id string, now time.Time) (asked *logEntry, marked bool) {
+// markedBlock finds, in the window a mark can follow its block (the UTC
+// day of the mark and the one before), the block of this id that asked for
+// a self-mark. A read error answers none: the mark is refused rather than
+// taken unchecked.
+func markedBlock(id string, now time.Time) (asked *logEntry, err error) {
 	needle := []byte(`"` + id + `"`)
 	for _, day := range []time.Time{now, now.AddDate(0, 0, -1)} {
 		path := filepath.Join(deliveryLogDir(), day.UTC().Format("2006-01-02")+".jsonl")
@@ -105,16 +106,43 @@ func markedBlock(id string, now time.Time) (asked *logEntry, marked bool) {
 			if json.Unmarshal(sc.Bytes(), &e) != nil {
 				continue
 			}
-			switch {
-			case e.ID == id && e.MarkAsked:
+			if e.ID == id && e.MarkAsked {
 				asked = &e
-			case e.Hook == "mark" && e.Mark != nil && e.Mark.Block == id:
-				marked = true
 			}
 		}
+		serr := sc.Err()
 		f.Close()
+		if serr != nil {
+			return nil, serr
+		}
 	}
-	return asked, marked
+	return asked, nil
+}
+
+// claimMark claims a block for its one mark: an exclusive create of
+// delivery/marks/<id>, which two calls at once cannot both make. Claims
+// older than the window are removed as new ones are made.
+func claimMark(id string, now time.Time) (bool, error) {
+	dir := filepath.Join(deliveryLogDir(), "marks")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return false, err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, id), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if os.IsExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	f.Close()
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, x := range entries {
+			if fi, err := x.Info(); err == nil && now.Sub(fi.ModTime()) > 72*time.Hour {
+				os.Remove(filepath.Join(dir, x.Name()))
+			}
+		}
+	}
+	return true, nil
 }
 
 // markNames is xs less what the block did not print as an agent's line,
@@ -149,12 +177,13 @@ func logMark(block string, helped, not []string) error {
 	if !deliveryLogOn() {
 		return errors.New("the delivery log is off; nothing was recorded")
 	}
-	asked, marked := markedBlock(block, time.Now())
+	now := time.Now()
+	asked, err := markedBlock(block, now)
 	switch {
+	case err != nil:
+		return fmt.Errorf("the delivery log could not be read: %w", err)
 	case asked == nil:
 		return errors.New("no tacit block asked for a mark with this id")
-	case marked:
-		return errors.New("this block is marked already")
 	}
 	both := map[string]bool{}
 	for _, h := range helped {
@@ -168,9 +197,17 @@ func logMark(block string, helped, not []string) error {
 	if len(m.Helped)+len(m.NotHelped) == 0 {
 		return errors.New("name at least one of the agent's lines the block printed")
 	}
-	e := &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: "mark", Mark: m}
+	switch ok, err := claimMark(block, now); {
+	case err != nil:
+		return fmt.Errorf("the mark could not be claimed: %w", err)
+	case !ok:
+		return errors.New("this block is marked already")
+	}
+	e := &logEntry{V: deliveryLogVersion, TS: now.UTC().Format(time.RFC3339Nano), Hook: "mark", Mark: m}
 	e.ID = logID(e)
-	writeBounded(e)
+	if err := appendLogEntry(e, now); err != nil {
+		return fmt.Errorf("the mark was not written: %w", err)
+	}
 	return nil
 }
 

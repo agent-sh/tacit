@@ -5,14 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/platform"
@@ -885,5 +888,42 @@ func TestSelfMarksWindowAndLines(t *testing.T) {
 	}
 	if got == nil || strings.Join(got.Helped, ",") != "local-note" {
 		t.Fatalf("mark: %+v", got)
+	}
+	// The day before is in the window.
+	yday := &logEntry{V: 1, ID: "00000000000000cc", Hook: "prompt", MarkAsked: true, Cands: []logCand{{Name: "a-note", Delivered: true, Prov: "agent"}}}
+	writeLogEntry(yday, now.AddDate(0, 0, -1))
+	if err := logMark(yday.ID, []string{"a-note"}, nil); err != nil {
+		t.Fatalf("a block of the day before: %v", err)
+	}
+	// Marks at once: one is taken, one entry is written.
+	many := &logEntry{V: 1, ID: "00000000000000dd", Hook: "prompt", MarkAsked: true, Cands: []logCand{{Name: "a-note", Delivered: true, Prov: "agent"}}}
+	writeLogEntry(many, now)
+	var wg sync.WaitGroup
+	var taken atomic.Int32
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if logMark(many.ID, []string{"a-note"}, nil) == nil {
+				taken.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	entries := 0
+	for _, e := range readDeliveryLog(t, state) {
+		if e.Hook == "mark" && e.Mark.Block == many.ID {
+			entries++
+		}
+	}
+	if taken.Load() != 1 || entries != 1 {
+		t.Fatalf("marks at once: %d taken, %d entries", taken.Load(), entries)
+	}
+	// A line that could not be written is reported, not "noted".
+	full := &logEntry{V: 1, ID: "00000000000000ee", Hook: "prompt", MarkAsked: true, Cands: []logCand{{Name: "a-note", Delivered: true, Prov: "agent"}}}
+	writeLogEntry(full, now)
+	os.Truncate(filepath.Join(state, "delivery", now.UTC().Format("2006-01-02")+".jsonl"), deliveryLogDayCap)
+	if err := logMark(full.ID, []string{"a-note"}, nil); err == nil {
+		t.Fatal("a mark the full log could not take was reported written")
 	}
 }

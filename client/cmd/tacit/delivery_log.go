@@ -477,17 +477,23 @@ func deliveryLogDir() string {
 
 // writeLogEntry appends e to its day's file: one write of one line, so
 // hooks running at once do not interleave inside a line.
-func writeLogEntry(e *logEntry, now time.Time) {
+func writeLogEntry(e *logEntry, now time.Time) { _ = appendLogEntry(e, now) }
+
+// appendLogEntry is writeLogEntry with its failure: the MCP server's marks
+// report a line that was not appended.
+func appendLogEntry(e *logEntry, now time.Time) error {
 	b, err := json.Marshal(e)
 	if err != nil {
-		return
+		return err
 	}
 	dir := deliveryLogDir()
-	if os.MkdirAll(dir, 0o700) != nil {
-		return
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
 	}
-	if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
-		return
+	if fi, err := os.Lstat(dir); err != nil {
+		return err
+	} else if !fi.IsDir() {
+		return errors.New("the delivery log's directory is not a directory")
 	} else if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o700 {
 		os.Chmod(dir, 0o700) // a directory made wider by hand is this log's again
 	}
@@ -500,11 +506,11 @@ func writeLogEntry(e *logEntry, now time.Time) {
 		f, err = platform.OpenPrivateAppend(d, name)
 		d.Close()
 		if err != nil {
-			return
+			return err
 		}
 		if fi, err := f.Stat(); err != nil || fi.Size()+n > deliveryLogDayCap {
 			f.Close()
-			return
+			return errors.New("the day's delivery log is full")
 		} else if fi.Size() == 0 {
 			pruneDeliveryLog(dir, now)
 		}
@@ -515,11 +521,14 @@ func writeLogEntry(e *logEntry, now time.Time) {
 			f, err = openDay(path, dir, now, n) // another hook made the day's file first
 		}
 		if err != nil {
-			return
+			return err
 		}
 	}
-	defer f.Close()
-	f.Write(append(b, '\n'))
+	if _, err := f.Write(append(b, '\n')); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // openDay is the day's open where the private open is not to be had

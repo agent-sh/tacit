@@ -212,7 +212,9 @@ def run_once(task, arm, block_path, rep):
         cmd += ["--tools", ""]  # decision tasks: one turn, no tools
     # `live`: no injected block; whatever hooks are installed in the user's
     # settings run (the shipped tacit hooks after 2026-10-08).
-    env = {**os.environ, "TACIT_AB": "1"}
+    # The live arm's installed hooks would ask for self-marks into the
+    # machine's real delivery log: no asks in any arm unless it sets them.
+    env = {**os.environ, "TACIT_AB": "1", "TACIT_DELIVERY_MARK_RATE": "0"}
     name, hook_env = hook_arm(arm)
     state = None
     if name is not None:
@@ -227,9 +229,10 @@ def run_once(task, arm, block_path, rep):
         if task["allowed_tools"]:
             cmd[cmd.index("--allowedTools") + 1:cmd.index("--allowedTools") + 1] = ["mcp__tacit__tacit_fact", "mcp__tacit__tacit_search", "mcp__tacit__tacit_tree"]
         # No self-mark ask unless the arm sets one: it would add turns in the
-        # hook arms only. (TACIT_DELIVERY_HOLDOUT is the hold-outs' share,
-        # read by builds that have them, for the same reason.)
-        env.update({"TACIT_DELIVERY_MARK_RATE": "0", "TACIT_DELIVERY_HOLDOUT": "0"}, **hook_env)
+        # hook arms only. An arm that sets one may call the tool.
+        env.update({"TACIT_DELIVERY_MARK_RATE": "0"}, **hook_env)
+        if task["allowed_tools"] and env["TACIT_DELIVERY_MARK_RATE"] != "0":
+            cmd[cmd.index("--allowedTools") + 1:cmd.index("--allowedTools") + 1] = ["mcp__tacit__tacit_mark"]
     elif arm not in ("bare", "live"):
         path = SCRATCH / f"{task['id']}-{arm}.md"
         settings = {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": f"cat {path}"}]}]}}
