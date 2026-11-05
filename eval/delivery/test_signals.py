@@ -80,7 +80,7 @@ class Signals(unittest.TestCase):
             with open(os.path.join(projects, "s2.jsonl"), "w") as fh:
                 fh.write(line(type="user", timestamp=t(14), userType="external", message={"role": "user", "content": "the office printer sits on the third floor near the kitchen"}))
             res = self.run_signals(d, [
-                {"id": "c1", "session": "s1", "ts": t(0), "event": "prompt", "origin": "owner", "commit": "HEAD",
+                {"id": "c1", "session": "s1", "ts": t(0), "event": "prompt", "origin": "typed", "commit": "HEAD",
                  "delivered": ["queue-retry-backoff", "pool-lock-order", "printer-floor", "signoff-rule"],
                  "labels": {"queue-retry-backoff": "R", "pool-lock-order": "R", "printer-floor": "N", "signoff-rule": "R"}},
                 {"id": "c2", "session": "s2", "ts": t(0), "event": "prompt", "origin": "headless", "commit": "HEAD", "labels": {"printer-floor": "N"}},
@@ -111,6 +111,37 @@ class Signals(unittest.TestCase):
         self.assertEqual(signals.verdict(weak, "sig", "R", base)["verdict"], "fails")
         self.assertEqual(signals.verdict(few, "sig", "R", base)["verdict"], "unmeasured")
         self.assertEqual(signals.verdict(one_session, "sig", "R", base)["verdict"], "unmeasured", "units from too few sessions")
+
+
+
+class Rulings(unittest.TestCase):
+    def test_rulings_and_descriptions_at_the_case_commit(self):
+        """In a store with the rulings audit a kind-user fact is a ruling only
+        with its evidence; a description is read as it was at the case's
+        commit."""
+        with tempfile.TemporaryDirectory() as d:
+            store = os.path.join(d, "store")
+            os.makedirs(os.path.join(store, "review"))
+            subprocess.run(["git", "init", "-q", store], check=True)
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t", GIT_CONFIG_GLOBAL="/dev/null")
+            def write(name, desc, extra):
+                os.makedirs(os.path.join(store, "user"), exist_ok=True)
+                with open(os.path.join(store, "user", name + ".md"), "w") as fh:
+                    fh.write(f"---\nname: {name}\ndescription: {desc}\ntype: user_standard\nsource:\n  kind: user\n{extra}---\nbody\n")
+            open(os.path.join(store, "review", "rulings-audit.json"), "w").write("{}")
+            write("quoted-rule", "Every release gets a signed tag from the owner", "  owner_quote: sign the tags\n  owner_quote_from: claude:x\n")
+            write("bare-claim", "Every release gets a signed tag from the owner", "")
+            write("moved-desc", "The cache lives under the old state folder", "")
+            subprocess.run(["git", "-C", store, "add", "-A"], check=True, env=env)
+            subprocess.run(["git", "-C", store, "commit", "-qm", "one"], check=True, env=env)
+            first = subprocess.run(["git", "-C", store, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+            write("moved-desc", "The cache moved to the new data volume", "")
+            subprocess.run(["git", "-C", store, "commit", "-qam", "two"], check=True, env=env)
+            st = signals.Store(store)
+            self.assertTrue(st.fact("quoted-rule", first)[1])
+            self.assertFalse(st.fact("bare-claim", first)[1], "no evidence: no ruling in an audited store")
+            self.assertEqual(st.fact("moved-desc", first)[0], "The cache lives under the old state folder")
+            self.assertEqual(st.fact("moved-desc", "HEAD")[0], "The cache moved to the new data volume")
 
 
 if __name__ == "__main__":
