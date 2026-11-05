@@ -196,13 +196,13 @@ Real task registration and default-browser launching require Windows. Generating
 
 ## Redaction
 
-Tacit release archives include scrump 0.2.0, with its required `text` profile and the records mode that keeps batched texts apart, built from pinned source [b2b3178](https://github.com/avifenesh/scrump/commit/b2b3178c412ee5d99aaf36233d3952c2d4e796ca), the `v0.2.0` tag. The installers check a masking canary before installation. A compatible redactor is required on every machine that writes: every write that adds text to the store is masked before it is staged and refused without one (SPEC "Every write is masked"), and model digests need it too.
+Tacit release archives include scrump 0.2.1, with its required `text` profile and the records mode that keeps batched texts apart, built from pinned source [3367ab1](https://github.com/avifenesh/scrump/commit/3367ab103b56bb88ff8e15e3c99cbd42008a0d68), the `v0.2.1` tag. The installers check a masking canary before installation. A compatible redactor is required on every machine that writes: every write that adds text to the store is masked before it is staged and refused without one (SPEC "Every write is masked"), and model digests need it too.
 
 If building Tacit from source, build the same scrump source:
 
 ```sh
 cargo install --locked --root ~/.local --git https://github.com/avifenesh/scrump \
-  --rev b2b3178c412ee5d99aaf36233d3952c2d4e796ca scrump-cli
+  --rev 3367ab103b56bb88ff8e15e3c99cbd42008a0d68 scrump-cli
 ```
 
 On Windows use those arguments on one PowerShell line with a Windows install root, then put that root's `bin` on PATH. Native Rust MSVC builds need the Windows C++ toolchain. The pinned source also builds for Windows GNU. A binary lacking the text profile is refused before an agent note is written. Owner app writes retain the token-shape commit check without requiring a model account.

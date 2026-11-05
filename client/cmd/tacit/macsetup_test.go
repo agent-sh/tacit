@@ -107,7 +107,7 @@ func mustNotContain(t *testing.T, out string, bad ...string) {
 	}
 }
 
-// recordsScrump stands in for scrump 0.2.0: the text profile's canary
+// recordsScrump stands in for scrump 0.2.1: the text profile's canary
 // masked at the same length, and records mode keeping the issue's repro
 // apart (its second record's password masked).
 const recordsScrump = `sed -e 's/=.*/=************/' -e 's/Zq7Vx9Lm2Kp4/************/'`
@@ -123,7 +123,7 @@ sed 's/=.*/=************/'`)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	mustContain(t, out, "+ cargo install --force --locked --root "+s.home+"/.local --git https://github.com/avifenesh/scrump --rev b2b3178c412ee5d99aaf36233d3952c2d4e796ca scrump-cli")
+	mustContain(t, out, "+ cargo install --force --locked --root "+s.home+"/.local --git https://github.com/avifenesh/scrump --rev 3367ab103b56bb88ff8e15e3c99cbd42008a0d68 scrump-cli")
 	mustNotContain(t, out, "records mode works")
 }
 
@@ -137,13 +137,13 @@ func TestMacSetupRebuildsAScrumpThatKeepsRecordsTogether(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	mustContain(t, out, "+ cargo install --force --locked --root "+s.home+"/.local --git https://github.com/avifenesh/scrump --rev b2b3178c412ee5d99aaf36233d3952c2d4e796ca scrump-cli")
+	mustContain(t, out, "+ cargo install --force --locked --root "+s.home+"/.local --git https://github.com/avifenesh/scrump --rev 3367ab103b56bb88ff8e15e3c99cbd42008a0d68 scrump-cli")
 	mustNotContain(t, out, "records mode works")
 }
 
 func TestMacSetupWriterDryRun(t *testing.T) {
 	s := newStubMac(t)
-	// scrump 0.2.0: the text profile and records mode (recordsScrump).
+	// scrump 0.2.1: the text profile and records mode (recordsScrump).
 	s.stub(t, "scrump", recordsScrump)
 	out, err := s.run(t, "--server", "http://mac-reachable.example:7447/", "--enroll-ssh", "root@203.0.113.10")
 	if err != nil {
@@ -252,7 +252,7 @@ func TestMacSetupDreamAndCodexDryRun(t *testing.T) {
 	}
 	bin := s.home + "/.local/bin"
 	mustContain(t, out,
-		"+ cargo install --force --locked --root "+s.home+"/.local --git https://github.com/avifenesh/scrump --rev b2b3178c412ee5d99aaf36233d3952c2d4e796ca scrump-cli",
+		"+ cargo install --force --locked --root "+s.home+"/.local --git https://github.com/avifenesh/scrump --rev 3367ab103b56bb88ff8e15e3c99cbd42008a0d68 scrump-cli",
 		"+ "+bin+"/tacit keygen codex",
 		"+ "+bin+"/tacit keygen dreamer",
 		"enroll(\\\"dreamer@macbook\\\"",

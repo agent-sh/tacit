@@ -40,10 +40,10 @@ mkdir -p ~/.local/bin
 (cd client && go build -o ~/.local/bin/tacit ./cmd/tacit)
 export PATH="$HOME/.local/bin:$PATH"
 cargo install --locked --root ~/.local --git https://github.com/avifenesh/scrump \
-  --rev b2b3178c412ee5d99aaf36233d3952c2d4e796ca scrump-cli
+  --rev 3367ab103b56bb88ff8e15e3c99cbd42008a0d68 scrump-cli
 ```
 
-The pinned scrump commit is the `v0.2.0` tag: the text profile tacit uses, and the records mode that keeps batched texts apart. Every write through `tacit add`, the MCP tool and the dreamer is redacted by it first, and fails closed without it.
+The pinned scrump commit is the `v0.2.1` tag: the text profile tacit uses, and the records mode that keeps batched texts apart. Every write through `tacit add`, the MCP tool and the dreamer is redacted by it first, and fails closed without it.
 
 ### Keys and the clone
 
