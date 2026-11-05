@@ -1282,63 +1282,65 @@ func clipLine(text string, terms []string, n int) string {
 	return out
 }
 
-// meetHits bounds the places of one word meet looks at, so a long tool
-// output that holds a short word everywhere costs a bounded clip.
-const meetHits = 4096
-
 // meet is the smallest stretch [i, j) of s (bytes) that holds every one of
-// terms s holds, the first of the smallest, among the first meetHits places
-// of each word; ok is false when it holds none.
+// terms s holds, the first of the smallest; ok is false when it holds none.
+// It walks the words' places in order, keeping only each word's last place,
+// so a long tool output that holds a word everywhere costs no more memory
+// than one word's state.
 func meet(s string, terms []string) (i, j int, ok bool) {
-	type at struct{ pos, end, term int }
-	var hits []at
-	held, longest := 0, 0
-	for k, w := range terms {
+	type word struct {
+		w          string
+		next, last int // next place at or after the walk; last place passed, -1 none
+	}
+	var ws []word
+	floor := 0 // no stretch is shorter than the longest word it holds
+	for _, w := range terms {
 		if w == "" {
 			continue
 		}
-		longest = max(longest, len(w))
-		found := false
-		for from, seen := 0, 0; seen < meetHits; seen++ {
-			x := strings.Index(s[from:], w)
-			if x < 0 {
-				break
-			}
-			found = true
-			hits = append(hits, at{from + x, from + x + len(w), k})
-			from += x + 1
-		}
-		if found {
-			held++
+		if x := strings.Index(s, w); x >= 0 {
+			ws = append(ws, word{w, x, -1})
+			floor = max(floor, len(w))
 		}
 	}
-	if held == 0 {
+	if len(ws) == 0 {
 		return 0, 0, false
 	}
-	sort.Slice(hits, func(a, b int) bool { return hits[a].pos < hits[b].pos })
-	count := make([]int, len(terms))
-	have, l := 0, 0
-	best := -1
-	for r, h := range hits {
-		if count[h.term] == 0 {
-			have++
+	best, seen := -1, 0
+	for {
+		// The word whose next place comes first.
+		k := -1
+		for n := range ws {
+			if ws[n].next >= 0 && (k < 0 || ws[n].next < ws[k].next) {
+				k = n
+			}
 		}
-		count[h.term]++
-		for have == held {
-			// Only a hit that starts within the longest term's length before
-			// the last one's end can end past it.
-			end := h.end
-			for x := r - 1; x >= l && hits[x].pos+longest > h.end; x-- {
-				end = max(end, hits[x].end)
+		if k < 0 {
+			break
+		}
+		if ws[k].last < 0 {
+			seen++
+		}
+		ws[k].last = ws[k].next
+		if x := strings.Index(s[ws[k].next+1:], ws[k].w); x >= 0 {
+			ws[k].next += 1 + x
+		} else {
+			ws[k].next = -1
+		}
+		if seen < len(ws) {
+			continue
+		}
+		// The smallest stretch that ends with this place holds every word's
+		// last place.
+		from, to := len(s), 0
+		for _, w := range ws {
+			from, to = min(from, w.last), max(to, w.last+len(w.w))
+		}
+		if best < 0 || to-from < best {
+			best, i, j = to-from, from, to
+			if best == floor {
+				break
 			}
-			if best < 0 || end-hits[l].pos < best {
-				best, i, j = end-hits[l].pos, hits[l].pos, end
-			}
-			count[hits[l].term]--
-			if count[hits[l].term] == 0 {
-				have--
-			}
-			l++
 		}
 	}
 	return i, j, true

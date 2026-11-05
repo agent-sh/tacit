@@ -272,6 +272,11 @@ func TestEpisodeClipWhereTheWordsMeet(t *testing.T) {
 	if got := eventLine("- ", ev, terms); !strings.Contains(got, "rel-0123456789") {
 		t.Fatalf("line: %q", got)
 	}
+	// However often a word comes before the place where they meet.
+	late := strings.Repeat("billing ", 5000) + strings.Repeat("x ", 500) + "deployed billing to staging as release rel-0123456789"
+	if got := clipLine(late, terms, 160); !strings.Contains(got, "rel-0123456789") {
+		t.Fatalf("late meeting: %q", got)
+	}
 	// A single word clips as before, a third of the room before it.
 	one := strings.Repeat("x ", 200) + "needle " + strings.Repeat("y ", 200)
 	if got := clipLine(one, []string{"needle"}, 40); !strings.Contains(got, "needle") || strings.Index(got, "needle") > 20 {
