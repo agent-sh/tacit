@@ -116,13 +116,14 @@ def hook_arm(arm):
 
 
 def hook_settings(binary):
-    """The hooks `tacit install claude` writes, for this binary."""
+    """The start, prompt and push hooks `tacit install claude` writes, for
+    this binary (PreCompact left out: a headless run does not compact)."""
     def cmd(*a):
         return {"type": "command", "command": " ".join(shlex.quote(x) for x in [binary, *a]), "timeout": 15}
     return {"hooks": {
         "SessionStart": [{"matcher": "startup|resume|clear|compact|fork", "hooks": [cmd("hook", "session-start", "--mcp")]}],
-        "UserPromptSubmit": [{"hooks": [cmd("hook", "prompt")]}],
-        "PreToolUse": [{"matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch|mcp__.*", "hooks": [cmd("hook", "pre-tool")]}],
+        "UserPromptSubmit": [{"hooks": [cmd("hook", "prompt", "--mcp")]}],
+        "PreToolUse": [{"matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch|mcp__.*", "hooks": [cmd("hook", "pre-tool", "--mcp")]}],
     }}
 
 

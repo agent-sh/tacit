@@ -164,7 +164,7 @@ Every YAML option is listed here:
 | `delivery.meta_ceiling` | `TACIT_DELIVERY_META_CEILING` | Most metadata lines per prompt and per tool call; default `1` |
 | `delivery.log` | `TACIT_DELIVERY_LOG` | `on` (default): each hook block, with what its gates left out, is a line of this machine's private delivery log (`delivery/` in the state directory, mode 0600, never sent; a request's terms the store's index holds, never its text; SPEC.md, Delivery log) |
 | `delivery.log_days` | `TACIT_DELIVERY_LOG_DAYS` | Days of the delivery log kept; default `30` |
-| `delivery.titles` | `TACIT_DELIVERY_TITLES` | `on` (default): the start, prompt and shell-command push blocks print an agent's note as a title (name, whose, type) the agent opens with `tacit_fact`; the owner's rules, rulings, statements and the notes holding their words or confirmed by them stay whole; `off` prints whole lines everywhere (SPEC.md, Titles) |
+| `delivery.titles` | `TACIT_DELIVERY_TITLES` | `on` (default): in a harness with tacit's MCP server (`tacit install claude`), the start, prompt and shell-command push blocks print an agent's note as a title (name, whose, type) the agent opens with `tacit_fact`; the owner's rules, rulings, statements and the notes holding their words or confirmed by them stay whole; `off` prints whole lines everywhere (SPEC.md, Titles) |
 | `verify_roots` | `TACIT_VERIFY_ROOTS` | Extra permitted source directories; YAML list, `PATH` separator in environment; every directory must exist |
 | `runner` | `TACIT_RUNNER` | Default CLI for all model jobs; `claude` |
 | `runners` | `TACIT_<ROLE>_RUNNER` | Per-role CLI overrides |

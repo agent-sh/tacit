@@ -453,7 +453,8 @@ func installHooks(path, exe string) error { return installHooksFor(path, exe, ru
 func installHooksFor(path, exe, goos string) error { return installHooksWith(path, exe, goos, nil) }
 
 // installHooksWith is installHooksFor with extra arguments for the
-// SessionStart hook (--mcp: the harness has tacit's MCP server).
+// SessionStart, UserPromptSubmit and PreToolUse hooks (--mcp: the harness
+// has tacit's MCP server, which titles need: SPEC.md, "Titles").
 //
 // The entries: SessionStart on a start, a resume, a clear, a compaction and a fork
 // (startSources; the hook answers each by what the context then holds,
@@ -482,12 +483,12 @@ func installHooksWith(path, exe, goos string, startArgs []string) error {
 	}
 	events := map[string][]spec{
 		"SessionStart":     {{startSources, "session-start", startArgs}},
-		"UserPromptSubmit": {{"", "prompt", nil}},
+		"UserPromptSubmit": {{"", "prompt", startArgs}},
 		"PreCompact":       {{"", "pre-compact", nil}},
 		// PreToolUse: before an edit or a shell command, the one rule,
 		// decision or past mistake whose applies_to names that file or
 		// command (preTool). It never blocks the call.
-		"PreToolUse": {{toolPushTools, "pre-tool", nil}},
+		"PreToolUse": {{toolPushTools, "pre-tool", startArgs}},
 	}
 	for event, specs := range events {
 		handlers := make([]map[string]any, len(specs))

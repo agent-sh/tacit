@@ -148,7 +148,7 @@ type logCand struct {
 // blocks no A/B measured (after a compaction, the summary's selection, a
 // resume, an edit's push) call search.Block.
 func hookBlock(hits []search.Hit, title, note string) string {
-	if !deliveryTitles() || !slices.ContainsFunc(hits, func(h search.Hit) bool { return !h.OwnerLine() }) {
+	if !deliveryTitles() || !hookMCP || !slices.ContainsFunc(hits, func(h search.Hit) bool { return !h.OwnerLine() }) {
 		return search.Block(hits, title)
 	}
 	if dlog != nil {
@@ -159,6 +159,12 @@ func hookBlock(hits []search.Hit, title, note string) string {
 	}
 	return search.TitleBlock(hits, title+note)
 }
+
+// hookMCP: the hook was told the harness has tacit's MCP server (--mcp,
+// which `tacit install claude` writes on the start, prompt and push hooks).
+// Titles need it: the A/B measured them there, with tacit_fact to open one.
+// A harness without it (Codex, Hermes, --no-mcp) keeps whole lines.
+var hookMCP bool
 
 // titlesNote names both ways to open a fact: the MCP tool where the
 // harness has tacit's server, the command where it has not (the prompt and

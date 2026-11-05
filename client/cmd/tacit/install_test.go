@@ -277,7 +277,7 @@ func TestInstallClaudeRegistersTheMCPServer(t *testing.T) {
 		at += i
 	}
 	hooks, _ := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
-	if !strings.Contains(string(hooks), "hook session-start --mcp") || !strings.Contains(string(hooks), "hook prompt\"") {
+	if !strings.Contains(string(hooks), "hook session-start --mcp") || !strings.Contains(string(hooks), "hook prompt --mcp\"") || !strings.Contains(string(hooks), "hook pre-tool --mcp\"") || strings.Contains(string(hooks), "pre-compact --mcp") {
 		t.Fatalf("hooks:\n%s", hooks)
 	}
 	// Idempotent: same bytes, the backup untouched.

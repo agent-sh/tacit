@@ -215,7 +215,7 @@ func preTool(s *store.Store, in hookInput) {
 	// A shell command's push is titled, as the titles A/B measured it; an
 	// edit's push keeps whole lines: the A/B made no edit (SPEC.md, "Titles").
 	block := search.Block(hits, "# tacit: before this step")
-	if command != "" && len(rel) == 0 {
+	if command != "" {
 		block = hookBlock(hits, "# tacit: before this step", titlesNote)
 	}
 	for _, l := range lines {

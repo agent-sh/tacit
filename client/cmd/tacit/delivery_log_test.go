@@ -591,7 +591,7 @@ func TestHookTitlesWithTheSettingOn(t *testing.T) {
 		t.Fatalf("off: %s", out)
 	}
 	t.Setenv("TACIT_DELIVERY_TITLES", "on")
-	out := hookOut(t, promptPayload(cwd, "s2", prompt), "prompt")
+	out := hookOut(t, promptPayload(cwd, "s2", prompt), "prompt", "--mcp")
 	if strings.Contains(out, "one shard lock per tenant") || !strings.Contains(out, "- scheduler-shard-locks: agent note (") || !strings.Contains(out, "), decision\n") || !strings.Contains(out, titlesNote) {
 		t.Fatalf("on: %s", out)
 	}
@@ -601,7 +601,17 @@ func TestHookTitlesWithTheSettingOn(t *testing.T) {
 			forms = append(forms, e.Session+":"+c.Form)
 		}
 	}
-	if strings.Join(forms, " ") != "s1:full s2:title" {
+	// A harness without tacit's MCP server (no --mcp) keeps whole lines.
+	if out := hookOut(t, promptPayload(cwd, "s3", prompt), "prompt"); !strings.Contains(out, "one shard lock per tenant") || strings.Contains(out, "titles:") {
+		t.Fatalf("no MCP server: %s", out)
+	}
+	forms = forms[:0]
+	for _, e := range readDeliveryLog(t, state) {
+		if c := candOf(e, "scheduler-shard-locks"); c != nil && c.Delivered {
+			forms = append(forms, e.Session+":"+c.Form)
+		}
+	}
+	if strings.Join(forms, " ") != "s1:full s2:title s3:full" {
 		t.Fatalf("forms: %v", forms)
 	}
 }
@@ -674,11 +684,11 @@ func TestPushTitlesForCommandsOnly(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state")
 	t.Setenv("TACIT_STATE_DIR", state)
 	t.Setenv("TACIT_DELIVERY_TITLES", "on")
-	if out := hookOut(t, toolPayload(cwd, "s1", "Bash", map[string]any{"command": "make lint"}), "pre-tool"); strings.Contains(out, "strict profile") || !strings.Contains(out, "lint-before-push: agent note (") || !strings.Contains(out, "titles:") {
+	if out := hookOut(t, toolPayload(cwd, "s1", "Bash", map[string]any{"command": "make lint"}), "pre-tool", "--mcp"); strings.Contains(out, "strict profile") || !strings.Contains(out, "lint-before-push: agent note (") || !strings.Contains(out, "titles:") {
 		t.Fatalf("command push: %s", out)
 	}
 	edit := toolPayload(cwd, "s1", "Edit", map[string]any{"file_path": filepath.Join(cwd, "src", "scheduler", "worker.go"), "old_string": "a", "new_string": "b"})
-	if out := hookOut(t, edit, "pre-tool"); !strings.Contains(out, "package globals") || strings.Contains(out, "titles:") {
+	if out := hookOut(t, edit, "pre-tool", "--mcp"); !strings.Contains(out, "package globals") || strings.Contains(out, "titles:") {
 		t.Fatalf("edit push: %s", out)
 	}
 	forms := map[string]string{}
@@ -699,7 +709,8 @@ func TestPushTitlesForCommandsOnly(t *testing.T) {
 func TestTitlesLeaveAnOwnersBlockWhole(t *testing.T) {
 	t.Setenv("TACIT_DELIVERY_TITLES", "on")
 	t.Setenv("TACIT_STATE_DIR", t.TempDir())
-	t.Cleanup(func() { dlog, logPending = nil, nil })
+	hookMCP = true
+	t.Cleanup(func() { dlog, logPending, hookMCP = nil, nil, false })
 	rule := search.Hit{Name: "signoff", Path: "user/signoff.md", Type: "user_standard", Ruling: true, Created: "2026-10-01", Description: "Every commit carries a Signed-off-by trailer"}
 	beginLog("prompt", hookInput{SessionID: "s1"}, "commit the change", nil, nil)
 	e := dlog

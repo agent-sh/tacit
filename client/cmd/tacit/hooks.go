@@ -152,6 +152,7 @@ func runHook(args []string) int {
 	}
 	// The delivery log's lines, after the answer is printed (flushLog).
 	defer flushLog()
+	hookMCP = slices.Contains(args[1:], "--mcp")
 	var in hookInput
 	raw, _ := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
 	_ = json.Unmarshal(raw, &in)
