@@ -213,20 +213,66 @@ func judgeCommand(ctx context.Context, model, dir string) (*exec.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The AWS SDK also reads an endpoint from its config files, which no
+	// environment check sees: on the bearer or key route the call reads none
+	// (empty files of its own); on a profile route a config with an
+	// endpoint_url refuses the call.
+	if !envHas(env, "AWS_PROFILE") {
+		empty := filepath.Join(deliveryLogDir(), "judge-aws-empty")
+		if err := os.MkdirAll(deliveryLogDir(), 0o700); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(empty, nil, 0o600); err != nil {
+			return nil, err
+		}
+		env = append(env, "AWS_CONFIG_FILE="+empty, "AWS_SHARED_CREDENTIALS_FILE="+empty)
+	} else if awsConfigEndpoint(env) {
+		return nil, errors.New("the AWS config names an endpoint_url; the judge does not run over it")
+	}
 	cmd := exec.CommandContext(ctx, "claude", "-p", "--output-format", "json", "--model", model,
 		"--tools", "", "--setting-sources", "local", "--strict-mcp-config", "--no-session-persistence")
 	cmd.Dir, cmd.Env = dir, env
 	return cmd, nil
 }
 
+func envHas(env []string, name string) bool {
+	for _, kv := range env {
+		if k, v, _ := strings.Cut(kv, "="); k == name && strings.TrimSpace(v) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// awsConfigEndpoint reports an endpoint_url (or a services section that can
+// hold one) in the AWS config or credentials file a profile route reads.
+func awsConfigEndpoint(env []string) bool {
+	home := ""
+	for _, kv := range env {
+		if k, v, _ := strings.Cut(kv, "="); k == "HOME" {
+			home = v
+		}
+	}
+	for _, p := range []string{filepath.Join(home, ".aws", "config"), filepath.Join(home, ".aws", "credentials")} {
+		if b, err := os.ReadFile(p); err == nil && regexp.MustCompile(`(?im)^\s*(endpoint_url|services)\s*=`).Match(b) {
+			return true
+		}
+	}
+	return false
+}
+
 // errJudgeRefused is a refusal or a rate limit of the route: the pass stops
 // and a later one tries again.
 var errJudgeRefused = errors.New("the route refused the judge's call")
 
-// A rate limit, or a route that refuses its credentials (an expired or
-// invalid token): neither says anything about the lines, so neither counts
-// against their tries.
-var rateLimitRx = regexp.MustCompile(`(?i)rate.?limit|usage limit|hit your .*limit|quota|overloaded|429|too many requests|expired|invalid.*(token|credential)|unauthori[sz]ed|forbidden|access ?denied|security token|401|403`)
+// routeRefusal reports an error of the route, not of the lines: a rate
+// limit or an overload, or a route that refuses its credentials (an API
+// error 401, 403 or 429, or AWS's own words for a bad or expired token).
+// Neither says anything about the lines, so neither counts against their
+// tries; any other error does (a prompt too long, a bad request).
+func routeRefusal(text string) bool { return routeRefusalRx.MatchString(text) }
+
+var routeRefusalRx = regexp.MustCompile(`(?i)rate.?limit|usage limit|hit your .*limit|overloaded|too many requests|API Error: (401|403|429)\b|security token included in the request is (invalid|expired)|ExpiredToken|UnrecognizedClient|AccessDenied`)
 
 // judgeCall runs one judge prompt and answers its text and the model that
 // answered. Tests replace it.
@@ -257,7 +303,7 @@ var judgeCall = func(ctx context.Context, model, prompt string) (string, string,
 	}
 	_ = json.Unmarshal(out.Bytes(), &res)
 	if err != nil || res.IsError {
-		if rateLimitRx.MatchString(errb.String() + res.Result) {
+		if routeRefusal(errb.String() + res.Result) {
 			return "", "", errJudgeRefused
 		}
 		return "", "", fmt.Errorf("claude -p: %v %s", err, judgeClip(errb.String()+" "+res.Result, 300))

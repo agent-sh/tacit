@@ -38,7 +38,8 @@ func TestJudgeEnvBedrockRoute(t *testing.T) {
 	}
 	old := judgeEnvKeep
 	t.Cleanup(func() { judgeEnvKeep = old })
-	for _, name := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_BEDROCK_BASE_URL", "AWS_ENDPOINT_URL_BEDROCK_RUNTIME", "CLAUDE_CODE_SKIP_BEDROCK_AUTH", "CLAUDE_CODE_USE_VERTEX", "HTTPS_PROXY"} {
+	for _, name := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_BEDROCK_BASE_URL", "AWS_ENDPOINT_URL_BEDROCK_RUNTIME", "CLAUDE_CODE_SKIP_BEDROCK_AUTH", "CLAUDE_CODE_USE_VERTEX", "HTTPS_PROXY",
+		"CLAUDE_CONFIG_DIR", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_CUSTOM_HEADERS", "CLAUDE_CODE_PLUGIN_DIRS"} {
 		judgeEnvKeep = regexp.MustCompile(`^(PATH|` + name + `|CLAUDE_CODE_USE_BEDROCK|AWS_BEARER_TOKEN_BEDROCK)$`)
 		if _, err := judgeEnv([]string{"PATH=/bin", name + "=x", "CLAUDE_CODE_USE_BEDROCK=1", "AWS_BEARER_TOKEN_BEDROCK=t"}); err == nil || errors.Is(err, errJudgeNoRoute) {
 			t.Fatalf("%s was passed: %v", name, err)
@@ -447,5 +448,61 @@ func TestJudgeRefusesLocalSettings(t *testing.T) {
 	os.MkdirAll(filepath.Join(deliveryLogDir(), "judge-cwd", ".claude"), 0o700)
 	if _, _, err := judgeCall(context.Background(), "opus", "x"); err == nil || !strings.Contains(err.Error(), ".claude") {
 		t.Fatalf("ran over a .claude: %v", err)
+	}
+}
+
+// Only the route's own errors end a pass without counting against the
+// lines; an error of the request counts.
+func TestRouteRefusal(t *testing.T) {
+	for text, want := range map[string]bool{
+		"API Error: 429 Too Many Requests":                      true,
+		"API Error: 403 {\"message\":\"x\"}":                    true,
+		"API Error: 401 unauthorized":                           true,
+		"rate limit reached":                                    true,
+		"Overloaded":                                            true,
+		"The security token included in the request is expired": true,
+		"ExpiredTokenException: token expired":                  true,
+		"UnrecognizedClientException":                           true,
+		"AccessDeniedException: no access":                      true,
+		`API Error: 400 {"type":"invalid_request_error","message":"prompt is too long: 210000 tokens > 200000 maximum"}`: false,
+		"max_tokens: 64000 > 32000":                     false,
+		"API Error: 500 request_id req_403abc internal": false,
+		"took 14030ms":                                  false,
+		"invalid token count in response":               false,
+	} {
+		if got := routeRefusal(text); got != want {
+			t.Errorf("routeRefusal(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
+
+// The AWS SDK's config files: none on the bearer route, and a profile
+// route whose config names an endpoint refuses the call.
+func TestJudgeCommandAWSConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("TACIT_STATE_DIR", t.TempDir())
+	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "t")
+	t.Setenv("AWS_PROFILE", "")
+	cmd, err := judgeCommand(context.Background(), "m", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg string
+	for _, kv := range cmd.Env {
+		if v, ok := strings.CutPrefix(kv, "AWS_CONFIG_FILE="); ok {
+			cfg = v
+		}
+	}
+	if b, err := os.ReadFile(cfg); cfg == "" || err != nil || len(b) != 0 {
+		t.Fatalf("no empty AWS config: %q %v", cfg, err)
+	}
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("AWS_PROFILE", "p")
+	os.MkdirAll(filepath.Join(home, ".aws"), 0o700)
+	os.WriteFile(filepath.Join(home, ".aws", "config"), []byte("[profile p]\nendpoint_url = https://gw.example\n"), 0o600)
+	if _, err := judgeCommand(context.Background(), "m", t.TempDir()); err == nil {
+		t.Fatal("a profile config with an endpoint_url was run over")
 	}
 }

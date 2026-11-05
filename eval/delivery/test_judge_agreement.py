@@ -118,6 +118,17 @@ class Agreement(unittest.TestCase):
                                 "--projects", os.path.join(d, "projects"), "--tacit", fake, "--sample", "5",
                                 "--compare", other, "--out", spot], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
+            # A sample smaller than the pool is the seed-7 draw.
+            one = os.path.join(d, "one.json")
+            r1 = subprocess.run([sys.executable, "-I", os.path.join(HERE, "judge_agreement.py"), "--cases", cases, "--store", store,
+                                 "--projects", os.path.join(d, "projects"), "--tacit", fake, "--sample", "1",
+                                 "--compare", other, "--out", one], capture_output=True, text=True)
+            self.assertEqual(r1.returncode, 0, r1.stderr)
+            with open(one + ".verdicts.jsonl") as fh:
+                got = [(v["block"], v["fact"]) for v in map(json.loads, fh)]
+            pool = sorted([("c1", "alpha-fact"), ("c1", "beta-fact")])
+            self.assertEqual(got[-1], ja.random.Random(7).sample(pool, 1)[0])
+            self.assertEqual(r.returncode, 0, r.stderr)
             with open(spot) as fh:
                 rep = json.load(fh)
             self.assertEqual(rep["lines"], 2)  # the two lines the other run judged
