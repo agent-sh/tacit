@@ -21,7 +21,6 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/events"
-	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
@@ -552,20 +551,16 @@ func alignedLineStart(path string, off int64) int64 {
 	return off + int64(len(skipped))
 }
 
-// factDescription is the description of the fact at a store path, or "".
+// factDescription is the description of the fact at a store or overlay
+// path, or "".
 func factDescription(s *store.Store, rel string) string {
-	if s == nil || rel == "" || strings.Contains(rel, "..") {
+	if strings.Contains(rel, "..") {
 		return ""
 	}
-	data, err := os.ReadFile(filepath.Join(s.Dir, filepath.FromSlash(rel)))
-	if err != nil {
-		return ""
+	if f := factAt(s, rel); f != nil {
+		return f.Meta.Description
 	}
-	f, err := fact.Parse(rel, data)
-	if err != nil {
-		return ""
-	}
-	return f.Meta.Description
+	return ""
 }
 
 // deliveryJudgePass gives every line that settled since the last pass its
@@ -604,12 +599,18 @@ func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int,
 	}
 	st.Through = now.Add(-judgeAge).UTC().Format(time.RFC3339Nano)
 	if over := len(st.Pending) - judgePending; over > 0 {
-		// Given up at random, not by age, and named in the pass's entry.
+		// Given up at random, not by age, and named in the pass's entry. A
+		// waiting line is kept with the probability kept/waiting, so its p
+		// (the chance it is labelled) is thinned by that share.
 		judgeShuffle(st.Pending)
 		for _, m := range st.Pending[:over] {
 			pass.Lost = append(pass.Lost, m.Block+"/"+m.Fact)
 		}
+		keep := float64(judgePending) / float64(len(st.Pending))
 		st.Pending, pass.Dropped = st.Pending[over:], over
+		for i := range st.Pending {
+			st.Pending[i].P *= keep
+		}
 	}
 	var err error
 	if len(st.Pending) > 0 && st.Count < daily {

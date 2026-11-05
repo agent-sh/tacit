@@ -73,7 +73,7 @@ class Agreement(unittest.TestCase):
             fake = os.path.join(d, "tacit")
             with open(fake, "w") as fh:
                 fh.write(FAKE)
-            os.chmod(fake, 0o755)
+            os.chmod(fake, 0o700)
             out = os.path.join(d, "judge.json")
             r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "judge_agreement.py"), "--cases", cases, "--store", store,
                                 "--projects", os.path.join(d, "projects"), "--tacit", fake, "--out", out], capture_output=True, text=True)
@@ -92,6 +92,11 @@ class Agreement(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             with open(fake + ".calls") as fh:
                 self.assertEqual(len(fh.read()), calls + 1)
+            # Another model asked for: the kept verdicts are not reused.
+            r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "judge_agreement.py"), "--cases", cases, "--store", store,
+                                "--projects", os.path.join(d, "projects"), "--tacit", fake, "--model", "other", "--out", out], capture_output=True, text=True)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("another judge", r.stderr)
             with open(out + ".verdicts.jsonl") as fh:
                 ms = {(v["block"], v["fact"]): v.get("moment") for v in map(json.loads, fh)}
             self.assertEqual(ms[("c1", "alpha-fact")]["offset"], prompt_off)  # the prompt's own turn

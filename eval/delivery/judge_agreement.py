@@ -32,10 +32,12 @@ write --out outside the repository.
 import argparse
 import collections
 import glob
+import hashlib
 import importlib.util
 import json
 import os
 import random
+import shutil
 import subprocess
 import sys
 
@@ -158,6 +160,18 @@ def judge(rows, tacit, model, path, seed=7):
     cmd = [tacit, "delivery-judge"] + (["--model", model] if model else [])
     key = {(r["moment"]["block"], r["fact"]): k for k, r in enumerate(rows)}
     got = {}
+    # A run resumes only for the same judge: the binary (its digest, which
+    # covers the judge's prompt) and the model asked for.
+    with open(shutil.which(tacit) or tacit, "rb") as fh:
+        meta = {"tacit": hashlib.sha256(fh.read()).hexdigest(), "model": model}
+    if os.path.exists(path + ".meta"):
+        with open(path + ".meta") as fh:
+            if json.load(fh) != meta:
+                sys.exit(f"{path} holds verdicts of another judge (binary or model): measure it apart, with another --out")
+    elif os.path.exists(path):
+        sys.exit(f"{path} has no record of its judge: measure apart, with another --out")
+    with open(path + ".meta", "w") as fh:
+        json.dump(meta, fh)
     if os.path.exists(path):
         with open(path) as fh:
             for line in fh:

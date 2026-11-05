@@ -345,6 +345,12 @@ func TestJudgeOverflowAndRate(t *testing.T) {
 	if len(passes) != 1 || passes[0].Dropped != 7 || len(passes[0].Lost) != 7 || len(st.Pending) != judgePending {
 		t.Fatalf("pass %+v, pending %d", passes, len(st.Pending))
 	}
+	// The kept lines' p is thinned by the share kept.
+	for _, m := range st.Pending {
+		if m.Block == "old" && !near(m.P, 0.1*float64(judgePending)/float64(judgePending+7)) {
+			t.Fatalf("p %v", m.P)
+		}
+	}
 	// The pool held 2 lines: the rate is 0.8 of the cap over the cap.
 	if !near(passes[0].Rate, 0.8) {
 		t.Fatalf("rate %v", passes[0].Rate)
