@@ -193,6 +193,7 @@ func summaryStep(ctx context.Context, ix *search.Index, in hookInput, sit search
 	var out []search.Hit
 	kept := withoutClaims(hits)
 	logDropped(hits, kept, "withheld")
+	kept = withoutDenied(in.SessionID, kept)
 	for _, h := range kept {
 		if !seen[h.Name] {
 			seen[h.Name] = true

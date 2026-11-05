@@ -50,6 +50,10 @@ func TestMain(m *testing.M) {
 	os.Setenv("TACIT_DELIVERY_TITLES", "off")
 	// No dream test may call the judge's model.
 	os.Setenv("TACIT_DELIVERY_JUDGE", "off")
+	// Nor would a random hold-out or self-mark ask let them; their tests set
+	// the share and the draw themselves.
+	os.Setenv("TACIT_DELIVERY_HOLDOUT", "0")
+	os.Setenv("TACIT_DELIVERY_MARK_RATE", "0")
 	os.Exit(m.Run())
 }
 

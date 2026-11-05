@@ -932,3 +932,136 @@ func TestSelfMarksWindowAndLines(t *testing.T) {
 		t.Fatal("a failed mark kept its claim")
 	}
 }
+
+// A hold-out withholds one agent's note from a drawn prompt block, never an
+// owner's line and never a note another line names; it logs the share, the
+// withheld fact and each line's propensity (1 - q/k for an eligible note, 1
+// for the rest), and p_nothing q when the block's one line is its one
+// eligible note. A note the session was given before is no longer eligible.
+// Undrawn, nothing is withheld and the propensities are logged all the
+// same; with the share 0 or no session, nothing.
+func TestHoldOutsWithholdAnAgentsNoteOnly(t *testing.T) {
+	t.Setenv("TACIT_STATE_DIR", t.TempDir())
+	t.Setenv("TACIT_DELIVERY_HOLDOUT", "0.05")
+	draw := holdoutDraw
+	t.Cleanup(func() { holdoutDraw, dlog, logPending = draw, nil, nil })
+	rule := search.Hit{Name: "signoff", Path: "user/signoff.md", Ruling: true, Score: 30}
+	a := search.Hit{Name: "note-a", Path: "user/note-a.md", Score: 29}
+	b := search.Hit{Name: "note-b", Path: "user/note-b.md", Score: 28}
+	named := search.Hit{Name: "note-c", Path: "user/note-c.md", Score: 27}
+	b.Conflicts = []string{"note-c"} // b's line names c
+	run := func(session string, coin float64, pick int, hits ...search.Hit) (*logEntry, []search.Hit) {
+		holdoutDraw = func(n int) (float64, int) { return coin, pick }
+		beginLog("prompt", hookInput{SessionID: session}, "fix it", nil, nil)
+		e := dlog
+		logChose(hits, "ranked")
+		out := holdOut(session, hits)
+		endLog(out)
+		return e, out
+	}
+	e, out := run("s1", 0.01, 1, rule, a, b, named)
+	if names(out) != "signoff,note-a,note-c" || e.HeldOut != "note-b" || e.HoldoutQ != 0.05 {
+		t.Fatalf("drawn: %s, held out %q, q %v", names(out), e.HeldOut, e.HoldoutQ)
+	}
+	want := map[string][2]any{"signoff": {1.0, ""}, "note-a": {0.975, ""}, "note-b": {0.975, "holdout"}, "note-c": {1.0, ""}}
+	for n, w := range want {
+		c := candOf(*e, n)
+		if c == nil || c.P != w[0] || c.Dropped != w[1] {
+			t.Errorf("%s: %+v, want p %v dropped %q", n, c, w[0], w[1])
+		}
+	}
+	if !readNames(denyFile("s1"))["note-b"] {
+		t.Fatal("the withheld fact is not denied for the session")
+	}
+	e, out = run("s2", 0.9, 0, rule, a)
+	if names(out) != "signoff,note-a" || e.HeldOut != "" || candOf(*e, "note-a").P != 0.95 {
+		t.Fatalf("undrawn: %s, %+v", names(out), e)
+	}
+	// A note the session was given is decided: no longer eligible.
+	rememberNames("s3", []string{"note-a"})
+	e, out = run("s3", 0, 0, a)
+	if names(out) != "note-a" || e.HoldoutQ != 0 {
+		t.Fatalf("given before: %s, q %v", names(out), e.HoldoutQ)
+	}
+	// One line, one eligible note: the block shows nothing with probability q.
+	e, out = run("s4", 0, 0, a)
+	if len(out) != 0 || !e.Nothing || e.PNothing != 0.05 {
+		t.Fatalf("emptied: %v, nothing %v p %v", names(out), e.Nothing, e.PNothing)
+	}
+	e, _ = run("s5", 0.9, 0, a)
+	if e.Nothing || e.PNothing != 0.05 {
+		t.Fatalf("not emptied: nothing %v p %v", e.Nothing, e.PNothing)
+	}
+	// The owner's lines alone: nothing to withhold.
+	e, out = run("s6", 0, 0, rule)
+	if names(out) != "signoff" || e.HoldoutQ != 0 {
+		t.Fatalf("owner only: %s", names(out))
+	}
+	t.Setenv("TACIT_DELIVERY_HOLDOUT", "0")
+	if _, out = run("s7", 0, 0, rule, a); names(out) != "signoff,note-a" {
+		t.Fatalf("off: %s", names(out))
+	}
+	t.Setenv("TACIT_DELIVERY_HOLDOUT", "0.05")
+	if _, out = run("", 0, 0, a); names(out) != "note-a" {
+		t.Fatalf("no session: %s", names(out))
+	}
+}
+
+// In the hooks a withheld fact is denied for the session: not printed by
+// the prompt block that drew it, nor by a later prompt, a push or the start
+// again after a compaction, and logged dropped "holdout" there. The drawing
+// block's entry carries the share and the propensity; with the log off
+// there is no hold-out.
+func TestHoldOutDeniesTheFactForTheSession(t *testing.T) {
+	_, cwd := repoFirstRig(t,
+		fact.Meta{Name: "scheduler-shard-locks", Description: "The scheduler pool keeps one shard lock per tenant and a slot lock per job", Type: "design_decision", Scope: "projects/widget",
+			AppliesTo: fact.AppliesTo{Commands: []string{"make lint"}}},
+	)
+	state := filepath.Join(t.TempDir(), "state")
+	t.Setenv("TACIT_STATE_DIR", state)
+	t.Setenv("TACIT_DELIVERY_REPO_START", "off")
+	t.Setenv("TACIT_DELIVERY_PROMPT_ACTION", "off")
+	t.Setenv("TACIT_DELIVERY_HOLDOUT", "0.05")
+	draw := holdoutDraw
+	t.Cleanup(func() { holdoutDraw = draw })
+	prompt := "Fix the scheduler pool shard lock and slot lock race"
+	holdoutDraw = func(n int) (float64, int) { return 0, 0 }
+	if out := hookOut(t, promptPayload(cwd, "s1", prompt), "prompt", "--mcp"); strings.Contains(out, "scheduler-shard-locks") || strings.Contains(out, "titles") || strings.Contains(out, "tacit_mark") {
+		t.Fatalf("withheld fact printed: %s", out)
+	}
+	holdoutDraw = func(n int) (float64, int) { return 0.99, 0 }
+	if out := hookOut(t, promptPayload(cwd, "s1", prompt), "prompt", "--mcp"); strings.Contains(out, "scheduler-shard-locks") {
+		t.Fatalf("a later block gave the denied fact: %s", out)
+	}
+	if out := hookOut(t, toolPayload(cwd, "s1", "Bash", map[string]any{"command": "make lint"}), "pre-tool", "--mcp"); strings.Contains(out, "scheduler-shard-locks") {
+		t.Fatalf("a push gave the denied fact: %s", out)
+	}
+	forget("s1") // as a clear or a compaction does
+	if out := hookOut(t, promptPayload(cwd, "s1", prompt), "prompt", "--mcp"); strings.Contains(out, "scheduler-shard-locks") {
+		t.Fatalf("the denial did not outlast a compaction: %s", out)
+	}
+	if out := hookOut(t, promptPayload(cwd, "s2", prompt), "prompt", "--mcp"); !strings.Contains(out, "scheduler-shard-locks") {
+		t.Fatalf("another session is denied too: %s", out)
+	}
+	var drew *logEntry
+	denied := 0
+	for _, e := range readDeliveryLog(t, state) {
+		if e.HeldOut == "scheduler-shard-locks" {
+			drew = &e
+		}
+		if c := candOf(e, "scheduler-shard-locks"); e.Session == "s1" && e.HeldOut == "" && c != nil && c.Dropped == "holdout" {
+			denied++
+		}
+	}
+	if drew == nil || drew.HoldoutQ != 0.05 || candOf(*drew, "scheduler-shard-locks").P != 0.95 || drew.PNothing != 0.05 {
+		t.Fatalf("the drawing entry: %+v", drew)
+	}
+	if denied < 2 {
+		t.Fatalf("later blocks logged the denial %d times", denied)
+	}
+	t.Setenv("TACIT_DELIVERY_LOG", "off")
+	holdoutDraw = func(n int) (float64, int) { return 0, 0 }
+	if out := hookOut(t, promptPayload(cwd, "s3", prompt), "prompt", "--mcp"); !strings.Contains(out, "scheduler-shard-locks") {
+		t.Fatalf("a hold-out with the log off: %s", out)
+	}
+}

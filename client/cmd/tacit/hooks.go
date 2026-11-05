@@ -223,7 +223,7 @@ func runHook(args []string) int {
 		}
 		kept := withoutClaims(hits)
 		logDropped(hits, kept, "withheld")
-		hits = kept
+		hits = withoutDenied(in.SessionID, kept)
 		mcp := slices.Contains(args[1:], "--mcp")
 		if restart != restartFresh {
 			fmt.Print(restartBlock(ctx, ix, s, in, sit, recs, hits, restart, mcp))
@@ -292,7 +292,7 @@ func runHook(args []string) int {
 		}
 		kept := withoutClaims(strong)
 		logDropped(strong, kept, "withheld")
-		strong = kept
+		strong = holdOut(in.SessionID, withoutDenied(in.SessionID, kept))
 		remember(in.SessionID, strong)
 		if out := hookBlock(strong, "# tacit: facts matching this request", titlesNote); out != "" {
 			fmt.Print(out + markAsk(strong))
@@ -835,6 +835,9 @@ func rememberNames(id string, names []string) {
 		return
 	}
 	os.MkdirAll(filepath.Dir(p), 0o700)
+	// Every fact a hook gives is in the session's given set too, which no
+	// clear or compaction drops: a hold-out decides a fact's arm once.
+	appendNames(givenFile(id), names)
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
