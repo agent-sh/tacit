@@ -1,13 +1,11 @@
 Tacit keeps memory for coding agents in Markdown and git. Use a local store or share one across machines.
 
-This release moves the dreamer's judge onto the dreamer's Bedrock route (#153).
+This release lets a day's delivery log hold a full working day, and keeps the judge's entries on a full day (#155).
 
-- **Judge on Bedrock.** At the end of a full dream run, the judge calls `claude -p` on the same Bedrock route the dream run uses, with the model `global.anthropic.claude-opus-5-5` (`TACIT_DELIVERY_JUDGE_MODEL` overrides it). Previously it ran on a subscription login.
-  - The call keeps only what a process needs plus the Bedrock route's settings. No endpoint, proxy, gateway key or token, custom header, other config directory, plugin directory, skipped auth or other provider's switch reaches it.
-  - On the bearer or key route the call reads no AWS config file. On a profile route, a config that names an `endpoint_url` refuses the call.
-- **Skipped without a route.** A machine whose dreamer runs through another gateway, with no Bedrock route, skips the judge. It draws nothing, sends no case anywhere, logs a `judge-skip` entry, and the dream run says why.
-- **Errors.** Only the route's own errors end a pass without counting against the drawn lines: the CLI's API error status 401, 403, 429 or 529, or, when it gives no status, its words for a throttle, an overload or AWS credentials that do not load or have expired. Any other error counts against the lines.
-- **Measured.** The Bedrock judge was measured against the hand grades with `eval/delivery/judge_agreement.py` (which gains `--sample` and `--compare` for the spot check) under the preregistered rule (eval/DELIVERY.md, step 5, amendment). Its `relevant` labels pass; its `useful` labels do not, so they move nothing, and the offline evaluation's net value promotes nothing from this judge yet.
+- **A larger day file.** The delivery log's day file now grows to 64 MiB, up from 10 MiB. On a working machine a normal day passed the old cap by early evening. Most of a day is push entries that delivered nothing, which the propensities need, and every entry after the cap was dropped. 64 MiB is several times a normal day. The default window of 31 files still bounds a runaway hook loop under 2 GiB.
+- **The judge's entries keep their place.** The judge's label and pass entries may go 8 MiB past the cap, so a day the hooks filled never loses a label or a pass's record of its draw.
+- **A label the log cannot take.** It counts against the judge's daily cap and as a failed try, and waits for a later pass. After three tries it is given up and named in the pass's lost and failed lines.
+- **A lighter pool read.** The judge's pool decodes only prompt and push moments and keeps only their delivered lines, so a larger day costs it little.
 
 Upgrading: install the new binary. No index, store format or protocol change; the server needs no deploy.
 
