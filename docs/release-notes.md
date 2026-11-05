@@ -2,7 +2,7 @@ Tacit keeps memory for coding agents in Markdown and git. Use a local store or s
 
 This release bundles scrump 0.2.1, whose start-up is now measured in milliseconds (#150, #151), and adds an offline evaluation of delivery policies (#149).
 
-- **scrump 0.2.1.** The bundled redactor, and the one the Mac setup builds, moves from scrump 0.2.0 to 0.2.1. It compiles a rule only where one of its keywords occurs, so start-up on empty input drops from about 0.29 s to 0.012 s, with byte-identical output on scrump's differential suite. Every `tacit episode` call and every redacted write starts scrump, so this is their latency floor. Installing v0.9.30 puts scrump 0.2.0 back; installing this release brings 0.2.1. Building scrump from source needs rustc 1.89.
+- **scrump 0.2.1.** The bundled redactor, and the one the Mac setup builds, moves from scrump 0.2.0 to 0.2.1. It compiles a rule only where one of its keywords occurs, so start-up on empty input drops from about 0.29 s to 0.012 s, with byte-identical output on scrump's differential suite. Every `tacit episode` call and every redacted write starts scrump, so this is their latency floor. Installing v0.9.30 puts scrump 0.2.0 back; installing this release brings 0.2.1 (`scrump --version` shows which is on the PATH). Building scrump from source needs rustc 1.89.
 - **Offline evaluation.** `eval/delivery/offline.py` grades a delivery policy on past moments without running it, as useful and noise lines per moment.
   - Inputs: the hooks' logged delivery probabilities, and the dreamer's judge labels with the probability each line had of being judged.
   - Estimators: inverse propensity, its self-normalized form, and a doubly robust estimate, each with its support and bootstrap intervals over sessions.
