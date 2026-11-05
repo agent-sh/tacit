@@ -247,11 +247,21 @@ func envHas(env []string, name string) bool {
 // awsConfigEndpoint reports an endpoint_url (or a services section that can
 // hold one) in the AWS config or credentials file a profile route reads.
 func awsConfigEndpoint(env []string) bool {
-	home := ""
+	get := map[string]string{}
 	for _, kv := range env {
-		if k, v, _ := strings.Cut(kv, "="); k == "HOME" {
-			home = v
-		}
+		k, v, _ := strings.Cut(kv, "=")
+		get[strings.ToUpper(k)] = v
+	}
+	// The SDK's home: HOME, else Windows's.
+	home := get["HOME"]
+	if home == "" {
+		home = get["USERPROFILE"]
+	}
+	if home == "" && get["HOMEDRIVE"] != "" {
+		home = get["HOMEDRIVE"] + get["HOMEPATH"]
+	}
+	if home == "" {
+		return false
 	}
 	for _, p := range []string{filepath.Join(home, ".aws", "config"), filepath.Join(home, ".aws", "credentials")} {
 		if b, err := os.ReadFile(p); err == nil && regexp.MustCompile(`(?im)^\s*(endpoint_url|services)\s*=`).Match(b) {
@@ -272,7 +282,7 @@ var errJudgeRefused = errors.New("the route refused the judge's call")
 // tries; any other error does (a prompt too long, a bad request).
 func routeRefusal(text string) bool { return routeRefusalRx.MatchString(text) }
 
-var routeRefusalRx = regexp.MustCompile(`(?i)rate.?limit|usage limit|hit your .*limit|overloaded|too many requests|API Error: (401|403|429)\b|security token included in the request is (invalid|expired)|ExpiredToken|UnrecognizedClient|AccessDenied`)
+var routeRefusalRx = regexp.MustCompile(`(?i)rate.?limit|usage limit|hit your .*limit|overloaded|too many requests|too many tokens|API Error: (401|403|429|529)\b|Request rejected \((401|403|429|529)\)|temporary capacity issue|Could not load Amazon Bedrock credentials|security token included in the request is (invalid|expired)|ExpiredToken|UnrecognizedClient|AccessDenied`)
 
 // judgeCall runs one judge prompt and answers its text and the model that
 // answered. Tests replace it.
@@ -295,18 +305,29 @@ var judgeCall = func(ctx context.Context, model, prompt string) (string, string,
 	cmd.Stdin = strings.NewReader(prompt)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
-	err = cmd.Run()
+	return judgeOutcome(out.Bytes(), errb.String(), cmd.Run(), model)
+}
+
+// judgeOutcome reads a judge call's answer: its text and the model that
+// answered, errJudgeRefused for an error of the route (the CLI's HTTP
+// status when it gives one, else routeRefusal's words), or the error.
+func judgeOutcome(out []byte, stderr string, runErr error, model string) (string, string, error) {
 	var res struct {
-		Result     string                     `json:"result"`
-		IsError    bool                       `json:"is_error"`
-		ModelUsage map[string]json.RawMessage `json:"modelUsage"`
+		Result         string                     `json:"result"`
+		IsError        bool                       `json:"is_error"`
+		APIErrorStatus int                        `json:"api_error_status"`
+		ModelUsage     map[string]json.RawMessage `json:"modelUsage"`
 	}
-	_ = json.Unmarshal(out.Bytes(), &res)
-	if err != nil || res.IsError {
-		if routeRefusal(errb.String() + res.Result) {
+	_ = json.Unmarshal(out, &res)
+	if runErr != nil || res.IsError {
+		switch res.APIErrorStatus {
+		case 401, 403, 429, 529:
 			return "", "", errJudgeRefused
 		}
-		return "", "", fmt.Errorf("claude -p: %v %s", err, judgeClip(errb.String()+" "+res.Result, 300))
+		if routeRefusal(stderr + " " + res.Result) {
+			return "", "", errJudgeRefused
+		}
+		return "", "", fmt.Errorf("claude -p: %v %s", runErr, judgeClip(stderr+" "+res.Result, 300))
 	}
 	return res.Result, answeredBy(res.ModelUsage, model), nil
 }

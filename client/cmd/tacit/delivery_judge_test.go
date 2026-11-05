@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -75,6 +76,7 @@ func TestJudgePassWithoutARoute(t *testing.T) {
 // The judge's call is `claude -p` with the reduced environment, local
 // settings only, no MCP server, no tools and no session kept.
 func TestJudgeCommand(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("ANTHROPIC_BASE_URL", "https://gw")
 	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "1")
 	t.Setenv("AWS_PROFILE", "p")
@@ -464,6 +466,9 @@ func TestRouteRefusal(t *testing.T) {
 		"ExpiredTokenException: token expired":                  true,
 		"UnrecognizedClientException":                           true,
 		"AccessDeniedException: no access":                      true,
+		"API Error: Request rejected (429) · Too many tokens, please wait before trying again.":                          true,
+		"API Error: Request rejected (429) · this may be a temporary capacity issue.":                                    true,
+		"API Error: Could not load Amazon Bedrock credentials · check your AWS setup":                                    true,
 		`API Error: 400 {"type":"invalid_request_error","message":"prompt is too long: 210000 tokens > 200000 maximum"}`: false,
 		"max_tokens: 64000 > 32000":                     false,
 		"API Error: 500 request_id req_403abc internal": false,
@@ -489,20 +494,71 @@ func TestJudgeCommandAWSConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var cfg string
-	for _, kv := range cmd.Env {
-		if v, ok := strings.CutPrefix(kv, "AWS_CONFIG_FILE="); ok {
-			cfg = v
+	empty := func(cmd *exec.Cmd) {
+		t.Helper()
+		for _, name := range []string{"AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE"} {
+			var f string
+			for _, kv := range cmd.Env {
+				if v, ok := strings.CutPrefix(kv, name+"="); ok {
+					f = v
+				}
+			}
+			if b, err := os.ReadFile(f); f == "" || err != nil || len(b) != 0 {
+				t.Fatalf("no empty %s: %q %v", name, f, err)
+			}
 		}
 	}
-	if b, err := os.ReadFile(cfg); cfg == "" || err != nil || len(b) != 0 {
-		t.Fatalf("no empty AWS config: %q %v", cfg, err)
-	}
-	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
-	t.Setenv("AWS_PROFILE", "p")
+	empty(cmd)
+	// The bearer route reads no AWS file, an endpoint in ~/.aws/config too.
 	os.MkdirAll(filepath.Join(home, ".aws"), 0o700)
 	os.WriteFile(filepath.Join(home, ".aws", "config"), []byte("[profile p]\nendpoint_url = https://gw.example\n"), 0o600)
-	if _, err := judgeCommand(context.Background(), "m", t.TempDir()); err == nil {
-		t.Fatal("a profile config with an endpoint_url was run over")
+	if cmd, err = judgeCommand(context.Background(), "m", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	empty(cmd)
+	// A profile route: an endpoint_url or a services section in the config
+	// or the credentials file refuses the call; a plain profile runs.
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("AWS_PROFILE", "p")
+	for _, c := range []struct{ file, text string }{
+		{"config", "[profile p]\nendpoint_url = https://gw.example\n"},
+		{"config", "[profile p]\nservices = gw\n"},
+		{"credentials", "[p]\nendpoint_url = https://gw.example\n"},
+	} {
+		os.Remove(filepath.Join(home, ".aws", "config"))
+		os.Remove(filepath.Join(home, ".aws", "credentials"))
+		os.WriteFile(filepath.Join(home, ".aws", c.file), []byte(c.text), 0o600)
+		if _, err := judgeCommand(context.Background(), "m", t.TempDir()); err == nil {
+			t.Fatalf("%s %q was run over", c.file, c.text)
+		}
+	}
+	os.Remove(filepath.Join(home, ".aws", "credentials"))
+	os.WriteFile(filepath.Join(home, ".aws", "config"), []byte("[profile p]\nregion = us-east-1\n"), 0o600)
+	if _, err := judgeCommand(context.Background(), "m", t.TempDir()); err != nil {
+		t.Fatalf("a plain profile: %v", err)
+	}
+}
+
+// The CLI's structured status decides first: a 429 in the JSON result is
+// the route's, whatever its text; a 400 is the request's.
+func TestJudgeOutcome(t *testing.T) {
+	fail := errors.New("exit status 1")
+	for _, c := range []struct {
+		out  string
+		want error
+	}{
+		{`{"is_error":true,"api_error_status":429,"result":"something new"}`, errJudgeRefused},
+		{`{"is_error":true,"api_error_status":529,"result":"x"}`, errJudgeRefused},
+		{`{"is_error":true,"api_error_status":400,"result":"API Error: 400 prompt is too long: 210000 tokens"}`, nil},
+		{`{"is_error":true,"result":"API Error: Request rejected (429) · Too many tokens, please wait before trying again."}`, errJudgeRefused},
+	} {
+		_, _, err := judgeOutcome([]byte(c.out), "", fail, "m")
+		if c.want != nil && !errors.Is(err, c.want) || c.want == nil && (err == nil || errors.Is(err, errJudgeRefused)) {
+			t.Errorf("%s: %v", c.out, err)
+		}
+	}
+	text, by, err := judgeOutcome([]byte(`{"result":"{}","modelUsage":{"claude-x":{}}}`), "", nil, "m")
+	if err != nil || text != "{}" || by != "claude-x" {
+		t.Fatalf("%q %q %v", text, by, err)
 	}
 }
