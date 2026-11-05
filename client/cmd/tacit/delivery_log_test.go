@@ -749,7 +749,7 @@ func TestSelfMarksAreSampledAndLogged(t *testing.T) {
 	}
 	markDraw = func() float64 { return 0.01 }
 	out := hookOut(t, promptPayload(cwd, "s2", prompt), "prompt", "--mcp")
-	if !strings.Contains(out, "`tacit_mark` (block ") {
+	if !strings.Contains(out, "`mcp__tacit__tacit_mark` (block ") {
 		t.Fatalf("drawn: %s", out)
 	}
 	if out := hookOut(t, promptPayload(cwd, "s3", prompt), "prompt"); strings.Contains(out, "tacit_mark") {
@@ -813,8 +813,24 @@ func TestSelfMarksAreSampledAndLogged(t *testing.T) {
 		}
 		return res
 	}
-	if res := call(map[string]any{"block": asked.ID, "helped": []string{"scheduler-shard-locks", "no-such-fact", "Not A Slug"}}); res.IsError {
+	errText := func(res *mcp.CallToolResult) string {
+		t.Helper()
+		if !res.IsError {
+			return ""
+		}
+		return res.Content[0].(*mcp.TextContent).Text
+	}
+	if e := errText(call(map[string]any{"block": asked.ID, "helped": []string{"scheduler-shard-locks"}, "not_helped": []string{"scheduler-shard-locks"}})); !strings.Contains(e, "name at least one") {
+		t.Fatalf("a mark with no name left: %q", e)
+	}
+	if e := errText(call(map[string]any{"block": asked.ID, "helped": []string{"pool-lock-order", "no-such-fact", "Not A Slug"}})); !strings.Contains(e, "name at least one") {
+		t.Fatalf("names the block did not print: %q", e)
+	}
+	if res := call(map[string]any{"block": asked.ID, "not_helped": []string{"scheduler-shard-locks"}}); res.IsError {
 		t.Fatalf("tacit_mark: %+v", res)
+	}
+	if e := errText(call(map[string]any{"block": asked.ID, "helped": []string{"scheduler-shard-locks"}})); !strings.Contains(e, "marked already") {
+		t.Fatalf("a second mark: %q", e)
 	}
 	var s1 logEntry
 	for _, e := range readDeliveryLog(t, state) {
@@ -822,13 +838,10 @@ func TestSelfMarksAreSampledAndLogged(t *testing.T) {
 			s1 = e
 		}
 	}
-	if res := call(map[string]any{"block": s1.ID, "helped": []string{"scheduler-shard-locks"}}); !res.IsError {
-		t.Fatal("a mark for a block that did not ask was taken")
+	if e := errText(call(map[string]any{"block": s1.ID, "helped": []string{"scheduler-shard-locks"}})); !strings.Contains(e, "no tacit block asked") {
+		t.Fatalf("a block that did not ask: %q", e)
 	}
-	if res := call(map[string]any{"block": asked.ID, "helped": []string{"scheduler-shard-locks"}, "not_helped": []string{"scheduler-shard-locks"}}); !res.IsError {
-		t.Fatal("a mark with no name left was taken")
-	}
-	if res := call(map[string]any{"block": "not-an-id"}); !res.IsError {
+	if e := errText(call(map[string]any{"block": "not-an-id"})); e == "" {
 		t.Fatal("a bad id was taken")
 	}
 	var marks []*logMarkStep
@@ -837,7 +850,40 @@ func TestSelfMarksAreSampledAndLogged(t *testing.T) {
 			marks = append(marks, e.Mark)
 		}
 	}
-	if len(marks) != 1 || marks[0].Block != asked.ID || strings.Join(marks[0].Helped, ",") != "scheduler-shard-locks" {
+	if len(marks) != 1 || marks[0].Block != asked.ID || strings.Join(marks[0].NotHelped, ",") != "scheduler-shard-locks" || len(marks[0].Helped) != 0 {
 		t.Fatalf("marks: %+v", marks)
+	}
+	t.Setenv("TACIT_DELIVERY_LOG", "off")
+	if e := errText(call(map[string]any{"block": asked.ID, "helped": []string{"scheduler-shard-locks"}})); !strings.Contains(e, "log is off") {
+		t.Fatalf("log off: %q", e)
+	}
+}
+
+// A mark follows its block within today and the day before: a block that
+// asked three days ago is no block to mark. A local note the block printed
+// can be marked; an owner's line cannot.
+func TestSelfMarksWindowAndLines(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("TACIT_STATE_DIR", state)
+	now := time.Now()
+	old := &logEntry{V: 1, ID: "00000000000000aa", Hook: "prompt", MarkAsked: true, Cands: []logCand{{Name: "a-note", Delivered: true, Prov: "agent"}}}
+	writeLogEntry(old, now.AddDate(0, 0, -3))
+	if err := logMark(old.ID, []string{"a-note"}, nil); err == nil || !strings.Contains(err.Error(), "no tacit block asked") {
+		t.Fatalf("a three-day-old block: %v", err)
+	}
+	fresh := &logEntry{V: 1, ID: "00000000000000bb", Hook: "prompt", MarkAsked: true, Cands: []logCand{
+		{Name: "local-note", Delivered: true, Prov: "agent", Local: true}, {Name: "owner-rule", Delivered: true, Prov: "rule"}, {Name: "not-shown", Prov: "agent"}}}
+	writeLogEntry(fresh, now)
+	if err := logMark(fresh.ID, []string{"local-note", "owner-rule", "not-shown"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var got *logMarkStep
+	for _, e := range readDeliveryLog(t, state) {
+		if e.Hook == "mark" {
+			got = e.Mark
+		}
+	}
+	if got == nil || strings.Join(got.Helped, ",") != "local-note" {
+		t.Fatalf("mark: %+v", got)
 	}
 }

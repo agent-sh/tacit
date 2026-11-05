@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,9 +16,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/search"
-	"github.com/agent-sh/tacit/client/internal/store"
 )
 
 // Sampled self-marks (SPEC.md, "Self-marks"): on a small share of the
@@ -53,7 +52,7 @@ func markAsk(hits []search.Hit) string {
 		return ""
 	}
 	dlog.MarkAsked = true
-	return fmt.Sprintf("# tacit: when this request is done, say which of these lines helped with `tacit_mark` (block %s); it is optional and nothing waits for it\n", dlog.ID)
+	return fmt.Sprintf("# tacit: when this request is done, say which of these lines helped with `mcp__tacit__tacit_mark` (block %s); it is optional and nothing waits for it\n", dlog.ID)
 }
 
 // logIDRx is a log entry's id (logID).
@@ -78,57 +77,63 @@ func hasAgentLine(hits []search.Hit) bool {
 // markCap bounds the names one mark keeps (the log's candidate cap).
 const markCap = logCandCap
 
-// askedBlock reports whether the log holds a block of this id that asked
-// for a self-mark, in the window a mark can follow its block (today and
-// the day before).
-func askedBlock(id string, now time.Time) bool {
-	for _, e := range readLogDays(now.AddDate(0, 0, -1)) {
-		if e.ID == id && e.MarkAsked {
-			return true
-		}
-	}
-	return false
-}
+// ownerProv are the provenances of the owner's own lines (OwnerLine), which
+// no agent grades.
+var ownerProv = map[string]bool{"rule": true, "owner": true, "statement": true, "words": true, "confirmed": true}
 
-// readLogDays is the log's entries from since's day on.
-func readLogDays(since time.Time) []logEntry {
-	dir := deliveryLogDir()
-	entries, _ := os.ReadDir(dir)
-	from := since.UTC().Format("2006-01-02")
-	var out []logEntry
-	for _, x := range entries {
-		m := logDay.FindStringSubmatch(x.Name())
-		if m == nil || m[1] < from {
-			continue
+// markedBlock finds, in the window a mark can follow its block (today and
+// the day before), the block of this id that asked for a self-mark, and
+// whether a mark of it is logged already.
+func markedBlock(id string, now time.Time) (asked *logEntry, marked bool) {
+	needle := []byte(`"` + id + `"`)
+	for _, day := range []time.Time{now, now.AddDate(0, 0, -1)} {
+		path := filepath.Join(deliveryLogDir(), day.UTC().Format("2006-01-02")+".jsonl")
+		if fi, err := os.Lstat(path); err != nil || !fi.Mode().IsRegular() {
+			continue // only this log's own regular files
 		}
-		f, err := os.Open(filepath.Join(dir, x.Name()))
+		f, err := os.Open(path)
 		if err != nil {
 			continue
 		}
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 1<<20), 1<<26)
 		for sc.Scan() {
+			if !bytes.Contains(sc.Bytes(), needle) {
+				continue // most lines are other blocks
+			}
 			var e logEntry
-			if json.Unmarshal(sc.Bytes(), &e) == nil {
-				out = append(out, e)
+			if json.Unmarshal(sc.Bytes(), &e) != nil {
+				continue
+			}
+			switch {
+			case e.ID == id && e.MarkAsked:
+				asked = &e
+			case e.Hook == "mark" && e.Mark != nil && e.Mark.Block == id:
+				marked = true
 			}
 		}
 		f.Close()
 	}
-	return out
+	return asked, marked
 }
 
-// markNames is xs less what is no fact the store holds (the index's
-// facts, as nav steps keep them), less doubles and what drop holds, at
-// most markCap.
-func markNames(ix *search.Index, xs []string, drop map[string]bool) []string {
+// markNames is xs less what the block did not print as an agent's line,
+// less doubles and what drop holds, at most markCap.
+func markNames(block *logEntry, xs []string, drop map[string]bool) []string {
+	lines := map[string]bool{}
+	for _, c := range block.Cands {
+		if c.Delivered && !ownerProv[c.Prov] {
+			lines[c.Name] = true
+		}
+	}
 	var out []string
 	seen := map[string]bool{}
-	ctx, cancel := context.WithTimeout(context.Background(), logVocabularyBudget)
-	defer cancel()
 	for _, x := range xs {
+		if len(out) >= markCap {
+			break
+		}
 		x = strings.TrimSpace(x)
-		if seen[x] || drop[x] || !fact.IsSlug(x) || ix == nil || !ix.HasFact(ctx, x) || len(out) >= markCap {
+		if seen[x] || drop[x] || !lines[x] {
 			continue
 		}
 		seen[x] = true
@@ -138,23 +143,18 @@ func markNames(ix *search.Index, xs []string, drop map[string]bool) []string {
 }
 
 // logMark records an agent's self-mark of a block that asked for one: the
-// fact names the store holds, a name in both lists in neither. It reports
-// why nothing was recorded.
-func logMark(s *store.Store, block string, helped, not []string) error {
+// agent's lines the block printed, a name in both lists in neither; one
+// mark a block. It reports why nothing was recorded.
+func logMark(block string, helped, not []string) error {
 	if !deliveryLogOn() {
 		return errors.New("the delivery log is off; nothing was recorded")
 	}
-	if !askedBlock(block, time.Now()) {
+	asked, marked := markedBlock(block, time.Now())
+	switch {
+	case asked == nil:
 		return errors.New("no tacit block asked for a mark with this id")
-	}
-	var ix *search.Index
-	ctx, cancel := context.WithTimeout(context.Background(), logVocabularyBudget)
-	defer cancel()
-	if s != nil {
-		if i, err := openHookIndex(ctx, s); err == nil {
-			ix = i
-			defer ix.Close()
-		}
+	case marked:
+		return errors.New("this block is marked already")
 	}
 	both := map[string]bool{}
 	for _, h := range helped {
@@ -164,9 +164,9 @@ func logMark(s *store.Store, block string, helped, not []string) error {
 			}
 		}
 	}
-	m := &logMarkStep{Block: block, Helped: markNames(ix, helped, both), NotHelped: markNames(ix, not, both)}
+	m := &logMarkStep{Block: block, Helped: markNames(asked, helped, both), NotHelped: markNames(asked, not, both)}
 	if len(m.Helped)+len(m.NotHelped) == 0 {
-		return errors.New("name at least one of the block's facts")
+		return errors.New("name at least one of the agent's lines the block printed")
 	}
 	e := &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: "mark", Mark: m}
 	e.ID = logID(e)
@@ -175,7 +175,7 @@ func logMark(s *store.Store, block string, helped, not []string) error {
 }
 
 // addMarkTool registers tacit_mark on the store's MCP server.
-func addMarkTool(server *mcp.Server, s *store.Store) {
+func addMarkTool(server *mcp.Server) {
 	type markArgs struct {
 		Block     string   `json:"block" jsonschema:"the block id tacit's line named"`
 		Helped    []string `json:"helped,omitempty" jsonschema:"names of the block's facts that helped with the request"`
@@ -193,7 +193,7 @@ func addMarkTool(server *mcp.Server, s *store.Store) {
 		if !logIDRx.MatchString(a.Block) {
 			return fail("give the block id tacit's line named")
 		}
-		if err := logMark(s, a.Block, a.Helped, a.NotHelped); err != nil {
+		if err := logMark(a.Block, a.Helped, a.NotHelped); err != nil {
 			return fail(err.Error())
 		}
 		return text("noted"), nil, nil

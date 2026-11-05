@@ -226,8 +226,9 @@ def run_once(task, arm, block_path, rep):
                 "--mcp-config", json.dumps(mcp), "--strict-mcp-config"]
         if task["allowed_tools"]:
             cmd[cmd.index("--allowedTools") + 1:cmd.index("--allowedTools") + 1] = ["mcp__tacit__tacit_fact", "mcp__tacit__tacit_search", "mcp__tacit__tacit_tree"]
-        # No self-mark ask or hold-out unless the arm sets one: either would
-        # add turns or remove lines in the hook arms only.
+        # No self-mark ask unless the arm sets one: it would add turns in the
+        # hook arms only. (TACIT_DELIVERY_HOLDOUT is the hold-outs' share,
+        # read by builds that have them, for the same reason.)
         env.update({"TACIT_DELIVERY_MARK_RATE": "0", "TACIT_DELIVERY_HOLDOUT": "0"}, **hook_env)
     elif arm not in ("bare", "live"):
         path = SCRATCH / f"{task['id']}-{arm}.md"

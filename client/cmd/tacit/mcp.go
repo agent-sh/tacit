@@ -67,7 +67,7 @@ func storeServer(s *store.Store, harness string) *mcp.Server {
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "tacit", Version: "0.1.0"}, opts)
 	addTreeTool(server, s)
-	addMarkTool(server, s)
+	addMarkTool(server)
 
 	type searchArgs struct {
 		Query       string `json:"query,omitempty" jsonschema:"what you are about to do or need to know; optional when a filter is given"`
