@@ -10,8 +10,8 @@ be) and hand it to `tacit delivery-judge`. That command builds the case
 exactly as the dream pass does (delivery_judge.go, momentOf: the request,
 what the session did next), with the line as it was delivered (the fact's
 name and description at the case's commit), redacts it and asks the judge
-on the dream pass's route (`claude -p` on the subscription's login, never
-Bedrock). The rows go to the judge shuffled, so a batch mixes sessions as
+on the dream pass's route (`claude -p` on the dreamer's Bedrock route,
+never another gateway). The rows go to the judge shuffled, so a batch mixes sessions as
 the dream pass's draw does.
 
 Agreement, under the rule eval/DELIVERY.md ("Scoring each delivery", step 5)
@@ -257,9 +257,15 @@ def main():
     ap.add_argument("--tacit", default="tacit", help="the tacit binary whose delivery-judge runs")
     ap.add_argument("--model", default="", help="the judge's model (TACIT_DELIVERY_JUDGE_MODEL, else its default)")
     ap.add_argument("--verdicts", help="a verdicts file from an earlier run: measure it again, judge nothing")
+    ap.add_argument("--sample", type=int, default=0, help="a spot check: this many of the graded lines, drawn uniformly (seed 7); the rule's line and session minimums are the sample's own (eval/DELIVERY.md, step 5)")
+    ap.add_argument("--compare", help="another judge's verdicts file: report the share of lines each label agrees on")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
+    global MIN_LINES, MIN_SESSIONS
     rows, skipped = rows_of(a)
+    if a.sample:
+        rows = sorted(random.Random(7).sample(rows, min(a.sample, len(rows))), key=lambda r: (r["moment"]["block"], r["fact"]))
+        MIN_LINES, MIN_SESSIONS = 0, 0
     if a.verdicts:
         with open(a.verdicts) as fh:
             by = {(v.get("block"), v.get("fact")): v for v in map(json.loads, fh)}
@@ -284,6 +290,13 @@ def main():
               "relevant": measure(rows, verdicts, "relevant", ("R", "W")),
               "useful": measure(rows, verdicts, "useful", ("R",)),
               "confused": dict(collections.Counter(v["confused"] for v in verdicts))}
+    if a.compare:
+        with open(a.compare) as fh:
+            other = {(v.get("block"), v.get("fact")): v for v in map(json.loads, fh)}
+        pairs = [(v, other.get((v.get("block"), v.get("fact")))) for v in verdicts]
+        pairs = [(v, o) for v, o in pairs if o and not o.get("unreadable")]
+        report["compare"] = {"lines": len(pairs), **{k: round(sum(v[k] == o[k] for v, o in pairs) / len(pairs), 3) if pairs else None
+                                                    for k in ("relevant", "novel", "confused")}}
     with open(a.out, "w") as fh:
         json.dump(report, fh, indent=1)
     for k in ("relevant", "useful"):

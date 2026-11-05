@@ -13,21 +13,57 @@ import (
 	"time"
 )
 
-// The judge's environment keeps only what a process needs to find its tools
-// and the subscription's login: no Bedrock or AWS route, no gateway, no other
-// config directory; a refused name that the keep list would pass is an error.
-func TestJudgeEnvNeverBedrock(t *testing.T) {
+// The judge's environment keeps what a process needs and the Bedrock
+// route, never a gateway or another config directory; without the route it
+// is an error (the judge is skipped there); a refused name the keep list
+// would pass is an error too.
+func TestJudgeEnvBedrockRoute(t *testing.T) {
 	env, err := judgeEnv([]string{"PATH=/bin", "HOME=/h", "AWS_REGION=x", "AWS_BEARER_TOKEN_BEDROCK=t", "CLAUDE_CODE_USE_BEDROCK=1",
-		"ANTHROPIC_BASE_URL=https://gw", "ANTHROPIC_AUTH_TOKEN=t", "ANTHROPIC_API_KEY=k", "ANTHROPIC_CUSTOM_HEADERS=h", "CLAUDE_CONFIG_DIR=/c",
-		"CLAUDE_CODE_USE_VERTEX=1", "CLAUDE_CODE_PLUGIN_DIRS=/p", "ANTHROPIC_MODEL=m", "LANG=C.UTF-8"})
-	if err != nil || strings.Join(env, " ") != "PATH=/bin HOME=/h LANG=C.UTF-8" {
+		"ANTHROPIC_DEFAULT_OPUS_MODEL=global.x", "ANTHROPIC_BASE_URL=https://gw", "ANTHROPIC_AUTH_TOKEN=t", "ANTHROPIC_API_KEY=k",
+		"ANTHROPIC_CUSTOM_HEADERS=h", "CLAUDE_CONFIG_DIR=/c", "CLAUDE_CODE_USE_VERTEX=1", "CLAUDE_CODE_PLUGIN_DIRS=/p", "LANG=C.UTF-8"})
+	if err != nil || strings.Join(env, " ") != "PATH=/bin HOME=/h AWS_REGION=x AWS_BEARER_TOKEN_BEDROCK=t CLAUDE_CODE_USE_BEDROCK=1 ANTHROPIC_DEFAULT_OPUS_MODEL=global.x LANG=C.UTF-8" {
 		t.Fatalf("kept: %v %v", env, err)
+	}
+	// A gateway's environment (another dreamer's route): no Bedrock, no judge.
+	for _, e := range [][]string{
+		{"PATH=/bin", "ANTHROPIC_BASE_URL=https://gw", "ANTHROPIC_AUTH_TOKEN=t", "ANTHROPIC_API_KEY=k"},
+		{"PATH=/bin", "CLAUDE_CODE_USE_BEDROCK=1"},
+		{"PATH=/bin", "CLAUDE_CODE_USE_BEDROCK=0", "AWS_BEARER_TOKEN_BEDROCK=t"},
+	} {
+		if _, err := judgeEnv(e); !errors.Is(err, errJudgeNoRoute) {
+			t.Fatalf("%v: %v", e, err)
+		}
 	}
 	old := judgeEnvKeep
 	t.Cleanup(func() { judgeEnvKeep = old })
-	judgeEnvKeep = regexp.MustCompile(`^(PATH|AWS_REGION)$`)
-	if _, err := judgeEnv([]string{"PATH=/bin", "AWS_REGION=x"}); err == nil {
-		t.Fatal("a route variable was passed")
+	judgeEnvKeep = regexp.MustCompile(`^(PATH|ANTHROPIC_BASE_URL|CLAUDE_CODE_USE_BEDROCK|AWS_BEARER_TOKEN_BEDROCK)$`)
+	if _, err := judgeEnv([]string{"PATH=/bin", "ANTHROPIC_BASE_URL=x", "CLAUDE_CODE_USE_BEDROCK=1", "AWS_BEARER_TOKEN_BEDROCK=t"}); err == nil || errors.Is(err, errJudgeNoRoute) {
+		t.Fatalf("a gateway variable was passed: %v", err)
+	}
+}
+
+// With no Bedrock route the pass draws nothing, sends nothing and logs why.
+func TestJudgePassWithoutARoute(t *testing.T) {
+	f := newJudgeFixture(t, 2)
+	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "")
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://gw")
+	n, err := deliveryJudgePass(context.Background(), nil, f.now)
+	if n != 0 || !errors.Is(err, errJudgeNoRoute) || len(f.sent) != 0 {
+		t.Fatalf("judged %d, %v, sent %d", n, err, len(f.sent))
+	}
+	skipped := false
+	for _, e := range readDeliveryLog(t, f.state) {
+		skipped = skipped || e.Hook == "judge-skip" && e.Policy == "no Bedrock route"
+		if e.Hook == "judge-pass" {
+			t.Fatalf("a pass without a route: %+v", e)
+		}
+	}
+	if !skipped {
+		t.Fatal("no judge-skip entry")
+	}
+	if _, err := os.Stat(judgeStatePath()); err == nil {
+		t.Fatal("a pass without a route moved the judge's state")
 	}
 }
 
@@ -37,7 +73,7 @@ func TestJudgeCommand(t *testing.T) {
 	t.Setenv("ANTHROPIC_BASE_URL", "https://gw")
 	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "1")
 	t.Setenv("AWS_PROFILE", "p")
-	cmd, err := judgeCommand(context.Background(), "opus", t.TempDir())
+	cmd, err := judgeCommand(context.Background(), "global.anthropic.claude-opus-5-5", t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +83,7 @@ func TestJudgeCommand(t *testing.T) {
 		}
 	}
 	args := strings.Join(cmd.Args, " ")
-	for _, want := range []string{"claude -p", "--model opus", "--tools  ", "--setting-sources local", "--strict-mcp-config", "--no-session-persistence"} {
+	for _, want := range []string{"claude -p", "--model global.anthropic.claude-opus-5-5", "--tools  ", "--setting-sources local", "--strict-mcp-config", "--no-session-persistence"} {
 		if !strings.Contains(args, want) {
 			t.Errorf("args %q lack %q", args, want)
 		}
@@ -72,6 +108,8 @@ func newJudgeFixture(t *testing.T, n int) *judgeFixture {
 	f := &judgeFixture{state: filepath.Join(home, "state"), now: time.Now()}
 	t.Setenv("TACIT_STATE_DIR", f.state)
 	t.Setenv("TACIT_DELIVERY_JUDGE", "on")
+	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "test")
 	f.tr = filepath.Join(home, ".claude", "projects", "-demo", "s1.jsonl")
 	os.MkdirAll(filepath.Dir(f.tr), 0o755)
 	first := `{"type":"user","timestamp":"2026-11-01T09:00:00Z","sessionId":"s1","userType":"external","message":{"role":"user","content":"an earlier request"}}` + "\n"

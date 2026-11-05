@@ -31,15 +31,15 @@ import (
 // session did after), and says per line whether it was relevant to what the
 // session was doing, whether it confused or misled the agent, and whether it
 // was novel (not already in the context, nor found by the agent on its own a
-// moment later). Its labels are judge entries of the private delivery log:
-// they label data a ranker trains on, so the call runs on the owner's
-// subscription, never Bedrock or another gateway (judgeEnv), and moves no
-// score until its agreement with the hand grades clears the rule written
-// before it was measured.
+// moment later). Its labels are judge entries of the private delivery log.
+// The call runs on the dreamer's Bedrock route and on no other (judgeRoute,
+// judgeEnv); where there is none the pass is skipped and says so. Its labels
+// move no score until its agreement with the hand grades clears the rule
+// written before it was measured.
 
 const (
 	// judgeDaily is the most lines judged a day: three calls of
-	// judgeBatch, a small share of a subscription's daily use, which still
+	// judgeBatch, a small cost beside the dreamer's own, which still
 	// gathers about a thousand labels a month for the calibration.
 	judgeDaily = 36
 	judgeBatch = 12
@@ -134,20 +134,46 @@ type judgeCase struct {
 }
 
 // judgeEnvKeep is what the judge's environment keeps of the dreamer's: the
-// names a process needs to find its tools, its home and the subscription's
-// login. Nothing else passes: no Bedrock or AWS route, no gateway
-// (ANTHROPIC_BASE_URL, a token, a custom header), no other Claude config
-// directory, no plugin directories.
+// names a process needs to find its tools and its home, and the Bedrock
+// route's (the switch, the bearer token or AWS credentials, the region, the
+// Bedrock model names). Nothing else passes: no gateway (ANTHROPIC_BASE_URL,
+// an API key or token, a custom header), no other Claude config directory,
+// no plugin directories, no other provider's switch.
 // The match ignores case: Windows spells them as it likes (Path, SystemRoot).
-var judgeEnvKeep = regexp.MustCompile(`(?i)^(PATH|HOME|USER|LOGNAME|SHELL|TERM|TZ|TMPDIR|TEMP|TMP|LANG|LC_[A-Z]+|XDG_RUNTIME_DIR|USERPROFILE|APPDATA|LOCALAPPDATA|HOMEDRIVE|HOMEPATH|SYSTEMROOT|COMSPEC|PATHEXT|WINDIR)$`)
+var judgeEnvKeep = regexp.MustCompile(`(?i)^(PATH|HOME|USER|LOGNAME|SHELL|TERM|TZ|TMPDIR|TEMP|TMP|LANG|LC_[A-Z]+|XDG_RUNTIME_DIR|USERPROFILE|APPDATA|LOCALAPPDATA|HOMEDRIVE|HOMEPATH|SYSTEMROOT|COMSPEC|PATHEXT|WINDIR` +
+	`|CLAUDE_CODE_USE_BEDROCK|AWS_BEARER_TOKEN_BEDROCK|AWS_REGION|AWS_DEFAULT_REGION|AWS_PROFILE|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|ANTHROPIC_BEDROCK_BASE_URL|ANTHROPIC_DEFAULT_[A-Z]+_MODEL|ANTHROPIC_DEFAULT_MODEL|ANTHROPIC_SMALL_FAST_MODEL)$`)
 
-// judgeEnvRefuse is a name that must never reach the judge.
-var judgeEnvRefuse = regexp.MustCompile(`(?i)bedrock|vertex|foundry|^(ANTHROPIC_|AWS_|CLAUDE_)`)
+// judgeEnvRefuse is a name that must never reach the judge: a gateway or
+// another provider's route.
+var judgeEnvRefuse = regexp.MustCompile(`(?i)^(ANTHROPIC_BASE_URL|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_API_KEY|ANTHROPIC_CUSTOM_HEADERS|CLAUDE_CONFIG_DIR|CLAUDE_CODE_USE_VERTEX|CLAUDE_CODE_USE_FOUNDRY|CLAUDE_CODE_PLUGIN_DIRS)$`)
 
-// judgeEnv is env reduced to judgeEnvKeep, and an error if a name
-// judgeEnvRefuse names is left: the judge runs on the owner's subscription,
-// never Bedrock or a gateway (training data is theirs to label on their
-// own plan).
+// errJudgeNoRoute is a machine where the dreamer has no Bedrock route (one
+// whose dreamer runs through another gateway): the judge does not run there,
+// and no case leaves it.
+var errJudgeNoRoute = errors.New("no Bedrock route here; the judge is skipped")
+
+// judgeRoute reports whether env holds the Bedrock route the judge runs on:
+// the switch on, and a bearer token or AWS credentials.
+func judgeRoute(env []string) error {
+	got := map[string]string{}
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		got[k] = strings.TrimSpace(v)
+	}
+	switch strings.ToLower(got["CLAUDE_CODE_USE_BEDROCK"]) {
+	case "1", "true", "yes", "on":
+	default:
+		return errJudgeNoRoute
+	}
+	if got["AWS_BEARER_TOKEN_BEDROCK"] == "" && got["AWS_PROFILE"] == "" && (got["AWS_ACCESS_KEY_ID"] == "" || got["AWS_SECRET_ACCESS_KEY"] == "") {
+		return errJudgeNoRoute
+	}
+	return nil
+}
+
+// judgeEnv is env reduced to judgeEnvKeep: the Bedrock route and what a
+// process needs, and an error if the route is not there or a name
+// judgeEnvRefuse names is left.
 func judgeEnv(env []string) ([]string, error) {
 	var out []string
 	for _, kv := range env {
@@ -159,13 +185,16 @@ func judgeEnv(env []string) ([]string, error) {
 	for _, kv := range out {
 		k, _, _ := strings.Cut(kv, "=")
 		if judgeEnvRefuse.MatchString(k) {
-			return nil, fmt.Errorf("a route variable is left in the judge's environment: %s", k)
+			return nil, fmt.Errorf("a gateway variable is left in the judge's environment: %s", k)
 		}
+	}
+	if err := judgeRoute(out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
 
-// judgeCommand is the judge's `claude -p` call: the subscription's login,
+// judgeCommand is the judge's `claude -p` call: the Bedrock route of
 // judgeEnv's environment, no user settings or hooks (local settings only,
 // from a scratch working directory), no MCP server, no tools, no session
 // kept on disk.
@@ -180,9 +209,9 @@ func judgeCommand(ctx context.Context, model, dir string) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-// errJudgeRefused is a refusal or a rate limit of the subscription: the
-// pass stops and a later one tries again.
-var errJudgeRefused = errors.New("the subscription refused the judge's call")
+// errJudgeRefused is a refusal or a rate limit of the route: the pass stops
+// and a later one tries again.
+var errJudgeRefused = errors.New("the route refused the judge's call")
 
 var rateLimitRx = regexp.MustCompile(`(?i)rate.?limit|usage limit|hit your .*limit|quota|overloaded|429|too many requests`)
 
@@ -242,7 +271,7 @@ func judgeModel() string {
 	if m := strings.TrimSpace(os.Getenv("TACIT_DELIVERY_JUDGE_MODEL")); m != "" {
 		return m
 	}
-	return "opus"
+	return "global.anthropic.claude-opus-5-5"
 }
 
 const judgePrompt = `You judge, with hindsight, lines a memory tool gave a coding agent. For each case you get where the line came (the owner's prompt, or a tool call about to run), the request it answered, the line, and what the session did next.
@@ -618,11 +647,19 @@ func factDescription(s *store.Store, rel string) string {
 // about judgeDaily are drawn a day), and judges the drawn lines up to what
 // is left of the day's cap; the rest wait for a later pass. Each verdict
 // carries its line's draw probability, and the pass logs its own entry. A
-// refusal of the subscription (a rate limit) ends the pass, the lines wait,
+// refusal of the route (a rate limit) ends the pass, the lines wait,
 // and a later pass tries again; it never falls back to another route.
 func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int, error) {
 	if !deliveryOn("JUDGE", true) || !deliveryLogOn() {
 		return 0, nil
+	}
+	// No Bedrock route (a machine whose dreamer runs through another
+	// gateway): nothing is drawn, nothing is sent, and the log says why.
+	if err := judgeRoute(os.Environ()); err != nil {
+		e := &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: "judge-skip", Policy: "no Bedrock route"}
+		e.ID = logID(e)
+		_ = appendLogEntry(e, time.Now())
+		return 0, err
 	}
 	st := readJudgeState(now.UTC().Format("2006-01-02"))
 	through, _ := time.Parse(time.RFC3339Nano, st.Through)
@@ -749,7 +786,9 @@ func runDreamJudge() {
 	n, err := deliveryJudgePass(ctx, s, time.Now())
 	switch {
 	case errors.Is(err, errJudgeRefused):
-		fmt.Println("dream: judge: the subscription refused the call; the next run tries again")
+		fmt.Println("dream: judge: the route refused the call; the next run tries again")
+	case errors.Is(err, errJudgeNoRoute):
+		fmt.Println("dream: judge: no Bedrock route here; skipped (the judge runs where the dreamer has one)")
 	case err != nil:
 		fmt.Fprintln(os.Stderr, "dream: judge:", err)
 	case n > 0:
