@@ -27,8 +27,12 @@ def line(**d):
 # description says useful, and echoes the moment it got.
 FAKE = """#!/usr/bin/env python3
 import json, sys
+open(sys.argv[0] + ".calls", "a").write("x")
 for l in sys.stdin:
     m = json.loads(l)
+    if "gone" in m["line"]:
+        print(json.dumps({"block": m["block"], "fact": m["fact"], "unreadable": True}))
+        continue
     w = "yes" if "useful" in m["line"] else "no"
     print(json.dumps({"block": m["block"], "fact": m["fact"], "relevant": w, "confused": "no", "novel": w, "model": "m", "prompt": "p", "moment": m}))
 """
@@ -40,7 +44,7 @@ class Agreement(unittest.TestCase):
             store = os.path.join(d, "store")
             os.makedirs(os.path.join(store, "projects"))
             subprocess.run(["git", "init", "-q", store], check=True)
-            for name, desc in (("alpha-fact", "a useful fact"), ("beta-fact", "an idle fact")):
+            for name, desc in (("alpha-fact", "a useful fact"), ("beta-fact", "an idle fact"), ("gamma-fact", "a gone fact")):
                 with open(os.path.join(store, "projects", name + ".md"), "w") as fh:
                     fh.write(f"---\nname: {name}\ndescription: {desc}\ntype: design_decision\nsource:\n  kind: observed\n---\nbody\n")
             proj = os.path.join(d, "projects", "p")
@@ -58,7 +62,7 @@ class Agreement(unittest.TestCase):
             cases = os.path.join(d, "cases.jsonl")
             with open(cases, "w") as fh:
                 fh.write(line(id="c1", event="prompt", ts="2026-10-01T10:00:05Z", session="s1", prompt="do the thing",
-                              delivered=["alpha-fact", "beta-fact"], labels={"alpha-fact": "R", "beta-fact": "N"}))
+                              delivered=["alpha-fact", "beta-fact", "gamma-fact"], labels={"alpha-fact": "R", "beta-fact": "N", "gamma-fact": "R"}))
                 # The same block again under another id: one row.
                 fh.write(line(id="c2", event="prompt", ts="2026-10-01T10:00:05Z", session="s1", prompt="do the thing",
                               delivered=["alpha-fact"], labels={"alpha-fact": "R"}))
@@ -77,11 +81,19 @@ class Agreement(unittest.TestCase):
             with open(out) as fh:
                 rep = json.load(fh)
             self.assertEqual(rep["lines"], 3)
-            self.assertEqual(rep["skipped"], {"duplicate": 1, "sidechain": 1})
+            self.assertEqual(rep["skipped"], {"duplicate": 1, "sidechain": 1, "unreadable": 1})
             self.assertEqual(rep["relevant"]["verdict"], "too few lines")
             self.assertEqual(rep["judges"], {"m p": 3})
+            # A second run resumes: nothing is asked again.
+            with open(fake + ".calls") as fh:
+                calls = len(fh.read())
+            r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "judge_agreement.py"), "--cases", cases, "--store", store,
+                                "--projects", os.path.join(d, "projects"), "--tacit", fake, "--out", out], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            with open(fake + ".calls") as fh:
+                self.assertEqual(len(fh.read()), calls)
             with open(out + ".verdicts.jsonl") as fh:
-                ms = {(v["block"], v["fact"]): v["moment"] for v in map(json.loads, fh)}
+                ms = {(v["block"], v["fact"]): v.get("moment") for v in map(json.loads, fh)}
             self.assertEqual(ms[("c1", "alpha-fact")]["offset"], prompt_off)  # the prompt's own turn
             self.assertEqual(ms[("c1", "alpha-fact")]["hook"], "prompt")
             self.assertEqual(ms[("c1", "alpha-fact")]["line"], "alpha-fact: a useful fact")

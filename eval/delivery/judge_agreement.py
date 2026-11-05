@@ -150,24 +150,37 @@ def rows_of(a):
     return rows, dict(skipped)
 
 
-def judge(rows, tacit, model, seed=7):
+def judge(rows, tacit, model, path, seed=7):
     """Verdicts for rows, in order, from `tacit delivery-judge`, asked in
-    shuffled batches of its batch size."""
+    shuffled batches of its batch size. Each batch's verdicts are appended
+    to path as they come, and a run resumes from what path holds; a
+    moment the command could not read is answered unreadable."""
     cmd = [tacit, "delivery-judge"] + (["--model", model] if model else [])
-    order = list(range(len(rows)))
-    random.Random(seed).shuffle(order)
+    key = {(r["moment"]["block"], r["fact"]): k for k, r in enumerate(rows)}
     got = {}
-    for i in range(0, len(order), BATCH):
-        part = order[i:i + BATCH]
-        batch = [rows[k] for k in part]
-        r = subprocess.run(cmd, input="".join(json.dumps(x["moment"]) + "\n" for x in batch), capture_output=True, text=True, timeout=1800)
-        if r.returncode != 0:
-            sys.exit(f"delivery-judge failed at batch {i // BATCH}: {r.stderr.strip()[:500]}")
-        answers = [json.loads(line) for line in r.stdout.splitlines() if line.strip()]
-        if [(v.get("block"), v.get("fact")) for v in answers] != [(x["moment"]["block"], x["fact"]) for x in batch]:
-            sys.exit(f"delivery-judge's answers do not match batch {i // BATCH}")
-        got.update(zip(part, answers))
-        print(f"judged {len(got)}/{len(rows)}", file=sys.stderr)
+    if os.path.exists(path):
+        with open(path) as fh:
+            for line in fh:
+                v = json.loads(line)
+                if (v.get("block"), v.get("fact")) in key:
+                    got[key[(v["block"], v["fact"])]] = v
+    order = [k for k in range(len(rows)) if k not in got]
+    random.Random(seed).shuffle(order)
+    with open(path, "a") as out:
+        for i in range(0, len(order), BATCH):
+            part = order[i:i + BATCH]
+            batch = [rows[k] for k in part]
+            r = subprocess.run(cmd, input="".join(json.dumps(x["moment"]) + "\n" for x in batch), capture_output=True, text=True, timeout=1800)
+            if r.returncode != 0:
+                sys.exit(f"delivery-judge failed ({len(got)} of {len(rows)} judged and kept in {path}; run again to resume): {r.stderr.strip()[:500]}")
+            answers = [json.loads(line) for line in r.stdout.splitlines() if line.strip()]
+            if [(v.get("block"), v.get("fact")) for v in answers] != [(x["moment"]["block"], x["fact"]) for x in batch]:
+                sys.exit(f"delivery-judge's answers do not match a batch ({len(got)} kept in {path})")
+            for k, v in zip(part, answers):
+                got[k] = v
+                out.write(json.dumps(v) + "\n")
+            out.flush()
+            print(f"judged {len(got)}/{len(rows)}", file=sys.stderr)
     return [got[k] for k in range(len(rows))]
 
 
@@ -235,13 +248,18 @@ def main():
     rows, skipped = rows_of(a)
     if a.verdicts:
         with open(a.verdicts) as fh:
-            verdicts = [json.loads(line) for line in fh]
+            by = {(v.get("block"), v.get("fact")): v for v in map(json.loads, fh)}
+        verdicts = [by.get((r["moment"]["block"], r["fact"]), {}) for r in rows]
     else:
-        verdicts = judge(rows, a.tacit, a.model)
-        with open(a.out + ".verdicts.jsonl", "w") as fh:
-            fh.writelines(json.dumps(v) + "\n" for v in verdicts)
+        verdicts = judge(rows, a.tacit, a.model, a.out + ".verdicts.jsonl")
     if len(verdicts) != len(rows) or any((v.get("block"), v.get("fact")) != (r["moment"]["block"], r["fact"]) for r, v in zip(rows, verdicts)):
         sys.exit("the verdicts do not match the rows")
+    # A moment the command could not read is left out and counted.
+    unreadable = sum(1 for v in verdicts if v.get("unreadable"))
+    kept = [(r, v) for r, v in zip(rows, verdicts) if not v.get("unreadable")]
+    rows, verdicts = [r for r, _ in kept], [v for _, v in kept]
+    if unreadable:
+        skipped["unreadable"] = unreadable
     if len({(v.get("model"), v.get("prompt")) for v in verdicts}) > 1:
         sys.exit("the verdicts come from more than one judge (model and prompt): measure each apart")
     base = collections.Counter(r["grade"] for r in rows)

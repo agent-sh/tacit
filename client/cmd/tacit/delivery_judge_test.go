@@ -147,8 +147,8 @@ func TestDeliveryJudgePass(t *testing.T) {
 		t.Fatalf("prompt: %s", p)
 	}
 	verdicts, passes := judgeEntries(t, f.state)
-	// The rate is the cap over the lines of the first pool: 3 of 6.
-	if len(verdicts) != 3 || verdicts[0].P != 0.5 || verdicts[0].Model != "claude-test-model" || verdicts[0].Prompt != judgePromptID || verdicts[0].Block != "00000000000000a1" {
+	// The rate aims at 0.8 of the cap over the lines of the first pool: 2.4 of 6.
+	if len(verdicts) != 3 || !near(verdicts[0].P, 0.4) || verdicts[0].Model != "claude-test-model" || verdicts[0].Prompt != judgePromptID || verdicts[0].Block != "00000000000000a1" {
 		t.Fatalf("verdicts: %+v", verdicts)
 	}
 	if len(passes) != 1 || passes[0].Pool != 6 || passes[0].Drawn != 6 || passes[0].Judged != 3 || passes[0].Waiting != 3 {
@@ -177,7 +177,7 @@ func TestDeliveryJudgePass(t *testing.T) {
 			push = &verdicts[i]
 		}
 	}
-	if len(verdicts) != 6 || push == nil || push.P != 0.5 {
+	if len(verdicts) != 6 || push == nil || !near(push.P, 0.4) {
 		t.Fatalf("verdicts: %+v", verdicts)
 	}
 	for k, c := range seen {
@@ -264,7 +264,108 @@ func TestDeliveryJudgeCommand(t *testing.T) {
 		t.Fatalf("code %d, out %s, sent %q", code, out, f.sent)
 	}
 	bad, _ := json.Marshal(judgeMoment{Block: "b2", Fact: "g", Hook: "prompt", Transcript: filepath.Join(t.TempDir(), "gone.jsonl")})
-	if code, _ := run(string(m) + "\n" + string(bad) + "\n"); code == 0 || len(f.sent) != 1 {
-		t.Fatalf("a failed moment still sent: code %d, %d prompt(s)", code, len(f.sent))
+	// A moment that cannot be read is answered unreadable and not sent; the
+	// rest are judged.
+	code, out = run(string(bad) + "\n" + string(m) + "\n")
+	if code != 0 || len(f.sent) != 2 || strings.Count(f.sent[1], "## Case ") != 1 ||
+		!strings.HasPrefix(out, `{"block":"b2","fact":"g","unreadable":true}`) || !strings.Contains(out, `"fact":"f"`) {
+		t.Fatalf("code %d, out %s, sent %d", code, out, len(f.sent))
 	}
 }
+
+// The model a verdict names is the one the CLI says answered, past its small
+// helper model; the alias asked for when the answer does not say.
+func TestAnsweredBy(t *testing.T) {
+	u := func(names ...string) map[string]json.RawMessage {
+		m := map[string]json.RawMessage{}
+		for _, n := range names {
+			m[n] = json.RawMessage(`{}`)
+		}
+		return m
+	}
+	for _, c := range []struct {
+		usage map[string]json.RawMessage
+		want  string
+	}{{u("claude-x-1", "claude-haiku-2"), "claude-x-1"}, {u(), "opus"}, {u("a", "b"), "opus"}} {
+		if got := answeredBy(c.usage, "opus"); got != c.want {
+			t.Errorf("answeredBy(%v) = %q, want %q", c.usage, got, c.want)
+		}
+	}
+}
+
+// A refusal leaves a waiting line's tries alone; another failure counts
+// one, and a line that fails judgeTries times is given up and named.
+func TestJudgeTriesAndLost(t *testing.T) {
+	f := newJudgeFixture(t, 1)
+	fail := errors.New("bad answer")
+	var calls int
+	judgeCall = func(ctx context.Context, model, prompt string) (string, string, error) {
+		calls++
+		if f.refuse {
+			return "", "", errJudgeRefused
+		}
+		return "", "", fail
+	}
+	f.refuse = true
+	for i := 0; i < judgeTries+1; i++ {
+		deliveryJudgePass(context.Background(), nil, f.now.Add(time.Duration(i)*time.Minute))
+	}
+	st := readJudgeState(f.now.UTC().Format("2006-01-02"))
+	if len(st.Pending) != 2 || st.Pending[0].Tries != 0 {
+		t.Fatalf("refusals counted tries: %+v", st.Pending)
+	}
+	f.refuse = false
+	for i := 0; i < judgeTries; i++ {
+		deliveryJudgePass(context.Background(), nil, f.now.Add(time.Duration(10+i)*time.Minute))
+	}
+	st = readJudgeState(f.now.UTC().Format("2006-01-02"))
+	_, passes := judgeEntries(t, f.state)
+	var lost []string
+	for _, p := range passes {
+		lost = append(lost, p.Lost...)
+	}
+	if len(st.Pending) != 0 || len(lost) != 2 || calls == 0 {
+		t.Fatalf("pending %+v, lost %v", st.Pending, lost)
+	}
+}
+
+// Past judgePending waiting lines, some are given up at random and named;
+// a quiet first day does not draw everything.
+func TestJudgeOverflowAndRate(t *testing.T) {
+	f := newJudgeFixture(t, 1)
+	st := readJudgeState(f.now.UTC().Format("2006-01-02"))
+	for i := 0; i < judgePending+5; i++ {
+		st.Pending = append(st.Pending, judgeMoment{Block: "old", Fact: fmt.Sprint(i), Hook: "prompt", Transcript: f.tr, Offset: f.off, P: 0.1})
+	}
+	st.Count = judgeDaily // nothing judged this pass
+	writeJudgeState(st)
+	deliveryJudgePass(context.Background(), nil, f.now)
+	_, passes := judgeEntries(t, f.state)
+	st = readJudgeState(f.now.UTC().Format("2006-01-02"))
+	if len(passes) != 1 || passes[0].Dropped != 7 || len(passes[0].Lost) != 7 || len(st.Pending) != judgePending {
+		t.Fatalf("pass %+v, pending %d", passes, len(st.Pending))
+	}
+	// The pool held 2 lines: the rate is 0.8 of the cap over the cap.
+	if !near(passes[0].Rate, 0.8) {
+		t.Fatalf("rate %v", passes[0].Rate)
+	}
+}
+
+// A push whose call the harness writes after the hook ran still has its
+// call as its request.
+func TestJudgePushCallWrittenAfter(t *testing.T) {
+	f := newJudgeFixture(t, 1)
+	m := judgeMoment{Block: "b", Fact: "f", Hook: "push", Tool: "Bash", Transcript: f.tr, Offset: f.off + 1, Line: "f: x"}
+	// The offset just inside the prompt's line aligns to the next line: the
+	// assistant's text and call come after it.
+	b, _ := os.ReadFile(f.tr)
+	i := strings.Index(string(b), `{"type":"assistant"`)
+	m.Offset = int64(i)
+	os.WriteFile(f.tr, []byte(strings.Replace(string(b), `{"type":"text","text":"I will take the shard lock first."},`, "", 1)), 0o644)
+	c, ok := momentOf(context.Background(), nil, m)
+	if !ok || !strings.HasPrefix(c.Request, "the tool call Bash: ") || !strings.Contains(c.Request, "made for the request: fix the scheduler") {
+		t.Fatalf("case %+v %v", c, ok)
+	}
+}
+
+func near(a, b float64) bool { return a-b < 1e-9 && b-a < 1e-9 }
