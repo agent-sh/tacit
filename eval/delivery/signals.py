@@ -273,6 +273,12 @@ def signals_for(events, start, end, name, desc, ruling, owner_session, owner_tim
     return s
 
 
+def block_key(c):
+    """A block's identity across label sets: its session, hook event, moment
+    and what it answered (the prompt or the tool call)."""
+    return (c.get("session"), c.get("event"), c.get("ts"), c.get("prompt") or json.dumps(c.get("tool_input"), sort_keys=True))
+
+
 def window_end(events, start, name):
     """The first block of the main chain after the line's own that delivers
     name again, or WINDOW_HOURS after start."""
@@ -347,13 +353,13 @@ def main():
     cache, rows = {}, []
     skipped = collections.Counter()
     # One delivery is one row: the same block can come in several label sets
-    # (one case id, deliveries.py's hash of the block); a fact graded two
-    # ways there is left out.
+    # (under different case ids when the sets were built apart); a fact
+    # graded two ways there is left out.
     seen_grade, conflicts = {}, set()
     for c in cases:
         labels = {**(c.get("labels") or {}), **{n: g for n, g in extra.get(c["id"], {}).items() if n in (c.get("delivered") or [])}}
         for n, g in labels.items():
-            k = (c["id"], n)
+            k = (block_key(c), n)
             if k in seen_grade and seen_grade[k] != g:
                 conflicts.add(k)
             seen_grade.setdefault(k, g)
@@ -375,7 +381,7 @@ def main():
             cache[path] = (transcript_events(path), os.path.getsize(path))
         events, size = cache[path]
         for name, grade in labels.items():
-            k = (c["id"], name)
+            k = (block_key(c), name)
             if k in conflicts or k in done:
                 skipped["graded two ways" if k in conflicts else "duplicate"] += 1
                 done.add(k)

@@ -90,7 +90,7 @@ class Signals(unittest.TestCase):
                 {"id": "c4", "session": "s1", "ts": t(14), "event": "prompt", "origin": "typed", "commit": "HEAD", "delivered": []},
                 # The same block in a second label set: one row; a fact
                 # graded two ways there is left out.
-                {"id": "c1", "session": "s1", "ts": t(0), "event": "prompt", "origin": "typed", "commit": "HEAD",
+                {"id": "c5", "session": "s1", "ts": t(0), "event": "prompt", "origin": "typed", "commit": "HEAD",
                  "delivered": ["queue-retry-backoff", "spare-note"], "labels": {"queue-retry-backoff": "R", "spare-note": "R"}},
                 {"id": "c3", "session": "s1", "ts": t(1), "event": "prompt", "sidechain": True, "commit": "HEAD", "labels": {"pool-lock-order": "W"}},
             ])
