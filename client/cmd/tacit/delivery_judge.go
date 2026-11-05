@@ -176,6 +176,11 @@ var judgeCall = func(ctx context.Context, model, prompt string) (string, string,
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", "", err
 	}
+	// Local settings are read from here: a .claude left in it could set a
+	// route, so the call refuses to run over one.
+	if _, err := os.Lstat(filepath.Join(dir, ".claude")); err == nil {
+		return "", "", fmt.Errorf("%s holds a .claude directory; the judge does not run over it", dir)
+	}
 	cmd, err := judgeCommand(ctx, model, dir)
 	if err != nil {
 		return "", "", err

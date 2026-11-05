@@ -369,3 +369,13 @@ func TestJudgePushCallWrittenAfter(t *testing.T) {
 }
 
 func near(a, b float64) bool { return a-b < 1e-9 && b-a < 1e-9 }
+
+// A .claude in the judge's working directory, whose local settings could
+// set a route, stops the call before it runs.
+func TestJudgeRefusesLocalSettings(t *testing.T) {
+	t.Setenv("TACIT_STATE_DIR", t.TempDir())
+	os.MkdirAll(filepath.Join(deliveryLogDir(), "judge-cwd", ".claude"), 0o700)
+	if _, _, err := judgeCall(context.Background(), "opus", "x"); err == nil || !strings.Contains(err.Error(), ".claude") {
+		t.Fatalf("ran over a .claude: %v", err)
+	}
+}

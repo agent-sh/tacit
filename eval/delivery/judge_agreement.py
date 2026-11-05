@@ -162,7 +162,7 @@ def judge(rows, tacit, model, path, seed=7):
         with open(path) as fh:
             for line in fh:
                 v = json.loads(line)
-                if (v.get("block"), v.get("fact")) in key:
+                if (v.get("block"), v.get("fact")) in key and not v.get("unreadable"):  # retried
                     got[key[(v["block"], v["fact"])]] = v
     order = [k for k in range(len(rows)) if k not in got]
     random.Random(seed).shuffle(order)
