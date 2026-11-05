@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -233,14 +234,16 @@ func TestEpisodeTimeLimit(t *testing.T) {
 	}
 	// The redaction runs on its own clock, not the read's: a caller's context
 	// whose read budget is spent still redacts.
-	got, err := redactFound(context.Background(), []events.Event{{Text: "token Zq7Vx9"}})
+	red := events.NewRedactor()
+	defer red.Close()
+	got, err := redactFound(context.Background(), red, []events.Event{{Text: "token Zq7Vx9"}}, false)
 	if err != nil || len(got) != 1 || strings.Contains(got[0].Text, "Zq7Vx9") {
 		t.Fatalf("redaction after the read's deadline: %v %+v", err, got)
 	}
 	// A caller that went away gets nothing.
 	gone, cancel := context.WithCancel(context.Background())
 	cancel()
-	if got, err := redactFound(gone, []events.Event{{Text: "token Zq7Vx9"}}); err == nil || got != nil {
+	if got, err := redactFound(gone, red, []events.Event{{Text: "token Zq7Vx9"}}, false); err == nil || got != nil {
 		t.Fatalf("redaction for a caller that went away: %v %+v", err, got)
 	}
 }
@@ -250,6 +253,74 @@ func TestEpisodeClipKeepsToRunes(t *testing.T) {
 	text := strings.Repeat("\u023a", 300) + " needle here"
 	if got := clipLine(text, []string{"needle"}, 40); !strings.Contains(got, "needle") {
 		t.Fatalf("clip: %q", got)
+	}
+}
+
+// The clip is centered where the words meet, not on the first word's first
+// mention: a log that names the service and the word early still shows the
+// line that holds all of them and the value after it.
+func TestEpisodeClipWhereTheWordsMeet(t *testing.T) {
+	text := "INFO billing deployed preview for canary\n" + strings.Repeat("ok   billing/internal/cache 0.012s\n", 20) +
+		"deployed billing to staging as release rel-0123456789\n" + strings.Repeat("ok   billing/internal/queue 0.020s\n", 5)
+	terms := []string{"deployed", "billing", "staging"}
+	if got := clipLine(text, terms, 160); !strings.Contains(got, "rel-0123456789") {
+		t.Fatalf("clip: %q", got)
+	}
+	// The part that holds the most of the words gives the clip: here the
+	// output, not the input that holds the first word only.
+	ev := events.Event{Kind: "tool_result", ToolName: "Bash", ToolInput: `{"command":"./deploy.sh billing deployed"}`, ToolOutput: text}
+	if got := eventLine("- ", ev, terms); !strings.Contains(got, "rel-0123456789") {
+		t.Fatalf("line: %q", got)
+	}
+	// A single word clips as before, a third of the room before it.
+	one := strings.Repeat("x ", 200) + "needle " + strings.Repeat("y ", 200)
+	if got := clipLine(one, []string{"needle"}, 40); !strings.Contains(got, "needle") || strings.Index(got, "needle") > 20 {
+		t.Fatalf("one word: %q", got)
+	}
+}
+
+// A small find, show or around runs scrump once: the query's own check rides
+// in the batch's call, and the call starts before the transcript is read.
+// The words are still refused when the redactor masks them, with matches
+// and without.
+func TestEpisodeOneScrumpCall(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a shell script stands in for scrump")
+	}
+	episodeHome(t)
+	bin := t.TempDir()
+	calls := filepath.Join(bin, "calls")
+	if err := os.WriteFile(filepath.Join(bin, "scrump"), []byte("#!/bin/sh\necho x >> '"+calls+"'\nexec sed 's/Zq7Vx9/******/g'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	count := func() int {
+		b, _ := os.ReadFile(calls)
+		os.Remove(calls)
+		return strings.Count(string(b), "x")
+	}
+	out, code := episodeOut(t, "find", "CR-123456789")
+	ref := refRx.FindStringSubmatch(out)
+	if code != 0 || ref == nil {
+		t.Fatalf("find (%d):\n%s", code, out)
+	}
+	if n := count(); n != 1 {
+		t.Fatalf("find ran scrump %d times", n)
+	}
+	for _, args := range [][]string{{"show", ref[1]}, {"around", ref[1]}} {
+		if out, code := episodeOut(t, args...); code != 0 {
+			t.Fatalf("%v (%d):\n%s", args, code, out)
+		}
+		if n := count(); n != 1 {
+			t.Fatalf("%v ran scrump %d times", args, n)
+		}
+	}
+	for _, words := range [][]string{{"Zq7Vx9"}, {"Zq7Vx9", "nowhere-in-the-session"}} {
+		out, code := episodeOut(t, append([]string{"find"}, words...)...)
+		if code != 1 || !strings.Contains(out, "masks: not searched") || strings.Contains(out, "Zq7Vx9") || refRx.MatchString(out) {
+			t.Fatalf("find %v (%d):\n%s", words, code, out)
+		}
+		count()
 	}
 }
 
@@ -595,7 +666,8 @@ func TestEpisodeCancelledCaller(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	// One scrump call takes 0.4 s; the caller goes away before it answers.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	out, err := episodeAnswer(ctx, &store.Store{Dir: t.TempDir()}, episodeQuery{Harness: "claude", Find: "CR-123456789"})
 	if err == nil || out != "" {

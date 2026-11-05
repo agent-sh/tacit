@@ -3,10 +3,12 @@
 package digest
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeScrump puts a scrump first on PATH that logs its arguments to the
@@ -26,6 +28,16 @@ func fakeScrump(t *testing.T, body string) string {
 	return calls
 }
 
+// redactPaths are the two ways to one redaction: a call started when its
+// texts are given, and one started ahead of them (StartWarm). They give the
+// same texts, calls and failures.
+var redactPaths = map[string]func([]string) ([]string, error){
+	"one call": RedactAll,
+	"started ahead": func(texts []string) ([]string, error) {
+		return StartWarm().RedactAll(context.Background(), texts)
+	},
+}
+
 // refuseRecords is a scrump before records mode: clap refuses the flag.
 const refuseRecords = `for a in "$@"; do
   if [ "$a" = --records ]; then
@@ -40,9 +52,15 @@ exec cat
 // refuses --records, the texts go joined by the boundary, and it is not
 // asked for records again in this process.
 func TestRedactAllFallsBackToTheBoundaryWithoutRecordsMode(t *testing.T) {
+	for path, redactAll := range redactPaths {
+		t.Run(path, func(t *testing.T) { fallsBackToTheBoundary(t, redactAll) })
+	}
+}
+
+func fallsBackToTheBoundary(t *testing.T, redactAll func([]string) ([]string, error)) {
 	calls := fakeScrump(t, refuseRecords)
 	for range 2 {
-		out, err := RedactAll([]string{"one", "two"})
+		out, err := redactAll([]string{"one", "two"})
 		if err != nil || len(out) != 2 || out[0] != "one" || out[1] != "two" {
 			t.Fatalf("RedactAll: %v %q", err, out)
 		}
@@ -77,16 +95,18 @@ func TestRedactAllFailsClosedInRecordsMode(t *testing.T) {
 		"a separator masked, same size": "exec tr '\\036' '*'\n",
 		"a separator moved, same size":  "exec perl -0777 -pe 's/one\\x1etwo/on\\x1eetwo/'\n",
 	} {
-		t.Run(name, func(t *testing.T) {
-			calls := fakeScrump(t, body)
-			if out, err := RedactAll([]string{"one", "two"}); err == nil {
-				t.Fatalf("RedactAll returned %q and no error", out)
-			}
-			b, _ := os.ReadFile(calls)
-			if got := strings.TrimSpace(string(b)); got != "--profile text --records scrub - -o -" {
-				t.Fatalf("calls %q, want the one records call", got)
-			}
-		})
+		for path, redactAll := range redactPaths {
+			t.Run(name+", "+path, func(t *testing.T) {
+				calls := fakeScrump(t, body)
+				if out, err := redactAll([]string{"one", "two"}); err == nil {
+					t.Fatalf("RedactAll returned %q and no error", out)
+				}
+				b, _ := os.ReadFile(calls)
+				if got := strings.TrimSpace(string(b)); got != "--profile text --records scrub - -o -" {
+					t.Fatalf("calls %q, want the one records call", got)
+				}
+			})
+		}
 	}
 }
 
@@ -94,8 +114,14 @@ func TestRedactAllFailsClosedInRecordsMode(t *testing.T) {
 // the first records call carries the issue's repro ahead of the texts, the
 // stream keeps its password, and the texts go joined by the boundary.
 func TestRedactAllCatchesAScrumpThatTakesRecordsButScansOneStream(t *testing.T) {
+	for path, redactAll := range redactPaths {
+		t.Run(path, func(t *testing.T) { catchesOneStream(t, redactAll) })
+	}
+}
+
+func catchesOneStream(t *testing.T, redactAll func([]string) ([]string, error)) {
 	calls := fakeScrump(t, "exec cat\n")
-	out, err := RedactAll([]string{"one", "two"})
+	out, err := redactAll([]string{"one", "two"})
 	if err != nil || len(out) != 2 || out[0] != "one" || out[1] != "two" {
 		t.Fatalf("RedactAll: %v %q", err, out)
 	}
@@ -107,5 +133,21 @@ func TestRedactAllCatchesAScrumpThatTakesRecordsButScansOneStream(t *testing.T) 
 	}
 	if _, err := RedactRecordsContext(t.Context(), []string{"x"}); err != ErrNoRecords {
 		t.Fatalf("RedactRecordsContext: %v, want ErrNoRecords", err)
+	}
+}
+
+// A call started ahead and never given its texts is ended, not waited for,
+// and a missing scrump fails a call started ahead as it fails any.
+func TestWarmEndsAndFailsClosed(t *testing.T) {
+	fakeScrump(t, "sleep 30\n")
+	start := time.Now()
+	w := StartWarm()
+	w.End()
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("End waited %v", d)
+	}
+	t.Setenv("PATH", t.TempDir())
+	if out, err := StartWarm().RedactAll(context.Background(), []string{"one"}); err == nil || out != nil {
+		t.Fatalf("without scrump: %v %q", err, out)
 	}
 }

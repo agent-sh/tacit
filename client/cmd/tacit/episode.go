@@ -786,12 +786,13 @@ var wrapperValue = map[string]bool{
 }
 
 // redactFound redacts what a read found on a clock of its own: the read may
-// have used its budget.
+// have used its budget. r's scrump call was started before the read; more
+// starts the next one.
 // A caller that goes away stops it.
-func redactFound(ctx context.Context, evs []events.Event) ([]events.Event, error) {
+func redactFound(ctx context.Context, r *events.Redactor, evs []events.Event, more bool) ([]events.Event, error) {
 	rctx, cancel := redactClock(ctx)
 	defer cancel()
-	out, err := events.Redact(rctx, evs)
+	out, err := r.Redact(rctx, evs, more)
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
@@ -832,13 +833,17 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 		return "", errEpisode{"the words are the redactor's mask: not searched"}
 	}
 	terms = kept
+	// scrump starts now, so it loads its rules while the transcript is read.
+	red := events.NewRedactor()
+	defer red.Close()
 	if anyWord {
-		// A fact's words: one the redactor masks is not searched for.
+		// A fact's words: one the redactor masks is not searched for. The
+		// batches' scrump starts meanwhile.
 		probe := make([]events.Event, len(terms))
 		for i, w := range terms {
 			probe[i] = events.Event{Text: w}
 		}
-		masked, err := redactFound(ctx, probe)
+		masked, err := redactFound(ctx, red, probe, true)
 		if err != nil || len(masked) != len(terms) {
 			return "", fmt.Errorf("redaction failed, nothing searched: %v", err)
 		}
@@ -852,10 +857,18 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 			return "", errEpisode{"the fact's words are all ones the redactor masks: not searched"}
 		}
 		terms = kept
-	} else if masked, err := redactFound(ctx, []events.Event{{Text: query}}); err != nil || len(masked) != 1 {
-		return "", fmt.Errorf("redaction failed, nothing searched: %v", err)
-	} else if masked[0].Text != query {
-		return "", errEpisode{"the words hold what the redactor masks: not searched"}
+	}
+	// Words the redactor masks are not searched for. They are checked in the
+	// first batch's scrump call, as a record of its own ahead of the events
+	// (alone when nothing matched): the read only collects candidates, and
+	// nothing is shown or counted before the words pass.
+	queryOK := anyWord
+	checkQuery := func(masked events.Event) error {
+		if masked.Text != query {
+			return errEpisode{"the words hold what the redactor masks: not searched"}
+		}
+		queryOK = true
+		return nil
 	}
 	limitOff, limitIdx, paged := int64(-1), 0, strings.TrimSpace(before) != ""
 	if paged {
@@ -959,6 +972,9 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 			}
 		}
 		var batch []events.Event
+		if !queryOK {
+			batch = append(batch, events.Event{Text: query})
+		}
 		size := 0
 		for _, c := range cands[checked:] {
 			if len(batch) > 0 && (len(batch) == episodeBatch || size+evSize(c.ev) > episodeBatchBytes) {
@@ -967,25 +983,52 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 			batch = append(batch, c.ev)
 			size += evSize(c.ev)
 		}
-		masked, err := events.Redact(rctx, batch)
+		n := len(batch)
+		if !queryOK {
+			n--
+		}
+		// The next batch's scrump starts now when one may follow: candidates
+		// are left, and (words that all must match) this batch may hold too few.
+		left := checked+n < len(cands)
+		more := left && (anyWord || len(shown)+n <= episodeHits)
+		masked, err := red.Redact(rctx, batch, more)
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		if err != nil && rctx.Err() != nil {
+		if err != nil && rctx.Err() != nil && queryOK {
 			// The redaction's clock ran out: what it redacted stands.
 			partial = true
 			break
 		}
 		if err != nil || len(masked) != len(batch) {
+			if !queryOK {
+				return "", fmt.Errorf("redaction failed, nothing searched: %v", err)
+			}
 			return "", fmt.Errorf("redaction failed, nothing shown: %v", err)
 		}
-		checked += len(batch)
+		if !queryOK {
+			if err := checkQuery(masked[0]); err != nil {
+				return "", err
+			}
+			masked = masked[1:]
+		}
+		checked += n
 		for _, ev := range masked {
 			if n := held(ev, terms, anyWord); n > 0 {
 				shown = append(shown, hit{ev, n})
 			}
 		}
 		rank()
+	}
+	if !queryOK {
+		// Nothing matched: the words are checked alone.
+		masked, err := redactFound(ctx, red, []events.Event{{Text: query}}, false)
+		if err != nil || len(masked) != 1 {
+			return "", fmt.Errorf("redaction failed, nothing searched: %v", err)
+		}
+		if err := checkQuery(masked[0]); err != nil {
+			return "", err
+		}
 	}
 	more := len(shown) > episodeHits
 	if more {
@@ -1054,6 +1097,8 @@ func episodeAroundRef(ctx context.Context, t episodeTarget, ref string, n int) (
 	n = min(n, episodeMaxN)
 	var before, after []events.Event
 	var anchor *events.Event
+	red := events.NewRedactor() // scrump loads its rules during the read
+	defer red.Close()
 	err := episodeRead(ctx, t, func(ev events.Event) bool {
 		if anchor == nil {
 			if ev.Offset == off && ev.Index == idx {
@@ -1081,7 +1126,7 @@ func episodeAroundRef(ctx context.Context, t episodeTarget, ref string, n int) (
 		return "", errEpisode{"no event " + ref + " in " + t.label}
 	}
 	all := append(append(before, *anchor), after...)
-	shown, err := redactFound(ctx, all)
+	shown, err := redactFound(ctx, red, all, false)
 	if err != nil {
 		return "", fmt.Errorf("redaction failed, nothing shown: %w", err)
 	}
@@ -1106,6 +1151,8 @@ func episodeShowRef(ctx context.Context, t episodeTarget, ref string) (string, e
 		return "", errEpisode{"not a ref: " + ref + " (an index line's first field, <offset>.<index>)"}
 	}
 	var found *events.Event
+	red := events.NewRedactor() // scrump loads its rules during the read
+	defer red.Close()
 	err := episodeRead(ctx, t, func(ev events.Event) bool {
 		if ev.Offset == off && ev.Index == idx {
 			e := ev
@@ -1124,7 +1171,7 @@ func episodeShowRef(ctx context.Context, t episodeTarget, ref string) (string, e
 		}
 		return "", errEpisode{"no event " + ref + " in " + t.label}
 	}
-	shown, err := redactFound(ctx, []events.Event{*found})
+	shown, err := redactFound(ctx, red, []events.Event{*found}, false)
 	if err != nil || len(shown) != 1 {
 		return "", fmt.Errorf("redaction failed, nothing shown: %v", err)
 	}
@@ -1148,7 +1195,8 @@ func episodeShowRef(ctx context.Context, t episodeTarget, ref string) (string, e
 }
 
 // eventLine is an index line: "<prefix><ref> <time> <who> <kind>[ <tool>][ error]: <clip>",
-// the clip around the first of terms when there are any.
+// the clip from the part (text, input, output) holding the most of terms,
+// the first such, around the place where they meet (clipLine).
 func eventLine(prefix string, ev events.Event, terms []string) string {
 	text := ev.Text
 	if strings.TrimSpace(text) == "" {
@@ -1157,10 +1205,16 @@ func eventLine(prefix string, ev events.Event, terms []string) string {
 	if strings.TrimSpace(text) == "" {
 		text = ev.ToolOutput
 	}
+	best := 0
 	for _, part := range []string{ev.Text, ev.ToolInput, ev.ToolOutput} {
-		if len(terms) > 0 && strings.Contains(strings.ToLower(part), terms[0]) {
-			text = part
-			break
+		lower, n := strings.ToLower(part), 0
+		for _, w := range terms {
+			if strings.Contains(lower, w) {
+				n++
+			}
+		}
+		if n > best {
+			text, best = part, n
 		}
 	}
 	errMark := ""
@@ -1191,8 +1245,9 @@ func timeOf(ev events.Event) string {
 	return ev.At.Local().Format("01-02 15:04")
 }
 
-// clipLine is text on one line, at most n runes, around the first of terms
-// when it holds one.
+// clipLine is text on one line, at most n runes, around the smallest
+// stretch of it that holds every one of terms it holds (meet): a third of the
+// room left before it, the rest after, where a value the words name follows.
 func clipLine(text string, terms []string, n int) string {
 	flat := strings.Join(strings.Fields(text), " ")
 	runes := []rune(flat)
@@ -1200,15 +1255,15 @@ func clipLine(text string, terms []string, n int) string {
 		return flat
 	}
 	start := 0
-	if len(terms) > 0 {
-		// strings.ToLower maps rune for rune, so a rune count in the lower
-		// text is one in flat (a byte offset is not: some runes change size).
-		lower := strings.ToLower(flat)
-		if i := strings.Index(lower, terms[0]); i >= 0 {
-			start = max(0, utf8.RuneCountInString(lower[:i])-n/3)
-		}
+	// strings.ToLower maps rune for rune, so a rune count in the lower text
+	// is one in flat (a byte offset is not: some runes change size).
+	lower := strings.ToLower(flat)
+	if i, j, ok := meet(lower, terms); ok {
+		from, to := utf8.RuneCountInString(lower[:i]), utf8.RuneCountInString(lower[:j])
+		start = max(0, from-max(0, n-(to-from))/3)
 	}
 	end := min(len(runes), start+n)
+	start = max(0, min(start, end-n))
 	out := string(runes[start:end])
 	if start > 0 {
 		out = "…" + out
@@ -1217,6 +1272,63 @@ func clipLine(text string, terms []string, n int) string {
 		out += "…"
 	}
 	return out
+}
+
+// meet is the smallest stretch [i, j) of s (bytes) that holds every one of
+// terms s holds, the first of the smallest; ok is false when it holds none.
+func meet(s string, terms []string) (i, j int, ok bool) {
+	type at struct{ pos, end, term int }
+	var hits []at
+	held, longest := 0, 0
+	for k, w := range terms {
+		if w == "" {
+			continue
+		}
+		longest = max(longest, len(w))
+		found := false
+		for from := 0; ; {
+			x := strings.Index(s[from:], w)
+			if x < 0 {
+				break
+			}
+			found = true
+			hits = append(hits, at{from + x, from + x + len(w), k})
+			from += x + 1
+		}
+		if found {
+			held++
+		}
+	}
+	if held == 0 {
+		return 0, 0, false
+	}
+	sort.Slice(hits, func(a, b int) bool { return hits[a].pos < hits[b].pos })
+	count := make([]int, len(terms))
+	have, l := 0, 0
+	best := -1
+	for r, h := range hits {
+		if count[h.term] == 0 {
+			have++
+		}
+		count[h.term]++
+		for have == held {
+			// Only a hit that starts within the longest term's length before
+			// the last one's end can end past it.
+			end := h.end
+			for x := r - 1; x >= l && hits[x].pos+longest > h.end; x-- {
+				end = max(end, hits[x].end)
+			}
+			if best < 0 || end-hits[l].pos < best {
+				best, i, j = end-hits[l].pos, hits[l].pos, end
+			}
+			count[hits[l].term]--
+			if count[hits[l].term] == 0 {
+				have--
+			}
+			l++
+		}
+	}
+	return i, j, true
 }
 
 // longestRun is the longest run of r in s.

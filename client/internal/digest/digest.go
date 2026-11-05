@@ -94,6 +94,53 @@ func RedactAllContext(ctx context.Context, texts []string) ([]string, error) {
 	return out, err
 }
 
+// Warm is a scrump records call started before its texts are known
+// (StartWarm), so scrump loads its rules while the caller does other work.
+// It redacts once (RedactAll); End stops one that is not used.
+type Warm struct{ run *scrumpRun }
+
+// StartWarm starts a records call, or none when this process's scrump has
+// shown it has no records mode: then RedactAll is RedactAllContext.
+func StartWarm() *Warm {
+	if recordsMode.Load() == 2 {
+		return &Warm{}
+	}
+	return &Warm{run: startScrub(true)}
+}
+
+// RedactAll is RedactAllContext on w's call: the same records, checks and
+// fallbacks, and the same failures, without the wait for scrump's start.
+// A second call, or one on a Warm that was ended, starts scrump anew.
+func (w *Warm) RedactAll(ctx context.Context, texts []string) ([]string, error) {
+	run := w.run
+	w.run = nil
+	if run == nil {
+		return RedactAllContext(ctx, texts)
+	}
+	used := false
+	out, err := apart(ctx, texts, func(b []string) ([]string, error) {
+		used = true
+		return redactRecordsOn(ctx, run, b)
+	})
+	if !used {
+		run.end()
+	}
+	if errors.Is(err, ErrNoRecords) {
+		out, err = apart(ctx, texts, func(b []string) ([]string, error) {
+			return redactJoined(ctx, b, boundarySep)
+		})
+	}
+	return out, err
+}
+
+// End stops w's call when RedactAll did not use it.
+func (w *Warm) End() {
+	if w.run != nil {
+		w.run.end()
+		w.run = nil
+	}
+}
+
 // ErrNoRecords is RedactRecordsContext's error when the installed scrump
 // has no records mode (`scrump --records`, scrump 0.2.0 and later).
 var ErrNoRecords = errors.New("scrump has no records mode (--records); install scrump 0.2.0 or later")
@@ -129,7 +176,20 @@ func recordsProbe() [2]string {
 }
 
 func redactRecords(ctx context.Context, texts []string) ([]string, error) {
+	if recordsMode.Load() == 2 {
+		return nil, ErrNoRecords
+	}
+	return redactRecordsOn(ctx, startScrub(true), texts)
+}
+
+// redactRecordsOn is redactRecords on a scrump records call already started
+// (run), which it finishes or ends.
+func redactRecordsOn(ctx context.Context, run *scrumpRun, texts []string) ([]string, error) {
 	mode := recordsMode.Load()
+	if mode == 2 {
+		run.end()
+		return nil, ErrNoRecords
+	}
 	if mode == 2 {
 		return nil, ErrNoRecords
 	}
@@ -141,7 +201,7 @@ func redactRecords(ctx context.Context, texts []string) ([]string, error) {
 	if mode == 0 {
 		in = append([]string{probe[0], probe[1]}, texts...)
 	}
-	out, err := scrub(ctx, strings.Join(in, "\x1e"), true)
+	out, err := run.finish(ctx, strings.Join(in, "\x1e"))
 	if errors.Is(err, ErrNoRecords) {
 		recordsMode.Store(2)
 	}
@@ -357,32 +417,93 @@ func redactWithScrumpCtx(ctx context.Context, s string) (string, error) {
 // records is set. A scrump that refuses --records (a usage error, exit 2,
 // that names the flag) gives ErrNoRecords.
 func scrub(ctx context.Context, s string, records bool) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
+	return startScrub(records).finish(ctx, s)
+}
+
+// scrumpRun is one scrump call started before its text is given: scrump
+// loads its rules before it reads its input, which is most of a small
+// call's time, so a caller that starts it first and reads a transcript
+// meanwhile waits for the load only where it is longer than the read.
+type scrumpRun struct {
+	cmd            *exec.Cmd
+	stdin          io.WriteCloser
+	stdout, stderr bytes.Buffer
+	records        bool
+	kill           context.CancelFunc
+	err            error // the start's failure, which finish reports
+}
+
+func startScrub(records bool) *scrumpRun {
+	pctx, kill := context.WithCancel(context.Background())
 	args := []string{"--profile", "text"}
 	if records {
 		args = append(args, "--records")
 	}
-	cmd := exec.CommandContext(ctx, "scrump", append(args, "scrub", "-", "-o", "-")...)
+	cmd := exec.CommandContext(pctx, "scrump", append(args, "scrub", "-", "-o", "-")...)
 	platform.Prepare(cmd)
 	cmd.WaitDelay = 100 * time.Millisecond
-	cmd.Stdin = strings.NewReader(s)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
+	r := &scrumpRun{cmd: cmd, records: records, kill: kill}
+	cmd.Stdout, cmd.Stderr = &r.stdout, &r.stderr
+	in, err := cmd.StdinPipe()
+	if err == nil {
+		err = cmd.Start()
+	}
+	if err != nil {
+		kill()
+		r.err = err
+		return r
+	}
+	r.stdin = in
+	return r
+}
+
+// end stops a call that will not be given its text, and waits for it.
+func (r *scrumpRun) end() {
+	if r.err != nil {
+		return
+	}
+	r.kill()
+	_ = r.stdin.Close()
+	_ = r.cmd.Wait()
+	r.err = errors.New("ended")
+}
+
+// finish gives the call its text and returns scrump's answer: 60 s from
+// now, ended when ctx ends. A call is finished once.
+func (r *scrumpRun) finish(ctx context.Context, s string) (string, error) {
+	defer r.kill()
+	if r.err != nil {
+		return "", errors.New("scrump: " + r.err.Error())
+	}
+	r.err = errors.New("finished")
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	stop := context.AfterFunc(ctx, r.kill)
+	defer stop()
+	wrote := make(chan error, 1)
+	go func() {
+		_, err := io.WriteString(r.stdin, s)
+		if cerr := r.stdin.Close(); err == nil {
+			err = cerr
+		}
+		wrote <- err
+	}()
+	err := r.cmd.Wait()
+	werr := <-wrote
+	if err != nil {
 		// A wrapper may exit while its children still hold stdout. WaitDelay
 		// releases the pipes; cancel the group as well so those children stop.
-		if cmd.Process != nil && cmd.Cancel != nil {
-			_ = cmd.Cancel()
+		if r.cmd.Process != nil && r.cmd.Cancel != nil {
+			_ = r.cmd.Cancel()
 		}
 		if ctx.Err() != nil {
 			return "", fmt.Errorf("scrump: %w", ctx.Err())
 		}
 		var exit *exec.ExitError
-		if records && errors.As(err, &exit) && exit.ExitCode() == 2 && strings.Contains(stderr.String(), "--records") {
+		if r.records && errors.As(err, &exit) && exit.ExitCode() == 2 && strings.Contains(r.stderr.String(), "--records") {
 			return "", ErrNoRecords
 		}
-		msg := strings.TrimSpace(stderr.String())
+		msg := strings.TrimSpace(r.stderr.String())
 		if i := strings.IndexByte(msg, '\n'); i > 0 {
 			msg = msg[:i]
 		}
@@ -391,11 +512,14 @@ func scrub(ctx context.Context, s string, records bool) (string, error) {
 		}
 		return "", errors.New("scrump: " + msg)
 	}
-	if stdout.Len() != len(s) {
-		// Masks keep the length; anything else is not scrump's text profile.
-		return "", fmt.Errorf("scrump changed the length of the text (%d -> %d)", len(s), stdout.Len())
+	if werr != nil {
+		return "", fmt.Errorf("scrump: its input: %w", werr)
 	}
-	return stdout.String(), nil
+	if r.stdout.Len() != len(s) {
+		// Masks keep the length; anything else is not scrump's text profile.
+		return "", fmt.Errorf("scrump changed the length of the text (%d -> %d)", len(s), r.stdout.Len())
+	}
+	return r.stdout.String(), nil
 }
 
 // clip collapses whitespace and truncates to the cap plus spare. Finish
