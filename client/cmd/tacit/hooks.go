@@ -294,7 +294,9 @@ func runHook(args []string) int {
 		logDropped(strong, kept, "withheld")
 		strong = kept
 		remember(in.SessionID, strong)
-		fmt.Print(hookBlock(strong, "# tacit: facts matching this request", titlesNote))
+		if out := hookBlock(strong, "# tacit: facts matching this request", titlesNote); out != "" {
+			fmt.Print(out + markAsk(strong))
+		}
 		endLog(strong)
 	default:
 		usage()

@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/agent-sh/tacit/client/internal/store"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -722,5 +724,71 @@ func TestTitlesLeaveAnOwnersBlockWhole(t *testing.T) {
 	}
 	if c := candOf(*e, "signoff"); c == nil || c.Form != "full" {
 		t.Fatalf("form: %+v", c)
+	}
+}
+
+// A sampled prompt block asks for a self-mark (its probability logged
+// either way); the ask names the block, and tacit_mark records the marks
+// as an entry of the log. No ask without the MCP server or an agent's line.
+func TestSelfMarksAreSampledAndLogged(t *testing.T) {
+	_, cwd := repoFirstRig(t,
+		fact.Meta{Name: "scheduler-shard-locks", Description: "The scheduler pool keeps one shard lock per tenant and a slot lock per job", Type: "design_decision", Scope: "projects/widget"},
+	)
+	state := filepath.Join(t.TempDir(), "state")
+	t.Setenv("TACIT_STATE_DIR", state)
+	t.Setenv("TACIT_DELIVERY_REPO_START", "off")
+	t.Setenv("TACIT_DELIVERY_PROMPT_ACTION", "off")
+	draw := markDraw
+	t.Cleanup(func() { markDraw = draw })
+	prompt := "Fix the scheduler pool shard lock and slot lock race"
+	markDraw = func() float64 { return 0.99 }
+	if out := hookOut(t, promptPayload(cwd, "s1", prompt), "prompt", "--mcp"); strings.Contains(out, "tacit_mark") {
+		t.Fatalf("not drawn: %s", out)
+	}
+	markDraw = func() float64 { return 0.01 }
+	out := hookOut(t, promptPayload(cwd, "s2", prompt), "prompt", "--mcp")
+	if !strings.Contains(out, "`tacit_mark` (block ") {
+		t.Fatalf("drawn: %s", out)
+	}
+	if out := hookOut(t, promptPayload(cwd, "s3", prompt), "prompt"); strings.Contains(out, "tacit_mark") {
+		t.Fatalf("no MCP server: %s", out)
+	}
+	var asked logEntry
+	for _, e := range readDeliveryLog(t, state) {
+		if e.Hook == "prompt" && e.Session == "s1" && (e.PMark != markRate || e.MarkAsked) {
+			t.Fatalf("not drawn, logged: %+v", e)
+		}
+		if e.Hook == "prompt" && e.Session == "s2" {
+			asked = e
+		}
+	}
+	if !asked.MarkAsked || asked.PMark != markRate || !strings.Contains(out, asked.ID) {
+		t.Fatalf("asked: %+v", asked)
+	}
+	// The tool records the marks, slugs only, under the block's id.
+	ctx := context.Background()
+	st, ct := mcp.NewInMemoryTransports()
+	ss, err := storeServer(&store.Store{Dir: t.TempDir()}, "claude").Connect(ctx, st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ss.Close()
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "tacit_mark", Arguments: map[string]any{"block": asked.ID, "helped": []string{"scheduler-shard-locks", "Not A Slug"}}})
+	if err != nil || res.IsError {
+		t.Fatalf("tacit_mark: %v %+v", err, res)
+	}
+	var mark *logMarkStep
+	for _, e := range readDeliveryLog(t, state) {
+		if e.Hook == "mark" {
+			mark = e.Mark
+		}
+	}
+	if mark == nil || mark.Block != asked.ID || strings.Join(mark.Helped, ",") != "scheduler-shard-locks" {
+		t.Fatalf("mark: %+v", mark)
 	}
 }

@@ -84,6 +84,11 @@ type logEntry struct {
 	// Omitted is how many candidates of the block's pools the entry leaves
 	// out: past the head of the start block's pool, or past logCandCap.
 	Omitted int `json:"omitted,omitempty"`
+	// PMark is the probability the block had of asking for a self-mark,
+	// MarkAsked whether it asked; Mark is a mark entry's marks.
+	PMark     float64      `json:"p_mark,omitempty"`
+	MarkAsked bool         `json:"mark_asked,omitempty"`
+	Mark      *logMarkStep `json:"mark,omitempty"`
 	// Nav is a nav entry's step through the store (no block: its
 	// nothing fields say nothing).
 	Nav *logNav `json:"nav,omitempty"`
