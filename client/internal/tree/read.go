@@ -3,6 +3,7 @@ package tree
 import (
 	"errors"
 	"fmt"
+	"github.com/agent-sh/tacit/client/internal/fact"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -39,6 +40,14 @@ type ReadOptions struct {
 	Local string
 	// Session is what the tool may read (Session.Reads).
 	Session
+	// Hidden is the names of facts that do not exist for the session (a
+	// hold-out's denial, SPEC.md "Hold-outs"): withoutHidden. Indexes and
+	// LocalIndexes, when set, are the folder indexes as the session's view
+	// generates them (GenerateWith over the facts less the hidden ones, by
+	// root-relative path), read in place of the files, so every count and
+	// word of a folder's summary is the view's.
+	Hidden                map[string]bool
+	Indexes, LocalIndexes map[string]string
 	// named is the scope the caller asked for by name (Named), set by Read;
 	// also the folder a suppressed one asked for points at.
 	named, also string
@@ -182,6 +191,36 @@ func (o ReadOptions) suppressedBy(p string) string {
 
 // filter drops the folder lines of content for folders out of scope and
 // returns the in-scope children it lists.
+// withoutHidden is text as the session's view shows it: a hidden fact's
+// own index line, and an overview line that cites it ([[name]]), are left
+// out; any other mention of its name is masked (fact.MaskNames).
+func (o ReadOptions) withoutHidden(text string) string {
+	if len(o.Hidden) == 0 {
+		return text
+	}
+	var out []string
+	for _, l := range strings.Split(text, "\n") {
+		if m := factLine.FindStringSubmatch(l); m != nil && o.Hidden[m[1]] {
+			continue
+		}
+		cites := false
+		for _, m := range citeLine.FindAllStringSubmatch(l, -1) {
+			cites = cites || o.Hidden[m[1]]
+		}
+		if cites {
+			continue
+		}
+		out = append(out, fact.MaskNames(l, o.Hidden))
+	}
+	return strings.Join(out, "\n")
+}
+
+// factLine is a fact's line of a folder index, citeLine an overview's cite.
+var (
+	factLine = regexp.MustCompile("^- `([a-z0-9][a-z0-9-]*)` \\(")
+	citeLine = regexp.MustCompile(`\[\[([a-z0-9][a-z0-9-]*)(?:\|[^\]]*)?\]\]`)
+)
+
 func (o ReadOptions) filter(p, content string) (string, []string) {
 	var out []string
 	var kids []string
@@ -206,7 +245,7 @@ func (o ReadOptions) filter(p, content string) (string, []string) {
 		}
 		out = append(out, l)
 	}
-	s := strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n"
+	s := o.withoutHidden(strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n")
 	if hidden > 0 {
 		s += fmt.Sprintf("\n(%d %s outside this session's scope not shown: another repository's or machine's; name one as the path to read it.)\n", hidden, plural(hidden, "folder", "folders"))
 	}
@@ -236,7 +275,7 @@ func Read(o ReadOptions, p string, depth int) (string, error) {
 	if w := o.suppressedBy(p); w != "" && w != p {
 		o.also = Named(w)
 		fmt.Fprintf(&b, "%s is suppressed by %s: its facts move there. Showing %s first, then what is left in %s.\n\n", p, w, w, p)
-		out, err := Read(ReadOptions{Store: o.Store, Local: o.Local, Session: o.Session}, w, depth)
+		out, err := Read(ReadOptions{Store: o.Store, Local: o.Local, Session: o.Session, Hidden: o.Hidden, Indexes: o.Indexes, LocalIndexes: o.LocalIndexes}, w, depth)
 		if err == nil {
 			b.WriteString(out)
 		}
@@ -252,8 +291,14 @@ func Read(o ReadOptions, p string, depth int) (string, error) {
 		}
 		seen[p] = true
 		var kids []string
-		for _, src := range []struct{ root, label string }{{o.Store, ""}, {o.Local, " (this machine's local layer)"}} {
+		for _, src := range []struct {
+			root, label string
+			gen         map[string]string
+		}{{o.Store, "", o.Indexes}, {o.Local, " (this machine's local layer)", o.LocalIndexes}} {
 			content, ok, err := readIndex(src.root, p)
+			if src.gen != nil && src.root != "" {
+				content, ok, err = src.gen[Rel(p)], src.gen[Rel(p)] != "", nil
+			}
 			if err != nil {
 				return err
 			}
@@ -302,6 +347,7 @@ func Read(o ReadOptions, p string, depth int) (string, error) {
 			if _, body, ok := strings.Cut(content, "\n---\n"); ok {
 				content = strings.TrimLeft(body, "\r\n")
 			}
+			content = o.withoutHidden(content)
 			block := fmt.Sprintf("=== overview of %s%s: %s/%s ===\n%s\n", p, src.label, p, OverviewFile, strings.TrimRight(content, "\n")+"\n")
 			if b.Len()+len(block) > maxOutput {
 				fmt.Fprintf(&b, "... the overview is cut: it would pass %d KB.\n", maxOutput>>10)

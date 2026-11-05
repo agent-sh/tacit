@@ -174,6 +174,7 @@ Every YAML option is listed here:
 | (environment only) | `TACIT_DELIVERY_JUDGE` | `on` (default): at the end of a full dream run, a model judges a sample of the delivered lines with hindsight (relevant, confused, novel) on the owner's Claude subscription through `claude -p`, never Bedrock; `off` for none (SPEC.md, The dreamer's judge) |
 | (environment only) | `TACIT_DELIVERY_JUDGE_DAILY` | Lines judged a day at most; default `36` |
 | (environment only) | `TACIT_DELIVERY_JUDGE_MODEL` | The judge's model for `claude -p`; default `opus` |
+| (environment only) | `TACIT_DELIVERY_HOLDOUT` | Share of prompt blocks that withhold one agent's note, to measure facts' effects; default `0.05`, `0` for none; never the owner's rules (SPEC.md, Hold-outs) |
 | `verify_roots` | `TACIT_VERIFY_ROOTS` | Extra permitted source directories; YAML list, `PATH` separator in environment; every directory must exist |
 | `runner` | `TACIT_RUNNER` | Default CLI for all model jobs; `claude` |
 | `runners` | `TACIT_<ROLE>_RUNNER` | Per-role CLI overrides |

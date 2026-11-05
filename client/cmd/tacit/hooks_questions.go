@@ -132,6 +132,8 @@ func questionBlock(ctx context.Context, in hookInput, sit search.Situation, prom
 	}
 	sess.Repos = append([]string{sit.Repo}, sit.RepoAliases...)
 	sess.Cwd, sess.Prompt = in.Cwd, prompt
+	deny := deniedTo(in.SessionID)
+	sess.Hidden = func(name string) bool { return deny[name] }
 	src := agentreview.DefaultSources(home)
 	var picked *agentreview.Item
 	_ = agentreview.Locked(path, questionWait, func(q *agentreview.Queue) bool {

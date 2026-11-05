@@ -79,6 +79,52 @@ type Index struct {
 	db    *sql.DB
 	sha   string
 	stale bool // opened by OpenRecent in place of the exact index
+	// hidden is the names of the facts that do not exist for the session
+	// this index answers (Hide): a hold-out's denial.
+	hidden map[string]bool
+}
+
+// Hide makes the index one session's view of the store: a fact of one of
+// these names does not exist for it. No answer holds it (Query, the scans,
+// List, Counts, HasFact) and no answer's conflict mark names it, so every
+// block, pointer and cross-reference built from the index leaves it out
+// without a filter of its own (SPEC.md, Hold-outs).
+func (ix *Index) Hide(names map[string]bool) {
+	if len(names) == 0 {
+		ix.hidden = nil
+		return
+	}
+	ix.hidden = names
+}
+
+// Hidden reports a name the view hides.
+func (ix *Index) Hidden(name string) bool { return ix.hidden[name] }
+
+// visible is hits less the hidden facts, each kept hit's conflict mark less
+// the hidden names, and its description and body with them masked.
+func (ix *Index) visible(hits []Hit) []Hit {
+	if len(ix.hidden) == 0 {
+		return hits
+	}
+	out := hits[:0]
+	for _, h := range hits {
+		if ix.hidden[h.Name] {
+			continue
+		}
+		if len(h.Conflicts) > 0 {
+			var keep []string
+			for _, c := range h.Conflicts {
+				if !ix.hidden[c] {
+					keep = append(keep, c)
+				}
+			}
+			h.Conflicts = keep
+		}
+		// Its own text names no hidden fact either.
+		h.Description, h.Body = fact.MaskNames(h.Description, ix.hidden), fact.MaskNames(h.Body, ix.hidden)
+		out = append(out, h)
+	}
+	return out
 }
 
 // IndexDir is where index files live: $TACIT_INDEX or ~/.local/state/tacit/index.
@@ -1141,6 +1187,7 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
+	hits = ix.visible(hits)
 	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
 	hits = dropConflictPartners(hits)
 	if len(hits) > limit {

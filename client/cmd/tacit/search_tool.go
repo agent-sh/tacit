@@ -488,7 +488,7 @@ func runIndexed(do func(ctx context.Context, ix *search.Index, cwd string) (stri
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	ix, err := openIndex(ctx, s)
+	ix, err := openExactSessionIndex(ctx, s, callerSession())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2

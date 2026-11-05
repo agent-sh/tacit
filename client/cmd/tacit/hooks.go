@@ -182,6 +182,11 @@ func runHook(args []string) int {
 		sit.Repo, sit.RepoAliases = r.Name, repoAliases(r)
 	}
 
+	// A Claude Code session's harness process: which session it runs now,
+	// for its tacit MCP server's view (session_pid.go).
+	if (args[0] == "session-start" || args[0] == "prompt") && isClaudeHook(in) {
+		recordHarnessSession(in.SessionID)
+	}
 	switch args[0] {
 	case "questions":
 		// The reviewer's question alone, for a harness whose facts come from
@@ -206,7 +211,7 @@ func runHook(args []string) int {
 			_ = s.Sync(sctx)
 			scancel()
 		}
-		ix, err := openHookIndex(ctx, s)
+		ix, err := openSessionIndex(ctx, s, in.SessionID)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "tacit hook:", err)
 			return 0
@@ -253,7 +258,7 @@ func runHook(args []string) int {
 		// not read yet: the summary's own facts (pendingSummary), whatever
 		// the prompt ("continue" among them).
 		if _, err := os.Stat(pendingFile(in.SessionID)); err == nil {
-			if ix, err := openHookIndex(ctx, s); err == nil {
+			if ix, err := openSessionIndex(ctx, s, in.SessionID); err == nil {
 				recs := hookRecords(ctx, ix)
 				psit, _ := withWorkspace(withRootFolder(sit, recs, in.Cwd), in.Cwd)
 				fmt.Print(pendingSummary(ctx, ix, in, withOrgs(withRecordAliases(psit, recs), recs), recs))
@@ -263,7 +268,7 @@ func runHook(args []string) int {
 		if !promptWorthy(p) {
 			return 0
 		}
-		ix, err := openHookIndex(ctx, s)
+		ix, err := openSessionIndex(ctx, s, in.SessionID)
 		if err != nil {
 			return 0
 		}
@@ -292,7 +297,7 @@ func runHook(args []string) int {
 		}
 		kept := withoutClaims(strong)
 		logDropped(strong, kept, "withheld")
-		strong = kept
+		strong = holdOut(in, kept, slices.Contains(args[1:], "--mcp"))
 		remember(in.SessionID, strong)
 		if out := hookBlock(strong, "# tacit: facts matching this request", titlesNote); out != "" {
 			fmt.Print(out + markAsk(strong))
@@ -827,6 +832,14 @@ func remember(id string, hits []search.Hit) {
 	rememberNames(id, names)
 }
 
+// sessionGroup is the session a file of the sessions directory belongs to:
+// its name up to the first dot (a session id has none; its side files are
+// <id>.given, <id>.holdout, <id>.compact and the like).
+func sessionGroup(name string) string {
+	g, _, _ := strings.Cut(name, ".")
+	return g
+}
+
 // rememberNames adds lines to the session's delivered set: fact names, and
 // the areas pushed (areaSeen).
 func rememberNames(id string, names []string) {
@@ -835,6 +848,17 @@ func rememberNames(id string, names []string) {
 		return
 	}
 	os.MkdirAll(filepath.Dir(p), 0o700)
+	// Every fact a hook gives is in the session's given set too, which no
+	// clear or compaction drops: a hold-out decides a fact's arm once.
+	given := readNames(givenFile(id))
+	var fresh []string
+	for _, n := range names {
+		if !given[n] {
+			given[n] = true
+			fresh = append(fresh, n)
+		}
+	}
+	appendNames(givenFile(id), fresh)
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
@@ -843,10 +867,20 @@ func rememberNames(id string, names []string) {
 	for _, n := range names {
 		fmt.Fprintln(f, n)
 	}
-	// Opportunistic cleanup of old sessions.
+	// Opportunistic cleanup of old sessions. A session's files (its
+	// delivered set, .given, .holdout) go together, by the newest of them, so
+	// a session that still reads its denial keeps all of them.
 	if entries, err := os.ReadDir(filepath.Dir(p)); err == nil && len(entries) > 200 {
+		newest := map[string]time.Time{}
 		for _, e := range entries {
-			if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > 7*24*time.Hour {
+			if info, err := e.Info(); err == nil {
+				if g := sessionGroup(e.Name()); info.ModTime().After(newest[g]) {
+					newest[g] = info.ModTime()
+				}
+			}
+		}
+		for _, e := range entries {
+			if time.Since(newest[sessionGroup(e.Name())]) > 7*24*time.Hour {
 				os.Remove(filepath.Join(filepath.Dir(p), e.Name()))
 			}
 		}
@@ -897,7 +931,7 @@ func runSearch(args []string) int {
 			repoAliases = hookRepoAliases(cwd)
 		}
 	}
-	ix, err := openIndex(ctx, s)
+	ix, err := openExactSessionIndex(ctx, s, callerSession())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "search:", err)
 		return 2
@@ -936,7 +970,7 @@ func runFact(args []string) int {
 	}
 	// The store's facts, then this machine's own notes (a read-only clone's
 	// local overlay); a replaced fact prints its successor first.
-	out, shown, ok, err := factText(s.Dir, args[0])
+	out, shown, ok, err := factTextIn(s.Dir, args[0], deniedTo(callerSession()))
 	if !ok {
 		fmt.Fprintln(os.Stderr, "fact: not found:", args[0])
 		return 1

@@ -66,7 +66,10 @@ func storeServer(s *store.Store, harness string) *mcp.Server {
 		opts = &mcp.ServerOptions{Instructions: mcpInstructions}
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "tacit", Version: "0.1.0"}, opts)
-	addTreeTool(server, s)
+	if harness == "claude" {
+		registerMCPServer()
+	}
+	addTreeTool(server, s, harness)
 	addMarkTool(server)
 
 	type searchArgs struct {
@@ -87,7 +90,8 @@ func storeServer(s *store.Store, harness string) *mcp.Server {
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a searchArgs) (*mcp.CallToolResult, any, error) {
 		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
-		ix, err := openIndex(ctx, s)
+		session := viewSession(harness, "tacit_search")
+		ix, err := openExactSessionIndex(ctx, s, session)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -97,6 +101,7 @@ func storeServer(s *store.Store, harness string) *mcp.Server {
 		if err != nil {
 			return text("error: " + err.Error()), nil, nil
 		}
+		givenByAnswer(session, answerNames(out))
 		return text(out), nil, nil
 	})
 
@@ -104,7 +109,7 @@ func storeServer(s *store.Store, harness string) *mcp.Server {
 		Name string `json:"name" jsonschema:"fact name as shown by tacit_search"`
 	}
 	mcp.AddTool(server, &mcp.Tool{Name: "tacit_fact", Description: "Read one fact in full (body, source, applies_to) by the name tacit_search or tacit_tree showed."}, func(ctx context.Context, req *mcp.CallToolRequest, a factArgs) (*mcp.CallToolResult, any, error) {
-		out, shown, ok, err := factText(s.Dir, a.Name)
+		out, shown, ok, err := factTextIn(s.Dir, a.Name, deniedTo(viewSession(harness, "tacit_fact")))
 		if !ok {
 			return text("not found: " + a.Name), nil, nil
 		}

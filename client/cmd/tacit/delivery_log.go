@@ -85,6 +85,20 @@ type logEntry struct {
 	// Omitted is how many candidates of the block's pools the entry leaves
 	// out: past the head of the start block's pool, or past logCandCap.
 	Omitted int `json:"omitted,omitempty"`
+	// HoldoutQ is the share of blocks that withhold one agent's note
+	// (Hold-outs), HeldOut the note this block withheld.
+	HoldoutQ float64 `json:"holdout_q,omitempty"`
+	HeldOut  string  `json:"held_out,omitempty"`
+	// HoldoutK is how many eligible notes (by name) the draw chose among;
+	// each eligible line's candidate is marked eligible.
+	HoldoutK int `json:"holdout_k,omitempty"`
+	// HoldoutSkip is why a block with eligible notes drew no hold-out: the
+	// harness ("harness": only Claude Code sessions have one), or no
+	// resolvable view ("no session record", "no MCP server"). HarnessPID
+	// is the harness process a drawing block, or an MCP call that resolved
+	// no session (view-unresolved), ran under.
+	HoldoutSkip string `json:"holdout_skip,omitempty"`
+	HarnessPID  int    `json:"harness_pid,omitempty"`
 	// PMark is the probability the block had of asking for a self-mark,
 	// MarkAsked whether it asked; Mark is a mark entry's marks.
 	PMark     *float64     `json:"p_mark,omitempty"`
@@ -104,8 +118,12 @@ type logEntry struct {
 	words map[string]bool
 	// titled: hookBlock printed the block's agents' notes as titles.
 	titled bool
-	ix     *search.Index
-	req    string
+	// propensity is each eligible line's probability of being shown under
+	// the hold-out draw, by path (holdOut); endLog puts it in its p.
+	propensity map[string]float64
+	pNothing   *float64
+	ix         *search.Index
+	req        string
 }
 
 // logCand is one candidate of a block, delivered or not.
@@ -140,6 +158,8 @@ type logCand struct {
 	// not say why).
 	Dropped   string `json:"dropped,omitempty"`
 	Delivered bool   `json:"delivered"`
+	// Eligible marks a line the block's hold-out draw could withhold.
+	Eligible bool `json:"eligible,omitempty"`
 	// P is the probability the policy had of showing it: 1 or 0 while the
 	// policy is deterministic.
 	P float64 `json:"p"`
@@ -409,8 +429,7 @@ func endLog(printed []search.Hit) {
 			c.Via, c.Dropped = "", "other" // chosen, then left out by a path that does not say why
 		}
 		if c.Delivered {
-			c.Dropped, c.P = "", 1
-			c.Form = "full"
+			c.Dropped, c.P, c.Form = "", 1, "full"
 			for _, h := range printed {
 				if h.Name == c.Name && h.Path == c.Path && e.titled && !h.OwnerLine() {
 					c.Form = "title"
@@ -418,6 +437,11 @@ func endLog(printed []search.Hit) {
 			}
 		} else {
 			c.P = 0
+		}
+		// Under the hold-out draw a line was shown, or withheld, with the
+		// probability holdOut computed.
+		if p, ok := e.propensity[c.Path]; ok && (c.Delivered || c.Dropped == "holdout") {
+			c.P, c.Eligible = p, true
 		}
 	}
 	e.capCands()
@@ -427,6 +451,9 @@ func endLog(printed []search.Hit) {
 	e.PNothing = 0
 	if e.Nothing {
 		e.PNothing = 1
+	}
+	if e.pNothing != nil {
+		e.PNothing = *e.pNothing // the hold-out could empty the block
 	}
 	logPending = append(logPending, e)
 }
