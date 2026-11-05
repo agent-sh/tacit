@@ -870,6 +870,15 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 		queryOK = true
 		return nil
 	}
+	// checkQueryAlone checks the words in a call of their own, on a clock of
+	// their own: when nothing matched, or the first batch ran out of time.
+	checkQueryAlone := func() error {
+		masked, err := redactFound(ctx, red, []events.Event{{Text: query}}, false)
+		if err != nil || len(masked) != 1 {
+			return fmt.Errorf("redaction failed, nothing searched: %v", err)
+		}
+		return checkQuery(masked[0])
+	}
 	limitOff, limitIdx, paged := int64(-1), 0, strings.TrimSpace(before) != ""
 	if paged {
 		var ok bool
@@ -975,17 +984,14 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 		if !queryOK {
 			batch = append(batch, events.Event{Text: query})
 		}
-		size := 0
+		size, n := 0, 0
 		for _, c := range cands[checked:] {
-			if len(batch) > 0 && (len(batch) == episodeBatch || size+evSize(c.ev) > episodeBatchBytes) {
+			if n > 0 && (n == episodeBatch || size+evSize(c.ev) > episodeBatchBytes) {
 				break
 			}
 			batch = append(batch, c.ev)
 			size += evSize(c.ev)
-		}
-		n := len(batch)
-		if !queryOK {
-			n--
+			n++
 		}
 		// The next batch's scrump starts now when one may follow: candidates
 		// are left, and (words that all must match) this batch may hold too few.
@@ -995,8 +1001,14 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		if err != nil && rctx.Err() != nil && queryOK {
-			// The redaction's clock ran out: what it redacted stands.
+		if err != nil && rctx.Err() != nil {
+			// The redaction's clock ran out: what it redacted stands, once the
+			// words pass.
+			if !queryOK {
+				if err := checkQueryAlone(); err != nil {
+					return "", err
+				}
+			}
 			partial = true
 			break
 		}
@@ -1022,11 +1034,7 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 	}
 	if !queryOK {
 		// Nothing matched: the words are checked alone.
-		masked, err := redactFound(ctx, red, []events.Event{{Text: query}}, false)
-		if err != nil || len(masked) != 1 {
-			return "", fmt.Errorf("redaction failed, nothing searched: %v", err)
-		}
-		if err := checkQuery(masked[0]); err != nil {
+		if err := checkQueryAlone(); err != nil {
 			return "", err
 		}
 	}
@@ -1274,8 +1282,13 @@ func clipLine(text string, terms []string, n int) string {
 	return out
 }
 
+// meetHits bounds the places of one word meet looks at, so a long tool
+// output that holds a short word everywhere costs a bounded clip.
+const meetHits = 4096
+
 // meet is the smallest stretch [i, j) of s (bytes) that holds every one of
-// terms s holds, the first of the smallest; ok is false when it holds none.
+// terms s holds, the first of the smallest, among the first meetHits places
+// of each word; ok is false when it holds none.
 func meet(s string, terms []string) (i, j int, ok bool) {
 	type at struct{ pos, end, term int }
 	var hits []at
@@ -1286,7 +1299,7 @@ func meet(s string, terms []string) (i, j int, ok bool) {
 		}
 		longest = max(longest, len(w))
 		found := false
-		for from := 0; ; {
+		for from, seen := 0, 0; seen < meetHits; seen++ {
 			x := strings.Index(s[from:], w)
 			if x < 0 {
 				break

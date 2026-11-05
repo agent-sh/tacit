@@ -552,6 +552,40 @@ func TestEpisodeFindPartialRedaction(t *testing.T) {
 	}
 }
 
+// A first batch that runs out of the redaction's time is a partial answer
+// too, not a failure: the words, checked in that batch's call, are checked
+// alone on a clock of their own, and nothing is shown before they pass.
+func TestEpisodeFindPartialFirstBatch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a shell script stands in for scrump")
+	}
+	home := episodeHome(t)
+	bin := t.TempDir()
+	// A batch of events is slow; the words alone are not.
+	script := "#!/bin/sh\nf=$(mktemp -p '" + bin + "')\ncat > \"$f\"\nif [ $(wc -c < \"$f\") -gt 200 ]; then sleep 3; fi\nexec sed 's/Zq7Vx9/******/g' \"$f\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "scrump"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	prev := episodeRedactWait
+	episodeRedactWait = time.Second
+	t.Cleanup(func() { episodeRedactWait = prev })
+	id := "7d7d7d7d-1111-4222-8333-444455556666"
+	var texts []string
+	for i := range 40 {
+		texts = append(texts, fmt.Sprintf("the vxlan bridge flapped %d", i), fmt.Sprintf("vxlan key Zq7Vx9 rotated %d", i))
+	}
+	writeClaudeSession(t, home, id, "", texts...)
+	out, code := episodeOut(t, "--session", id, "find", "vxlan")
+	if code != 0 || !strings.Contains(out, "# tacit: 0 event(s)") || !strings.Contains(out, "# partial: not every matching event was checked") || refRx.MatchString(out) {
+		t.Fatalf("a first batch past the redaction's time (%d):\n%s", code, out)
+	}
+	// Words the redactor masks are still refused on that path.
+	if out, code := episodeOut(t, "--session", id, "find", "vxlan", "Zq7Vx9"); code != 1 || !strings.Contains(out, "masks: not searched") {
+		t.Fatalf("masked words past the redaction's time (%d):\n%s", code, out)
+	}
+}
+
 // A fact's words: one the redactor masks is left out, not the query, and of
 // events holding as many words the newest come first, whatever a secret in
 // older ones holds.

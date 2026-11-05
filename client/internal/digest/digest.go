@@ -185,6 +185,7 @@ func redactRecords(ctx context.Context, texts []string) ([]string, error) {
 // redactRecordsOn is redactRecords on a scrump records call already started
 // (run), which it finishes or ends.
 func redactRecordsOn(ctx context.Context, run *scrumpRun, texts []string) ([]string, error) {
+	// A call started ahead may meet a mode another call learned since.
 	mode := recordsMode.Load()
 	if mode == 2 {
 		run.end()
@@ -457,15 +458,17 @@ func startScrub(records bool) *scrumpRun {
 	return r
 }
 
-// end stops a call that will not be given its text, and waits for it.
+// end stops a call that will not be given its text, without waiting for
+// it: its input is closed, so scrump ends on its own if the kill is late,
+// and it is reaped in the background.
 func (r *scrumpRun) end() {
 	if r.err != nil {
 		return
 	}
-	r.kill()
-	_ = r.stdin.Close()
-	_ = r.cmd.Wait()
 	r.err = errors.New("ended")
+	_ = r.stdin.Close()
+	r.kill()
+	go func() { _ = r.cmd.Wait() }()
 }
 
 // finish gives the call its text and returns scrump's answer: 60 s from
