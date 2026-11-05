@@ -44,20 +44,20 @@
 <rect x="479.8" y="283.3" width="9" height="9" fill="#8f9089" stroke="#1c1f24" stroke-width="2"/>
 <rect x="580.2" y="264.6" width="9" height="9" fill="#8f9089" stroke="#1c1f24" stroke-width="2"/>
 <rect x="680.5" y="255.7" width="9" height="9" fill="#8f9089" stroke="#1c1f24" stroke-width="2"/>
-<path d="M101.0,381.8 V291.0 M98.0,381.8 h6 M98.0,291.0 h6" stroke="#4d6bc4" stroke-width="1" fill="none"/>
-<path d="M201.3,381.6 V278.9 M198.3,381.6 h6 M198.3,278.9 h6" stroke="#4d6bc4" stroke-width="1" fill="none"/>
-<path d="M301.7,376.6 V287.6 M298.7,376.6 h6 M298.7,287.6 h6" stroke="#4d6bc4" stroke-width="1" fill="none"/>
-<path d="M402.0,376.6 V280.4 M399.0,376.6 h6 M399.0,280.4 h6" stroke="#4d6bc4" stroke-width="1" fill="none"/>
-<path d="M502.3,376.5 V277.1 M499.3,376.5 h6 M499.3,277.1 h6" stroke="#4d6bc4" stroke-width="1" fill="none"/>
+<path d="M101.0,380.2 V291.0 M98.0,380.2 h6 M98.0,291.0 h6" stroke="#4d6bc4" stroke-width="1" fill="none"/>
+<path d="M201.3,380.1 V295.4 M198.3,380.1 h6 M198.3,295.4 h6" stroke="#4d6bc4" stroke-width="1" fill="none"/>
+<path d="M301.7,375.6 V287.6 M298.7,375.6 h6 M298.7,287.6 h6" stroke="#4d6bc4" stroke-width="1" fill="none"/>
+<path d="M402.0,375.6 V280.4 M399.0,375.6 h6 M399.0,280.4 h6" stroke="#4d6bc4" stroke-width="1" fill="none"/>
+<path d="M502.3,375.5 V277.1 M499.3,375.5 h6 M499.3,277.1 h6" stroke="#4d6bc4" stroke-width="1" fill="none"/>
 <path d="M602.7,372.9 V278.9 M599.7,372.9 h6 M599.7,278.9 h6" stroke="#4d6bc4" stroke-width="1" fill="none"/>
-<path d="M703.0,376.0 V264.6 M700.0,376.0 h6 M700.0,264.6 h6" stroke="#4d6bc4" stroke-width="1" fill="none"/>
-<polyline points="101.0,372.2 201.3,362.7 301.7,359.4 402.0,359.3 502.3,359.3 602.7,317.0 703.0,320.4" fill="none" stroke="#6d8ff0" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="101.0" cy="372.2" r="4.5" fill="#6d8ff0" stroke="#1c1f24" stroke-width="2"/>
-<circle cx="201.3" cy="362.7" r="4.5" fill="#6d8ff0" stroke="#1c1f24" stroke-width="2"/>
+<path d="M703.0,375.3 V264.5 M700.0,375.3 h6 M700.0,264.5 h6" stroke="#4d6bc4" stroke-width="1" fill="none"/>
+<polyline points="101.0,370.8 201.3,362.4 301.7,359.4 402.0,359.0 502.3,359.3 602.7,316.8 703.0,320.4" fill="none" stroke="#6d8ff0" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="101.0" cy="370.8" r="4.5" fill="#6d8ff0" stroke="#1c1f24" stroke-width="2"/>
+<circle cx="201.3" cy="362.4" r="4.5" fill="#6d8ff0" stroke="#1c1f24" stroke-width="2"/>
 <circle cx="301.7" cy="359.4" r="4.5" fill="#6d8ff0" stroke="#1c1f24" stroke-width="2"/>
-<circle cx="402.0" cy="359.3" r="4.5" fill="#6d8ff0" stroke="#1c1f24" stroke-width="2"/>
+<circle cx="402.0" cy="359.0" r="4.5" fill="#6d8ff0" stroke="#1c1f24" stroke-width="2"/>
 <circle cx="502.3" cy="359.3" r="4.5" fill="#6d8ff0" stroke="#1c1f24" stroke-width="2"/>
-<circle cx="602.7" cy="317.0" r="4.5" fill="#6d8ff0" stroke="#1c1f24" stroke-width="2"/>
+<circle cx="602.7" cy="316.8" r="4.5" fill="#6d8ff0" stroke="#1c1f24" stroke-width="2"/>
 <circle cx="703.0" cy="320.4" r="4.5" fill="#6d8ff0" stroke="#1c1f24" stroke-width="2"/>
 <text x="726" y="264.2" font-size="13" font-weight="600">36K chars<tspan class="s" font-weight="400"> grep</tspan></text>
 <text x="726" y="324.4" font-size="13" font-weight="600">3.7K chars<tspan class="s" font-weight="400"> tacit</tspan></text>
