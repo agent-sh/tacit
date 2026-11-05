@@ -946,9 +946,9 @@ func TestHoldOutsWithholdAnAgentsNoteOnly(t *testing.T) {
 	draw := holdoutDraw
 	t.Cleanup(func() { holdoutDraw, dlog, logPending = draw, nil, nil })
 	rule := search.Hit{Name: "signoff", Path: "user/signoff.md", Ruling: true, Score: 30}
-	a := search.Hit{Name: "note-a", Path: "user/note-a.md", Score: 29}
-	b := search.Hit{Name: "note-b", Path: "user/note-b.md", Score: 28}
-	named := search.Hit{Name: "note-c", Path: "user/note-c.md", Score: 27}
+	a := search.Hit{Name: "note-a", Path: "user/note-a.md", Type: "design_decision", Score: 29}
+	b := search.Hit{Name: "note-b", Path: "user/note-b.md", Type: "past_mistake", Score: 28}
+	named := search.Hit{Name: "note-c", Path: "user/note-c.md", Type: "machine_fact", Score: 27}
 	b.Conflicts = []string{"note-c"} // b's line names c
 	run := func(session string, coin float64, pick int, hits ...search.Hit) (*logEntry, []search.Hit) {
 		holdoutDraw = func(n int) (float64, int) { return coin, pick }
@@ -991,6 +991,14 @@ func TestHoldOutsWithholdAnAgentsNoteOnly(t *testing.T) {
 	e, _ = run("s5", 0.9, 0, a)
 	if e.Nothing || e.PNothing != 0.05 {
 		t.Fatalf("not emptied: nothing %v p %v", e.Nothing, e.PNothing)
+	}
+	// Only an agent's note of the four analysed kinds is eligible: never a
+	// fact computed from git, a reference or another type.
+	derived := search.Hit{Name: "hot-spot", Path: "derived/widget/hot-spot.md", Scope: "derived/widget", Kind: "derived", Type: "design_decision", Score: 26}
+	ref := search.Hit{Name: "a-reference", Path: "user/a-reference.md", Type: "reference", Score: 25}
+	e, out = run("s8", 0, 0, derived, ref)
+	if names(out) != "hot-spot,a-reference" || e.HoldoutQ != 0 || e.HeldOut != "" {
+		t.Fatalf("ineligible kinds: %s, q %v", names(out), e.HoldoutQ)
 	}
 	// The owner's lines alone: nothing to withhold.
 	e, out = run("s6", 0, 0, rule)
@@ -1063,5 +1071,108 @@ func TestHoldOutDeniesTheFactForTheSession(t *testing.T) {
 	holdoutDraw = func(n int) (float64, int) { return 0, 0 }
 	if out := hookOut(t, promptPayload(cwd, "s3", prompt), "prompt", "--mcp"); !strings.Contains(out, "scheduler-shard-locks") {
 		t.Fatalf("a hold-out with the log off: %s", out)
+	}
+}
+
+// A denied fact is left out at every restart path of its session: the
+// start, the start after a clear, a resume's block, the start after a
+// compaction and the compaction summary's selection, each logged dropped
+// "holdout"; another session gets it.
+func TestHoldOutDenialAtEveryRestart(t *testing.T) {
+	r, home, payload := restartRig(t)
+	appendNames(denyFile("h1"), []string{"demo-note", "demo-note-v3", "demo-wombat-flusher"})
+	if out := hookOut(t, payload("h2", "startup", ""), "session-start"); !strings.Contains(out, "demo-note:") {
+		t.Fatalf("the control session lacks the fact:\n%s", out)
+	}
+	if out := hookOut(t, payload("h1", "startup", ""), "session-start"); strings.Contains(out, "demo-note:") {
+		t.Fatalf("start:\n%s", out)
+	}
+	if out := hookOut(t, payload("h1", "clear", ""), "session-start"); strings.Contains(out, "demo-note:") {
+		t.Fatalf("after a clear:\n%s", out)
+	}
+	writeFact(t, r.clone, fact.Meta{Name: "demo-note-v3", Description: "a third curated note about demo", Type: "design_decision", Scope: "projects/demo"}, "body")
+	r.commitIndex(r.clone, "a note since")
+	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
+	buildIndexForHooks(r.s)
+	if out := hookOut(t, payload("h2", "resume", ""), "session-start"); !strings.Contains(out, "third curated note") {
+		t.Fatalf("the control session's resume lacks the new fact:\n%s", out)
+	}
+	if out := hookOut(t, payload("h1", "resume", ""), "session-start"); strings.Contains(out, "third curated note") {
+		t.Fatalf("resume:\n%s", out)
+	}
+	turns := []string{`{"type":"response_item","payload":{"type":"message","role":"user"}}`}
+	line := `{"timestamp":"2026-11-04T10:00:00Z","type":"compacted","payload":{"message":` + jsonString(compactSummaryText) + `,"replacement_history":[]}}`
+	tr2 := writeTranscript(t, filepath.Join(home, ".codex", "sessions", "2026", "11", "04", "rollout-2026-11-04T10-00-00-h2.jsonl"), append(turns, line)...)
+	if out := hookOut(t, payload("h2", "compact", tr2), "session-start"); !strings.Contains(out, "demo-wombat-flusher:") {
+		t.Fatalf("the control session's summary selection lacks the fact:\n%s", out)
+	}
+	tr := writeTranscript(t, filepath.Join(home, ".codex", "sessions", "2026", "11", "04", "rollout-2026-11-04T10-00-00-h1.jsonl"), append(turns, line)...)
+	if out := hookOut(t, payload("h1", "compact", tr), "session-start"); strings.Contains(out, "demo-wombat-flusher:") || strings.Contains(out, "demo-note:") || strings.Contains(out, "third curated note") {
+		t.Fatalf("after the compaction:\n%s", out)
+	}
+	dropped := map[string]bool{}
+	for _, e := range readDeliveryLog(t, platform.StateDir(home)) {
+		if e.Session != "h1" {
+			continue
+		}
+		for _, c := range e.Cands {
+			if c.Dropped == "holdout" {
+				dropped[e.Hook+":"+c.Name] = true
+			}
+		}
+	}
+	for _, k := range []string{"start:demo-note", "resume:demo-note-v3", "summary:demo-wombat-flusher"} {
+		if !dropped[k] {
+			t.Errorf("no holdout drop logged for %s (%v)", k, dropped)
+		}
+	}
+}
+
+// A kept line's conflict mark does not name a denied fact.
+func TestHoldOutDenialHidesConflictNames(t *testing.T) {
+	t.Setenv("TACIT_STATE_DIR", t.TempDir())
+	appendNames(denyFile("c1"), []string{"note-b"})
+	a := search.Hit{Name: "note-a", Path: "user/note-a.md", Conflicts: []string{"note-b", "note-c"}}
+	b := search.Hit{Name: "note-b", Path: "user/note-b.md"}
+	in := []search.Hit{a, b}
+	out := withoutDenied("c1", in)
+	if len(out) != 1 || strings.Join(out[0].Conflicts, ",") != "note-c" || len(in[0].Conflicts) != 2 {
+		t.Fatalf("out %+v, in %+v", out, in)
+	}
+}
+
+// The cleanup of old sessions takes a session's files together, by the
+// newest of them: a live session that reads its denial keeps it.
+func TestHoldOutDenialOutlivesCleanup(t *testing.T) {
+	t.Setenv("TACIT_STATE_DIR", t.TempDir())
+	old := time.Now().Add(-10 * 24 * time.Hour)
+	appendNames(denyFile("live"), []string{"note-b"})
+	os.Chtimes(denyFile("live"), old, old)
+	rememberNames("live", []string{"note-a"})
+	for i := 0; i < 205; i++ {
+		id := fmt.Sprintf("old%03d", i)
+		// Written directly: rememberNames would sweep them as they come.
+		os.WriteFile(sessionFile(id), []byte("x\n"), 0o600)
+		os.WriteFile(givenFile(id), []byte("x\n"), 0o600)
+		os.Chtimes(sessionFile(id), old, old)
+		os.Chtimes(givenFile(id), old, old)
+	}
+	appendNames(denyFile("gone"), []string{"y"})
+	os.Chtimes(denyFile("gone"), old, old)
+	rememberNames("trigger", []string{"z"})
+	if !readNames(denyFile("live"))["note-b"] {
+		t.Fatal("the cleanup took a live session's denial")
+	}
+	if _, err := os.Stat(denyFile("gone")); err == nil {
+		t.Fatal("an old session's denial was kept")
+	}
+	if _, err := os.Stat(sessionFile("old000")); err == nil {
+		t.Fatal("an old session was kept")
+	}
+	// Reading the denial keeps it fresh.
+	os.Chtimes(denyFile("live"), old, old)
+	withoutDenied("live", []search.Hit{{Name: "note-b"}})
+	if fi, err := os.Stat(denyFile("live")); err != nil || time.Since(fi.ModTime()) > time.Hour {
+		t.Fatalf("the read did not refresh the denial: %v", err)
 	}
 }

@@ -827,6 +827,16 @@ func remember(id string, hits []search.Hit) {
 	rememberNames(id, names)
 }
 
+// sessionGroup is the session a file of the sessions directory belongs to.
+func sessionGroup(name string) string {
+	for _, ext := range []string{".holdout", ".given"} {
+		if g, ok := strings.CutSuffix(name, ext); ok {
+			return g
+		}
+	}
+	return name
+}
+
 // rememberNames adds lines to the session's delivered set: fact names, and
 // the areas pushed (areaSeen).
 func rememberNames(id string, names []string) {
@@ -846,10 +856,20 @@ func rememberNames(id string, names []string) {
 	for _, n := range names {
 		fmt.Fprintln(f, n)
 	}
-	// Opportunistic cleanup of old sessions.
+	// Opportunistic cleanup of old sessions. A session's files (its
+	// delivered set, .given, .holdout) go together, by the newest of them, so
+	// a session that still reads its denial keeps all of them.
 	if entries, err := os.ReadDir(filepath.Dir(p)); err == nil && len(entries) > 200 {
+		newest := map[string]time.Time{}
 		for _, e := range entries {
-			if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > 7*24*time.Hour {
+			if info, err := e.Info(); err == nil {
+				if g := sessionGroup(e.Name()); info.ModTime().After(newest[g]) {
+					newest[g] = info.ModTime()
+				}
+			}
+		}
+		for _, e := range entries {
+			if time.Since(newest[sessionGroup(e.Name())]) > 7*24*time.Hour {
 				os.Remove(filepath.Join(filepath.Dir(p), e.Name()))
 			}
 		}

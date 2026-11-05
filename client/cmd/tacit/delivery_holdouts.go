@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/agent-sh/tacit/client/internal/search"
 )
@@ -23,7 +24,8 @@ import (
 // holdoutShare is the share of eligible prompt blocks that withhold one
 // agent's note: 0.05, one line in about 1 in 20 such blocks. Its analysis
 // is preregistered in eval/DELIVERY.md (step 4): pooled by kind of fact,
-// read only once each kind holds 30 sessions with a withheld fact.
+// each session classed at its first block with an eligible line of the
+// kind, read only once each kind holds 30 denied sessions.
 // TACIT_DELIVERY_HOLDOUT sets it, 0 for none.
 const holdoutShare = 0.05
 
@@ -77,20 +79,49 @@ func appendNames(path string, names []string) {
 }
 
 // withoutDenied is hits less the facts the session is denied, which every
-// hook leaves out (logged dropped "holdout").
+// hook leaves out (logged dropped "holdout"), and with a denied fact's name
+// taken out of every kept line's conflict mark, which would show it. A
+// session that reads its denial keeps the file fresh, so the cleanup of old
+// sessions does not take it while the session lives (rememberNames).
 func withoutDenied(id string, hits []search.Hit) []search.Hit {
-	deny := readNames(denyFile(id))
+	path := denyFile(id)
+	deny := readNames(path)
 	if len(deny) == 0 {
 		return hits
 	}
+	now := time.Now()
+	os.Chtimes(path, now, now)
 	out := hits[:0:0]
 	for _, h := range hits {
-		if !deny[h.Name] {
-			out = append(out, h)
+		if deny[h.Name] {
+			continue
 		}
+		if len(h.Conflicts) > 0 {
+			var keep []string
+			for _, c := range h.Conflicts {
+				if !deny[c] {
+					keep = append(keep, c)
+				}
+			}
+			h.Conflicts = keep
+		}
+		out = append(out, h)
 	}
 	logDropped(hits, out, "holdout")
 	return out
+}
+
+// holdoutKinds are the fact types the preregistered analysis reads (eval/
+// DELIVERY.md, step 4): a rule, a decision, a past mistake, a machine fact.
+// Only an agent's note of one of them may be withheld; a fact computed from
+// git, a reference, a result or any other type never is.
+var holdoutKinds = map[string]bool{"user_standard": true, "design_decision": true, "past_mistake": true, "machine_fact": true}
+
+// holdoutEligible is a line a hold-out may withhold: an agent's own note
+// (search.Hit.Provenance "agent": not the owner's, not computed from git)
+// of an analysed kind.
+func holdoutEligible(h search.Hit) bool {
+	return !h.OwnerLine() && h.Provenance() == "agent" && holdoutKinds[h.Type]
 }
 
 // holdOut is a prompt block's hits with one agent's note withheld and
@@ -115,7 +146,7 @@ func holdOut(id string, hits []search.Hit) []search.Hit {
 	}
 	var eligible []int
 	for i, h := range hits {
-		if !h.OwnerLine() && !given[h.Name] && !named[h.Name] {
+		if holdoutEligible(h) && !given[h.Name] && !named[h.Name] {
 			eligible = append(eligible, i)
 		}
 	}
