@@ -573,7 +573,7 @@ func readJudgeDays(since time.Time) []logEntry {
 			}
 			var e logEntry
 			if json.Unmarshal(line, &e) == nil && e.ID != "" && (e.Hook == "prompt" || e.Hook == "push") {
-				kept := e.Cands[:0]
+				var kept []logCand // a new array: the dropped candidates are freed
 				for _, c := range e.Cands {
 					if c.Delivered {
 						kept = append(kept, c)
@@ -846,7 +846,7 @@ func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int,
 				e := &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: "judge", Judge: &v}
 				e.ID = logID(e)
 				st.Count++ // the call was paid either way
-				if appendLogEntry(e, time.Now()) == nil {
+				if appendJudgeLabel(e, time.Now()) == nil {
 					pass.Judged++
 					continue
 				}
@@ -879,6 +879,10 @@ func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int,
 	}
 	return pass.Judged, err
 }
+
+// appendJudgeLabel writes a label to the delivery log; tests stand in for
+// it to refuse labels while the pass's own entry is written.
+var appendJudgeLabel = appendLogEntry
 
 func slicesClone(m []judgeMoment) []judgeMoment { return append([]judgeMoment(nil), m...) }
 

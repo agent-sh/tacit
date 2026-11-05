@@ -609,3 +609,28 @@ func TestJudgeLabelTheLogCannotTake(t *testing.T) {
 		t.Fatalf("the waiting labels: %d %v", n, err)
 	}
 }
+
+// A label the log keeps refusing is given up after judgeTries, named in
+// the pass's lost and failed lines.
+func TestJudgeLabelTheLogKeepsRefusing(t *testing.T) {
+	f := newJudgeFixture(t, 1)
+	t.Setenv("TACIT_DELIVERY_JUDGE_DAILY", "100")
+	write := appendJudgeLabel
+	t.Cleanup(func() { appendJudgeLabel = write })
+	appendJudgeLabel = func(*logEntry, time.Time) error { return errors.New("the day's delivery log is full") }
+	for i := 0; i < judgeTries; i++ {
+		deliveryJudgePass(context.Background(), nil, f.now.Add(time.Duration(i)*time.Minute))
+	}
+	st := readJudgeState(f.now.UTC().Format("2006-01-02"))
+	if len(st.Pending) != 0 || st.Count != 2*judgeTries {
+		t.Fatalf("pending %+v, count %d", st.Pending, st.Count)
+	}
+	_, passes := judgeEntries(t, f.state)
+	var failed, lost []string
+	for _, p := range passes {
+		failed, lost = append(failed, p.Failed...), append(lost, p.Lost...)
+	}
+	if len(failed) != 2 || len(lost) != 2 {
+		t.Fatalf("failed %v, lost %v", failed, lost)
+	}
+}
