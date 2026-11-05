@@ -6,9 +6,12 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/agent-sh/tacit/client/internal/digest"
+	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
@@ -140,9 +143,10 @@ func holdoutEligible(h search.Hit) bool {
 // withheld line's probability of being withheld is 1 - p), 1 for any other
 // line; and p_nothing, q when the block's lines are all its one eligible
 // note.
-func holdOut(id string, hits []search.Hit) []search.Hit {
+func holdOut(in hookInput, hits []search.Hit, mcp bool) []search.Hit {
+	id := in.SessionID
 	q := deliveryHoldout()
-	if dlog == nil || q <= 0 || id == "" {
+	if dlog == nil || q <= 0 || id == "" || denyFile(id) == "" {
 		return hits
 	}
 	given := readNames(givenFile(id))
@@ -155,10 +159,27 @@ func holdOut(id string, hits []search.Hit) []search.Hit {
 			named[c] = true
 		}
 	}
+	// A note another line's text names is not eligible either: withheld, it
+	// would be masked there, which says something is.
+	for _, h := range hits {
+		for _, o := range hits {
+			if o.Name != h.Name && fact.NamesAny(o.Description+" "+o.Body, map[string]bool{h.Name: true}) {
+				named[h.Name] = true
+			}
+		}
+	}
+	// A name's kind is its store file's (a local note's only when the store
+	// has none): one name, one kind.
+	rep := map[string]search.Hit{}
+	for _, h := range hits {
+		if r, ok := rep[h.Name]; !ok || r.Local && !h.Local {
+			rep[h.Name] = h
+		}
+	}
 	var names []string
 	seen := map[string]bool{}
 	for _, h := range hits {
-		if holdoutEligible(h) && !given[h.Name] && !named[h.Name] && !seen[h.Name] {
+		if !seen[h.Name] && holdoutEligible(rep[h.Name]) && !given[h.Name] && !named[h.Name] {
 			seen[h.Name] = true
 			names = append(names, h.Name)
 		}
@@ -166,6 +187,21 @@ func holdOut(id string, hits []search.Hit) []search.Hit {
 	if len(names) == 0 {
 		return hits
 	}
+	// Drawn only in a Claude Code session (the harness whose failures
+	// momentum records) whose tools will read its view: its harness process
+	// recorded it, and its tacit MCP server, when it has one, is registered
+	// under that process. Otherwise the block logs why, and the session is
+	// out of the analysis.
+	if !isClaudeHook(in) {
+		dlog.HoldoutSkip = "harness"
+		return hits
+	}
+	pid, why := holdoutResolvable(id, mcp)
+	if pid == 0 {
+		dlog.HoldoutSkip = why
+		return hits
+	}
+	dlog.HarnessPID = pid
 	k := float64(len(names))
 	dlog.HoldoutQ, dlog.HoldoutK = q, len(names)
 	dlog.propensity = map[string]float64{}
@@ -193,4 +229,66 @@ func holdOut(id string, hits []search.Hit) []search.Hit {
 	appendNames(denyFile(id), []string{dlog.HeldOut})
 	logDropped(hits, out, "holdout")
 	return out
+}
+
+// isClaudeHook reports a hook of a Claude Code session, by its transcript.
+func isClaudeHook(in hookInput) bool {
+	if in.TranscriptPath == "" {
+		return false
+	}
+	home, _ := os.UserHomeDir()
+	f, ok := transcriptFormat(home, filepath.Clean(in.TranscriptPath))
+	return ok && f == digest.Claude
+}
+
+// viewSession is the session an MCP tool call answers, for its view: a
+// Claude Code server's harness process's current session (mcpSession),
+// another harness's from its environment. A Claude Code call that cannot
+// resolve one reads no session's view, and the delivery log records it
+// (view-unresolved, with the harness process), so the analysis leaves that
+// process's sessions out.
+func viewSession(harness, tool string) string {
+	if harness != "claude" {
+		return harnessSession(harness)
+	}
+	if s := mcpSession(); s != "" {
+		return s
+	}
+	if deliveryLogOn() {
+		e := &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: "view-unresolved", Tool: tool, HarnessPID: serverParent()}
+		e.ID = logID(e)
+		_ = appendLogEntry(e, time.Now())
+	}
+	return ""
+}
+
+// givenByAnswer adds the facts a search or tree answer listed to the
+// session's given set: the agent has seen them, so no later block's
+// hold-out may withhold one (its arm is decided).
+func givenByAnswer(session string, names []string) {
+	if session == "" || len(names) == 0 {
+		return
+	}
+	given := readNames(givenFile(session))
+	var fresh []string
+	for _, n := range names {
+		if !given[n] {
+			given[n] = true
+			fresh = append(fresh, n)
+		}
+	}
+	appendNames(givenFile(session), fresh)
+}
+
+// answerLine is a fact's line in a search answer ("- name: ...", "- RULE
+// name: ...") or a tree answer ("- `name` (...").
+var answerLine = regexp.MustCompile("(?m)^- (?:RULE )?`?([a-z0-9][a-z0-9-]*)`?[: (]")
+
+// answerNames is the facts an answer lists.
+func answerNames(out string) []string {
+	var names []string
+	for _, m := range answerLine.FindAllStringSubmatch(out, -1) {
+		names = append(names, m[1])
+	}
+	return names
 }

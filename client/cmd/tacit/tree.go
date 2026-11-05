@@ -13,7 +13,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/overlay"
+	"github.com/agent-sh/tacit/client/internal/record"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
 	"github.com/agent-sh/tacit/client/internal/tree"
@@ -67,9 +69,13 @@ func runTree(args []string) int {
 // exist in it (SPEC.md, Hold-outs).
 func treeView(s *store.Store, p string, depth int, repo, host, session string) (string, error) {
 	cwd, _ := os.Getwd()
-	ro := tree.ReadOptions{Store: s.Dir, Session: readSession(storeRecords(s.Dir), cwd, repo, host), Hidden: deniedTo(session)}
+	recs := storeRecords(s.Dir)
+	ro := tree.ReadOptions{Store: s.Dir, Session: readSession(recs, cwd, repo, host), Hidden: deniedTo(session)}
 	if overlay.LayerOn() && overlay.Outside(overlay.Dir(), s.Dir) {
 		ro.Local = filepath.Join(overlay.Dir(), filepath.FromSlash(overlay.CuratedDir))
+	}
+	if len(ro.Hidden) > 0 {
+		ro.Indexes, ro.LocalIndexes = viewIndexes(s, recs, ro.Hidden, ro.Local != "")
 	}
 	out, err := tree.Read(ro, p, depth)
 	if err != nil {
@@ -83,6 +89,39 @@ func treeView(s *store.Store, p string, depth int, repo, host, session string) (
 	}
 	defer ix.Close()
 	return treeCounts(ctx, ix, ro.Session, p) + treeWhose(ctx, ix, out), nil
+}
+
+// viewIndexes is the folder indexes as a session's view has them: generated
+// from the store's facts (and this machine's local layer's) less the hidden
+// ones, with every other fact's description masked (fact.MaskNames), so a
+// folder's counts, words and lines are the view's.
+func viewIndexes(s *store.Store, recs map[string]*record.Record, hidden map[string]bool, local bool) (map[string]string, map[string]string) {
+	keep := func(fs []*fact.Fact) []*fact.Fact {
+		var out []*fact.Fact
+		for _, f := range fs {
+			if hidden[f.Meta.Name] {
+				continue
+			}
+			cp := *f
+			cp.Meta.Description = fact.MaskNames(f.Meta.Description, hidden)
+			out = append(out, &cp)
+		}
+		return out
+	}
+	all, _, _ := fact.Walk(s.Dir)
+	idx := tree.GenerateWith(keep(all), recs, "")
+	if !local {
+		return idx, nil
+	}
+	lf, _ := overlay.Load(overlay.Dir())
+	var curated []*fact.Fact
+	for _, f := range lf {
+		if overlay.IsCurated(f.Path) {
+			curated = append(curated, f)
+		}
+	}
+	lrecs, _ := record.Walk(filepath.Join(overlay.Dir(), filepath.FromSlash(overlay.CuratedDir)))
+	return idx, tree.GenerateWith(keep(curated), lrecs, overlay.Prefix+overlay.CuratedDir+"/")
 }
 
 // treeCounts is scopeCounts for the scopes of a tree answer from folder p:
@@ -181,6 +220,9 @@ func addTreeTool(server *mcp.Server, s *store.Store, harness string) {
 		Name:        "tacit_tree",
 		Description: "What the store holds for this session, folder by folder: how many facts of each type its scopes hold, each folder's facts (name, type, one line) and its subfolders with counts. At depth 0 a project, area or topic folder also shows its overview, every line citing its facts. Another repository's or machine's folder only when named as the path. A scope's full list is tacit_search scope=<scope>; a fact in full, tacit_fact.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a treeArgs) (*mcp.CallToolResult, any, error) {
-		return text(treeToolText(s, a.Path, a.Depth, harnessSession(harness))), nil, nil
+		session := viewSession(harness, "tacit_tree")
+		out := treeToolText(s, a.Path, a.Depth, session)
+		givenByAnswer(session, answerNames(out))
+		return text(out), nil, nil
 	})
 }

@@ -92,6 +92,13 @@ type logEntry struct {
 	// HoldoutK is how many eligible notes (by name) the draw chose among;
 	// each eligible line's candidate is marked eligible.
 	HoldoutK int `json:"holdout_k,omitempty"`
+	// HoldoutSkip is why a block with eligible notes drew no hold-out: the
+	// harness ("harness": only Claude Code sessions have one), or no
+	// resolvable view ("no session record", "no MCP server"). HarnessPID
+	// is the harness process a drawing block, or an MCP call that resolved
+	// no session (view-unresolved), ran under.
+	HoldoutSkip string `json:"holdout_skip,omitempty"`
+	HarnessPID  int    `json:"harness_pid,omitempty"`
 	// PMark is the probability the block had of asking for a self-mark,
 	// MarkAsked whether it asked; Mark is a mark entry's marks.
 	PMark     *float64     `json:"p_mark,omitempty"`

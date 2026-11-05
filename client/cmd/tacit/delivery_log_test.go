@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -942,7 +943,9 @@ func TestSelfMarksWindowAndLines(t *testing.T) {
 // same; with the share 0 or no session, nothing.
 func TestHoldOutsWithholdAnAgentsNoteOnly(t *testing.T) {
 	t.Setenv("TACIT_STATE_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("TACIT_DELIVERY_HOLDOUT", "0.05")
+	stubHarness(t, 4242)
 	draw := holdoutDraw
 	t.Cleanup(func() { holdoutDraw, dlog, logPending = draw, nil, nil })
 	rule := search.Hit{Name: "signoff", Path: "user/signoff.md", Ruling: true, Score: 30}
@@ -952,14 +955,15 @@ func TestHoldOutsWithholdAnAgentsNoteOnly(t *testing.T) {
 	b.Conflicts = []string{"note-c"} // b's line names c
 	run := func(session string, coin float64, pick int, hits ...search.Hit) (*logEntry, []search.Hit) {
 		holdoutDraw = func(n int) (float64, int) { return coin, pick }
-		beginLog("prompt", hookInput{SessionID: session}, "fix it", nil, nil)
+		in := claudeHookInput(t, session)
+		beginLog("prompt", in, "fix it", nil, nil)
 		e := dlog
 		logChose(hits, "ranked")
-		out := holdOut(session, hits)
+		out := holdOut(in, hits, false)
 		endLog(out)
 		return e, out
 	}
-	e, out := run("s1", 0.01, 1, rule, a, b, named)
+	e, out := run("sess-s1", 0.01, 1, rule, a, b, named)
 	if names(out) != "signoff,note-a,note-c" || e.HeldOut != "note-b" || e.HoldoutQ != 0.05 {
 		t.Fatalf("drawn: %s, held out %q, q %v", names(out), e.HeldOut, e.HoldoutQ)
 	}
@@ -970,65 +974,115 @@ func TestHoldOutsWithholdAnAgentsNoteOnly(t *testing.T) {
 			t.Errorf("%s: %+v, want p %v dropped %q", n, c, w[0], w[1])
 		}
 	}
-	if !readNames(denyFile("s1"))["note-b"] {
+	if !readNames(denyFile("sess-s1"))["note-b"] {
 		t.Fatal("the withheld fact is not denied for the session")
 	}
-	e, out = run("s2", 0.9, 0, rule, a)
+	e, out = run("sess-s2", 0.9, 0, rule, a)
 	if names(out) != "signoff,note-a" || e.HeldOut != "" || candOf(*e, "note-a").P != 0.95 {
 		t.Fatalf("undrawn: %s, %+v", names(out), e)
 	}
 	// A note the session was given is decided: no longer eligible.
-	rememberNames("s3", []string{"note-a"})
-	e, out = run("s3", 0, 0, a)
+	rememberNames("sess-s3", []string{"note-a"})
+	e, out = run("sess-s3", 0, 0, a)
 	if names(out) != "note-a" || e.HoldoutQ != 0 {
 		t.Fatalf("given before: %s, q %v", names(out), e.HoldoutQ)
 	}
 	// One line, one eligible note: the block shows nothing with probability q.
-	e, out = run("s4", 0, 0, a)
+	e, out = run("sess-s4", 0, 0, a)
 	if len(out) != 0 || !e.Nothing || e.PNothing != 0.05 {
 		t.Fatalf("emptied: %v, nothing %v p %v", names(out), e.Nothing, e.PNothing)
 	}
-	e, _ = run("s5", 0.9, 0, a)
+	e, _ = run("sess-s5", 0.9, 0, a)
 	if e.Nothing || e.PNothing != 0.05 {
 		t.Fatalf("not emptied: nothing %v p %v", e.Nothing, e.PNothing)
 	}
 	// Eligible lines are marked and counted, by name: a store fact and a
 	// local note of one name are one note, withheld together.
-	if e, _ = run("s9", 0.9, 0, a, b); e.HoldoutK != 2 || !candOf(*e, "note-a").Eligible || candOf(*e, "note-a").P != 0.975 {
+	if e, _ = run("sess-s9", 0.9, 0, a, b); e.HoldoutK != 2 || !candOf(*e, "note-a").Eligible || candOf(*e, "note-a").P != 0.975 {
 		t.Fatalf("eligible marks: k %d, %+v", e.HoldoutK, candOf(*e, "note-a"))
 	}
 	local := a
 	local.Path, local.Local = "local/user/note-a.md", true
-	e, out = run("s10", 0, 0, a, local, b)
+	e, out = run("sess-s10", 0, 0, a, local, b)
 	if names(out) != "note-b" || e.HoldoutK != 2 || e.HeldOut != "note-a" {
 		t.Fatalf("one name, two files: %s, k %d, held %q", names(out), e.HoldoutK, e.HeldOut)
 	}
 	// A session older than the given set: its delivered set counts as given.
-	os.WriteFile(sessionFile("s11"), []byte("note-a\n"), 0o600)
-	if e, out = run("s11", 0, 0, a); names(out) != "note-a" || e.HoldoutQ != 0 {
+	os.WriteFile(sessionFile("sess-s11"), []byte("note-a\n"), 0o600)
+	if e, out = run("sess-s11", 0, 0, a); names(out) != "note-a" || e.HoldoutQ != 0 {
 		t.Fatalf("delivered before the given set: %s", names(out))
 	}
 	// Only an agent's note of the four analysed kinds is eligible: never a
 	// fact computed from git, a reference or another type.
 	derived := search.Hit{Name: "hot-spot", Path: "derived/widget/hot-spot.md", Scope: "derived/widget", Kind: "derived", Type: "design_decision", Score: 26}
 	ref := search.Hit{Name: "a-reference", Path: "user/a-reference.md", Type: "reference", Score: 25}
-	e, out = run("s8", 0, 0, derived, ref)
+	e, out = run("sess-s8", 0, 0, derived, ref)
 	if names(out) != "hot-spot,a-reference" || e.HoldoutQ != 0 || e.HeldOut != "" {
 		t.Fatalf("ineligible kinds: %s, q %v", names(out), e.HoldoutQ)
 	}
 	// The owner's lines alone: nothing to withhold.
-	e, out = run("s6", 0, 0, rule)
+	e, out = run("sess-s6", 0, 0, rule)
 	if names(out) != "signoff" || e.HoldoutQ != 0 {
 		t.Fatalf("owner only: %s", names(out))
 	}
 	t.Setenv("TACIT_DELIVERY_HOLDOUT", "0")
-	if _, out = run("s7", 0, 0, rule, a); names(out) != "signoff,note-a" {
+	if _, out = run("sess-s7", 0, 0, rule, a); names(out) != "signoff,note-a" {
 		t.Fatalf("off: %s", names(out))
 	}
 	t.Setenv("TACIT_DELIVERY_HOLDOUT", "0.05")
 	if _, out = run("", 0, 0, a); names(out) != "note-a" {
 		t.Fatalf("no session: %s", names(out))
 	}
+	// Drawn only in a Claude Code session whose view resolves; otherwise
+	// the block says why.
+	draw1 := func(in hookInput, mcp bool) *logEntry {
+		holdoutDraw = func(n int) (float64, int) { return 0, 0 }
+		beginLog("prompt", in, "fix it", nil, nil)
+		e := dlog
+		logChose([]search.Hit{a}, "ranked")
+		endLog(holdOut(in, []search.Hit{a}, mcp))
+		return e
+	}
+	if e := draw1(hookInput{SessionID: "sess-x1"}, false); e.HoldoutSkip != "harness" || e.HeldOut != "" {
+		t.Fatalf("no Claude transcript: %+v", e)
+	}
+	in := claudeHookInput(t, "sess-x2")
+	os.Remove(filepath.Join(harnessPIDDir(), "4242"))
+	if e := draw1(in, false); e.HoldoutSkip != "no session record" || e.HeldOut != "" {
+		t.Fatalf("no record: %+v", e)
+	}
+	in = claudeHookInput(t, "sess-x3")
+	if e := draw1(in, true); e.HoldoutSkip != "no MCP server" || e.HeldOut != "" {
+		t.Fatalf("no MCP server: %+v", e)
+	}
+	writeSmall(filepath.Join(harnessPIDDir(), "mcp-4242"), strconv.Itoa(os.Getpid()))
+	if e := draw1(in, true); e.HoldoutSkip != "" || e.HeldOut != "note-a" || e.HarnessPID != 4242 {
+		t.Fatalf("resolvable: %+v", e)
+	}
+}
+
+// stubHarness makes pid the hooks' (and the CLI's) harness process and the
+// MCP server's parent.
+func stubHarness(t *testing.T, pid int) {
+	t.Helper()
+	anc, par := hookAncestors, serverParent
+	t.Cleanup(func() { hookAncestors, serverParent = anc, par })
+	hookAncestors = func() []int { return []int{pid} }
+	serverParent = func() int { return pid }
+}
+
+// claudeHookInput is a Claude Code session's hook input, its transcript in
+// place and the session recorded as its harness process's.
+func claudeHookInput(t *testing.T, session string) hookInput {
+	t.Helper()
+	home, _ := os.UserHomeDir()
+	tr := filepath.Join(home, ".claude", "projects", "-t", session+".jsonl")
+	os.MkdirAll(filepath.Dir(tr), 0o700)
+	if _, err := os.Stat(tr); err != nil {
+		os.WriteFile(tr, []byte(`{"type":"user","sessionId":"`+session+`","message":{"content":"x"}}`+"\n"), 0o600)
+	}
+	recordHarnessSession(session)
+	return hookInput{SessionID: session, TranscriptPath: tr}
 }
 
 // In the hooks a withheld fact is denied for the session: not printed by
@@ -1048,23 +1102,35 @@ func TestHoldOutDeniesTheFactForTheSession(t *testing.T) {
 	t.Setenv("TACIT_DELIVERY_HOLDOUT", "0.05")
 	draw := holdoutDraw
 	t.Cleanup(func() { holdoutDraw = draw })
+	// A Claude Code session with tacit's MCP server registered under its
+	// harness process: a draw's view resolves.
+	stubHarness(t, 5151)
+	writeSmall(filepath.Join(harnessPIDDir(), "mcp-5151"), strconv.Itoa(os.Getpid()))
+	home, _ := os.UserHomeDir()
+	claudePrompt := func(session, prompt string) string {
+		tr := filepath.Join(home, ".claude", "projects", "-w", session+".jsonl")
+		os.MkdirAll(filepath.Dir(tr), 0o700)
+		os.WriteFile(tr, []byte(`{"type":"user","sessionId":"`+session+`","message":{"content":"x"}}`+"\n"), 0o600)
+		b, _ := json.Marshal(map[string]string{"session_id": session, "cwd": cwd, "prompt": prompt, "transcript_path": tr})
+		return string(b)
+	}
 	prompt := "Fix the scheduler pool shard lock and slot lock race"
 	holdoutDraw = func(n int) (float64, int) { return 0, 0 }
-	if out := hookOut(t, promptPayload(cwd, "s1", prompt), "prompt", "--mcp"); strings.Contains(out, "scheduler-shard-locks") || strings.Contains(out, "titles") || strings.Contains(out, "tacit_mark") {
+	if out := hookOut(t, claudePrompt("sess-s1", prompt), "prompt", "--mcp"); strings.Contains(out, "scheduler-shard-locks") || strings.Contains(out, "titles") || strings.Contains(out, "tacit_mark") {
 		t.Fatalf("withheld fact printed: %s", out)
 	}
 	holdoutDraw = func(n int) (float64, int) { return 0.99, 0 }
-	if out := hookOut(t, promptPayload(cwd, "s1", prompt), "prompt", "--mcp"); strings.Contains(out, "scheduler-shard-locks") {
+	if out := hookOut(t, claudePrompt("sess-s1", prompt), "prompt", "--mcp"); strings.Contains(out, "scheduler-shard-locks") {
 		t.Fatalf("a later block gave the denied fact: %s", out)
 	}
-	if out := hookOut(t, toolPayload(cwd, "s1", "Bash", map[string]any{"command": "make lint"}), "pre-tool", "--mcp"); strings.Contains(out, "scheduler-shard-locks") {
+	if out := hookOut(t, toolPayload(cwd, "sess-s1", "Bash", map[string]any{"command": "make lint"}), "pre-tool", "--mcp"); strings.Contains(out, "scheduler-shard-locks") {
 		t.Fatalf("a push gave the denied fact: %s", out)
 	}
-	forget("s1") // as a clear or a compaction does
-	if out := hookOut(t, promptPayload(cwd, "s1", prompt), "prompt", "--mcp"); strings.Contains(out, "scheduler-shard-locks") {
+	forget("sess-s1") // as a clear or a compaction does
+	if out := hookOut(t, claudePrompt("sess-s1", prompt), "prompt", "--mcp"); strings.Contains(out, "scheduler-shard-locks") {
 		t.Fatalf("the denial did not outlast a compaction: %s", out)
 	}
-	if out := hookOut(t, promptPayload(cwd, "s2", prompt), "prompt", "--mcp"); !strings.Contains(out, "scheduler-shard-locks") {
+	if out := hookOut(t, claudePrompt("sess-s2", prompt), "prompt", "--mcp"); !strings.Contains(out, "scheduler-shard-locks") {
 		t.Fatalf("another session is denied too: %s", out)
 	}
 	var drew *logEntry
@@ -1073,7 +1139,7 @@ func TestHoldOutDeniesTheFactForTheSession(t *testing.T) {
 		if e.HeldOut == "scheduler-shard-locks" {
 			drew = &e
 		}
-		if c := candOf(e, "scheduler-shard-locks"); e.Session == "s1" && e.HeldOut == "" && c != nil {
+		if c := candOf(e, "scheduler-shard-locks"); e.Session == "sess-s1" && e.HeldOut == "" && c != nil {
 			denied++
 		}
 	}
@@ -1087,7 +1153,7 @@ func TestHoldOutDeniesTheFactForTheSession(t *testing.T) {
 	}
 	t.Setenv("TACIT_DELIVERY_LOG", "off")
 	holdoutDraw = func(n int) (float64, int) { return 0, 0 }
-	if out := hookOut(t, promptPayload(cwd, "s3", prompt), "prompt", "--mcp"); !strings.Contains(out, "scheduler-shard-locks") {
+	if out := hookOut(t, claudePrompt("sess-s3", prompt), "prompt", "--mcp"); !strings.Contains(out, "scheduler-shard-locks") {
 		t.Fatalf("a hold-out with the log off: %s", out)
 	}
 }

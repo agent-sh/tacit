@@ -182,6 +182,11 @@ func runHook(args []string) int {
 		sit.Repo, sit.RepoAliases = r.Name, repoAliases(r)
 	}
 
+	// A Claude Code session's harness process: which session it runs now,
+	// for its tacit MCP server's view (session_pid.go).
+	if (args[0] == "session-start" || args[0] == "prompt") && isClaudeHook(in) {
+		recordHarnessSession(in.SessionID)
+	}
 	switch args[0] {
 	case "questions":
 		// The reviewer's question alone, for a harness whose facts come from
@@ -292,7 +297,7 @@ func runHook(args []string) int {
 		}
 		kept := withoutClaims(strong)
 		logDropped(strong, kept, "withheld")
-		strong = holdOut(in.SessionID, kept)
+		strong = holdOut(in, kept, slices.Contains(args[1:], "--mcp"))
 		remember(in.SessionID, strong)
 		if out := hookBlock(strong, "# tacit: facts matching this request", titlesNote); out != "" {
 			fmt.Print(out + markAsk(strong))
@@ -965,7 +970,7 @@ func runFact(args []string) int {
 	}
 	// The store's facts, then this machine's own notes (a read-only clone's
 	// local overlay); a replaced fact prints its successor first.
-	out, shown, ok, err := factText(s.Dir, args[0])
+	out, shown, ok, err := factTextIn(s.Dir, args[0], deniedTo(callerSession()))
 	if !ok {
 		fmt.Fprintln(os.Stderr, "fact: not found:", args[0])
 		return 1

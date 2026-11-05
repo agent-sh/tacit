@@ -15,13 +15,19 @@ import (
 // TACIT_STORE and returns its text.
 func callTool(t *testing.T, name string, args map[string]any) string {
 	t.Helper()
+	return callToolAs(t, "codex", name, args)
+}
+
+// callToolAs calls a tool of the MCP server of harness.
+func callToolAs(t *testing.T, harness, name string, args map[string]any) string {
+	t.Helper()
 	ctx := context.Background()
 	s, err := store.Default()
 	if err != nil {
 		t.Fatal(err)
 	}
 	st, ct := mcp.NewInMemoryTransports()
-	ss, err := storeServer(s, "codex").Connect(ctx, st, nil)
+	ss, err := storeServer(s, harness).Connect(ctx, st, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

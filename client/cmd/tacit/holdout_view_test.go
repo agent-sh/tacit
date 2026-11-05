@@ -3,6 +3,8 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -51,22 +53,27 @@ func TestHoldOutViewOnEveryPath(t *testing.T) {
 		line := `{"timestamp":"2026-11-04T10:00:00Z","type":"compacted","payload":{"message":` + jsonString("This session is being continued from a previous conversation that ran out of context. Summary: the session fixed how the "+deniedText+" flushes in the demo repo, alpha bravo charlie delta foxtrot golf hotel india juliet kilo lima mike november oscar papa.") + `,"replacement_history":[]}}`
 		return writeTranscript(t, filepath.Join(home, ".codex", "sessions", "2026", "11", "04", "rollout-2026-11-04T10-00-00-"+session+".jsonl"), append(turns, line)...)
 	}
-	// The tools and the CLI find their session in the harness's
-	// environment; only Codex's is set here.
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
-	t.Setenv("TACIT_SESSION", "")
-	t.Setenv("PI_SESSION_ID", "")
+	// One Claude Code process runs every session here, one after another:
+	// its hooks record the session it runs, and its tacit MCP server and
+	// the CLI in its shell read that record (session_pid.go). No session
+	// id is in the environment.
+	for _, k := range []string{"CLAUDE_CODE_SESSION_ID", "TACIT_SESSION", "PI_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID"} {
+		t.Setenv(k, "")
+	}
+	stubHarness(t, 6161)
+	runs := func(session string) {
+		writeSmall(filepath.Join(harnessPIDDir(), "6161"), session)
+		t.Chdir(cwd)
+	}
 	tool := func(name string, args map[string]any) func(session string) string {
 		return func(session string) string {
-			t.Setenv("CODEX_THREAD_ID", session)
-			t.Chdir(cwd)
-			return callTool(t, name, args)
+			runs(session)
+			return callToolAs(t, "claude", name, args)
 		}
 	}
 	cli := func(cmd func([]string) int, args ...string) func(session string) string {
 		return func(session string) string {
-			t.Setenv("CODEX_THREAD_ID", session)
-			t.Chdir(cwd)
+			runs(session)
 			return captureStdout(t, func() { cmd(args) })
 		}
 	}
@@ -105,6 +112,8 @@ func TestHoldOutViewOnEveryPath(t *testing.T) {
 		{"tacit_tree root", tool("tacit_tree", map[string]any{"path": "projects", "depth": 2})},
 		{"tacit search", cli(runSearch, "--repo", "demo", deniedText)},
 		{"tacit tree", cli(runTree, "projects/demo")},
+		{"tacit_fact of a fact that names it", tool("tacit_fact", map[string]any{"name": "demo-yak-loader"})},
+		{"tacit fact of a fact that names it", cli(runFact, "demo-yak-loader")},
 	}
 	for _, row := range rows {
 		id := strings.NewReplacer(" ", "-", "'", "", "_", "-").Replace(row.path)
@@ -117,6 +126,39 @@ func TestHoldOutViewOnEveryPath(t *testing.T) {
 		if out := row.run(denied); strings.Contains(out, deniedName) || strings.Contains(out, deniedText) {
 			t.Errorf("%s: the denied fact shows:\n%s", row.path, out)
 		}
+	}
+
+	// What a search answer listed is given to the session: its arm is
+	// decided.
+	if !readNames(givenFile("c-tacit-search-by-words"))[deniedName] {
+		t.Error("the search answer's facts are not in the session's given set")
+	}
+
+	// Every count the tree shows is the view's: one fact fewer.
+	for _, args := range []map[string]any{{"path": "projects/demo", "depth": 0}, {"path": "projects", "depth": 2}} {
+		appendNames(denyFile("d-counts"), []string{deniedName})
+		c, d := tool("tacit_tree", args)("c-counts"), tool("tacit_tree", args)("d-counts")
+		cn, dn := factCounts(c), factCounts(d)
+		if len(cn) == 0 || len(cn) != len(dn) {
+			t.Fatalf("counts %v / %v:\n%s\n%s", cn, dn, c, d)
+		}
+		for i := range cn {
+			if dn[i] != cn[i]-1 {
+				t.Errorf("tree %v: count %d is %d in the control, %d denied", args, i, cn[i], dn[i])
+			}
+		}
+	}
+
+	// A Claude Code call whose session cannot be resolved reads no view
+	// and is logged, with its harness process.
+	os.Remove(filepath.Join(harnessPIDDir(), "6161"))
+	callToolAs(t, "claude", "tacit_search", map[string]any{"query": deniedText})
+	found := false
+	for _, e := range readDeliveryLog(t, platform.StateDir(home)) {
+		found = found || e.Hook == "view-unresolved" && e.Tool == "tacit_search" && e.HarnessPID == 6161
+	}
+	if !found {
+		t.Error("no view-unresolved entry")
 	}
 
 	// A resume: a fact the session was given is now replaced by the denied
@@ -143,14 +185,39 @@ func TestHoldOutViewOnEveryPath(t *testing.T) {
 // pull, which the delivery log records (a nav entry naming the fact), so
 // the analysis sees the denial broken for that session.
 func TestHoldOutFactByName(t *testing.T) {
-	r, _, _ := restartRig(t)
+	r, home, _ := restartRig(t)
 	writeFact(t, r.clone, fact.Meta{Name: deniedName, Description: "the " + deniedText + " in demo flushes every quarter hour", Type: "design_decision", Scope: "projects/demo"}, "zebra")
 	r.commitIndex(r.clone, "the denied fact")
 	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
 	buildIndexForHooks(r.s)
+	stubHarness(t, 7171)
 	appendNames(denyFile("d-fact"), []string{deniedName})
-	t.Setenv("CODEX_THREAD_ID", "d-fact")
-	if out := callTool(t, "tacit_fact", map[string]any{"name": deniedName}); !strings.Contains(out, deniedText) {
+	writeSmall(filepath.Join(harnessPIDDir(), "7171"), "d-fact")
+	if out := callToolAs(t, "claude", "tacit_fact", map[string]any{"name": deniedName}); !strings.Contains(out, deniedText) {
 		t.Fatalf("tacit_fact by name:\n%s", out)
 	}
+	// The opening is in the log: the session's denial is broken.
+	cwd := filepath.Join(r.projects, "demo")
+	hookOut(t, toolPayload(cwd, "d-fact", "mcp__tacit__tacit_fact", map[string]any{"name": deniedName}), "pre-tool", "--mcp")
+	broken := false
+	for _, e := range readDeliveryLog(t, platform.StateDir(home)) {
+		broken = broken || e.Session == "d-fact" && e.Nav != nil && e.Nav.Tool == "fact" && strings.Join(e.Nav.Names, ",") == deniedName
+	}
+	if !broken {
+		t.Fatal("no nav entry names the denied fact")
+	}
 }
+
+// factCounts is every "N facts" count, and every scope count "(N)" of the
+// counts block, of a tree answer, in order.
+func factCounts(out string) []int {
+	var n []int
+	for _, m := range countRx.FindAllStringSubmatch(out, -1) {
+		v := m[1] + m[2]
+		x, _ := strconv.Atoi(v)
+		n = append(n, x)
+	}
+	return n
+}
+
+var countRx = regexp.MustCompile(`(?m)(?:^| )(\d+) facts\b|^- projects/demo \((\d+)\)`)

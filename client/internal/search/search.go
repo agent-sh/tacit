@@ -100,8 +100,8 @@ func (ix *Index) Hide(names map[string]bool) {
 // Hidden reports a name the view hides.
 func (ix *Index) Hidden(name string) bool { return ix.hidden[name] }
 
-// visible is hits less the hidden facts, and each kept hit's conflict mark
-// less the hidden names.
+// visible is hits less the hidden facts, each kept hit's conflict mark less
+// the hidden names, and its description and body with them masked.
 func (ix *Index) visible(hits []Hit) []Hit {
 	if len(ix.hidden) == 0 {
 		return hits
@@ -120,6 +120,8 @@ func (ix *Index) visible(hits []Hit) []Hit {
 			}
 			h.Conflicts = keep
 		}
+		// Its own text names no hidden fact either.
+		h.Description, h.Body = fact.MaskNames(h.Description, ix.hidden), fact.MaskNames(h.Body, ix.hidden)
 		out = append(out, h)
 	}
 	return out

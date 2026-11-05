@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -151,15 +152,25 @@ var sessionEnv = map[string][]string{
 	"pi":     {"PI_SESSION_ID"},
 }
 
-// callerSession is the session a command runs in, from any harness's
-// environment (harnessSession), or "".
+// callerSession is the session a command runs in, for its view: the
+// session its harness process runs now (an ancestor's record, written by
+// that session's hooks: session_pid.go), else the one the environment
+// names for the one harness that names one (sessionHarness; with two named,
+// neither), or "".
 func callerSession() string {
-	for _, h := range []string{"claude", "codex", "pi"} {
-		if v := harnessSession(h); v != "" {
-			return v
+	dir := harnessPIDDir()
+	for _, pid := range hookAncestors() {
+		if b, err := os.ReadFile(filepath.Join(dir, strconv.Itoa(pid))); err == nil {
+			if s := strings.TrimSpace(string(b)); agentreview.ValidSession(s) {
+				return s
+			}
 		}
 	}
-	return harnessSession("")
+	h, err := sessionHarness()
+	if err != nil {
+		return ""
+	}
+	return harnessSession(h)
 }
 
 // harnessSession is the session a note of harness is written in, from the

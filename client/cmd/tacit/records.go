@@ -88,6 +88,22 @@ func suppressionNames(recs map[string]*record.Record, names []string) []string {
 // files the text shows, as the index names them, the newer first. ok is
 // false when no fact has the name.
 func factText(storeDir, name string) (text string, shown []string, ok bool, err error) {
+	return factTextIn(storeDir, name, nil)
+}
+
+// factTextIn is factText as a session's view has it (SPEC.md, Hold-outs):
+// a fact asked for by name is served, hidden or not (the agent's own
+// pull); another fact's text has the hidden names masked, and its
+// successors are followed only up to a hidden one.
+func factTextIn(storeDir, name string, hidden map[string]bool) (text string, shown []string, ok bool, err error) {
+	text, shown, ok, err = factTextFollow(storeDir, name, hidden)
+	if ok && !hidden[name] {
+		text = fact.MaskNames(text, hidden)
+	}
+	return text, shown, ok, err
+}
+
+func factTextFollow(storeDir, name string, hidden map[string]bool) (text string, shown []string, ok bool, err error) {
 	files := factFiles(storeDir, overlay.Dir(), name)
 	if len(files) == 0 {
 		return "", nil, false, nil
@@ -105,6 +121,9 @@ func factText(storeDir, name string) (text string, shown []string, ok bool, err 
 	cur, curBytes, curRel := f, b, files[0].rel
 	for cur.Meta.SupersededBy != "" && !seen[cur.Meta.SupersededBy] && len(seen) < 16 {
 		next := cur.Meta.SupersededBy
+		if hidden[next] {
+			break
+		}
 		seen[next] = true
 		nfs := factFiles(storeDir, overlay.Dir(), next)
 		if len(nfs) == 0 {

@@ -3,6 +3,7 @@ package tree
 import (
 	"errors"
 	"fmt"
+	"github.com/agent-sh/tacit/client/internal/fact"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -40,9 +41,13 @@ type ReadOptions struct {
 	// Session is what the tool may read (Session.Reads).
 	Session
 	// Hidden is the names of facts that do not exist for the session (a
-	// hold-out's denial, SPEC.md "Hold-outs"): no index line or overview
-	// line that names one is shown.
-	Hidden map[string]bool
+	// hold-out's denial, SPEC.md "Hold-outs"): withoutHidden. Indexes and
+	// LocalIndexes, when set, are the folder indexes as the session's view
+	// generates them (GenerateWith over the facts less the hidden ones, by
+	// root-relative path), read in place of the files, so every count and
+	// word of a folder's summary is the view's.
+	Hidden                map[string]bool
+	Indexes, LocalIndexes map[string]string
 	// named is the scope the caller asked for by name (Named), set by Read;
 	// also the folder a suppressed one asked for points at.
 	named, also string
@@ -186,33 +191,35 @@ func (o ReadOptions) suppressedBy(p string) string {
 
 // filter drops the folder lines of content for folders out of scope and
 // returns the in-scope children it lists.
-// withoutHidden is text less every line that names a hidden fact: as a
-// word of its own, so a longer name that holds it stays.
+// withoutHidden is text as the session's view shows it: a hidden fact's
+// own index line, and an overview line that cites it ([[name]]), are left
+// out; any other mention of its name is masked (fact.MaskNames).
 func (o ReadOptions) withoutHidden(text string) string {
 	if len(o.Hidden) == 0 {
 		return text
 	}
 	var out []string
 	for _, l := range strings.Split(text, "\n") {
-		if !namesHidden(l, o.Hidden) {
-			out = append(out, l)
+		if m := factLine.FindStringSubmatch(l); m != nil && o.Hidden[m[1]] {
+			continue
 		}
+		cites := false
+		for _, m := range citeLine.FindAllStringSubmatch(l, -1) {
+			cites = cites || o.Hidden[m[1]]
+		}
+		if cites {
+			continue
+		}
+		out = append(out, fact.MaskNames(l, o.Hidden))
 	}
 	return strings.Join(out, "\n")
 }
 
-func namesHidden(line string, hidden map[string]bool) bool {
-	for _, w := range nameWord.FindAllString(line, -1) {
-		if hidden[w] {
-			return true
-		}
-	}
-	return false
-}
-
-// nameWord is a run that can be a fact name: lowercase letters, digits and
-// hyphens.
-var nameWord = regexp.MustCompile(`[a-z0-9][a-z0-9-]*`)
+// factLine is a fact's line of a folder index, citeLine an overview's cite.
+var (
+	factLine = regexp.MustCompile("^- `([a-z0-9][a-z0-9-]*)` \\(")
+	citeLine = regexp.MustCompile(`\[\[([a-z0-9][a-z0-9-]*)(?:\|[^\]]*)?\]\]`)
+)
 
 func (o ReadOptions) filter(p, content string) (string, []string) {
 	var out []string
@@ -268,7 +275,7 @@ func Read(o ReadOptions, p string, depth int) (string, error) {
 	if w := o.suppressedBy(p); w != "" && w != p {
 		o.also = Named(w)
 		fmt.Fprintf(&b, "%s is suppressed by %s: its facts move there. Showing %s first, then what is left in %s.\n\n", p, w, w, p)
-		out, err := Read(ReadOptions{Store: o.Store, Local: o.Local, Session: o.Session, Hidden: o.Hidden}, w, depth)
+		out, err := Read(ReadOptions{Store: o.Store, Local: o.Local, Session: o.Session, Hidden: o.Hidden, Indexes: o.Indexes, LocalIndexes: o.LocalIndexes}, w, depth)
 		if err == nil {
 			b.WriteString(out)
 		}
@@ -284,8 +291,14 @@ func Read(o ReadOptions, p string, depth int) (string, error) {
 		}
 		seen[p] = true
 		var kids []string
-		for _, src := range []struct{ root, label string }{{o.Store, ""}, {o.Local, " (this machine's local layer)"}} {
+		for _, src := range []struct {
+			root, label string
+			gen         map[string]string
+		}{{o.Store, "", o.Indexes}, {o.Local, " (this machine's local layer)", o.LocalIndexes}} {
 			content, ok, err := readIndex(src.root, p)
+			if src.gen != nil && src.root != "" {
+				content, ok, err = src.gen[Rel(p)], src.gen[Rel(p)] != "", nil
+			}
 			if err != nil {
 				return err
 			}
