@@ -9,14 +9,18 @@ moment and compute, without a model:
   summary_dropped  a compaction summary in the window does not hold it
   needed_again     after such a drop, the agent opened the fact (tacit_fact,
                    `tacit fact`) or ran a tacit search whose words the fact's
-                   description holds
+                   description holds (whether the search returned the fact
+                   is not checked)
   carried_forward  the agent put the fact in what it wrote on its own: a
                    subagent's brief, a commit or PR body, a note it added,
-                   its reply text
+                   its reply text (a mention by name counts, whatever the
+                   agent then did with it)
   opened           the agent opened the fact in the window
-  owner_restated   a later turn of the owner's holds the fact (only in a
-                   session with a case of the owner's origin; a curator
-                   flag, never a score)
+  owner_restated   a later turn of the owner's holds the fact: a turn whose
+                   time is a case's of the owner's origin (deliveries.py's
+                   typed and queued; "owner" in older files), so a program's
+                   prompt or a task notification in the same session is not
+                   theirs (a curator flag, never a score)
 
 "Holds" approximates the hooks' summary rule (hooks_restart.go,
 summaryOf/holds), without their stemming (search.TermKey) or the in-order
@@ -29,8 +33,9 @@ endorsement, or written by the owner (harness human, outside local/ and the
 other agents' inbox folders); before it, source.kind user or type
 user_standard (the ledgers that back the evidence are not read).
 
-The window runs from the line's moment to the next block of the session's
-main chain that delivers the same fact again (the transcript's own hook
+The window runs from the line's moment (plus 5 seconds, so the line's own
+block is not its end) to the next block of the session's main chain that
+delivers the same fact again (the transcript's own hook
 output, the start after a compaction among them), or WINDOW_HOURS after it,
 whichever is first: later outcomes belong to a later delivery. A subagent's
 delivery (a sidechain case) is left out and counted: its outcomes are in the
@@ -178,8 +183,11 @@ def transcript_events(path):
                 continue
             att = d.get("attachment") or {}
             if d.get("type") == "attachment" and att.get("type") == "queued_command":
-                # A message typed while the agent worked.
-                out.append((ts, "user", str(att.get("prompt") or att.get("content") or "")))
+                # A message typed while the agent worked; a task notification
+                # or another agent's message is no prompt.
+                text = str(att.get("prompt") or att.get("content") or "")
+                if att.get("commandMode", "prompt") == "prompt" and text and not text.startswith("<"):
+                    out.append((ts, "user", text))
                 continue
             if d.get("type") == "attachment" and att.get("type") == "hook_success":
                 text = str(att.get("content") or "")
@@ -235,7 +243,7 @@ def transcript_events(path):
     return out
 
 
-def signals_for(events, start, end, name, desc, ruling, owner_session):
+def signals_for(events, start, end, name, desc, ruling, owner_session, owner_times=frozenset()):
     dt = terms(desc)
     s = {"summary_kept": False, "summary_dropped": False, "needed_again": False,
          "carried_forward": False, "opened": False, "owner_restated": None if not owner_session else False}
@@ -258,7 +266,7 @@ def signals_for(events, start, end, name, desc, ruling, owner_session):
                 s["needed_again"] = True
         elif kind in ("brief", "commit", "note", "agent") and holds(text, name, dt, ruling):
             s["carried_forward"] = True
-        elif kind == "user" and owner_session and holds(text, "\x00", dt, False):
+        elif kind == "user" and owner_session and any(abs((t - o).total_seconds()) <= 2 for o in owner_times) and holds(text, "\x00", dt, False):
             s["owner_restated"] = True
     return s
 
@@ -330,10 +338,16 @@ def main():
     # A session is the owner's when one of its prompts is: deliveries.py's
     # typed and queued origins, and "owner" in older case files.
     owner_sessions = {c.get("session") for c in cases if c.get("origin") in ("typed", "queued", "owner")}
+    owner_times = collections.defaultdict(set)
+    for c in cases:
+        t = parse_ts(c.get("ts") or "")
+        if c.get("origin") in ("typed", "queued", "owner") and t:
+            owner_times[c.get("session")].add(t)
     cache, rows = {}, []
     skipped = collections.Counter()
     for c in cases:
-        labels = {**(c.get("labels") or {}), **extra.get(c["id"], {})}
+        # Extra grades only for what the block delivered (deliveries.py's rule).
+        labels = {**(c.get("labels") or {}), **{n: g for n, g in extra.get(c["id"], {}).items() if n in (c.get("delivered") or [])}}
         if not labels:
             continue
         if c.get("sidechain"):
@@ -361,7 +375,7 @@ def main():
             rows.append({"case": c["id"], "session": c.get("session"), "fact": name, "grade": grade, "ruling": ruling,
                          "origin": c.get("origin"), "window_ended_early": end < start + timedelta(hours=WINDOW_HOURS),
                          "crossed_unrecorded_compaction": crossed,
-                         "transcript_bytes": size, **signals_for(events, start, end, name, desc, ruling, c.get("session") in owner_sessions)})
+                         "transcript_bytes": size, **signals_for(events, start, end, name, desc, ruling, c.get("session") in owner_sessions, frozenset(owner_times[c.get("session")]))})
     n = len(rows)
     base = {g: sum(r["grade"] == g for r in rows) / n for g in "RWN"} if n else {g: 0 for g in "RWN"}
     report = {"lines": n, "sessions": len({r["session"] for r in rows}), "skipped": dict(skipped), "base": base,

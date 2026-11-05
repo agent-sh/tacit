@@ -63,12 +63,14 @@ class Signals(unittest.TestCase):
             t = lambda m: f"2026-10-01T10:{m:02d}:00Z"
             with open(os.path.join(projects, "s1.jsonl"), "w") as fh:
                 # At the moment itself: no signal (the window starts after it).
-                fh.write(assistant(t(0), {"type": "text", "text": "queue retries back off exponentially with jitter in the worker"}))
+                fh.write(assistant(t(0), {"type": "text", "text": "Take the shard lock before the slot lock in the scheduler pool"}))
                 fh.write(assistant(t(5), tool("Agent", prompt="Note: queue retries back off exponentially with jitter in the worker.")))
                 # The rule's words without its name: a ruling is held by its name only.
                 fh.write(assistant(t(6), {"type": "text", "text": "Every commit carries a signed-off-by trailer line."}))
                 fh.write(line(type="user", timestamp=t(10), isCompactSummary=True, message={"role": "user", "content": "Summary: we read pool-lock-order and changed the loop."}))
                 fh.write(assistant(t(12), tool("mcp__tacit__tacit_search", query="office printer floor")))
+                fh.write(line(type="attachment", timestamp=t(13), attachment={"type": "queued_command", "commandMode": "task-notification",
+                              "prompt": "<task-notification> the office printer sits on the third floor near the kitchen </task-notification>"}))
                 fh.write(line(type="user", timestamp=t(14), userType="external", message={"role": "user", "content": "the office printer sits on the third floor near the kitchen, remember"}))
                 # The backoff note, dropped by the summary, opened again.
                 fh.write(assistant(t(16), tool("mcp__tacit__tacit_fact", name="queue-retry-backoff")))
@@ -83,7 +85,8 @@ class Signals(unittest.TestCase):
                 {"id": "c1", "session": "s1", "ts": t(0), "event": "prompt", "origin": "typed", "commit": "HEAD",
                  "delivered": ["queue-retry-backoff", "pool-lock-order", "printer-floor", "signoff-rule"],
                  "labels": {"queue-retry-backoff": "R", "pool-lock-order": "R", "printer-floor": "N", "signoff-rule": "R"}},
-                {"id": "c2", "session": "s2", "ts": t(0), "event": "prompt", "origin": "headless", "commit": "HEAD", "labels": {"printer-floor": "N"}},
+                {"id": "c2", "session": "s2", "ts": t(0), "event": "prompt", "origin": "headless", "commit": "HEAD", "delivered": ["printer-floor"], "labels": {"printer-floor": "N"}},
+                {"id": "c4", "session": "s1", "ts": t(14), "event": "prompt", "origin": "typed", "commit": "HEAD", "delivered": []},
                 {"id": "c3", "session": "s1", "ts": t(1), "event": "prompt", "sidechain": True, "commit": "HEAD", "labels": {"pool-lock-order": "W"}},
             ])
             by = {r["fact"]: r for r in res["rows"] if r["session"] == "s1"}
@@ -92,6 +95,7 @@ class Signals(unittest.TestCase):
             self.assertTrue(by["queue-retry-backoff"]["carried_forward"])
             self.assertTrue(by["queue-retry-backoff"]["summary_dropped"] and by["queue-retry-backoff"]["needed_again"], "opened after the drop")
             self.assertTrue(by["pool-lock-order"]["summary_kept"] and not by["pool-lock-order"]["summary_dropped"])
+            self.assertFalse(by["pool-lock-order"]["carried_forward"], "text at the moment itself is outside the window")
             self.assertFalse(by["signoff-rule"]["carried_forward"], "a ruling is held by its name only")
             p = by["printer-floor"]
             self.assertTrue(p["summary_dropped"] and p["needed_again"], "the search after the drop")
@@ -128,7 +132,8 @@ class Rulings(unittest.TestCase):
                 os.makedirs(os.path.join(store, "user"), exist_ok=True)
                 with open(os.path.join(store, "user", name + ".md"), "w") as fh:
                     fh.write(f"---\nname: {name}\ndescription: {desc}\ntype: user_standard\nsource:\n  kind: user\n{extra}---\nbody\n")
-            open(os.path.join(store, "review", "rulings-audit.json"), "w").write("{}")
+            with open(os.path.join(store, "review", "rulings-audit.json"), "w") as fh:
+                fh.write("{}")
             write("quoted-rule", "Every release gets a signed tag from the owner", "  owner_quote: sign the tags\n  owner_quote_from: claude:x\n")
             write("bare-claim", "Every release gets a signed tag from the owner", "")
             write("moved-desc", "The cache lives under the old state folder", "")
@@ -142,6 +147,60 @@ class Rulings(unittest.TestCase):
             self.assertFalse(st.fact("bare-claim", first)[1], "no evidence: no ruling in an audited store")
             self.assertEqual(st.fact("moved-desc", first)[0], "The cache lives under the old state folder")
             self.assertEqual(st.fact("moved-desc", "HEAD")[0], "The cache moved to the new data volume")
+
+
+
+class Transcripts(unittest.TestCase):
+    def test_a_push_block_ends_a_window_and_counts(self):
+        """A PreToolUse block comes as stdout JSON: its re-delivery ends the
+        window. A compaction with no start block after it is counted. A
+        queued prompt the owner typed is their turn; an older file's "owner"
+        origin makes the session theirs."""
+        with tempfile.TemporaryDirectory() as d:
+            store, projects = os.path.join(d, "store"), os.path.join(d, "projects", "-demo")
+            os.makedirs(projects)
+            fact(store, "projects/demo", "lint-strict", "Run the linter with the strict profile before every push")
+            subprocess.run(["git", "init", "-q", store], check=True)
+            t = lambda m: f"2026-10-01T10:{m:02d}:00Z"
+            ctx = json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "# tacit: before this step\n- lint-strict: agent note (2026-10-01): Run the linter\n"}})
+            with open(os.path.join(projects, "s1.jsonl"), "w") as fh:
+                fh.write(line(type="user", timestamp=t(2), isCompactSummary=True, message={"role": "user", "content": "Summary: other work."}))
+                fh.write(line(type="attachment", timestamp=t(3), attachment={"type": "queued_command", "commandMode": "prompt",
+                              "prompt": "run the linter with the strict profile before every push, as I said"}))
+                fh.write(line(type="attachment", timestamp=t(10), attachment={"type": "hook_success", "hookEvent": "PreToolUse", "content": "", "stdout": ctx}))
+                fh.write(assistant(t(12), tool("mcp__tacit__tacit_fact", name="lint-strict")))
+            cases = os.path.join(d, "cases.jsonl")
+            with open(cases, "w") as fh:
+                fh.write(line(id="c1", session="s1", ts=t(0), event="prompt", origin="owner", commit="HEAD", delivered=["lint-strict"], labels={"lint-strict": "R"}))
+                fh.write(line(id="c2", session="s1", ts=t(3), event="prompt", origin="queued", commit="HEAD", delivered=[]))
+            out = os.path.join(d, "out.json")
+            subprocess.run([sys.executable, "-I", os.path.join(HERE, "signals.py"), "--cases", cases, "--store", store,
+                            "--projects", os.path.join(d, "projects"), "--out", out], check=True, capture_output=True, text=True)
+            with open(out) as fh:
+                res = json.load(fh)
+            r = res["rows"][0]
+            self.assertTrue(r["window_ended_early"], "the push's re-delivery ends the window")
+            self.assertFalse(r["opened"], "the open after the re-delivery is the push's")
+            self.assertTrue(r["crossed_unrecorded_compaction"])
+            self.assertEqual(res["report"]["windows_through_unrecorded_compaction"], 1)
+            self.assertTrue(r["owner_restated"], "a queued prompt at an owner case's time")
+
+    def test_the_owner_s_own_writing_is_a_ruling(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = os.path.join(d, "store")
+            os.makedirs(os.path.join(store, "review"))
+            with open(os.path.join(store, "review", "rulings-audit.json"), "w") as fh:
+                fh.write("{}")
+            for rel, harness in (("user/owner-wrote.md", "human"), ("local/claude@h/local-human.md", "human"), ("user/agent-wrote.md", "claude")):
+                os.makedirs(os.path.dirname(os.path.join(store, rel)), exist_ok=True)
+                name = os.path.basename(rel)[:-3]
+                with open(os.path.join(store, rel), "w") as fh:
+                    fh.write(f"---\nname: {name}\ndescription: a rule of some kind for the tests here\ntype: user_standard\nsource:\n  kind: user\n  harness: {harness}\n---\nbody\n")
+            subprocess.run(["git", "init", "-q", store], check=True)
+            st = signals.Store(store)
+            self.assertTrue(st.fact("owner-wrote", "HEAD")[1])
+            self.assertFalse(st.fact("local-human", "HEAD")[1], "local/ is not the owner's writing")
+            self.assertFalse(st.fact("agent-wrote", "HEAD")[1])
 
 
 if __name__ == "__main__":
