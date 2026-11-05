@@ -7,7 +7,7 @@ This release moves the dreamer's judge onto the dreamer's Bedrock route (#153).
   - On the bearer or key route the call reads no AWS config file. On a profile route, a config that names an `endpoint_url` refuses the call.
 - **Skipped without a route.** A machine whose dreamer runs through another gateway, with no Bedrock route, skips the judge. It draws nothing, sends no case anywhere, logs a `judge-skip` entry, and the dream run says why.
 - **Errors.** Only the route's own errors end a pass without counting against the drawn lines: the CLI's API error status 401, 403, 429 or 529, or, when it gives no status, its words for a throttle, an overload or AWS credentials that do not load or have expired. Any other error counts against the lines.
-- **Measured.** The Bedrock judge was measured against the hand grades under the preregistered rule (eval/DELIVERY.md, step 5, amendment). Its `relevant` labels pass; its `useful` labels do not, so they move nothing, and the offline evaluation's net value promotes nothing from this judge yet.
+- **Measured.** The Bedrock judge was measured against the hand grades with `eval/delivery/judge_agreement.py` (which gains `--sample` and `--compare` for the spot check) under the preregistered rule (eval/DELIVERY.md, step 5, amendment). Its `relevant` labels pass; its `useful` labels do not, so they move nothing, and the offline evaluation's net value promotes nothing from this judge yet.
 
 Upgrading: install the new binary. No index, store format or protocol change; the server needs no deploy.
 
