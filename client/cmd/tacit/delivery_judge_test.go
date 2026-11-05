@@ -466,10 +466,10 @@ func TestRouteRefusal(t *testing.T) {
 		"ExpiredTokenException: token expired":                  true,
 		"UnrecognizedClientException":                           true,
 		"AccessDeniedException: no access":                      true,
-		"API Error: Request rejected (429) · Too many tokens, please wait before trying again.":                          true,
-		"API Error: Request rejected (429) · this may be a temporary capacity issue.":                                    true,
-		"API Error: Could not load Amazon Bedrock credentials · check your AWS setup":                                    true,
-		`API Error: 400 {"type":"invalid_request_error","message":"prompt is too long: 210000 tokens > 200000 maximum"}`: false,
+		"API Error: Request rejected (429) · Too many tokens, please wait before trying again.":                           true,
+		"API Error: Request rejected (429) · this may be a temporary capacity issue.":                                     true,
+		"API Error: Could not load AWS credentials · token expired. Check or refresh your AWS credentials and try again.": true,
+		`API Error: 400 {"type":"invalid_request_error","message":"prompt is too long: 210000 tokens > 200000 maximum"}`:  false,
 		"max_tokens: 64000 > 32000":                     false,
 		"API Error: 500 request_id req_403abc internal": false,
 		"took 14030ms":                                  false,
@@ -537,6 +537,13 @@ func TestJudgeCommandAWSConfig(t *testing.T) {
 	if _, err := judgeCommand(context.Background(), "m", t.TempDir()); err != nil {
 		t.Fatalf("a plain profile: %v", err)
 	}
+	// Windows's home, when HOME is not set.
+	win := t.TempDir()
+	os.MkdirAll(filepath.Join(win, ".aws"), 0o700)
+	os.WriteFile(filepath.Join(win, ".aws", "config"), []byte("[profile p]\nendpoint_url = https://gw.example\n"), 0o600)
+	if !awsConfigEndpoint([]string{"USERPROFILE=" + win}) || awsConfigEndpoint([]string{"USERPROFILE=" + t.TempDir()}) {
+		t.Fatal("the Windows home was not read")
+	}
 }
 
 // The CLI's structured status decides first: a 429 in the JSON result is
@@ -550,6 +557,7 @@ func TestJudgeOutcome(t *testing.T) {
 		{`{"is_error":true,"api_error_status":429,"result":"something new"}`, errJudgeRefused},
 		{`{"is_error":true,"api_error_status":529,"result":"x"}`, errJudgeRefused},
 		{`{"is_error":true,"api_error_status":400,"result":"API Error: 400 prompt is too long: 210000 tokens"}`, nil},
+		{`{"is_error":true,"api_error_status":400,"result":"API Error: 400 the request mentions a rate limit"}`, nil},
 		{`{"is_error":true,"result":"API Error: Request rejected (429) · Too many tokens, please wait before trying again."}`, errJudgeRefused},
 	} {
 		_, _, err := judgeOutcome([]byte(c.out), "", fail, "m")

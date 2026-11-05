@@ -282,7 +282,7 @@ var errJudgeRefused = errors.New("the route refused the judge's call")
 // tries; any other error does (a prompt too long, a bad request).
 func routeRefusal(text string) bool { return routeRefusalRx.MatchString(text) }
 
-var routeRefusalRx = regexp.MustCompile(`(?i)rate.?limit|usage limit|hit your .*limit|overloaded|too many requests|too many tokens|API Error: (401|403|429|529)\b|Request rejected \((401|403|429|529)\)|temporary capacity issue|Could not load Amazon Bedrock credentials|security token included in the request is (invalid|expired)|ExpiredToken|UnrecognizedClient|AccessDenied`)
+var routeRefusalRx = regexp.MustCompile(`(?i)rate.?limit|usage limit|hit your .*limit|overloaded|too many requests|too many tokens|API Error: (401|403|429|529)\b|Request rejected \((401|403|429|529)\)|temporary capacity issue|Could not load AWS credentials|security token included in the request is (invalid|expired)|ExpiredToken|UnrecognizedClient|AccessDenied`)
 
 // judgeCall runs one judge prompt and answers its text and the model that
 // answered. Tests replace it.
@@ -320,12 +320,14 @@ func judgeOutcome(out []byte, stderr string, runErr error, model string) (string
 	}
 	_ = json.Unmarshal(out, &res)
 	if runErr != nil || res.IsError {
+		// A status decides alone; the words only when there is none.
 		switch res.APIErrorStatus {
 		case 401, 403, 429, 529:
 			return "", "", errJudgeRefused
-		}
-		if routeRefusal(stderr + " " + res.Result) {
-			return "", "", errJudgeRefused
+		case 0:
+			if routeRefusal(stderr + " " + res.Result) {
+				return "", "", errJudgeRefused
+			}
 		}
 		return "", "", fmt.Errorf("claude -p: %v %s", runErr, judgeClip(stderr+" "+res.Result, 300))
 	}
