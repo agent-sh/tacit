@@ -932,3 +932,58 @@ func TestSelfMarksWindowAndLines(t *testing.T) {
 		t.Fatal("a failed mark kept its claim")
 	}
 }
+
+// A normal day is larger than the old cap: a day's file at 15 MB still takes
+// a hook's line. At the cap it refuses a push line, and still takes the
+// judge's label and pass entries, which the judge's own cap bounds.
+func TestDeliveryLogDayCap(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("TACIT_STATE_DIR", state)
+	now := time.Now()
+	day := filepath.Join(state, "delivery", now.UTC().Format("2006-01-02")+".jsonl")
+	writeLogEntry(&logEntry{V: 1, ID: "0000000000000001", Hook: "push"}, now)
+	size := func() int64 {
+		fi, err := os.Stat(day)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fi.Size()
+	}
+	if err := os.Truncate(day, 15<<20); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLogEntry(&logEntry{V: 1, ID: "0000000000000002", Hook: "push"}, now); err != nil || size() <= 15<<20 {
+		t.Fatalf("a 15 MB day refused a push line: %v", err)
+	}
+	if err := os.Truncate(day, deliveryLogDayCap); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLogEntry(&logEntry{V: 1, ID: "0000000000000003", Hook: "push"}, now); err == nil || size() != deliveryLogDayCap {
+		t.Fatalf("a full day took a push line: %v, size %d", err, size())
+	}
+	label := &logEntry{V: 1, ID: "0000000000000004", Hook: "judge", Judge: &judgeVerdict{Block: "b", Fact: "f", Relevant: "yes", Confused: "no", Novel: "no", P: 0.1}}
+	if err := appendLogEntry(label, now); err != nil {
+		t.Fatalf("a full day refused a judge label: %v", err)
+	}
+	after := size()
+	pass := &logEntry{V: 1, ID: "0000000000000005", Hook: "judge-pass", JudgePass: &judgePassLog{Pool: 3, Rate: 0.5, Drawn: 1}}
+	if err := appendLogEntry(pass, now); err != nil || size() <= after || after <= deliveryLogDayCap {
+		t.Fatalf("a full day refused a judge pass: %v (%d, %d)", err, after, size())
+	}
+	// The judge's headroom is bounded too.
+	if err := os.Truncate(day, deliveryLogDayCap+judgeLogHeadroom); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLogEntry(label, now); err == nil {
+		t.Fatal("the judge's headroom has no bound")
+	}
+}
+
+// The same on the path that opens a day's file without the pinned
+// directory (Windows's).
+func TestDeliveryLogDayCapOpenDay(t *testing.T) {
+	old := openPrivateDir
+	t.Cleanup(func() { openPrivateDir = old })
+	openPrivateDir = func(string) (*os.File, error) { return nil, os.ErrPermission }
+	TestDeliveryLogDayCap(t)
+}

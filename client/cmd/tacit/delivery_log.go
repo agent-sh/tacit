@@ -41,9 +41,19 @@ const (
 	// next day's file is made. Facts change week by week, so a moment much
 	// older describes a store that is no longer there.
 	deliveryLogDays = 30
-	// deliveryLogDayCap: a day's file stops growing here (the utility
-	// audit's cap), so a runaway loop of hook calls cannot fill the disk.
-	deliveryLogDayCap = 10 << 20
+	// deliveryLogDayCap: a day's file stops growing here, so a runaway loop
+	// of hook calls cannot fill the disk. Measured on a working machine, a
+	// normal day passed the old 10 MiB cap by early evening, most of it push
+	// entries that delivered nothing (which the propensities need); 64 MiB
+	// is several times a normal day, and the default window (today and
+	// deliveryLogDays before it, 31 files) still bounds a runaway loop under
+	// 2 GiB. The judge's entries get headroom past it (dayCapOf).
+	deliveryLogDayCap = 64 << 20
+	// judgeLogHeadroom is what the judge's label and pass entries may add
+	// past the day's cap: labels are at most the judge's daily cap (a few
+	// hundred bytes each) and passes one a dream run, so this holds many
+	// days of them, and the file still has a hard bound.
+	judgeLogHeadroom = 8 << 20
 )
 
 // logEntry is one hook block.
@@ -507,8 +517,9 @@ func appendLogEntry(e *logEntry, now time.Time) error {
 	}
 	name := now.UTC().Format("2006-01-02") + ".jsonl"
 	n := int64(len(b)) + 1
+	limit := dayCapOf(e)
 	var f *os.File
-	if d, err := platform.OpenPrivateDirectory(dir); err == nil {
+	if d, err := openPrivateDir(dir); err == nil {
 		// Unix: relative to a pinned directory, no link, no special file,
 		// no second hard link, this user's own (the utility audit's open).
 		f, err = platform.OpenPrivateAppend(d, name)
@@ -516,7 +527,7 @@ func appendLogEntry(e *logEntry, now time.Time) error {
 		if err != nil {
 			return err
 		}
-		if fi, err := f.Stat(); err != nil || fi.Size()+n > deliveryLogDayCap {
+		if fi, err := f.Stat(); err != nil || fi.Size()+n > limit {
 			f.Close()
 			return errors.New("the day's delivery log is full")
 		} else if fi.Size() == 0 {
@@ -524,9 +535,9 @@ func appendLogEntry(e *logEntry, now time.Time) error {
 		}
 	} else {
 		path := filepath.Join(dir, name)
-		f, err = openDay(path, dir, now, n)
+		f, err = openDay(path, dir, now, n, limit)
 		if os.IsExist(err) {
-			f, err = openDay(path, dir, now, n) // another hook made the day's file first
+			f, err = openDay(path, dir, now, n, limit) // another hook made the day's file first
 		}
 		if err != nil {
 			return err
@@ -539,17 +550,31 @@ func appendLogEntry(e *logEntry, now time.Time) error {
 	return f.Close()
 }
 
+// dayCapOf is the size a day's file may reach for e: deliveryLogDayCap,
+// and judgeLogHeadroom more for the judge's labels and pass entries, so a
+// day the hooks filled never loses a label or a pass's record of its draw.
+func dayCapOf(e *logEntry) int64 {
+	if e.Hook == "judge" || e.Hook == "judge-pass" {
+		return deliveryLogDayCap + judgeLogHeadroom
+	}
+	return deliveryLogDayCap
+}
+
+// openPrivateDir is the delivery log's pinned open of its directory; a test
+// stands in for it to drive the other platforms' path (openDay).
+var openPrivateDir = platform.OpenPrivateDirectory
+
 // openDay is the day's open where the private open is not to be had
 // (Windows): it opens a day's file to append n bytes, a new one exclusively
 // (O_EXCL never follows a link in its place), an existing one only when it
-// is the regular file that was there before the open, under the day's cap.
-func openDay(path, dir string, now time.Time, n int64) (*os.File, error) {
+// is the regular file that was there before the open, under limit.
+func openDay(path, dir string, now time.Time, n, limit int64) (*os.File, error) {
 	fi, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		pruneDeliveryLog(dir, now)
 		return os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	}
-	if err != nil || !fi.Mode().IsRegular() || fi.Size()+n > deliveryLogDayCap {
+	if err != nil || !fi.Mode().IsRegular() || fi.Size()+n > limit {
 		return nil, errors.New("not this log's day file, or full")
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)

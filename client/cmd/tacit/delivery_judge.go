@@ -564,8 +564,15 @@ func readJudgeDays(since time.Time) []logEntry {
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 1<<20), 1<<26)
 		for sc.Scan() {
+			// Only the moments a pool reads are decoded and kept: a day's
+			// file is mostly push lines, and the pool keeps only delivered
+			// candidates.
+			line := sc.Bytes()
+			if !bytes.Contains(line, []byte(`"delivered":true`)) {
+				continue
+			}
 			var e logEntry
-			if json.Unmarshal(sc.Bytes(), &e) == nil && e.ID != "" {
+			if json.Unmarshal(line, &e) == nil && e.ID != "" && (e.Hook == "prompt" || e.Hook == "push") {
 				out = append(out, e)
 			}
 		}
@@ -834,6 +841,10 @@ func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int,
 				if appendLogEntry(e, time.Now()) == nil {
 					pass.Judged++
 					st.Count++
+				} else {
+					// A label the log could not take: the line waits for a
+					// later pass, so no draw comes to no label unnamed.
+					waiting = append(waiting, moments[i+k])
 				}
 			}
 		}
