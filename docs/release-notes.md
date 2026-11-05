@@ -1,17 +1,14 @@
 Tacit keeps memory for coding agents in Markdown and git. Use a local store or share one across machines.
 
-This release adds two ways to score what the hooks deliver: agents mark which lines helped (#143), and a judge labels a sample of delivered lines after each dream run (#145). Episode recall is faster and its clip lands where the search words meet (#146).
+This release bundles scrump 0.2.1, whose start-up is now measured in milliseconds (#150, #151), and adds an offline evaluation of delivery policies (#149).
 
-- **Self-marks.** About 1 in 20 prompt blocks that print an agent's note end with an ask: when the request is done, say which lines helped, through the MCP tool `tacit_mark`. The ask never blocks, and the block's log entry records the chance it had of asking. A mark counts only for a block that asked, once per block, and only for the agent's lines that block printed. Marks move no score until they are calibrated. Set `TACIT_DELIVERY_MARK_RATE=0` to turn the asks off.
-- **The dreamer's judge.** After each full dream run that succeeds, a model reads a sample of the delivered prompt and push lines with hindsight: the request, the line, and what the session did next. It labels each line relevant, confused and novel.
-  - Route: `claude -p` on your Claude subscription, never Bedrock. The child process keeps only a short list of environment variables, so no Bedrock, AWS or gateway setting reaches it, and it runs with no tools, hooks or MCP servers. Everything it reads is redacted first.
-  - Volume: about 36 lines a day, and each line gets one draw. Each label logs its chance of being labelled, plus the model that answered and a digest of the prompt.
-  - Rate limits: a rate limit skips the pass, and the next dream run tries again.
-  - Settings: `TACIT_DELIVERY_JUDGE=off` turns it off; `TACIT_DELIVERY_JUDGE_DAILY` and `TACIT_DELIVERY_JUDGE_MODEL` set the cap and the model.
-- **Measured.** `eval/delivery/judge_agreement.py` checked the judge against the hand grades. The rule was written before the run, and both the relevant and useful labels passed it (eval/DELIVERY.md, "Scoring each delivery", step 5).
-- **Recall.** A small `find`, `around` or `show` now starts one scrump redaction instead of two, and the clip is centred where the search words meet. On the synthetic recall bench: 112 of 112 tasks right (up from 108), and 1 MiB sessions at 617 ms (down from 993 ms). Redaction still fails closed.
-- **Eval tooling.** `eval/delivery/signals.py` measures cheap outcome signals against the hand grades (#141). The README shows recall against grep on synthetic sessions anyone can regenerate.
+- **scrump 0.2.1.** The bundled redactor, and the one the Mac setup builds, moves from scrump 0.2.0 to 0.2.1. It compiles a rule only where one of its keywords occurs, so start-up on empty input drops from about 0.29 s to 0.012 s, with byte-identical output on scrump's differential suite. Every `tacit episode` call and every redacted write starts scrump, so this is their latency floor. Installing v0.9.30 puts scrump 0.2.0 back; installing this release brings 0.2.1. Building scrump from source needs rustc 1.89.
+- **Offline evaluation.** `eval/delivery/offline.py` grades a delivery policy on past moments without running it, as useful and noise lines per moment.
+  - Inputs: the hooks' logged delivery probabilities, and the dreamer's judge labels with the probability each line had of being judged.
+  - Estimators: inverse propensity, its self-normalized form, and a doubly robust estimate, each with its support and bootstrap intervals over sessions.
+  - The rule was written before any data (eval/DELIVERY.md, "Scoring each delivery", step 6). An offline result never ships a ranking change; at most it promotes a candidate to a live interleaving test.
+- **Judge log.** Each judge pass now logs its pool's window, the models that answered, the moments it could not read, and why each drawn line came to no label. The offline evaluation needs these to know which moments every pass covered. A pass now also checks that each transcript opens before it draws.
 
-Upgrading: install the new binary. The judge needs `claude` on the PATH, logged in to your subscription, wherever `tacit dream` runs. This release changes no index, store format or protocol, and the server needs no deploy.
+Upgrading: install the new binary. No index, store format or protocol change; the server needs no deploy.
 
 Builds for Linux, macOS and Windows on amd64 and arm64 include the CLI, the browser app and a compatible scrump redactor. Git 2.29+ is required. [Setup and platform validation](https://github.com/agent-sh/tacit/blob/main/docs/portable.md).
