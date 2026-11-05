@@ -231,7 +231,7 @@ def run_once(task, arm, block_path, rep):
         # No self-mark ask unless the arm sets one: it would add turns in the
         # hook arms only. An arm that sets one may call the tool.
         env.update({"TACIT_DELIVERY_MARK_RATE": "0"}, **hook_env)
-        if task["allowed_tools"] and env["TACIT_DELIVERY_MARK_RATE"] != "0":
+        if task["allowed_tools"] and float(env["TACIT_DELIVERY_MARK_RATE"] or 0) > 0:
             cmd[cmd.index("--allowedTools") + 1:cmd.index("--allowedTools") + 1] = ["mcp__tacit__tacit_mark"]
     elif arm not in ("bare", "live"):
         path = SCRATCH / f"{task['id']}-{arm}.md"

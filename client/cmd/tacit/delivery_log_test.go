@@ -922,8 +922,13 @@ func TestSelfMarksWindowAndLines(t *testing.T) {
 	// A line that could not be written is reported, not "noted".
 	full := &logEntry{V: 1, ID: "00000000000000ee", Hook: "prompt", MarkAsked: true, Cands: []logCand{{Name: "a-note", Delivered: true, Prov: "agent"}}}
 	writeLogEntry(full, now)
-	os.Truncate(filepath.Join(state, "delivery", now.UTC().Format("2006-01-02")+".jsonl"), deliveryLogDayCap)
-	if err := logMark(full.ID, []string{"a-note"}, nil); err == nil {
-		t.Fatal("a mark the full log could not take was reported written")
+	if err := os.Truncate(filepath.Join(state, "delivery", now.UTC().Format("2006-01-02")+".jsonl"), deliveryLogDayCap); err != nil {
+		t.Fatal(err)
+	}
+	if err := logMark(full.ID, []string{"a-note"}, nil); err == nil || !strings.Contains(err.Error(), "not written") {
+		t.Fatalf("a mark the full log could not take: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(state, "delivery", "marks", full.ID)); !os.IsNotExist(err) {
+		t.Fatal("a failed mark kept its claim")
 	}
 }

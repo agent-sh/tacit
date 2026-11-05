@@ -206,6 +206,7 @@ func logMark(block string, helped, not []string) error {
 	e := &logEntry{V: deliveryLogVersion, TS: now.UTC().Format(time.RFC3339Nano), Hook: "mark", Mark: m}
 	e.ID = logID(e)
 	if err := appendLogEntry(e, now); err != nil {
+		os.Remove(filepath.Join(deliveryLogDir(), "marks", block)) // a retry may claim it again
 		return fmt.Errorf("the mark was not written: %w", err)
 	}
 	return nil
