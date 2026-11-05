@@ -93,8 +93,12 @@ class Signals(unittest.TestCase):
                 {"id": "c5", "session": "s1", "ts": t(0), "event": "prompt", "origin": "typed", "commit": "HEAD",
                  "delivered": ["queue-retry-backoff", "spare-note"], "labels": {"queue-retry-backoff": "R", "spare-note": "R"}},
                 {"id": "c3", "session": "s1", "ts": t(1), "event": "prompt", "sidechain": True, "commit": "HEAD", "labels": {"pool-lock-order": "W"}},
+                # Two tool calls at one moment are two blocks, not a duplicate.
+                {"id": "c6", "session": "s1", "ts": t(2), "event": "pre-tool", "commit": "HEAD", "tool_input": {"command": "make a"}, "delivered": ["printer-floor"], "labels": {"printer-floor": "N"}},
+                {"id": "c7", "session": "s1", "ts": t(2), "event": "pre-tool", "commit": "HEAD", "tool_input": {"command": "make b"}, "delivered": ["printer-floor"], "labels": {"printer-floor": "W"}},
             ])
-            by = {r["fact"]: r for r in res["rows"] if r["session"] == "s1"}
+            self.assertEqual(sorted(r["case"] for r in res["rows"] if r["case"] in ("c6", "c7")), ["c6", "c7"])
+            by = {r["fact"]: r for r in res["rows"] if r["session"] == "s1" and r["case"] == "c1"}
             others = [r for r in res["rows"] if r["session"] == "s2"]
             self.assertEqual(len(others), 2)
             for other in others:
