@@ -49,7 +49,8 @@ class Signals(unittest.TestCase):
         subprocess.run([sys.executable, "-I", os.path.join(HERE, "signals.py"), "--cases", path, "--store", store,
                         "--projects", os.path.join(d, "projects"), "--out", out], check=True, capture_output=True, text=True)
         self.assertEqual(oct(os.stat(out).st_mode & 0o777), "0o600")
-        return json.load(open(out))
+        with open(out) as fh:
+            return json.load(fh)
 
     def test_signals_in_their_window(self):
         with tempfile.TemporaryDirectory() as d:
@@ -69,22 +70,33 @@ class Signals(unittest.TestCase):
                 fh.write(line(type="user", timestamp=t(10), isCompactSummary=True, message={"role": "user", "content": "Summary: we read pool-lock-order and changed the loop."}))
                 fh.write(assistant(t(12), tool("mcp__tacit__tacit_search", query="office printer floor")))
                 fh.write(line(type="user", timestamp=t(14), userType="external", message={"role": "user", "content": "the office printer sits on the third floor near the kitchen, remember"}))
-                # After the printer note's next delivery: outside its window.
+                # The backoff note, dropped by the summary, opened again.
+                fh.write(assistant(t(16), tool("mcp__tacit__tacit_fact", name="queue-retry-backoff")))
+                # The start after a later compaction delivers the printer note
+                # again: its window ends there.
+                fh.write(line(type="attachment", timestamp=t(20), attachment={"type": "hook_success", "hookEvent": "SessionStart",
+                              "content": "# tacit: facts for demo, again after the compaction\n- printer-floor: agent note (2026-10-01): The office printer\n"}))
                 fh.write(assistant(t(30), tool("mcp__tacit__tacit_fact", name="printer-floor")))
+            with open(os.path.join(projects, "s2.jsonl"), "w") as fh:
+                fh.write(line(type="user", timestamp=t(14), userType="external", message={"role": "user", "content": "the office printer sits on the third floor near the kitchen"}))
             res = self.run_signals(d, [
                 {"id": "c1", "session": "s1", "ts": t(0), "event": "prompt", "origin": "owner", "commit": "HEAD",
                  "delivered": ["queue-retry-backoff", "pool-lock-order", "printer-floor", "signoff-rule"],
                  "labels": {"queue-retry-backoff": "R", "pool-lock-order": "R", "printer-floor": "N", "signoff-rule": "R"}},
-                {"id": "c2", "session": "s1", "ts": t(20), "event": "prompt", "origin": "owner", "commit": "HEAD", "delivered": ["printer-floor"]},
+                {"id": "c2", "session": "s2", "ts": t(0), "event": "prompt", "origin": "headless", "commit": "HEAD", "labels": {"printer-floor": "N"}},
                 {"id": "c3", "session": "s1", "ts": t(1), "event": "prompt", "sidechain": True, "commit": "HEAD", "labels": {"pool-lock-order": "W"}},
             ])
-            by = {r["fact"]: r for r in res["rows"]}
+            by = {r["fact"]: r for r in res["rows"] if r["session"] == "s1"}
+            other = [r for r in res["rows"] if r["session"] == "s2"][0]
+            self.assertIsNone(other["owner_restated"], "a session of no owner case is not the owner's")
             self.assertTrue(by["queue-retry-backoff"]["carried_forward"])
+            self.assertTrue(by["queue-retry-backoff"]["summary_dropped"] and by["queue-retry-backoff"]["needed_again"], "opened after the drop")
             self.assertTrue(by["pool-lock-order"]["summary_kept"] and not by["pool-lock-order"]["summary_dropped"])
             self.assertFalse(by["signoff-rule"]["carried_forward"], "a ruling is held by its name only")
             p = by["printer-floor"]
             self.assertTrue(p["summary_dropped"] and p["needed_again"], "the search after the drop")
             self.assertFalse(p["opened"], "the open after its next delivery is outside the window")
+            self.assertTrue(p["window_ended_early"])
             self.assertTrue(p["owner_restated"])
             self.assertEqual(res["report"]["skipped"], {"sidechain": 1})
 
@@ -94,9 +106,11 @@ class Signals(unittest.TestCase):
         strong = [mk(f"s{i}", f"f{i}", "R" if i % 10 < 8 else "N") for i in range(30)]
         weak = [mk(f"s{i}", f"f{i}", "R" if i % 10 < 3 else "N") for i in range(30)]
         few = [mk("s1", f"f{i}", "R") for i in range(5)]
+        one_session = [mk("s1", f"f{i}", "R") for i in range(30)]
         self.assertEqual(signals.verdict(strong, "sig", "R", base)["verdict"], "passes")
         self.assertEqual(signals.verdict(weak, "sig", "R", base)["verdict"], "fails")
         self.assertEqual(signals.verdict(few, "sig", "R", base)["verdict"], "unmeasured")
+        self.assertEqual(signals.verdict(one_session, "sig", "R", base)["verdict"], "unmeasured", "units from too few sessions")
 
 
 if __name__ == "__main__":

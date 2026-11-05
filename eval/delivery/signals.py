@@ -14,20 +14,26 @@ moment and compute, without a model:
                    subagent's brief, a commit or PR body, a note it added,
                    its reply text
   opened           the agent opened the fact in the window
-  owner_restated   a later turn of the owner's holds the fact (only in
-                   sessions whose prompts are the owner's; a curator flag,
-                   never a score)
+  owner_restated   a later turn of the owner's holds the fact (only in a
+                   session with a case of the owner's origin; a curator
+                   flag, never a score)
 
-"Holds" is the hooks' summary rule (hooks_restart.go, summaryOf/holds): the
-fact's whole name, or for a fact that is no ruling one sentence holding at
-least 6 in 10 of its description's terms and at least 3 of them; a ruling is
-held by its name only, since a rule's words are the work's words.
+"Holds" approximates the hooks' summary rule (hooks_restart.go,
+summaryOf/holds), without their stemming or the in-order words of a long
+name: the fact's whole name, or for a fact that is no ruling one sentence
+holding at least 6 in 10 of its description's terms and at least 3 of them;
+a ruling is held by its name only, since a rule's words are the work's
+words. A ruling approximates fact.IsRuling at the case's commit: in a store
+with the rulings audit, source.kind user with an owner quote or an
+endorsement; before it, source.kind user or type user_standard (the ledgers
+that back the evidence are not read).
 
-The window runs from the line's moment to the session's next delivery of the
-same fact, or WINDOW_HOURS after it, whichever is first: later outcomes
-belong to a later delivery. A subagent's delivery (a sidechain case) is left
-out and counted: its outcomes are in the subagent's own transcript, which a
-case does not name.
+The window runs from the line's moment to the next block of the session's
+main chain that delivers the same fact again (the transcript's own hook
+output, the start after a compaction among them), or WINDOW_HOURS after it,
+whichever is first: later outcomes belong to a later delivery. A subagent's
+delivery (a sidechain case) is left out and counted: its outcomes are in the
+subagent's own transcript, which a case does not name.
 
 Per signal: the lines and the distinct (session, fact) units it fires on,
 the shares graded useful (R) and noise (N) there, a 95% interval by a
@@ -52,9 +58,11 @@ from datetime import datetime, timedelta
 
 WINDOW_HOURS = 24
 MIN_UNITS = 10  # distinct (session, fact) units a signal must fire on to count
+MIN_SESSIONS = 5  # and distinct sessions: the interval resamples sessions
 WORD = re.compile(r"[a-z0-9][a-z0-9_]{3,}")
 STOP = set("this that with from have when then than they them were what will your about into been only also more most some such each over just like".split())
-SENTENCE = re.compile(r"[.!?](?=\s|$)|\n")
+SENTENCE = re.compile(r"[.!?;](?=\s|$)|\n")
+BLOCK_LINE = re.compile(r"^- (?:RULE )?([a-z0-9][a-z0-9-]*)[ :]", re.M)
 
 
 def terms(text):
@@ -90,27 +98,40 @@ class Store:
     case's commit (the clone's git), falling back to HEAD's."""
 
     def __init__(self, root):
-        self.root, self.head, self._at = root, {}, {}
+        self.root, self.head, self._at, self._audited = root, {}, {}, {}
+        self.fallbacks = 0
+        audited = os.path.exists(os.path.join(root, "review", "rulings-audit.json"))
         for p in glob.glob(os.path.join(root, "**", "*.md"), recursive=True):
             try:
                 with open(p, encoding="utf-8", errors="replace") as fh:
                     text = fh.read(6000)
             except OSError:
                 continue
-            f = self.parse(text)
+            f = self.parse(text, audited)
             if f:
                 self.head.setdefault(f[0], (os.path.relpath(p, root), f[1], f[2]))
 
     @staticmethod
-    def parse(text):
+    def parse(text, audited=True):
         if not text.startswith("---"):
             return None
         name = re.search(r"^name:\s*(.+)$", text, re.M)
         desc = re.search(r"^description:\s*(.+)$", text, re.M)
         if not (name and desc):
             return None
-        ruling = re.search(r"^\s+kind:\s*user\s*$", text, re.M) is not None or re.search(r"^type:\s*statement\s*$", text, re.M) is not None
+        user = re.search(r"^\s+kind:\s*user\s*$", text, re.M) is not None
+        if audited:
+            evidence = (re.search(r"^\s+owner_quote:\s*\S", text, re.M) and re.search(r"^\s+owner_quote_from:\s*\S", text, re.M)) or re.search(r"^\s+endorsed:\s*\S", text, re.M)
+            ruling = user and bool(evidence)
+        else:
+            ruling = user or re.search(r"^type:\s*user_standard\s*$", text, re.M) is not None
         return name.group(1).strip().strip("'\""), desc.group(1).strip().strip("'\""), ruling
+
+    def audited(self, commit):
+        if commit not in self._audited:
+            r = subprocess.run(["git", "-C", self.root, "cat-file", "-e", f"{commit}:review/rulings-audit.json"], capture_output=True)
+            self._audited[commit] = r.returncode == 0
+        return self._audited[commit]
 
     def fact(self, name, commit):
         if name not in self.head:
@@ -119,7 +140,9 @@ class Store:
         key = (commit, path)
         if key not in self._at:
             r = subprocess.run(["git", "-C", self.root, "show", f"{commit}:{path}"], capture_output=True, text=True)
-            f = self.parse(r.stdout) if r.returncode == 0 else None
+            f = self.parse(r.stdout, self.audited(commit)) if r.returncode == 0 else None
+            if f is None:
+                self.fallbacks += 1
             self._at[key] = (f[1], f[2]) if f else (desc, ruling)
         return self._at[key]
 
@@ -130,7 +153,9 @@ def transcript_events(path):
     agent (reply text), brief (a subagent's prompt), commit (a shell command
     that writes a commit, PR or issue body), note (a tacit note the agent
     added), open (tacit_fact), search (a tacit search), summary (a
-    compaction summary). Sidechain lines are left out."""
+    compaction summary), delivered (a tacit hook block the transcript
+    recorded: the names it printed, as text one per line). Sidechain lines
+    are left out."""
     out = []
     with open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -140,6 +165,16 @@ def transcript_events(path):
                 continue
             ts = parse_ts(d.get("timestamp") or "")
             if ts is None or d.get("isSidechain"):
+                continue
+            att = d.get("attachment") or {}
+            if d.get("type") == "attachment" and att.get("type") == "hook_success":
+                text = str(att.get("content") or "")
+                try:
+                    text = json.loads(att.get("stdout") or "")["hookSpecificOutput"]["additionalContext"]
+                except (ValueError, KeyError, TypeError):
+                    pass
+                if "# tacit:" in text:
+                    out.append((ts, "delivered", "\n".join(BLOCK_LINE.findall(text))))
                 continue
             msg = d.get("message") or {}
             content = msg.get("content")
@@ -167,7 +202,7 @@ def transcript_events(path):
                     elif name.endswith("tacit_search"):
                         out.append((ts, "search", str(inp.get("query", ""))))
                     elif name.endswith("tacit_add"):
-                        out.append((ts, "note", json.dumps(inp)))
+                        out.append((ts, "note", "\n".join(str(v) for v in inp.values())))
                     elif name == "Bash":
                         cmd = str(inp.get("command", ""))
                         for x in re.findall(r"(?:^|[\s;&|])tacit\s+fact\s+([a-z0-9-]+)", cmd):
@@ -210,6 +245,16 @@ def signals_for(events, start, end, name, desc, ruling, owner_session):
     return s
 
 
+def window_end(events, start, name):
+    """The first block of the main chain after the line's own that delivers
+    name again, or WINDOW_HOURS after start."""
+    end = start + timedelta(hours=WINDOW_HOURS)
+    for t, kind, text in events:
+        if kind == "delivered" and start + timedelta(seconds=5) < t < end and name in text.split("\n"):
+            return t
+    return end
+
+
 def bootstrap_share(rows, good, n=2000, seed=7):
     """A 95% interval of the share of rows graded good, resampling sessions."""
     by = collections.defaultdict(list)
@@ -231,13 +276,14 @@ def bootstrap_share(rows, good, n=2000, seed=7):
 def verdict(rows, sig, good, base):
     fired = [r for r in rows if r[sig]]
     units = {(r["session"], r["fact"]) for r in fired}
-    row = {"fires": len(fired), "units": len(units), "R": sum(r["grade"] == "R" for r in fired),
+    sessions = {r["session"] for r in fired}
+    row = {"fires": len(fired), "units": len(units), "sessions": len(sessions), "R": sum(r["grade"] == "R" for r in fired),
            "W": sum(r["grade"] == "W" for r in fired), "N": sum(r["grade"] == "N" for r in fired)}
     if good and fired:
         share = row[good] / len(fired)
         lo, hi = bootstrap_share(fired, good)
         row.update(share=round(share, 3), ci=[round(lo, 3), round(hi, 3)], base=round(base[good], 3))
-        if len(units) < MIN_UNITS:
+        if len(units) < MIN_UNITS or len(sessions) < MIN_SESSIONS:
             row["verdict"] = "unmeasured"  # too few units to say
         else:
             row["verdict"] = "passes" if share >= 2 * base[good] and lo > base[good] else "fails"
@@ -263,14 +309,7 @@ def main():
             if len(f) >= 3 and f[2] in ("R", "W", "N"):
                 extra[f[0]][f[1]] = f[2]
     cases = [json.loads(line) for line in open(a.cases)]
-    # When each session's later blocks deliver a fact again: a line's window
-    # ends there.
-    deliveries = collections.defaultdict(list)
-    for c in cases:
-        t = parse_ts(c.get("ts") or "")
-        for n in c.get("delivered") or []:
-            if t:
-                deliveries[(c.get("session"), n)].append(t)
+    owner_sessions = {c.get("session") for c in cases if c.get("origin") == "owner"}
     cache, rows = {}, []
     skipped = collections.Counter()
     for c in cases:
@@ -295,14 +334,15 @@ def main():
                 continue
             desc, ruling = f
             ruling = ruling or name in (c.get("rules") or [])
-            later = [t for t in deliveries[(c.get("session"), name)] if t > start]
-            end = min(later + [start + timedelta(hours=WINDOW_HOURS)])
+            end = window_end(events, start, name)
             rows.append({"case": c["id"], "session": c.get("session"), "fact": name, "grade": grade, "ruling": ruling,
-                         "transcript_bytes": size, **signals_for(events, start, end, name, desc, ruling, c.get("origin") == "owner")})
+                         "origin": c.get("origin"), "window_ended_early": end < start + timedelta(hours=WINDOW_HOURS),
+                         "transcript_bytes": size, **signals_for(events, start, end, name, desc, ruling, c.get("session") in owner_sessions)})
     n = len(rows)
     base = {g: sum(r["grade"] == g for r in rows) / n for g in "RWN"} if n else {g: 0 for g in "RWN"}
     report = {"lines": n, "sessions": len({r["session"] for r in rows}), "skipped": dict(skipped), "base": base,
-              "window_hours": WINDOW_HOURS, "min_units": MIN_UNITS, "signals": {}}
+              "description_fallbacks": store.fallbacks, "windows_ended_early": sum(r["window_ended_early"] for r in rows),
+              "window_hours": WINDOW_HOURS, "min_units": MIN_UNITS, "min_sessions": MIN_SESSIONS, "signals": {}}
     for sig, good in (("summary_kept", "R"), ("needed_again", "R"), ("carried_forward", "R"), ("opened", "R"), ("summary_dropped", "N")):
         report["signals"][sig] = verdict(rows, sig, good, base)
     restated = [r for r in rows if r["owner_restated"]]
