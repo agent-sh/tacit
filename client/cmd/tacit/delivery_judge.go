@@ -97,6 +97,12 @@ type judgePassLog struct {
 	// each label carries the one that answered) and its prompt digest.
 	Model  string `json:"model,omitempty"`
 	Prompt string `json:"prompt,omitempty"`
+	// From and To bound the moments that entered this pass's pool (after
+	// From, up to To); UnreadBlocks are the moments in them left out of the
+	// draw because their transcript could not be read.
+	From         string   `json:"from,omitempty"`
+	To           string   `json:"to,omitempty"`
+	UnreadBlocks []string `json:"unread_blocks,omitempty"`
 }
 
 // judgeMoment is one drawn line as the judge's case is built from it.
@@ -369,12 +375,12 @@ func writeJudgeState(st judgeState) error {
 // prompt or push block whose moment is after the last pass's (through) and
 // at least judgeAge old, within judgeDays, with a transcript to read. Each
 // line enters exactly one draw.
-func judgePool(now time.Time, through time.Time) []judgeMoment {
+func judgePool(now time.Time, through time.Time) (out []judgeMoment, unread []string, from, cutoff time.Time) {
 	cutoff, floor := now.Add(-judgeAge), now.AddDate(0, 0, -judgeDays)
 	if through.Before(floor) {
 		through = floor
 	}
-	var out []judgeMoment
+	home, _ := os.UserHomeDir()
 	for _, e := range readJudgeDays(through) {
 		t, err := time.Parse(time.RFC3339Nano, e.TS)
 		if err != nil || !t.After(through) || t.After(cutoff) || e.TranscriptPath == "" || e.Transcript < 0 {
@@ -383,13 +389,23 @@ func judgePool(now time.Time, through time.Time) []judgeMoment {
 		if e.Hook != "prompt" && e.Hook != "push" {
 			continue
 		}
+		// A moment whose transcript cannot be read now has no chance of a
+		// label: none of its lines enters the draw, and the pass names it.
+		if _, ok := transcriptFormat(home, e.TranscriptPath); !ok {
+			unread = append(unread, e.ID)
+			continue
+		}
+		if fi, err := os.Stat(e.TranscriptPath); err != nil || !fi.Mode().IsRegular() {
+			unread = append(unread, e.ID)
+			continue
+		}
 		for _, c := range e.Cands {
 			if c.Delivered {
 				out = append(out, judgeMoment{Block: e.ID, Fact: c.Name, Hook: e.Hook, Tool: e.Tool, Transcript: e.TranscriptPath, Offset: e.Transcript, FactPath: c.Path})
 			}
 		}
 	}
-	return out
+	return out, unread, through, cutoff
 }
 
 func readJudgeDays(since time.Time) []logEntry {
@@ -586,9 +602,10 @@ func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int,
 	}
 	st := readJudgeState(now.UTC().Format("2006-01-02"))
 	through, _ := time.Parse(time.RFC3339Nano, st.Through)
-	pool := judgePool(now, through)
+	pool, unreadBlocks, poolFrom, poolTo := judgePool(now, through)
 	daily := deliveryInt("JUDGE_DAILY", judgeDaily)
-	pass := judgePassLog{Pool: len(pool)}
+	pass := judgePassLog{Pool: len(pool), UnreadBlocks: unreadBlocks,
+		From: poolFrom.UTC().Format(time.RFC3339Nano), To: poolTo.UTC().Format(time.RFC3339Nano)}
 	if len(pool) > 0 {
 		if st.Rate == 0 {
 			// Aimed at judgeAim of the cap, so the waiting lines drain on
@@ -677,7 +694,9 @@ func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int,
 		st.Pending = append(waiting, rest...)
 	}
 	pass.Waiting = len(st.Pending)
-	if pass.Pool > 0 || pass.Drawn > 0 || pass.Judged > 0 || pass.Dropped > 0 || pass.Unreadable > 0 || pass.Refused {
+	// Every pass writes its entry, an empty one too: its window says which
+	// moments had their draw (eval/delivery/offline.py's population).
+	{
 		pass.Model, pass.Prompt = judgeModel(), judgePromptID
 		e := &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: "judge-pass", JudgePass: &pass}
 		e.ID = logID(e)

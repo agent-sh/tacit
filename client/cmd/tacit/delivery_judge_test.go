@@ -94,6 +94,9 @@ func newJudgeFixture(t *testing.T, n int) *judgeFixture {
 		Cands: []logCand{{Name: "start-note", Delivered: true}}}, f.now)
 	writeLogEntry(&logEntry{V: 1, ID: "00000000000000a4", TS: f.now.UTC().Format(time.RFC3339Nano), Hook: "prompt", Session: "s1", TranscriptPath: f.tr, Transcript: f.off,
 		Cands: []logCand{{Name: "too-fresh", Delivered: true}}}, f.now)
+	// A moment whose transcript no harness of this machine writes: never drawn.
+	writeLogEntry(&logEntry{V: 1, ID: "00000000000000a6", TS: old, Hook: "prompt", Session: "s1", TranscriptPath: filepath.Join(home, "elsewhere", "x.jsonl"), Transcript: 1,
+		Cands: []logCand{{Name: "unreadable-note", Delivered: true}}}, f.now)
 	call, red, rnd := judgeCall, judgeRedactTexts, judgeRand
 	t.Cleanup(func() { judgeCall, judgeRedactTexts, judgeRand = call, red, rnd })
 	judgeRedactTexts = func(ctx context.Context, texts []string) ([]string, error) {
@@ -153,6 +156,9 @@ func TestDeliveryJudgePass(t *testing.T) {
 	}
 	if len(passes) != 1 || passes[0].Pool != 6 || passes[0].Drawn != 6 || passes[0].Judged != 3 || passes[0].Waiting != 3 {
 		t.Fatalf("pass: %+v", passes)
+	}
+	if strings.Join(passes[0].UnreadBlocks, ",") != "00000000000000a6" || passes[0].From == "" || passes[0].To == "" {
+		t.Fatalf("the pass's window: %+v", passes[0])
 	}
 	// The cap is spent: nothing more today, and no line is drawn twice.
 	if n, _ := deliveryJudgePass(context.Background(), nil, f.now.Add(time.Minute)); n != 0 {

@@ -139,15 +139,41 @@ class Population(unittest.TestCase):
         early = dict(moment, id="early", ts="2026-10-29T10:00:00Z")  # more than 2 days before the pass
         late = dict(moment, id="late", ts="2026-11-01T11:45:00Z")  # less than 30 minutes before it
         bare = dict(moment, id="bare", transcript_path="")
+        unreadable = dict(moment, id="unreadable")
         after = dict(moment, id="after", ts="2026-11-02T10:00:00Z")  # in a pass that left lines waiting
         waiting = {"id": "pass2", "ts": "2026-11-02T12:00:00Z", "hook": "judge-pass", "judge_pass": {"pool": 1, "waiting": 3, "prompt": "p"}}
-        unread = {"id": "pass0", "ts": "2026-11-01T11:59:00Z", "hook": "judge-pass", "judge_pass": {"pool": 1, "waiting": 0, "prompt": "p", "unread": [moment["id"] + "/f0"]}}
-        moments, info = off.moments_of(entries + [early, late, bare, after, waiting, unread])
+        unread = {"id": "pass0", "ts": "2026-11-01T11:59:00Z", "hook": "judge-pass",
+                  "judge_pass": {"pool": 1, "waiting": 0, "prompt": "p", "unread": [moment["id"] + "/f0"], "unread_blocks": ["unreadable"]}}
+        moments, info = off.moments_of(entries + [early, late, bare, unreadable, after, waiting, unread])
         ids = {m["id"] for m in moments}
-        self.assertFalse(ids & {"early", "late", "bare", "after"}, ids)
-        self.assertEqual(info["left_out"]["no transcript"], 1)
+        self.assertFalse(ids & {"early", "late", "bare", "unreadable", "after"}, ids)
+        self.assertEqual(info["left_out"]["no transcript to read"], 2)
+        # The drawn line the judge could not read stays a candidate (a policy
+        # ranks it), and counts in no sum.
         got = next(m for m in moments if m["id"] == moment["id"])
-        self.assertNotIn("f0", [c["name"] for c in got["cands"]])
+        f0 = next(c for c in got["cands"] if c["name"] == "f0")
+        self.assertTrue(f0["excluded"])
+        top1 = off.top_k(1)
+        self.assertEqual([c["name"] for c in got["cands"] if top1(got, c)], ["f0"])
+        sums = off.session_sums([got], top1, lambda m, c: (0.5, 0.5))
+        self.assertEqual(sums[got["session"]]["pi"], 0.0)
+
+    def test_another_judges_pool(self):
+        # Passes of judges p, q, p: a moment in q's pool is not p's, though
+        # p's next pass comes after it.
+        entries, _ = world(sessions=1, per=1)
+        entries = [e for e in entries if e.get("hook") != "judge-pass"]
+        moment = next(e for e in entries if e.get("hook") == "prompt")
+        mid = dict(moment, id="mid", ts="2026-11-01T13:00:00Z")
+        p1 = {"id": "p1", "ts": "2026-11-01T12:00:00Z", "hook": "judge-pass", "judge_pass": {"waiting": 0, "prompt": "p"}}
+        q = {"id": "q", "ts": "2026-11-01T14:00:00Z", "hook": "judge-pass", "judge_pass": {"waiting": 0, "prompt": "q"}}
+        p2 = {"id": "p2", "ts": "2026-11-01T16:00:00Z", "hook": "judge-pass", "judge_pass": {"waiting": 0, "prompt": "p"}}
+        moments, _ = off.moments_of(entries + [mid, p1, q, p2], ("m", "p"))
+        self.assertEqual({m["id"] for m in moments}, {moment["id"]})
+        # Logged windows win over the passes' times.
+        p2["judge_pass"].update({"from": "2026-11-01T12:30:00Z", "to": "2026-11-01T15:30:00Z"})
+        moments, _ = off.moments_of(entries + [mid, p1, q, p2], ("m", "p"))
+        self.assertEqual({m["id"] for m in moments}, {moment["id"], "mid"})
 
     def test_cross_fitting(self):
         # Sessions of one half hold only useful labels, the other only
@@ -161,6 +187,32 @@ class Population(unittest.TestCase):
         model = off.cross_fit(moments, [m["session"] for m in moments])
         self.assertLess(model(moments[0], moments[0]["cands"][0])[0], 0.5)
         self.assertGreater(model(moments[1], moments[1]["cands"][0])[0], 0.5)
+
+
+class Robust(unittest.TestCase):
+    def test_a_wrong_model_is_corrected(self):
+        # One stratum for every line: the model is the overall mean, wrong
+        # for each rank. The model alone misses the truth; dr's residual
+        # brings it back.
+        entries, truth = world(sessions=100)
+        moments, _ = off.moments_of(entries)
+        pol = off.logged_where(lambda c: c["share"] >= 0.7)
+        tu, _ = true_value(entries, truth, pol)
+        real = off.cell
+        try:
+            off.cell = lambda m, c: ()
+            r = off.evaluate(moments, {"logged": off.logged, "share": pol}, n=100)["share"]
+            model = off.cross_fit(moments, [m["session"] for m in moments])
+            only = sum(pol(m, c) * model(m, c)[0] for m in moments for c in m["cands"]) / len(moments)
+        finally:
+            off.cell = real
+        self.assertGreater(abs(only - tu), 0.1)
+        self.assertTrue(near(r["ci"]["dr_u"], tu), (r["ci"]["dr_u"], tu))
+
+    def test_net(self):
+        v = off.values([dict(dict.fromkeys(off.SUMS, 0.0), moments=2, pi=2, sup=2, w=2, ips_u=3, ips_n=1, dr_u=3, dr_n=1, drs_u=3, drs_n=1)])
+        self.assertEqual(v["dr_net"], (3 - off.LAMBDA * 1) / 2)
+        self.assertEqual(off.LAMBDA, 1.0)
 
 
 class Rules(unittest.TestCase):
