@@ -1,13 +1,13 @@
 Tacit keeps memory for coding agents in Markdown and git. Use a local store or share one across machines.
 
-This release bundles scrump 0.2.1, whose start-up is now measured in milliseconds (#150, #151), and adds an offline evaluation of delivery policies (#149).
+This release moves the dreamer's judge onto the dreamer's Bedrock route (#153).
 
-- **scrump 0.2.1.** The bundled redactor, and the one the Mac setup builds, moves from scrump 0.2.0 to 0.2.1. It compiles a rule only where one of its keywords occurs, so start-up on empty input drops from about 0.29 s to 0.012 s, with byte-identical output on scrump's differential suite. Every `tacit episode` call and every redacted write starts scrump, so this is their latency floor. Installing v0.9.30 puts scrump 0.2.0 back; installing this release brings 0.2.1 (`scrump --version` shows which is on the PATH). Building scrump from source needs rustc 1.89.
-- **Offline evaluation.** `eval/delivery/offline.py` grades a delivery policy on past moments without running it, as useful and noise lines per moment.
-  - Inputs: the hooks' logged delivery probabilities, and the dreamer's judge labels with the probability each line had of being judged.
-  - Estimators: inverse propensity, its self-normalized form, and a doubly robust estimate, each with its support and bootstrap intervals over sessions.
-  - The rule was written before any data (eval/DELIVERY.md, "Scoring each delivery", step 6). An offline result never ships a ranking change; at most it promotes a candidate to a live interleaving test.
-- **Judge log.** Each judge pass now logs its pool's window, the models that answered, the moments it could not read, and why each drawn line came to no label. The offline evaluation needs these to know which moments every pass covered. A pass now also checks that each transcript opens before it draws.
+- **Judge on Bedrock.** At the end of a full dream run, the judge calls `claude -p` on the same Bedrock route the dream run uses, with the model `global.anthropic.claude-opus-5-5` (`TACIT_DELIVERY_JUDGE_MODEL` overrides it). Previously it ran on a subscription login.
+  - The call keeps only what a process needs plus the Bedrock route's settings. No endpoint, proxy, gateway key or token, custom header, other config directory, plugin directory, skipped auth or other provider's switch reaches it.
+  - On the bearer or key route the call reads no AWS config file. On a profile route, a config that names an `endpoint_url` refuses the call.
+- **Skipped without a route.** A machine whose dreamer runs through another gateway, with no Bedrock route, skips the judge. It draws nothing, sends no case anywhere, logs a `judge-skip` entry, and the dream run says why.
+- **Errors.** Only the route's own errors end a pass without counting against the drawn lines: the CLI's API error status 401, 403, 429 or 529, or, when it gives no status, its words for a throttle, an overload or AWS credentials that do not load or have expired. Any other error counts against the lines.
+- **Measured.** The Bedrock judge was measured against the hand grades under the preregistered rule (eval/DELIVERY.md, step 5, amendment). Its `relevant` labels pass; its `useful` labels do not, so they move nothing, and the offline evaluation's net value promotes nothing from this judge yet.
 
 Upgrading: install the new binary. No index, store format or protocol change; the server needs no deploy.
 
