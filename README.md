@@ -295,10 +295,10 @@ The synthetic sample runs without a server or model account. It demonstrates the
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/recall-latency-dark.svg">
-  <img alt="Time per task, by transcript size from 1 to 64 MiB: tacit episode takes 569 ms at 1 MiB and 1.2 s at 64 MiB, grep 1.7 ms and 36 ms." src="docs/images/recall-latency-light.svg" width="880">
+  <img alt="Time per task, by transcript size from 1 to 64 MiB: tacit episode takes 617 ms at 1 MiB and 1.0 s at 64 MiB, grep 1.9 ms and 33 ms." src="docs/images/recall-latency-light.svg" width="880">
 </picture>
 
-*grep is faster: 1.7 ms per task at 1 MiB and 36 ms at 64 MiB, where tacit takes 569 ms and 1.2 s. Most of a small call's time is scrump loading its rules, which tacit starts before it reads the transcript. Times are from one machine; same run and command.*
+*grep is faster: 1.9 ms per task at 1 MiB and 33 ms at 64 MiB, where tacit takes 617 ms and 1.0 s. Most of a small call's time is scrump loading its rules, which tacit starts before it reads the transcript. Times are from one machine; same run and command.*
 
 <details>
 <summary>The numbers: median (min to max) of 16 tasks; a task's time is the median of 5 launches</summary>
@@ -307,20 +307,20 @@ The synthetic sample runs without a server or model account. It demonstrates the
 
 | MiB | Arm | Right | Characters | Planted secrets | Calls | Time |
 |---|---|---|---|---|---|---|
-| 1 | tacit | 16 of 16 | 550 (386 to 11,190) | 0 (0 to 0) | 1 (1 to 3) | 569 ms (513 ms to 1.7 s) |
-| 1 | grep | 16 of 16 | 3,416 (452 to 19,677) | 1 (1 to 2) | 1 (1 to 1) | 1.7 ms (1.4 ms to 3.0 ms) |
-| 2 | tacit | 16 of 16 | 756 (388 to 9,474) | 0 (0 to 0) | 1 (1 to 3) | 567 ms (526 ms to 1.8 s) |
-| 2 | grep | 16 of 16 | 9,876 (454 to 25,798) | 2 (1 to 3) | 1 (1 to 1) | 2.3 ms (1.9 ms to 5.5 ms) |
-| 4 | tacit | 16 of 16 | 848 (459 to 12,720) | 0 (0 to 0) | 1 (1 to 4) | 669 ms (570 ms to 2.7 s) |
-| 4 | grep | 16 of 16 | 7,131 (914 to 31,968) | 2 (1 to 2) | 1 (1 to 1) | 3.8 ms (3.4 ms to 5.5 ms) |
-| 8 | tacit | 16 of 16 | 858 (459 to 16,723) | 0 (0 to 0) | 1 (1 to 4) | 583 ms (521 ms to 2.1 s) |
-| 8 | grep | 16 of 16 | 10,400 (2,561 to 25,115) | 1 (1 to 2) | 1 (1 to 1) | 5.7 ms (5.1 ms to 7.8 ms) |
-| 16 | tacit | 16 of 16 | 849 (461 to 18,937) | 0 (0 to 0) | 1 (1 to 4) | 551 ms (515 ms to 2.2 s) |
-| 16 | grep | 16 of 16 | 12,636 (2,557 to 27,297) | 1 (1 to 2) | 1 (1 to 1) | 10 ms (9.1 ms to 13 ms) |
-| 32 | tacit | 16 of 16 | 4,231 (509 to 17,692) | 0 (0 to 0) | 1.5 (1 to 5) | 853 ms (516 ms to 2.7 s) |
-| 32 | grep | 16 of 16 | 25,626 (2,520 to 74,165) | 2 (1 to 2) | 1 (1 to 1) | 19 ms (17 ms to 28 ms) |
-| 64 | tacit | 16 of 16 | 3,688 (465 to 30,474) | 0 (0 to 0) | 1.5 (1 to 10) | 1.2 s (750 ms to 6.5 s) |
-| 64 | grep | 15 of 16 | 35,838 (2,597 to 384,925) | 2 (1 to 2) | 1 (1 to 1) | 36 ms (32 ms to 57 ms) |
+| 1 | tacit | 16 of 16 | 550 (386 to 11,190) | 0 (0 to 0) | 1 (1 to 3) | 617 ms (567 ms to 1.7 s) |
+| 1 | grep | 16 of 16 | 3,416 (452 to 19,677) | 1 (1 to 2) | 1 (1 to 1) | 1.9 ms (1.5 ms to 3.8 ms) |
+| 2 | tacit | 16 of 16 | 756 (388 to 9,474) | 0 (0 to 0) | 1 (1 to 3) | 629 ms (528 ms to 1.7 s) |
+| 2 | grep | 16 of 16 | 9,876 (454 to 25,798) | 2 (1 to 3) | 1 (1 to 1) | 2.4 ms (2.1 ms to 3.6 ms) |
+| 4 | tacit | 16 of 16 | 848 (459 to 12,720) | 0 (0 to 0) | 1 (1 to 4) | 648 ms (553 ms to 2.2 s) |
+| 4 | grep | 16 of 16 | 7,131 (914 to 31,968) | 2 (1 to 2) | 1 (1 to 1) | 3.8 ms (3.1 ms to 5.2 ms) |
+| 8 | tacit | 16 of 16 | 858 (459 to 16,723) | 0 (0 to 0) | 1 (1 to 4) | 593 ms (531 ms to 2.4 s) |
+| 8 | grep | 16 of 16 | 10,400 (2,561 to 25,115) | 1 (1 to 2) | 1 (1 to 1) | 5.6 ms (4.9 ms to 7.8 ms) |
+| 16 | tacit | 16 of 16 | 849 (461 to 18,937) | 0 (0 to 0) | 1 (1 to 4) | 612 ms (544 ms to 2.3 s) |
+| 16 | grep | 16 of 16 | 12,636 (2,557 to 27,297) | 1 (1 to 2) | 1 (1 to 1) | 11 ms (9.8 ms to 14 ms) |
+| 32 | tacit | 16 of 16 | 4,231 (509 to 17,692) | 0 (0 to 0) | 1.5 (1 to 5) | 822 ms (499 ms to 2.6 s) |
+| 32 | grep | 16 of 16 | 25,626 (2,520 to 74,165) | 2 (1 to 2) | 1 (1 to 1) | 19 ms (16 ms to 27 ms) |
+| 64 | tacit | 16 of 16 | 3,688 (465 to 30,474) | 0 (0 to 0) | 1.5 (1 to 10) | 1.0 s (689 ms to 5.8 s) |
+| 64 | grep | 15 of 16 | 35,838 (2,597 to 384,925) | 2 (1 to 2) | 1 (1 to 1) | 33 ms (32 ms to 46 ms) |
 
 <!-- /recall-table -->
 

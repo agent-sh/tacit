@@ -567,7 +567,7 @@ func TestEpisodeFindPartialFirstBatch(t *testing.T) {
 	home := episodeHome(t)
 	bin := t.TempDir()
 	// A batch of events is slow; the words alone are not.
-	script := "#!/bin/sh\nf=$(mktemp -p '" + bin + "')\ncat > \"$f\"\nif [ $(wc -c < \"$f\") -gt 200 ]; then sleep 3; fi\nexec sed 's/Zq7Vx9/******/g' \"$f\"\n"
+	script := "#!/bin/sh\nf='" + bin + "'/in.$$\ncat > \"$f\"\nif [ $(wc -c < \"$f\") -gt 200 ]; then sleep 3; fi\nexec sed 's/Zq7Vx9/******/g' \"$f\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "scrump"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
