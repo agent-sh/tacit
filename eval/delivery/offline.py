@@ -389,7 +389,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--log", required=True, help="the delivery log directory (or one day's file)")
     ap.add_argument("--policy", action="append", help="policies to evaluate (default: all built in)")
-    ap.add_argument("--judge", help="the judge whose labels count, as 'MODEL PROMPT-DIGEST' (the pair step 5 passed); required when the log holds more than one")
+    ap.add_argument("--judge", help="the judge whose labels count, as 'MODEL PROMPT-DIGEST' (the pair step 5 confirmed: since its route amendment, the Bedrock judge); required when the log holds more than one")
     ap.add_argument("--boot", type=int, default=500, help="bootstrap samples")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()

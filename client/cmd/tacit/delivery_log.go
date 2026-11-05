@@ -92,6 +92,8 @@ type logEntry struct {
 	Mark      *logMarkStep `json:"mark,omitempty"`
 	// Judge is a judge entry's labels (the dreamer's judge).
 	Judge *judgeVerdict `json:"judge,omitempty"`
+	// Reason is why a judge-skip entry's pass did not run.
+	Reason string `json:"reason,omitempty"`
 	// JudgePass is a judge-pass entry: one pass's draw and what became of it.
 	JudgePass *judgePassLog `json:"judge_pass,omitempty"`
 	// Nav is a nav entry's step through the store (no block: its

@@ -141,11 +141,21 @@ type judgeCase struct {
 // no plugin directories, no other provider's switch.
 // The match ignores case: Windows spells them as it likes (Path, SystemRoot).
 var judgeEnvKeep = regexp.MustCompile(`(?i)^(PATH|HOME|USER|LOGNAME|SHELL|TERM|TZ|TMPDIR|TEMP|TMP|LANG|LC_[A-Z]+|XDG_RUNTIME_DIR|USERPROFILE|APPDATA|LOCALAPPDATA|HOMEDRIVE|HOMEPATH|SYSTEMROOT|COMSPEC|PATHEXT|WINDIR` +
-	`|CLAUDE_CODE_USE_BEDROCK|AWS_BEARER_TOKEN_BEDROCK|AWS_REGION|AWS_DEFAULT_REGION|AWS_PROFILE|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|ANTHROPIC_BEDROCK_BASE_URL|ANTHROPIC_DEFAULT_[A-Z]+_MODEL|ANTHROPIC_DEFAULT_MODEL|ANTHROPIC_SMALL_FAST_MODEL)$`)
+	`|CLAUDE_CODE_USE_BEDROCK|AWS_BEARER_TOKEN_BEDROCK|AWS_REGION|AWS_DEFAULT_REGION|AWS_PROFILE|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|ANTHROPIC_DEFAULT_[A-Z]+_MODEL|ANTHROPIC_DEFAULT_MODEL|ANTHROPIC_SMALL_FAST_MODEL)$`)
 
-// judgeEnvRefuse is a name that must never reach the judge: a gateway or
-// another provider's route.
-var judgeEnvRefuse = regexp.MustCompile(`(?i)^(ANTHROPIC_BASE_URL|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_API_KEY|ANTHROPIC_CUSTOM_HEADERS|CLAUDE_CONFIG_DIR|CLAUDE_CODE_USE_VERTEX|CLAUDE_CODE_USE_FOUNDRY|CLAUDE_CODE_PLUGIN_DIRS)$`)
+// judgeEnvRefuse is a name that must never reach the judge, whatever the
+// keep list says: an endpoint or proxy (a custom Bedrock endpoint among
+// them, which would get the token), a gateway's key or token, a header, a
+// config or plugin directory, a skipped auth. judgeEnvOtherRoute is another
+// provider's switch.
+var (
+	judgeEnvRefuse     = regexp.MustCompile(`(?i)(BASE_URL|ENDPOINT|PROXY|AUTH_TOKEN|API_KEY|CUSTOM_HEADERS|CONFIG_DIR|PLUGIN|SKIP_.*_AUTH)`)
+	judgeEnvOtherRoute = regexp.MustCompile(`(?i)^CLAUDE_CODE_USE_`)
+)
+
+func judgeEnvRefused(k string) bool {
+	return judgeEnvRefuse.MatchString(k) || judgeEnvOtherRoute.MatchString(k) && !strings.EqualFold(k, "CLAUDE_CODE_USE_BEDROCK")
+}
 
 // errJudgeNoRoute is a machine where the dreamer has no Bedrock route (one
 // whose dreamer runs through another gateway): the judge does not run there,
@@ -184,7 +194,7 @@ func judgeEnv(env []string) ([]string, error) {
 	}
 	for _, kv := range out {
 		k, _, _ := strings.Cut(kv, "=")
-		if judgeEnvRefuse.MatchString(k) {
+		if judgeEnvRefused(k) {
 			return nil, fmt.Errorf("a gateway variable is left in the judge's environment: %s", k)
 		}
 	}
@@ -213,7 +223,10 @@ func judgeCommand(ctx context.Context, model, dir string) (*exec.Cmd, error) {
 // and a later one tries again.
 var errJudgeRefused = errors.New("the route refused the judge's call")
 
-var rateLimitRx = regexp.MustCompile(`(?i)rate.?limit|usage limit|hit your .*limit|quota|overloaded|429|too many requests`)
+// A rate limit, or a route that refuses its credentials (an expired or
+// invalid token): neither says anything about the lines, so neither counts
+// against their tries.
+var rateLimitRx = regexp.MustCompile(`(?i)rate.?limit|usage limit|hit your .*limit|quota|overloaded|429|too many requests|expired|invalid.*(token|credential)|unauthori[sz]ed|forbidden|access ?denied|security token|401|403`)
 
 // judgeCall runs one judge prompt and answers its text and the model that
 // answered. Tests replace it.
@@ -656,7 +669,7 @@ func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int,
 	// No Bedrock route (a machine whose dreamer runs through another
 	// gateway): nothing is drawn, nothing is sent, and the log says why.
 	if err := judgeRoute(os.Environ()); err != nil {
-		e := &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: "judge-skip", Policy: "no Bedrock route"}
+		e := &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: "judge-skip", Reason: "no Bedrock route"}
 		e.ID = logID(e)
 		_ = appendLogEntry(e, time.Now())
 		return 0, err

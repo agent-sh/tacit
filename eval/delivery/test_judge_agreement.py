@@ -104,19 +104,26 @@ class Agreement(unittest.TestCase):
             self.assertEqual(ms[("c1", "alpha-fact")]["line"], "alpha-fact: a useful fact")
             self.assertEqual(ms[("c4", "beta-fact")], {"block": "c4", "fact": "beta-fact", "hook": "push", "tool": "Bash",
                                                         "transcript": os.path.join(proj, "s1.jsonl"), "offset": push_off, "line": "beta-fact: an idle fact"})
-            # A spot check: a sample of the lines (all three here, one of them
-            # unreadable), the rule's minimums its
-            # own, and the share each label agrees with another judge's run.
+            # A spot check: a sample of the lines another run judged, the
+            # rule's minimums its own, and the share each label agrees with
+            # that run. The other run here disagrees on one of two lines and
+            # could not read a third.
+            other = os.path.join(d, "other.jsonl")
+            with open(other, "w") as fh:
+                fh.write(json.dumps({"block": "c1", "fact": "alpha-fact", "relevant": "yes", "novel": "yes", "confused": "no"}) + "\n")
+                fh.write(json.dumps({"block": "c1", "fact": "beta-fact", "relevant": "yes", "novel": "no", "confused": "no"}) + "\n")
+                fh.write(json.dumps({"block": "c4", "fact": "beta-fact", "unreadable": True}) + "\n")
             spot = os.path.join(d, "spot.json")
             r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "judge_agreement.py"), "--cases", cases, "--store", store,
-                                "--projects", os.path.join(d, "projects"), "--tacit", fake, "--sample", "3",
-                                "--compare", out + ".verdicts.jsonl", "--out", spot], capture_output=True, text=True)
+                                "--projects", os.path.join(d, "projects"), "--tacit", fake, "--sample", "5",
+                                "--compare", other, "--out", spot], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
             with open(spot) as fh:
                 rep = json.load(fh)
-            self.assertEqual(rep["lines"], 2)
-            self.assertEqual(rep["compare"]["lines"], 2)
-            self.assertEqual(rep["compare"]["relevant"], 1.0)
+            self.assertEqual(rep["lines"], 2)  # the two lines the other run judged
+            self.assertEqual(rep["rule"]["min_lines"], 0)
+            self.assertNotEqual(rep["relevant"]["verdict"], "too few lines")
+            self.assertEqual(rep["compare"], {"lines": 2, "relevant": 0.5, "novel": 1.0, "confused": 1.0})
 
     def rows(self, sessions=60):
         rows, verdicts = [], []

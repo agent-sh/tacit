@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 func TestJudgeEnvBedrockRoute(t *testing.T) {
 	env, err := judgeEnv([]string{"PATH=/bin", "HOME=/h", "AWS_REGION=x", "AWS_BEARER_TOKEN_BEDROCK=t", "CLAUDE_CODE_USE_BEDROCK=1",
 		"ANTHROPIC_DEFAULT_OPUS_MODEL=global.x", "ANTHROPIC_BASE_URL=https://gw", "ANTHROPIC_AUTH_TOKEN=t", "ANTHROPIC_API_KEY=k",
+		"ANTHROPIC_BEDROCK_BASE_URL=https://gw", "AWS_ENDPOINT_URL=https://gw", "CLAUDE_CODE_SKIP_BEDROCK_AUTH=1", "CLAUDE_CODE_USE_GATEWAY=1",
 		"ANTHROPIC_CUSTOM_HEADERS=h", "CLAUDE_CONFIG_DIR=/c", "CLAUDE_CODE_USE_VERTEX=1", "CLAUDE_CODE_PLUGIN_DIRS=/p", "LANG=C.UTF-8"})
 	if err != nil || strings.Join(env, " ") != "PATH=/bin HOME=/h AWS_REGION=x AWS_BEARER_TOKEN_BEDROCK=t CLAUDE_CODE_USE_BEDROCK=1 ANTHROPIC_DEFAULT_OPUS_MODEL=global.x LANG=C.UTF-8" {
 		t.Fatalf("kept: %v %v", env, err)
@@ -36,9 +38,11 @@ func TestJudgeEnvBedrockRoute(t *testing.T) {
 	}
 	old := judgeEnvKeep
 	t.Cleanup(func() { judgeEnvKeep = old })
-	judgeEnvKeep = regexp.MustCompile(`^(PATH|ANTHROPIC_BASE_URL|CLAUDE_CODE_USE_BEDROCK|AWS_BEARER_TOKEN_BEDROCK)$`)
-	if _, err := judgeEnv([]string{"PATH=/bin", "ANTHROPIC_BASE_URL=x", "CLAUDE_CODE_USE_BEDROCK=1", "AWS_BEARER_TOKEN_BEDROCK=t"}); err == nil || errors.Is(err, errJudgeNoRoute) {
-		t.Fatalf("a gateway variable was passed: %v", err)
+	for _, name := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_BEDROCK_BASE_URL", "AWS_ENDPOINT_URL_BEDROCK_RUNTIME", "CLAUDE_CODE_SKIP_BEDROCK_AUTH", "CLAUDE_CODE_USE_VERTEX", "HTTPS_PROXY"} {
+		judgeEnvKeep = regexp.MustCompile(`^(PATH|` + name + `|CLAUDE_CODE_USE_BEDROCK|AWS_BEARER_TOKEN_BEDROCK)$`)
+		if _, err := judgeEnv([]string{"PATH=/bin", name + "=x", "CLAUDE_CODE_USE_BEDROCK=1", "AWS_BEARER_TOKEN_BEDROCK=t"}); err == nil || errors.Is(err, errJudgeNoRoute) {
+			t.Fatalf("%s was passed: %v", name, err)
+		}
 	}
 }
 
@@ -54,7 +58,7 @@ func TestJudgePassWithoutARoute(t *testing.T) {
 	}
 	skipped := false
 	for _, e := range readDeliveryLog(t, f.state) {
-		skipped = skipped || e.Hook == "judge-skip" && e.Policy == "no Bedrock route"
+		skipped = skipped || e.Hook == "judge-skip" && e.Reason == "no Bedrock route"
 		if e.Hook == "judge-pass" {
 			t.Fatalf("a pass without a route: %+v", e)
 		}
@@ -73,12 +77,21 @@ func TestJudgeCommand(t *testing.T) {
 	t.Setenv("ANTHROPIC_BASE_URL", "https://gw")
 	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "1")
 	t.Setenv("AWS_PROFILE", "p")
-	cmd, err := judgeCommand(context.Background(), "global.anthropic.claude-opus-5-5", t.TempDir())
+	for _, k := range []string{"AWS_BEARER_TOKEN_BEDROCK", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "TACIT_DELIVERY_JUDGE_MODEL"} {
+		t.Setenv(k, "")
+	}
+	if judgeModel() != "global.anthropic.claude-opus-5-5" {
+		t.Fatalf("default model %q", judgeModel())
+	}
+	cmd, err := judgeCommand(context.Background(), judgeModel(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !slices.Contains(cmd.Env, "CLAUDE_CODE_USE_BEDROCK=1") || !slices.Contains(cmd.Env, "AWS_PROFILE=p") {
+		t.Fatalf("the route did not reach the call: %v", cmd.Env)
+	}
 	for _, kv := range cmd.Env {
-		if judgeEnvRefuse.MatchString(strings.SplitN(kv, "=", 2)[0]) {
+		if judgeEnvRefused(strings.SplitN(kv, "=", 2)[0]) {
 			t.Fatalf("passed %s", kv)
 		}
 	}

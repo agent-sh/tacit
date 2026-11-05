@@ -257,14 +257,21 @@ def main():
     ap.add_argument("--tacit", default="tacit", help="the tacit binary whose delivery-judge runs")
     ap.add_argument("--model", default="", help="the judge's model (TACIT_DELIVERY_JUDGE_MODEL, else its default)")
     ap.add_argument("--verdicts", help="a verdicts file from an earlier run: measure it again, judge nothing")
-    ap.add_argument("--sample", type=int, default=0, help="a spot check: this many of the graded lines, drawn uniformly (seed 7); the rule's line and session minimums are the sample's own (eval/DELIVERY.md, step 5)")
+    ap.add_argument("--sample", type=int, default=0, help="a spot check: up to this many of the graded lines (of those --compare's run judged, when given), drawn uniformly (seed 7); the rule's line and session minimums are the sample's own (eval/DELIVERY.md, step 5)")
     ap.add_argument("--compare", help="another judge's verdicts file: report the share of lines each label agrees on")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     global MIN_LINES, MIN_SESSIONS
     rows, skipped = rows_of(a)
     if a.sample:
-        rows = sorted(random.Random(7).sample(rows, min(a.sample, len(rows))), key=lambda r: (r["moment"]["block"], r["fact"]))
+        # Drawn from the lines the compared run judged (when there is one),
+        # so every sampled line can be compared.
+        pool = rows
+        if a.compare:
+            with open(a.compare) as fh:
+                judged = {(v.get("block"), v.get("fact")) for v in map(json.loads, fh) if not v.get("unreadable")}
+            pool = [r for r in rows if (r["moment"]["block"], r["fact"]) in judged]
+        rows = sorted(random.Random(7).sample(pool, min(a.sample, len(pool))), key=lambda r: (r["moment"]["block"], r["fact"]))
         MIN_LINES, MIN_SESSIONS = 0, 0
     if a.verdicts:
         with open(a.verdicts) as fh:
