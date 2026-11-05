@@ -211,20 +211,28 @@ Result, on the graded prompt and push lines of real sessions whose transcripts a
 
 First run, under that rule, on the graded prompt and push lines (the judge `claude-opus-5-5` with prompt digest `349414a790aa`): both `relevant` and `useful` pass every bar (lines, sessions, kappa, the interval's low end, unsure share); the numbers stay with the owner. So that judge's `relevant` and `useful` labels may train the ranker, each with its logged `p`; `confused` stays unmeasured. A changed prompt or model is measured again before its labels are used.
 
-**6. Offline evaluation.** `delivery/offline.py` grades a delivery policy on past moments without running it. It reads the private log's prompt and push moments in the time the judge's passes covered: each candidate line has its logged features and `p`, the logging policy's probability of delivering it, and a judged line also has the judge's label and the judge's own draw probability. A policy is a function from a moment's candidates to the lines it would deliver. Two values are estimated per moment: useful lines (the judge says relevant and novel) and noise lines (the judge says not relevant); unsure is neither. There are three estimators:
-- **Inverse propensity (IPS).** A delivered, judged line counts with weight `1 / (p · p_judge)` (Li, Chu, Langford and Wang, WSDM 2011; for rankings from implicit feedback, Joachims, Swaminathan and Schnabel, WSDM 2017).
-- **Self-normalized IPS.** The same weights, normalized (Swaminathan and Joachims, NeurIPS 2015).
-- **Doubly robust (DR).** A reward model's prediction for every line the policy picks, corrected by the weighted residual where a label exists (Dudík, Langford and Li, ICML 2011). The model is a weighted logistic regression over the logged features, cross-fitted by halves of the sessions so a line is never predicted by a model that saw it (Chernozhukov et al., 2018).
+**6. Offline evaluation.** `delivery/offline.py` grades a delivery policy on past moments without running it. It reads the private log: prompt and push moments with every candidate's logged features and `p` (the logging policy's probability of delivering it, logged before any draw), the judge's labels with the probability each line had of being judged, and the judge's passes.
 
-Each estimate comes with its **support**: the share of the policy's lines the logging policy could deliver (`p > 0`). A line with no support counts nothing in IPS and is only the model's guess in DR. Today's logging policy is almost deterministic, so a policy that delivers lines the hooks never showed rests on the model. Intervals are 95% bootstraps over sessions. `delivery/test_offline.py` checks the estimators on a synthetic log whose true values are known: they recover the truth, the unweighted mean misses it, and an unsupported policy is flagged.
+- **Policy.** A policy gives each candidate a probability π of being delivered, computed from its features and `p`. The logging policy is π = `p`, and a narrowing of it is π = `p` where a condition holds.
+- **Values.** Per moment: useful lines (relevant and novel), noise lines (not relevant; unsure is neither) and their net, useful minus noise. A noise line is weighted at 1, as much as a useful line gains; that is the neutral weight before a noise line's cost is measured.
+- **Estimators.**
+  - Inverse propensity (IPS): a delivered, judged line counts with weight `π / (p · p_judge)` (Li, Chu, Langford and Wang, WSDM 2011; for rankings from implicit feedback, Joachims, Swaminathan and Schnabel, WSDM 2017).
+  - Self-normalized IPS: per unit of weight, times the policy's supported lines (Swaminathan and Joachims, NeurIPS 2015).
+  - Doubly robust (DR): π times a reward model's prediction for every line, plus the weighted residual where a label exists (Dudík, Langford and Li, ICML 2011). The model is a stratified mean (hook, provenance, share, matched terms, form) shrunk toward the overall mean. It is cross-fitted by halves of the sessions, so no line is predicted by a model that saw it (Chernozhukov et al., 2018), and refit in every bootstrap sample so the intervals include its uncertainty.
+  - DR over supported lines only, which IPS and SNIPS also estimate.
+- **Support.** The share of π on lines the logging policy could deliver (`p > 0`). IPS and SNIPS count nothing for the rest; DR gives them only the model's guess, which rests on no label.
+- **Population.** The moments the judge's passes covered: each moment lies in the pool of one pass (after the previous pass's cutoff, at least 30 minutes before this one, within 2 days of it), up to the last pass that left no drawn line waiting. Only that judge's passes count, and a moment needs a transcript to read. Lines the judge could not read are left out of the population. Lines whose judge calls kept failing are counted and reported; give-ups at random are already in the thinned `p`.
+- **Intervals.** 95%, by a bootstrap over sessions.
+- **Tests.** `delivery/test_offline.py` checks the estimators on a synthetic log whose true values are known:
+  - they recover the truth for the logging policy and for supported policies, and miss it without the weights;
+  - an unsupported policy is flagged;
+  - the population's edges, the cross-fitting and every bar of the rule hold.
 
 The rule, written before any real data:
 - **What it decides.** An offline estimate never ships a ranking change. At most it promotes a candidate policy to a live comparison (team-draft interleaving, Radlinski, Kurup and Joachims, CIKM 2008), and the live result decides.
 - **To promote.** All of the following must hold:
-  - at least 300 judged lines on the candidate's lines, in at least 30 sessions (about a week and a half of the judge's daily cap, and the session minimum the other reads use);
-  - support of at least 0.8, so at most a fifth of the estimate rests on the model;
-  - the 95% interval of the DR difference from the logged policy is above zero for useful lines and not above zero for noise lines.
-
-  IPS and SNIPS are reported beside DR as checks; when their intervals exclude DR's point estimate, the read is flagged and promotes nothing.
-- **One judge.** Labels from one judge only (its model and prompt digest), the one that passed step 5.
-
+  - at least 300 judged lines among the candidate's own lines, in at least 30 sessions that hold one (about a week and a half of the judge's daily cap, and the session minimum the other reads use);
+  - support of at least 0.8, so at most a fifth of the estimate rests on the model alone;
+  - DR's net difference from the logged policy, counted over supported lines only, falls within the 95% intervals of both IPS's and SNIPS's net differences, so the model agrees with them where they can see; otherwise the read is flagged and promotes nothing;
+  - the 95% interval of DR's net difference from the logged policy is above zero.
+- **One judge.** Labels and passes from one judge only (its model and prompt digest): the one that passed step 5.

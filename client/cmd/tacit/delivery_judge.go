@@ -84,9 +84,19 @@ type judgePassLog struct {
 	Dropped    int     `json:"dropped,omitempty"`    // drawn and given up: too many waiting, or failed judgeTries times
 	Unreadable int     `json:"unreadable,omitempty"` // drawn and left out: the transcript or its redaction failed
 	// Lost names each drawn line given up or left out this pass
-	// (block/fact), so the analysis knows which draws came to no label.
+	// (block/fact), so the analysis knows which draws came to no label;
+	// Unread and Failed are the ones of them left out because their moment
+	// could not be read or redacted, and the ones whose call failed
+	// judgeTries times (not random, unlike the give-ups past the waiting
+	// bound, which thin the waiting lines' p).
 	Lost    []string `json:"lost,omitempty"`
+	Unread  []string `json:"unread,omitempty"`
+	Failed  []string `json:"failed,omitempty"`
 	Refused bool     `json:"refused,omitempty"`
+	// Model and Prompt are the judge this pass asked (the model as asked;
+	// each label carries the one that answered) and its prompt digest.
+	Model  string `json:"model,omitempty"`
+	Prompt string `json:"prompt,omitempty"`
 }
 
 // judgeMoment is one drawn line as the judge's case is built from it.
@@ -624,6 +634,7 @@ func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int,
 			} else {
 				pass.Unreadable++
 				pass.Lost = append(pass.Lost, m.Block+"/"+m.Fact)
+				pass.Unread = append(pass.Unread, m.Block+"/"+m.Fact)
 			}
 		}
 		model := judgeModel()
@@ -645,6 +656,7 @@ func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int,
 					if m.Tries >= judgeTries {
 						pass.Dropped++
 						pass.Lost = append(pass.Lost, m.Block+"/"+m.Fact)
+						pass.Failed = append(pass.Failed, m.Block+"/"+m.Fact)
 					} else {
 						waiting = append(waiting, m)
 					}
@@ -666,6 +678,7 @@ func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int,
 	}
 	pass.Waiting = len(st.Pending)
 	if pass.Pool > 0 || pass.Drawn > 0 || pass.Judged > 0 || pass.Dropped > 0 || pass.Unreadable > 0 || pass.Refused {
+		pass.Model, pass.Prompt = judgeModel(), judgePromptID
 		e := &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: "judge-pass", JudgePass: &pass}
 		e.ID = logID(e)
 		_ = appendLogEntry(e, time.Now())

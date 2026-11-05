@@ -141,7 +141,9 @@ type logCand struct {
 	Dropped   string `json:"dropped,omitempty"`
 	Delivered bool   `json:"delivered"`
 	// P is the probability the policy had of showing it: 1 or 0 while the
-	// policy is deterministic.
+	// policy is deterministic. A policy that draws at random must log the
+	// probability it had before the draw, never the outcome: the offline
+	// evaluation (eval/delivery/offline.py) weights by it.
 	P float64 `json:"p"`
 	// Utility is the utility provider's score, when its scores chose.
 	Utility *float64 `json:"utility,omitempty"`

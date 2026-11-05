@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Checks of offline.py on a synthetic delivery log whose true values are
-known: logging that delivers some lines at random, a judge that labels a
-sample, and policies whose expected useful and noise lines per moment are
-computed from the truth.
+known: a logging policy that delivers some lines at random and logs its
+probability before the draw, a judge that labels a sample at varying rates,
+and policies whose expected useful and noise lines per moment follow from
+the truth.
 
   python3 -I eval/delivery/test_offline.py
 """
@@ -20,15 +21,17 @@ spec = importlib.util.spec_from_file_location("offline", os.path.join(HERE, "off
 off = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(off)
 
+T_MOMENT, T_PASS = "2026-11-01T10:00:00Z", "2026-11-01T12:00:00Z"
+DELIVER = (1.0, 1.0, 0.5, 0.0, 0.0)  # the logging policy's p for each rank
 
-def world(seed=3, sessions=60, per=20, judge=0.4):
-    """Synthetic moments: five candidates each, a line useful with
-    probability rising in its share; the logging policy delivers the best
-    two always and the third with p 0.5; the judge labels each delivered
-    line with p `judge`. Returns the log's entries and the truth."""
+
+def world(seed=3, sessions=60, per=20):
+    """Five candidates a moment; a line is useful with a probability that
+    falls with its rank, noise with a share of the rest. The judge labels
+    each delivered line at 0.2 or 0.6, drawn per line. Returns the log's
+    entries and each line's expected (useful, noise)."""
     rng = random.Random(seed)
     entries, truth = [], {}
-    t0 = "2026-11-01T10:00:00Z"
     for s in range(sessions):
         for i in range(per):
             bid = f"b{s}-{i}"
@@ -36,137 +39,168 @@ def world(seed=3, sessions=60, per=20, judge=0.4):
             for r in range(5):
                 share = 1.0 - r * 0.2
                 pu = 0.15 + 0.6 * share
+                truth[(bid, f"f{r}")] = (pu, (1 - pu) * 0.6)
                 useful = rng.random() < pu
                 noise = (not useful) and rng.random() < 0.6
-                truth[(bid, f"f{r}")] = (pu, (1 - pu) * 0.6)
-                p = 1.0 if r < 2 else (0.5 if r == 2 else 0.0)
+                p = DELIVER[r]
                 delivered = rng.random() < p
-                # p is the line's probability of being delivered, as the
-                # hooks log it.
-                c = {"name": f"f{r}", "score": 10 - r, "share": share, "rank": r, "matched": 3 - min(r, 3), "tier": 0,
-                     "prov": "agent", "age_days": 5, "echo": 0.0, "delivered": delivered, "p": p}
-                cands.append(c)
-                if delivered and rng.random() < judge:
-                    entries.append({"id": "j" + bid + c["name"], "ts": t0, "hook": "judge",
-                                    "judge": {"block": bid, "fact": c["name"], "relevant": "yes" if (useful or not noise) else "no",
-                                              "novel": "yes" if useful else "no", "confused": "no", "p": judge}})
-            entries.append({"id": bid, "ts": t0, "hook": "prompt", "session": f"s{s}", "cands": cands})
-    entries.append({"id": "pass1", "ts": "2026-11-01T12:00:00Z", "hook": "judge-pass", "judge_pass": {"pool": 1}})
+                cands.append({"name": f"f{r}", "score": 10 - r, "share": share, "rank": r, "matched": 3 - min(r, 3), "tier": 0,
+                              "prov": "agent", "age_days": 5, "echo": 0.0, "delivered": delivered, "p": p})
+                pj = rng.choice((0.2, 0.6))
+                if delivered and rng.random() < pj:
+                    entries.append({"id": f"j{bid}f{r}", "ts": T_PASS, "hook": "judge",
+                                    "judge": {"block": bid, "fact": f"f{r}", "relevant": "no" if noise else "yes",
+                                              "novel": "yes" if useful else "no", "confused": "no", "p": pj, "model": "m", "prompt": "p"}})
+            entries.append({"id": bid, "ts": T_MOMENT, "hook": "prompt", "session": f"s{s}", "cands": cands,
+                            "transcript_path": "/t/" + bid, "transcript": 10})
+    entries.append({"id": "pass1", "ts": T_PASS, "hook": "judge-pass", "judge_pass": {"pool": 1, "waiting": 0, "prompt": "p"}})
     return entries, truth
 
 
-def true_value(entries, truth, policy):
+def true_value(entries, truth, policy, supported_only=False):
     moments = [e for e in entries if e.get("hook") == "prompt"]
     u = n = 0.0
     for e in moments:
         m = {"id": e["id"], "session": e["session"], "hook": "prompt", "cands": e["cands"]}
-        for name in policy(m):
-            pu, pn = truth[(e["id"], name)]
-            u += pu
-            n += pn
+        for c in e["cands"]:
+            pi = policy(m, c)
+            if supported_only and not c["p"] > 0:
+                continue
+            pu, pn = truth[(e["id"], c["name"])]
+            u += pi * pu
+            n += pi * pn
     return u / len(moments), n / len(moments)
 
 
-class Offline(unittest.TestCase):
-    def test_estimates_find_the_truth(self):
-        entries, truth = world()
-        moments, cover = off.moments_of(entries)
-        self.assertEqual(len(moments), 1200)
-        pols = {"logged": off.logged, "top2": off.top_k(2), "top3": off.top_k(3)}
-        rep = off.evaluate(moments, pols, n=200)
-        for name in ("top2", "top3"):
-            tu, tn = true_value(entries, truth, pols[name])
-            r = rep[name]
-            # top2's lines are always delivered: full support, ips is unbiased.
-            # top3's third line has p 0.5: still supported, weighted by 2.
-            self.assertEqual(r["point"]["support"], 1.0)
-            for est in ("ips", "snips", "dr"):
-                lo, hi = r["ci"][est + "_useful"]
-                self.assertTrue(lo <= tu <= hi, f"{name} {est} useful {r['ci'][est + '_useful']} misses {tu:.3f}")
-                lo, hi = r["ci"][est + "_noise"]
-                self.assertTrue(lo <= tn <= hi, f"{name} {est} noise {r['ci'][est + '_noise']} misses {tn:.3f}")
-        # Without the weights the third line would count at half its value:
-        # the unweighted mean of the labels is off the truth.
-        tu, _ = true_value(entries, truth, pols["top3"])
-        naive = 0.0
-        for e in entries:
-            if e.get("hook") == "prompt":
-                for c in e["cands"]:
-                    if c["name"] in ("f0", "f1", "f2"):
-                        lab = next((x["judge"] for x in entries if x.get("hook") == "judge" and x["judge"]["block"] == e["id"] and x["judge"]["fact"] == c["name"]), None)
-                        if lab:
-                            naive += (1.0 if lab["novel"] == "yes" else 0.0) / 0.4
-        naive /= 1200
-        self.assertGreater(abs(naive - tu), 0.05)
+def covers(ci, x):
+    return ci[0] <= x <= ci[1]
 
-    def test_support_and_the_model(self):
-        entries, truth = world()
-        moments, _ = off.moments_of(entries)
-        pols = {"logged": off.logged, "top5": off.top_k(5)}
-        r = off.evaluate(moments, pols, n=100)["top5"]
-        # Two of five lines are never delivered: support 0.6, and ips
-        # counts nothing for them, so it falls short of the truth; dr's model
-        # fills them in.
-        self.assertAlmostEqual(r["point"]["support"], 0.6, delta=0.02)
-        tu, _ = true_value(entries, truth, pols["top5"])
-        self.assertLess(r["ci"]["ips_useful"][1], tu)
-        self.assertLess(abs(r["point"]["dr_useful"] - tu), abs(r["point"]["ips_useful"] - tu))
+
+def near(ci, x):
+    """x within the interval widened to about three standard errors: the
+    tests check many intervals at once, and a 95% one misses 1 in 20."""
+    mid, half = (ci[0] + ci[1]) / 2, (ci[1] - ci[0]) / 2
+    return abs(x - mid) <= half * 1.6
+
+
+class Estimates(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.entries, cls.truth = world(sessions=100)
+        cls.moments, cls.info = off.moments_of(cls.entries)
+        cls.pols = {"logged": off.logged, "share": off.logged_where(lambda c: c["share"] >= 0.7), "top2": off.top_k(2),
+                    "top3": off.top_k(3), "top5": off.top_k(5)}
+        cls.rep = off.evaluate(cls.moments, cls.pols, n=200)
+
+    def test_supported_policies_find_the_truth(self):
+        self.assertEqual(len(self.moments), 2000)
+        # The logging policy (p 0.5 on the third line) and the policies over
+        # supported lines: every estimator covers the truth.
+        for name in ("logged", "share", "top2", "top3"):
+            tu, tn = true_value(self.entries, self.truth, self.pols[name])
+            r = self.rep[name]
+            self.assertEqual(r["point"]["support"], 1.0, name)
+            for est in ("ips", "snips", "dr"):
+                self.assertTrue(near(r["ci"][est + "_u"], tu), f"{name} {est} useful {r['ci'][est + '_u']} misses {tu:.3f}")
+                self.assertTrue(near(r["ci"][est + "_n"], tn), f"{name} {est} noise {r['ci'][est + '_n']} misses {tn:.3f}")
+
+    def test_unsupported_lines(self):
+        # top5's last two lines are never delivered: support 0.6. ips counts
+        # nothing for them and falls short; snips and dr_sup are the value of
+        # the supported lines; dr adds its model's guess for the rest, which
+        # rests on no label (so the rule reads no verdict below 0.8).
+        r = self.rep["top5"]
+        self.assertAlmostEqual(r["point"]["support"], 0.6, places=6)
+        tu, _ = true_value(self.entries, self.truth, self.pols["top5"])
+        su, _ = true_value(self.entries, self.truth, self.pols["top5"], supported_only=True)
+        self.assertLess(r["ci"]["ips_u"][1], tu)
+        self.assertTrue(near(r["ci"]["snips_u"], su), (r["ci"]["snips_u"], su))
+        self.assertTrue(near(r["ci"]["dr_sup_u"], su), (r["ci"]["dr_sup_u"], su))
+        self.assertGreater(r["point"]["dr_u"], r["point"]["dr_sup_u"])
         self.assertEqual(r["verdict"], "too little support")
 
-    def test_the_rule(self):
-        entries, _ = world(sessions=10, per=5)
-        moments, _ = off.moments_of(entries)
-        r = off.evaluate(moments, {"logged": off.logged, "top3": off.top_k(3)}, n=50)
-        self.assertEqual(r["top3"]["verdict"], "too few labels")
-        self.assertEqual(r["logged"]["verdict"], "base")
+    def test_the_weights_matter(self):
+        # Without the judge's p or the delivery p in the weights the
+        # estimate misses the truth.
+        tu, _ = true_value(self.entries, self.truth, self.pols["top3"])
+        real = off.weight
+        try:
+            off.weight = lambda c: 1.0 if c.get("label") and c.get("delivered") else 0.0
+            r = off.evaluate(self.moments, {"logged": off.logged, "top3": self.pols["top3"]}, n=50)["top3"]
+        finally:
+            off.weight = real
+        self.assertFalse(covers(r["ci"]["ips_u"], tu))
 
-    def test_cli(self):
-        entries, _ = world(sessions=5, per=4)
-        with tempfile.TemporaryDirectory() as d:
-            log = os.path.join(d, "2026-11-01.jsonl")
-            with open(log, "w") as fh:
-                fh.writelines(json.dumps(e) + "\n" for e in entries)
-            out = os.path.join(d, "o.json")
-            r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "offline.py"), "--log", d, "--out", out, "--policy", "top1"], capture_output=True, text=True)
-            self.assertEqual(r.returncode, 0, r.stderr)
-            with open(out) as fh:
-                rep = json.load(fh)
-            self.assertEqual(sorted(rep["policies"]), ["logged", "top1"])
-            self.assertEqual(rep["moments"], 20)
+
+class Population(unittest.TestCase):
+    def test_window(self):
+        entries, _ = world(sessions=2, per=2)
+        moment = next(e for e in entries if e.get("hook") == "prompt")
+        early = dict(moment, id="early", ts="2026-10-29T10:00:00Z")  # more than 2 days before the pass
+        late = dict(moment, id="late", ts="2026-11-01T11:45:00Z")  # less than 30 minutes before it
+        bare = dict(moment, id="bare", transcript_path="")
+        after = dict(moment, id="after", ts="2026-11-02T10:00:00Z")  # in a pass that left lines waiting
+        waiting = {"id": "pass2", "ts": "2026-11-02T12:00:00Z", "hook": "judge-pass", "judge_pass": {"pool": 1, "waiting": 3, "prompt": "p"}}
+        unread = {"id": "pass0", "ts": "2026-11-01T11:59:00Z", "hook": "judge-pass", "judge_pass": {"pool": 1, "waiting": 0, "prompt": "p", "unread": [moment["id"] + "/f0"]}}
+        moments, info = off.moments_of(entries + [early, late, bare, after, waiting, unread])
+        ids = {m["id"] for m in moments}
+        self.assertFalse(ids & {"early", "late", "bare", "after"}, ids)
+        self.assertEqual(info["left_out"]["no transcript"], 1)
+        got = next(m for m in moments if m["id"] == moment["id"])
+        self.assertNotIn("f0", [c["name"] for c in got["cands"]])
+
+    def test_cross_fitting(self):
+        # Sessions of one half hold only useful labels, the other only
+        # useless ones: each session's lines are predicted from the other half.
+        moments = []
+        for s in range(4):
+            useful = s % 2 == 0
+            cands = [{"name": "f0", "share": 1.0, "matched": 3, "prov": "agent", "delivered": True, "p": 1.0,
+                      "label": {"relevant": "yes", "novel": "yes" if useful else "no", "p": 1.0}}]
+            moments.append({"id": f"b{s}", "session": f"s{s}", "hook": "prompt", "cands": cands})
+        model = off.cross_fit(moments, [m["session"] for m in moments])
+        self.assertLess(model(moments[0], moments[0]["cands"][0])[0], 0.5)
+        self.assertGreater(model(moments[1], moments[1]["cands"][0])[0], 0.5)
 
 
 class Rules(unittest.TestCase):
+    def test_verdicts(self):
+        point = {"support": 1.0}
+        diff = {"dr_sup_net": 0.1}
+        dci = {"dr_net": [0.05, 0.2], "ips_net": [0.0, 0.2], "snips_net": [0.0, 0.2]}
+        self.assertEqual(off.verdict("c", "logged", point, diff, dci, (400, 40)), "promote to a live test")
+        self.assertEqual(off.verdict("c", "logged", point, diff, dci, (400, 20)), "too few labels")
+        self.assertEqual(off.verdict("c", "logged", point, diff, dci, (200, 40)), "too few labels")
+        self.assertEqual(off.verdict("c", "logged", {"support": 0.7}, diff, dci, (400, 40)), "too little support")
+        self.assertTrue(off.verdict("c", "logged", point, {"dr_sup_net": 0.5}, dci, (400, 40)).startswith("flagged"))
+        self.assertEqual(off.verdict("c", "logged", point, diff, dict(dci, dr_net=[-0.01, 0.2]), (400, 40)), "no")
+        self.assertEqual(off.verdict("logged", "logged", point, diff, dci, (0, 0)), "base")
+
+    def test_label_sessions_are_the_candidates(self):
+        entries, _ = world(sessions=8, per=3)
+        moments, _ = off.moments_of(entries)
+        only_s0 = lambda m, c: 1.0 if m["session"] == "s0" and c["name"] == "f0" else 0.0
+        r = off.evaluate(moments, {"logged": off.logged, "s0": only_s0}, n=20)["s0"]
+        self.assertEqual(r["label_sessions"], 1)
+
     def test_one_judge(self):
         entries, _ = world(sessions=4, per=3)
-        for e in entries:
-            if e.get("hook") == "judge":
-                e["judge"].update(model="m1", prompt="p1")
         first = next(e for e in entries if e.get("hook") == "judge")
         first["judge"]["model"] = "m2"
         with tempfile.TemporaryDirectory() as d:
-            log = os.path.join(d, "2026-11-01.jsonl")
-            with open(log, "w") as fh:
+            with open(os.path.join(d, "2026-11-01.jsonl"), "w") as fh:
                 fh.writelines(json.dumps(e) + "\n" for e in entries)
             out = os.path.join(d, "o.json")
-            r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "offline.py"), "--log", d, "--out", out], capture_output=True, text=True)
+            r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "offline.py"), "--log", d, "--out", out, "--boot", "20"], capture_output=True, text=True)
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("more than one judge", r.stderr)
-            r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "offline.py"), "--log", d, "--out", out, "--judge", "m1 p1"], capture_output=True, text=True)
+            r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "offline.py"), "--log", d, "--out", out, "--boot", "20", "--judge", "m p", "--policy", "top1"], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
             with open(out) as fh:
                 rep = json.load(fh)
             n = sum(1 for e in entries if e.get("hook") == "judge")
             self.assertEqual(rep["coverage"]["labels"], n - 1)
-
-    def test_disagreement_flags(self):
-        point = {"support": 1.0, "dr_useful": 0.9, "dr_noise": 0.1}
-        dci = {"dr_useful": [0.1, 0.2], "dr_noise": [-0.2, -0.1]}
-        ok = {"ips_useful": [0.8, 1.0], "snips_useful": [0.8, 1.0], "ips_noise": [0.0, 0.2], "snips_noise": [0.0, 0.2]}
-        self.assertEqual(off.verdict("c", "logged", point, dci, 400, 40, ok), "promote to a live test")
-        bad = dict(ok, ips_useful=[0.2, 0.4])
-        self.assertTrue(off.verdict("c", "logged", point, dci, 400, 40, bad).startswith("flagged"))
-        self.assertEqual(off.verdict("c", "logged", dict(point, support=0.7), dci, 400, 40, ok), "too little support")
-        self.assertEqual(off.verdict("c", "logged", point, dict(dci, dr_noise=[-0.1, 0.05]), 400, 40, ok), "no")
+            self.assertEqual(sorted(rep["policies"]), ["logged", "top1"])
 
 
 if __name__ == "__main__":

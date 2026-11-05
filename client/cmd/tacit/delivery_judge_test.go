@@ -218,7 +218,7 @@ func TestJudgeDrawsOnceAndRedactsFirst(t *testing.T) {
 		t.Fatalf("sent without redaction: %d %q", n, f2.sent)
 	}
 	_, passes := judgeEntries(t, f2.state)
-	if len(passes) != 1 || passes[0].Unreadable != 3 {
+	if len(passes) != 1 || passes[0].Unreadable != 3 || len(passes[0].Unread) != 3 || passes[0].Prompt != judgePromptID || passes[0].Model == "" {
 		t.Fatalf("pass: %+v", passes)
 	}
 }
@@ -323,6 +323,13 @@ func TestJudgeTriesAndLost(t *testing.T) {
 	var lost []string
 	for _, p := range passes {
 		lost = append(lost, p.Lost...)
+	}
+	var failed []string
+	for _, p := range passes {
+		failed = append(failed, p.Failed...)
+	}
+	if len(failed) != 2 {
+		t.Fatalf("failed %v", failed)
 	}
 	if len(st.Pending) != 0 || len(lost) != 2 || calls == 0 {
 		t.Fatalf("pending %+v, lost %v", st.Pending, lost)
