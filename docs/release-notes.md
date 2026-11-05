@@ -7,6 +7,6 @@ This release lets a day's delivery log hold a full working day, and keeps the ju
 - **A label the log cannot take.** It counts against the judge's daily cap and as a failed try, and waits for a later pass. After three tries it is given up and named in the pass's lost and failed lines.
 - **A lighter pool read.** The judge's pool decodes only prompt and push moments and keeps only their delivered lines, so a larger day costs it little.
 
-Upgrading: install the new binary. No index, store format or protocol change; the server needs no deploy.
+Upgrading: install the new binary on every machine whose hooks log deliveries, and on the one that runs the dreamer's judge (each machine keeps its own log). No index, store format or protocol change; the server needs no deploy.
 
 Builds for Linux, macOS and Windows on amd64 and arm64 include the CLI, the browser app and a compatible scrump redactor. Git 2.29+ is required. [Setup and platform validation](https://github.com/agent-sh/tacit/blob/main/docs/portable.md).
