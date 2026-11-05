@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/search"
+	"github.com/agent-sh/tacit/client/internal/store"
 )
 
 // Hold-outs (SPEC.md, "Hold-outs"): a small random share of the prompt
@@ -78,37 +80,38 @@ func appendNames(path string, names []string) {
 	fmt.Fprint(f, strings.Join(names, "\n")+"\n")
 }
 
-// withoutDenied is hits less the facts the session is denied, which every
-// hook leaves out (logged dropped "holdout"), and with a denied fact's name
-// taken out of every kept line's conflict mark, which would show it. A
-// session that reads its denial keeps the file fresh, so the cleanup of old
-// sessions does not take it while the session lives (rememberNames).
-func withoutDenied(id string, hits []search.Hit) []search.Hit {
+// deniedTo is the session's denied facts (its view hides them): read
+// from its denial file, which the read refreshes so the cleanup of old
+// sessions keeps it while the session lives (rememberNames).
+func deniedTo(id string) map[string]bool {
 	path := denyFile(id)
 	deny := readNames(path)
-	if len(deny) == 0 {
-		return hits
+	if len(deny) > 0 {
+		now := time.Now()
+		os.Chtimes(path, now, now)
 	}
-	now := time.Now()
-	os.Chtimes(path, now, now)
-	out := hits[:0:0]
-	for _, h := range hits {
-		if deny[h.Name] {
-			continue
-		}
-		if len(h.Conflicts) > 0 {
-			var keep []string
-			for _, c := range h.Conflicts {
-				if !deny[c] {
-					keep = append(keep, c)
-				}
-			}
-			h.Conflicts = keep
-		}
-		out = append(out, h)
+	return deny
+}
+
+// openSessionIndex is openHookIndex as the session's view of the store:
+// the facts it is denied do not exist in it (search.Index.Hide). Every
+// hook block, pointer, count and cross-reference, and the search and tree
+// tools, read the store through it.
+func openSessionIndex(ctx context.Context, s *store.Store, session string) (*search.Index, error) {
+	ix, err := openHookIndex(ctx, s)
+	if err == nil {
+		ix.Hide(deniedTo(session))
 	}
-	logDropped(hits, out, "holdout")
-	return out
+	return ix, err
+}
+
+// openExactSessionIndex is openIndex as the session's view.
+func openExactSessionIndex(ctx context.Context, s *store.Store, session string) (*search.Index, error) {
+	ix, err := openIndex(ctx, s)
+	if err == nil {
+		ix.Hide(deniedTo(session))
+	}
+	return ix, err
 }
 
 // holdoutKinds are the fact types the preregistered analysis reads (eval/
@@ -126,53 +129,66 @@ func holdoutEligible(h search.Hit) bool {
 
 // holdOut is a prompt block's hits with one agent's note withheld and
 // denied for the session when the draw says so. Eligible are the agent's
-// notes the session was never given (their arm is not decided yet) and
-// that no other line of the block names (a "contradicted by" mark would
-// show it). It logs the share, the withheld fact (dropped "holdout") and
-// each line's probability of being shown, 1 - q/k for k eligible notes (a
+// notes of an analysed kind (holdoutEligible) that the session was never
+// given (its given set, and its delivered set for a session older than the
+// given set) and that no other line of the block names (a "contradicted
+// by" mark would show it), counted by name: a store fact and a local note
+// of one name are one note, withheld together. It logs the share
+// (holdout_q), the eligible notes' count (holdout_k), each eligible line
+// (eligible), the withheld fact (held_out, dropped "holdout"), and each
+// line's probability of being shown, 1 - q/k for k eligible notes (a
 // withheld line's probability of being withheld is 1 - p), 1 for any other
-// line; and p_nothing, q when the block's one line is its one eligible note.
+// line; and p_nothing, q when the block's lines are all its one eligible
+// note.
 func holdOut(id string, hits []search.Hit) []search.Hit {
 	q := deliveryHoldout()
 	if dlog == nil || q <= 0 || id == "" {
 		return hits
 	}
 	given := readNames(givenFile(id))
+	for n := range delivered(id) {
+		given[n] = true
+	}
 	named := map[string]bool{}
 	for _, h := range hits {
 		for _, c := range h.Conflicts {
 			named[c] = true
 		}
 	}
-	var eligible []int
-	for i, h := range hits {
-		if holdoutEligible(h) && !given[h.Name] && !named[h.Name] {
-			eligible = append(eligible, i)
+	var names []string
+	seen := map[string]bool{}
+	for _, h := range hits {
+		if holdoutEligible(h) && !given[h.Name] && !named[h.Name] && !seen[h.Name] {
+			seen[h.Name] = true
+			names = append(names, h.Name)
 		}
 	}
-	if len(eligible) == 0 {
+	if len(names) == 0 {
 		return hits
 	}
-	k := float64(len(eligible))
-	dlog.HoldoutQ = q
+	k := float64(len(names))
+	dlog.HoldoutQ, dlog.HoldoutK = q, len(names)
 	dlog.propensity = map[string]float64{}
-	for _, i := range eligible {
-		dlog.propensity[hits[i].Path] = 1 - q/k
+	only := true
+	for _, h := range hits {
+		if seen[h.Name] {
+			dlog.propensity[h.Path] = 1 - q/k
+		}
+		only = only && h.Name == names[0]
 	}
-	if len(hits) == 1 {
+	if len(names) == 1 && only {
 		dlog.pNothing = &q
 	}
-	coin, pick := holdoutDraw(len(eligible))
-	if coin >= q || pick < 0 || pick >= len(eligible) {
+	coin, pick := holdoutDraw(len(names))
+	if coin >= q || pick < 0 || pick >= len(names) {
 		return hits
 	}
+	dlog.HeldOut = names[pick]
 	out := make([]search.Hit, 0, len(hits)-1)
-	for i, h := range hits {
-		if i == eligible[pick] {
-			dlog.HeldOut = h.Name
-			continue
+	for _, h := range hits {
+		if h.Name != dlog.HeldOut {
+			out = append(out, h)
 		}
-		out = append(out, h)
 	}
 	appendNames(denyFile(id), []string{dlog.HeldOut})
 	logDropped(hits, out, "holdout")

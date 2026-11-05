@@ -151,6 +151,17 @@ var sessionEnv = map[string][]string{
 	"pi":     {"PI_SESSION_ID"},
 }
 
+// callerSession is the session a command runs in, from any harness's
+// environment (harnessSession), or "".
+func callerSession() string {
+	for _, h := range []string{"claude", "codex", "pi"} {
+		if v := harnessSession(h); v != "" {
+			return v
+		}
+	}
+	return harnessSession("")
+}
+
 // harnessSession is the session a note of harness is written in, from the
 // environment its harness gives it, or "" when it gives none (code supplies
 // it only where it reads it reliably). An id that could name a path is not

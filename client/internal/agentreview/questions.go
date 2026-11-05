@@ -296,6 +296,9 @@ type Situation struct {
 	Offset                       int64
 	Repos                        []string
 	Cwd, Prompt                  string
+	// Hidden is the session's view of the store (a hold-out's denial): a
+	// note or fact of a name it hides is never asked about there.
+	Hidden func(name string) bool
 }
 
 // Relevant reports a question that belongs in the session, by code: the
@@ -430,6 +433,9 @@ func (q *Queue) Pick(s Situation, now time.Time) *Item {
 	for i := range q.Items {
 		it := &q.Items[i]
 		if it.State != StateOpen || it.asked(s.Harness, s.Session) || len(it.Asks) >= MaxAsks || !it.Relevant(s) {
+			continue
+		}
+		if s.Hidden != nil && (s.Hidden(it.Name) || it.Fact != "" && s.Hidden(it.Fact)) {
 			continue
 		}
 		if best == nil || it.Queued > best.Queued {

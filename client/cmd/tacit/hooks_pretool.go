@@ -164,7 +164,7 @@ func preTool(s *store.Store, in hookInput) {
 	if !areas && !wsCommand && (!inRepo || (len(rel) == 0 && command == "")) {
 		return
 	}
-	ix, err := openHookIndex(ctx, s)
+	ix, err := openSessionIndex(ctx, s, in.SessionID)
 	if err != nil {
 		return
 	}
@@ -197,7 +197,7 @@ func preTool(s *store.Store, in hookInput) {
 	}
 	kept := withoutClaims(hits)
 	logDropped(hits, kept, "withheld")
-	hits = withoutDenied(in.SessionID, kept)
+	hits = kept
 	if ctx.Err() != nil || (len(hits) == 0 && len(pushed) == 0) {
 		return
 	}

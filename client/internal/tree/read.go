@@ -39,6 +39,10 @@ type ReadOptions struct {
 	Local string
 	// Session is what the tool may read (Session.Reads).
 	Session
+	// Hidden is the names of facts that do not exist for the session (a
+	// hold-out's denial, SPEC.md "Hold-outs"): no index line or overview
+	// line that names one is shown.
+	Hidden map[string]bool
 	// named is the scope the caller asked for by name (Named), set by Read;
 	// also the folder a suppressed one asked for points at.
 	named, also string
@@ -182,6 +186,34 @@ func (o ReadOptions) suppressedBy(p string) string {
 
 // filter drops the folder lines of content for folders out of scope and
 // returns the in-scope children it lists.
+// withoutHidden is text less every line that names a hidden fact: as a
+// word of its own, so a longer name that holds it stays.
+func (o ReadOptions) withoutHidden(text string) string {
+	if len(o.Hidden) == 0 {
+		return text
+	}
+	var out []string
+	for _, l := range strings.Split(text, "\n") {
+		if !namesHidden(l, o.Hidden) {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+func namesHidden(line string, hidden map[string]bool) bool {
+	for _, w := range nameWord.FindAllString(line, -1) {
+		if hidden[w] {
+			return true
+		}
+	}
+	return false
+}
+
+// nameWord is a run that can be a fact name: lowercase letters, digits and
+// hyphens.
+var nameWord = regexp.MustCompile(`[a-z0-9][a-z0-9-]*`)
+
 func (o ReadOptions) filter(p, content string) (string, []string) {
 	var out []string
 	var kids []string
@@ -206,7 +238,7 @@ func (o ReadOptions) filter(p, content string) (string, []string) {
 		}
 		out = append(out, l)
 	}
-	s := strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n"
+	s := o.withoutHidden(strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n")
 	if hidden > 0 {
 		s += fmt.Sprintf("\n(%d %s outside this session's scope not shown: another repository's or machine's; name one as the path to read it.)\n", hidden, plural(hidden, "folder", "folders"))
 	}
@@ -236,7 +268,7 @@ func Read(o ReadOptions, p string, depth int) (string, error) {
 	if w := o.suppressedBy(p); w != "" && w != p {
 		o.also = Named(w)
 		fmt.Fprintf(&b, "%s is suppressed by %s: its facts move there. Showing %s first, then what is left in %s.\n\n", p, w, w, p)
-		out, err := Read(ReadOptions{Store: o.Store, Local: o.Local, Session: o.Session}, w, depth)
+		out, err := Read(ReadOptions{Store: o.Store, Local: o.Local, Session: o.Session, Hidden: o.Hidden}, w, depth)
 		if err == nil {
 			b.WriteString(out)
 		}
@@ -302,6 +334,7 @@ func Read(o ReadOptions, p string, depth int) (string, error) {
 			if _, body, ok := strings.Cut(content, "\n---\n"); ok {
 				content = strings.TrimLeft(body, "\r\n")
 			}
+			content = o.withoutHidden(content)
 			block := fmt.Sprintf("=== overview of %s%s: %s/%s ===\n%s\n", p, src.label, p, OverviewFile, strings.TrimRight(content, "\n")+"\n")
 			if b.Len()+len(block) > maxOutput {
 				fmt.Fprintf(&b, "... the overview is cut: it would pass %d KB.\n", maxOutput>>10)

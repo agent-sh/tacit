@@ -193,7 +193,6 @@ func summaryStep(ctx context.Context, ix *search.Index, in hookInput, sit search
 	var out []search.Hit
 	kept := withoutClaims(hits)
 	logDropped(hits, kept, "withheld")
-	kept = withoutDenied(in.SessionID, kept)
 	for _, h := range kept {
 		if !seen[h.Name] {
 			seen[h.Name] = true
@@ -546,6 +545,8 @@ func withdrawnLines(ctx context.Context, ix *search.Index, s *store.Store, names
 		h := gone[n]
 		why := "retired or replaced"
 		switch f := factAt(s, h.Path); {
+		case f != nil && f.Meta.SupersededBy != "" && ix.Hidden(f.Meta.SupersededBy):
+			why = "replaced" // its successor does not exist in the session's view
 		case f != nil && f.Meta.SupersededBy != "":
 			why = "replaced by " + f.Meta.SupersededBy
 		case f != nil && f.Meta.Retired != "":

@@ -206,7 +206,7 @@ func runHook(args []string) int {
 			_ = s.Sync(sctx)
 			scancel()
 		}
-		ix, err := openHookIndex(ctx, s)
+		ix, err := openSessionIndex(ctx, s, in.SessionID)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "tacit hook:", err)
 			return 0
@@ -223,7 +223,7 @@ func runHook(args []string) int {
 		}
 		kept := withoutClaims(hits)
 		logDropped(hits, kept, "withheld")
-		hits = withoutDenied(in.SessionID, kept)
+		hits = kept
 		mcp := slices.Contains(args[1:], "--mcp")
 		if restart != restartFresh {
 			fmt.Print(restartBlock(ctx, ix, s, in, sit, recs, hits, restart, mcp))
@@ -253,7 +253,7 @@ func runHook(args []string) int {
 		// not read yet: the summary's own facts (pendingSummary), whatever
 		// the prompt ("continue" among them).
 		if _, err := os.Stat(pendingFile(in.SessionID)); err == nil {
-			if ix, err := openHookIndex(ctx, s); err == nil {
+			if ix, err := openSessionIndex(ctx, s, in.SessionID); err == nil {
 				recs := hookRecords(ctx, ix)
 				psit, _ := withWorkspace(withRootFolder(sit, recs, in.Cwd), in.Cwd)
 				fmt.Print(pendingSummary(ctx, ix, in, withOrgs(withRecordAliases(psit, recs), recs), recs))
@@ -263,7 +263,7 @@ func runHook(args []string) int {
 		if !promptWorthy(p) {
 			return 0
 		}
-		ix, err := openHookIndex(ctx, s)
+		ix, err := openSessionIndex(ctx, s, in.SessionID)
 		if err != nil {
 			return 0
 		}
@@ -292,7 +292,7 @@ func runHook(args []string) int {
 		}
 		kept := withoutClaims(strong)
 		logDropped(strong, kept, "withheld")
-		strong = holdOut(in.SessionID, withoutDenied(in.SessionID, kept))
+		strong = holdOut(in.SessionID, kept)
 		remember(in.SessionID, strong)
 		if out := hookBlock(strong, "# tacit: facts matching this request", titlesNote); out != "" {
 			fmt.Print(out + markAsk(strong))
@@ -827,14 +827,12 @@ func remember(id string, hits []search.Hit) {
 	rememberNames(id, names)
 }
 
-// sessionGroup is the session a file of the sessions directory belongs to.
+// sessionGroup is the session a file of the sessions directory belongs to:
+// its name up to the first dot (a session id has none; its side files are
+// <id>.given, <id>.holdout, <id>.compact and the like).
 func sessionGroup(name string) string {
-	for _, ext := range []string{".holdout", ".given"} {
-		if g, ok := strings.CutSuffix(name, ext); ok {
-			return g
-		}
-	}
-	return name
+	g, _, _ := strings.Cut(name, ".")
+	return g
 }
 
 // rememberNames adds lines to the session's delivered set: fact names, and
@@ -847,7 +845,15 @@ func rememberNames(id string, names []string) {
 	os.MkdirAll(filepath.Dir(p), 0o700)
 	// Every fact a hook gives is in the session's given set too, which no
 	// clear or compaction drops: a hold-out decides a fact's arm once.
-	appendNames(givenFile(id), names)
+	given := readNames(givenFile(id))
+	var fresh []string
+	for _, n := range names {
+		if !given[n] {
+			given[n] = true
+			fresh = append(fresh, n)
+		}
+	}
+	appendNames(givenFile(id), fresh)
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
@@ -920,7 +926,7 @@ func runSearch(args []string) int {
 			repoAliases = hookRepoAliases(cwd)
 		}
 	}
-	ix, err := openIndex(ctx, s)
+	ix, err := openExactSessionIndex(ctx, s, callerSession())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "search:", err)
 		return 2

@@ -47,7 +47,7 @@ func runTree(args []string) int {
 		fmt.Fprintln(os.Stderr, "tree:", errTreeArgs)
 		return 2
 	}
-	out, err := treeView(s, fs.Arg(0), d, *repo, *host)
+	out, err := treeView(s, fs.Arg(0), d, *repo, *host, callerSession())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "tree:", err)
 		return 1
@@ -62,9 +62,12 @@ func runTree(args []string) int {
 // type the answer's scopes hold (scopeCounts, from the search index; left
 // out when the index cannot be opened), then the folder indexes, each fact
 // line saying whose it is (treeWhose).
-func treeView(s *store.Store, p string, depth int, repo, host string) (string, error) {
+//
+// It is the asking session's view: a fact the session is denied does not
+// exist in it (SPEC.md, Hold-outs).
+func treeView(s *store.Store, p string, depth int, repo, host, session string) (string, error) {
 	cwd, _ := os.Getwd()
-	ro := tree.ReadOptions{Store: s.Dir, Session: readSession(storeRecords(s.Dir), cwd, repo, host)}
+	ro := tree.ReadOptions{Store: s.Dir, Session: readSession(storeRecords(s.Dir), cwd, repo, host), Hidden: deniedTo(session)}
 	if overlay.LayerOn() && overlay.Outside(overlay.Dir(), s.Dir) {
 		ro.Local = filepath.Join(overlay.Dir(), filepath.FromSlash(overlay.CuratedDir))
 	}
@@ -74,7 +77,7 @@ func treeView(s *store.Store, p string, depth int, repo, host string) (string, e
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	ix, err := openHookIndex(ctx, s)
+	ix, err := openSessionIndex(ctx, s, session)
 	if err != nil {
 		return out, nil
 	}
@@ -153,7 +156,7 @@ var errTreeArgs = errors.New("depth must be between 0 and 8")
 
 // treeToolText answers the MCP tool: the view, or the error as text the agent
 // can act on.
-func treeToolText(s *store.Store, p string, depth *int) string {
+func treeToolText(s *store.Store, p string, depth *int, session string) string {
 	d := tree.DepthFor(p)
 	if depth != nil {
 		d = *depth
@@ -161,7 +164,7 @@ func treeToolText(s *store.Store, p string, depth *int) string {
 	if d < 0 || d > tree.MaxDepth {
 		return "error: " + errTreeArgs.Error()
 	}
-	out, err := treeView(s, p, d, "", store.ShortHost())
+	out, err := treeView(s, p, d, "", store.ShortHost(), session)
 	if err != nil {
 		return "error: " + err.Error()
 	}
@@ -169,7 +172,7 @@ func treeToolText(s *store.Store, p string, depth *int) string {
 }
 
 // addTreeTool registers tacit_tree on the store's MCP server.
-func addTreeTool(server *mcp.Server, s *store.Store) {
+func addTreeTool(server *mcp.Server, s *store.Store, harness string) {
 	type treeArgs struct {
 		Path  string `json:"path,omitempty" jsonschema:"store folder: empty for the root, or system, user, projects/<repo>, machines/<host>, derived/<repo>"`
 		Depth *int   `json:"depth,omitempty" jsonschema:"levels below the folder to include; default 2 for the store root and 3 for a folder, 0 for the folder alone"`
@@ -178,6 +181,6 @@ func addTreeTool(server *mcp.Server, s *store.Store) {
 		Name:        "tacit_tree",
 		Description: "What the store holds for this session, folder by folder: how many facts of each type its scopes hold, each folder's facts (name, type, one line) and its subfolders with counts. At depth 0 a project, area or topic folder also shows its overview, every line citing its facts. Another repository's or machine's folder only when named as the path. A scope's full list is tacit_search scope=<scope>; a fact in full, tacit_fact.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a treeArgs) (*mcp.CallToolResult, any, error) {
-		return text(treeToolText(s, a.Path, a.Depth)), nil, nil
+		return text(treeToolText(s, a.Path, a.Depth, harnessSession(harness))), nil, nil
 	})
 }

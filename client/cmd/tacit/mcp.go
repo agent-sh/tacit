@@ -66,7 +66,7 @@ func storeServer(s *store.Store, harness string) *mcp.Server {
 		opts = &mcp.ServerOptions{Instructions: mcpInstructions}
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "tacit", Version: "0.1.0"}, opts)
-	addTreeTool(server, s)
+	addTreeTool(server, s, harness)
 	addMarkTool(server)
 
 	type searchArgs struct {
@@ -87,7 +87,7 @@ func storeServer(s *store.Store, harness string) *mcp.Server {
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a searchArgs) (*mcp.CallToolResult, any, error) {
 		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
-		ix, err := openIndex(ctx, s)
+		ix, err := openExactSessionIndex(ctx, s, harnessSession(harness))
 		if err != nil {
 			return nil, nil, err
 		}

@@ -29,6 +29,9 @@ func (ix *Index) InVocabulary(ctx context.Context, terms []string) []string {
 // HasFact reports whether the store holds a fact of this name (not this
 // machine's overlay or local layer).
 func (ix *Index) HasFact(ctx context.Context, name string) bool {
+	if ix.hidden[name] {
+		return false
+	}
 	var one int
 	return ix.db.QueryRowContext(ctx, `SELECT 1 FROM facts WHERE name = ? AND local = 0 LIMIT 1`, name).Scan(&one) == nil
 }

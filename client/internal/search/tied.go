@@ -164,7 +164,7 @@ func (ix *Index) scan(ctx context.Context, q string, named map[string]any) ([]Hi
 		}
 		out = append(out, h)
 	}
-	return out, rows.Err()
+	return ix.visible(out), rows.Err()
 }
 
 // List returns the live facts in scopes, of type typ when it is set, owner
@@ -213,7 +213,41 @@ func (ix *Index) Counts(ctx context.Context, scopes []string) (map[string]map[st
 		}
 		out[scope][typ] = n
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	// A hidden fact is not counted: a count would point at it.
+	if len(ix.hidden) > 0 {
+		var names []string
+		for n := range ix.hidden {
+			names = append(names, n)
+		}
+		nb, _ := json.Marshal(names)
+		hrows, err := ix.db.QueryContext(ctx, `SELECT scope, type, count(*) FROM facts
+			WHERE superseded = 0 AND inbox = 0 AND scope IN (SELECT value FROM json_each(?)) AND name IN (SELECT value FROM json_each(?)) GROUP BY scope, type`, string(b), string(nb))
+		if err != nil {
+			return nil, err
+		}
+		defer hrows.Close()
+		for hrows.Next() {
+			var scope, typ string
+			var n int
+			if err := hrows.Scan(&scope, &typ, &n); err != nil {
+				return nil, err
+			}
+			if out[scope] != nil {
+				if out[scope][typ] -= n; out[scope][typ] <= 0 {
+					delete(out[scope], typ)
+				}
+				if len(out[scope]) == 0 {
+					delete(out, scope)
+				}
+			}
+		}
+		return out, hrows.Err()
+	}
+	return out, nil
 }
 
 // Scopes returns every scope that holds a fact.

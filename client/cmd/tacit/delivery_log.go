@@ -89,6 +89,9 @@ type logEntry struct {
 	// (Hold-outs), HeldOut the note this block withheld.
 	HoldoutQ float64 `json:"holdout_q,omitempty"`
 	HeldOut  string  `json:"held_out,omitempty"`
+	// HoldoutK is how many eligible notes (by name) the draw chose among;
+	// each eligible line's candidate is marked eligible.
+	HoldoutK int `json:"holdout_k,omitempty"`
 	// PMark is the probability the block had of asking for a self-mark,
 	// MarkAsked whether it asked; Mark is a mark entry's marks.
 	PMark     *float64     `json:"p_mark,omitempty"`
@@ -148,6 +151,8 @@ type logCand struct {
 	// not say why).
 	Dropped   string `json:"dropped,omitempty"`
 	Delivered bool   `json:"delivered"`
+	// Eligible marks a line the block's hold-out draw could withhold.
+	Eligible bool `json:"eligible,omitempty"`
 	// P is the probability the policy had of showing it: 1 or 0 while the
 	// policy is deterministic.
 	P float64 `json:"p"`
@@ -429,7 +434,7 @@ func endLog(printed []search.Hit) {
 		// Under the hold-out draw a line was shown, or withheld, with the
 		// probability holdOut computed.
 		if p, ok := e.propensity[c.Path]; ok && (c.Delivered || c.Dropped == "holdout") {
-			c.P = p
+			c.P, c.Eligible = p, true
 		}
 	}
 	e.capCands()

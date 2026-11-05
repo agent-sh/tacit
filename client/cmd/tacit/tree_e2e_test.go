@@ -196,7 +196,7 @@ func TestFreshStoreCuratesIntoAnIndexedTree(t *testing.T) {
 	// The tree tool, for several folders and depths, from the index files.
 	view := func(p string, depth int) string {
 		t.Helper()
-		out, err := treeView(s, p, depth, "widget", host)
+		out, err := treeView(s, p, depth, "widget", host, "")
 		if err != nil {
 			t.Fatalf("tree %q %d: %v", p, depth, err)
 		}
@@ -231,14 +231,14 @@ func TestFreshStoreCuratesIntoAnIndexedTree(t *testing.T) {
 	}
 	// Another session's repository is not listed, but read when named;
 	// paths out of the store are refused.
-	if out, err := treeView(s, "", 3, "gadget", host); err != nil || strings.Contains(out, "widget-port") {
+	if out, err := treeView(s, "", 3, "gadget", host, ""); err != nil || strings.Contains(out, "widget-port") {
 		t.Errorf("another repository's folder was listed: %v\n%s", err, out)
 	}
-	if out, err := treeView(s, "projects/widget", 0, "gadget", host); err != nil || !strings.Contains(out, "`widget-port`") {
+	if out, err := treeView(s, "projects/widget", 0, "gadget", host, ""); err != nil || !strings.Contains(out, "`widget-port`") {
 		t.Errorf("a named repository's folder: %v\n%s", err, out)
 	}
 	for _, p := range []string{"../", "inbox", "/etc"} {
-		if out := treeToolText(s, p, nil); !strings.HasPrefix(out, "error: ") {
+		if out := treeToolText(s, p, nil, ""); !strings.HasPrefix(out, "error: ") {
 			t.Errorf("tacit_tree %q answered:\n%s", p, out)
 		}
 	}
@@ -246,14 +246,14 @@ func TestFreshStoreCuratesIntoAnIndexedTree(t *testing.T) {
 	// own indexes) from inside widget; a folder's default is 3; an explicit
 	// depth wins.
 	t.Chdir(filepath.Join(home, "projects", "widget"))
-	if out := treeToolText(s, "", nil); !strings.Contains(out, "`widget-port`") || len(heads(out)) != 6 {
+	if out := treeToolText(s, "", nil, ""); !strings.Contains(out, "`widget-port`") || len(heads(out)) != 6 {
 		t.Errorf("tacit_tree defaults:\n%s", out)
 	}
-	if out := treeToolText(s, "projects", nil); len(heads(out)) != 2 {
+	if out := treeToolText(s, "projects", nil, ""); len(heads(out)) != 2 {
 		t.Errorf("tacit_tree projects default:\n%s", out)
 	}
 	zero := 0
-	if out := treeToolText(s, "", &zero); len(heads(out)) != 1 {
+	if out := treeToolText(s, "", &zero, ""); len(heads(out)) != 1 {
 		t.Errorf("tacit_tree root depth 0:\n%s", out)
 	}
 }
