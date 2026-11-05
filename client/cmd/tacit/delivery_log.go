@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
@@ -86,7 +87,7 @@ type logEntry struct {
 	Omitted int `json:"omitted,omitempty"`
 	// PMark is the probability the block had of asking for a self-mark,
 	// MarkAsked whether it asked; Mark is a mark entry's marks.
-	PMark     float64      `json:"p_mark,omitempty"`
+	PMark     *float64     `json:"p_mark,omitempty"`
 	MarkAsked bool         `json:"mark_asked,omitempty"`
 	Mark      *logMarkStep `json:"mark,omitempty"`
 	// Nav is a nav entry's step through the store (no block: its
@@ -202,6 +203,10 @@ func beginLog(hook string, in hookInput, request string, repos []string, ix *sea
 		dlog.full = request // the echo filter runs on these only
 	}
 	dlog.ix, dlog.req = ix, request
+	if hook == "prompt" {
+		zero := 0.0
+		dlog.PMark = &zero // the probability of a self-mark ask (markAsk); 0 when none could be asked
+	}
 	dlog.ID = logID(dlog)
 }
 
@@ -209,12 +214,12 @@ func beginLog(hook string, in hookInput, request string, repos []string, ix *sea
 // 64 bits of a hash of its time, session, hook and its place among this
 // process's entries (a tool call's nav steps share a time).
 func logID(e *logEntry) string {
-	logSeq++
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d", e.TS, e.Session, e.Hook, os.Getpid(), logSeq)))
+	n := logSeq.Add(1) // the MCP server writes marks from calls run at once
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d", e.TS, e.Session, e.Hook, os.Getpid(), n)))
 	return hex.EncodeToString(sum[:8])
 }
 
-var logSeq int
+var logSeq atomic.Int64
 
 func transcriptSize(p string) int64 {
 	if p == "" {

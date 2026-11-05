@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/agent-sh/tacit/client/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"os"
 	"path/filepath"
@@ -727,19 +726,22 @@ func TestTitlesLeaveAnOwnersBlockWhole(t *testing.T) {
 	}
 }
 
-// A sampled prompt block asks for a self-mark (its probability logged
-// either way); the ask names the block, and tacit_mark records the marks
-// as an entry of the log. No ask without the MCP server or an agent's line.
+// A sampled prompt block asks for a self-mark (its probability logged on
+// every prompt entry, 0 where no ask could be made); the ask names the
+// block, and tacit_mark records the marks, only for a block that asked and
+// only names of the store's facts. No ask without the MCP server, for a
+// block of only the owner's lines, or at the rate 0.
 func TestSelfMarksAreSampledAndLogged(t *testing.T) {
-	_, cwd := repoFirstRig(t,
+	r, cwd := repoFirstRig(t,
 		fact.Meta{Name: "scheduler-shard-locks", Description: "The scheduler pool keeps one shard lock per tenant and a slot lock per job", Type: "design_decision", Scope: "projects/widget"},
 	)
 	state := filepath.Join(t.TempDir(), "state")
 	t.Setenv("TACIT_STATE_DIR", state)
 	t.Setenv("TACIT_DELIVERY_REPO_START", "off")
 	t.Setenv("TACIT_DELIVERY_PROMPT_ACTION", "off")
+	t.Setenv("TACIT_DELIVERY_MARK_RATE", "0.05")
 	draw := markDraw
-	t.Cleanup(func() { markDraw = draw })
+	t.Cleanup(func() { markDraw, hookMCP = draw, false })
 	prompt := "Fix the scheduler pool shard lock and slot lock race"
 	markDraw = func() float64 { return 0.99 }
 	if out := hookOut(t, promptPayload(cwd, "s1", prompt), "prompt", "--mcp"); strings.Contains(out, "tacit_mark") {
@@ -753,22 +755,47 @@ func TestSelfMarksAreSampledAndLogged(t *testing.T) {
 	if out := hookOut(t, promptPayload(cwd, "s3", prompt), "prompt"); strings.Contains(out, "tacit_mark") {
 		t.Fatalf("no MCP server: %s", out)
 	}
+	markDraw = func() float64 { return 0 }
+	t.Setenv("TACIT_DELIVERY_MARK_RATE", "0")
+	if out := hookOut(t, promptPayload(cwd, "s4", prompt), "prompt", "--mcp"); strings.Contains(out, "tacit_mark") {
+		t.Fatalf("rate 0: %s", out)
+	}
+	t.Setenv("TACIT_DELIVERY_MARK_RATE", "0.05")
+	pm := map[string]float64{}
 	var asked logEntry
 	for _, e := range readDeliveryLog(t, state) {
-		if e.Hook == "prompt" && e.Session == "s1" && (e.PMark != markRate || e.MarkAsked) {
-			t.Fatalf("not drawn, logged: %+v", e)
+		if e.Hook != "prompt" {
+			continue
 		}
-		if e.Hook == "prompt" && e.Session == "s2" {
+		if e.PMark == nil {
+			t.Fatalf("a prompt entry without p_mark: %+v", e)
+		}
+		pm[e.Session] = *e.PMark
+		if e.Session == "s2" {
 			asked = e
 		}
+		if e.Session != "s2" && e.MarkAsked {
+			t.Fatalf("asked unasked: %+v", e)
+		}
 	}
-	if !asked.MarkAsked || asked.PMark != markRate || !strings.Contains(out, asked.ID) {
+	if pm["s1"] != markRate || pm["s2"] != markRate || pm["s3"] != 0 || pm["s4"] != 0 || len(pm) != 4 {
+		t.Fatalf("p_mark: %v", pm)
+	}
+	if !asked.MarkAsked || !strings.Contains(out, asked.ID) {
 		t.Fatalf("asked: %+v", asked)
 	}
-	// The tool records the marks, slugs only, under the block's id.
+	// A block of only the owner's lines asks nothing.
+	beginLog("prompt", hookInput{SessionID: "s5"}, "commit", nil, nil)
+	hookMCP = true
+	if ask := markAsk([]search.Hit{{Name: "signoff", Path: "user/signoff.md", Ruling: true}}); ask != "" || *dlog.PMark != 0 {
+		t.Fatalf("owner only: %q", ask)
+	}
+	endLog(nil)
+	hookMCP = false
+	// The tool: a block that asked, names the store holds; else an error.
 	ctx := context.Background()
 	st, ct := mcp.NewInMemoryTransports()
-	ss, err := storeServer(&store.Store{Dir: t.TempDir()}, "claude").Connect(ctx, st, nil)
+	ss, err := storeServer(r.s, "claude").Connect(ctx, st, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -778,17 +805,39 @@ func TestSelfMarksAreSampledAndLogged(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cs.Close()
-	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "tacit_mark", Arguments: map[string]any{"block": asked.ID, "helped": []string{"scheduler-shard-locks", "Not A Slug"}}})
-	if err != nil || res.IsError {
-		t.Fatalf("tacit_mark: %v %+v", err, res)
+	call := func(args map[string]any) *mcp.CallToolResult {
+		t.Helper()
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "tacit_mark", Arguments: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
 	}
-	var mark *logMarkStep
+	if res := call(map[string]any{"block": asked.ID, "helped": []string{"scheduler-shard-locks", "no-such-fact", "Not A Slug"}}); res.IsError {
+		t.Fatalf("tacit_mark: %+v", res)
+	}
+	var s1 logEntry
 	for _, e := range readDeliveryLog(t, state) {
-		if e.Hook == "mark" {
-			mark = e.Mark
+		if e.Session == "s1" && e.Hook == "prompt" {
+			s1 = e
 		}
 	}
-	if mark == nil || mark.Block != asked.ID || strings.Join(mark.Helped, ",") != "scheduler-shard-locks" {
-		t.Fatalf("mark: %+v", mark)
+	if res := call(map[string]any{"block": s1.ID, "helped": []string{"scheduler-shard-locks"}}); !res.IsError {
+		t.Fatal("a mark for a block that did not ask was taken")
+	}
+	if res := call(map[string]any{"block": asked.ID, "helped": []string{"scheduler-shard-locks"}, "not_helped": []string{"scheduler-shard-locks"}}); !res.IsError {
+		t.Fatal("a mark with no name left was taken")
+	}
+	if res := call(map[string]any{"block": "not-an-id"}); !res.IsError {
+		t.Fatal("a bad id was taken")
+	}
+	var marks []*logMarkStep
+	for _, e := range readDeliveryLog(t, state) {
+		if e.Hook == "mark" {
+			marks = append(marks, e.Mark)
+		}
+	}
+	if len(marks) != 1 || marks[0].Block != asked.ID || strings.Join(marks[0].Helped, ",") != "scheduler-shard-locks" {
+		t.Fatalf("marks: %+v", marks)
 	}
 }
