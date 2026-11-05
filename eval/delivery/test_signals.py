@@ -58,6 +58,7 @@ class Signals(unittest.TestCase):
             os.makedirs(projects)
             fact(store, "projects/demo", "queue-retry-backoff", "Queue retries back off exponentially with jitter in the worker")
             fact(store, "projects/demo", "pool-lock-order", "Take the shard lock before the slot lock in the scheduler pool")
+            fact(store, "projects/demo", "spare-note", "The spare keys hang inside the server room door")
             fact(store, "projects/demo", "printer-floor", "The office printer sits on the third floor near the kitchen")
             fact(store, "projects/demo", "signoff-rule", "Every commit carries a signed-off-by trailer line", ruling=True)
             t = lambda m: f"2026-10-01T10:{m:02d}:00Z"
@@ -83,19 +84,21 @@ class Signals(unittest.TestCase):
                 fh.write(line(type="user", timestamp=t(14), userType="external", message={"role": "user", "content": "the office printer sits on the third floor near the kitchen"}))
             res = self.run_signals(d, [
                 {"id": "c1", "session": "s1", "ts": t(0), "event": "prompt", "origin": "typed", "commit": "HEAD",
-                 "delivered": ["queue-retry-backoff", "pool-lock-order", "printer-floor", "signoff-rule"],
-                 "labels": {"queue-retry-backoff": "R", "pool-lock-order": "R", "printer-floor": "N", "signoff-rule": "R"}},
-                {"id": "c2", "session": "s2", "ts": t(0), "event": "prompt", "origin": "headless", "commit": "HEAD", "delivered": ["printer-floor"], "labels": {"printer-floor": "N"}},
+                 "delivered": ["queue-retry-backoff", "pool-lock-order", "printer-floor", "signoff-rule", "spare-note"],
+                 "labels": {"queue-retry-backoff": "R", "pool-lock-order": "R", "printer-floor": "N", "signoff-rule": "R", "spare-note": "N"}},
+                {"id": "c2", "session": "s2", "ts": t(0), "event": "prompt", "origin": "headless", "commit": "HEAD", "delivered": ["printer-floor", "pool-lock-order"], "labels": {"printer-floor": "N", "pool-lock-order": "W"}},
                 {"id": "c4", "session": "s1", "ts": t(14), "event": "prompt", "origin": "typed", "commit": "HEAD", "delivered": []},
                 # The same block in a second label set: one row; a fact
                 # graded two ways there is left out.
-                {"id": "c5", "session": "s1", "ts": t(0), "event": "prompt", "origin": "typed", "commit": "HEAD",
-                 "delivered": ["queue-retry-backoff", "pool-lock-order"], "labels": {"queue-retry-backoff": "R", "pool-lock-order": "N"}},
+                {"id": "c1", "session": "s1", "ts": t(0), "event": "prompt", "origin": "typed", "commit": "HEAD",
+                 "delivered": ["queue-retry-backoff", "spare-note"], "labels": {"queue-retry-backoff": "R", "spare-note": "R"}},
                 {"id": "c3", "session": "s1", "ts": t(1), "event": "prompt", "sidechain": True, "commit": "HEAD", "labels": {"pool-lock-order": "W"}},
             ])
             by = {r["fact"]: r for r in res["rows"] if r["session"] == "s1"}
-            other = [r for r in res["rows"] if r["session"] == "s2"][0]
-            self.assertIsNone(other["owner_restated"], "a session of no owner case is not the owner's")
+            others = [r for r in res["rows"] if r["session"] == "s2"]
+            self.assertEqual(len(others), 2)
+            for other in others:
+                self.assertIsNone(other["owner_restated"], "a session of no owner case is not the owner's")
             self.assertTrue(by["queue-retry-backoff"]["carried_forward"])
             self.assertTrue(by["queue-retry-backoff"]["needed_again"], "opened after the drop")
 
@@ -106,7 +109,9 @@ class Signals(unittest.TestCase):
             self.assertTrue(p["window_ended_early"])
             self.assertTrue(p["owner_restated"])
             self.assertEqual(res["report"]["skipped"], {"sidechain": 1, "duplicate": 1, "graded two ways": 2})
-            self.assertNotIn("pool-lock-order", by, "graded two ways")
+            self.assertNotIn("spare-note", by, "graded two ways")
+            self.assertTrue(by["pool-lock-order"]["summary_kept"])
+            self.assertFalse(by["pool-lock-order"]["carried_forward"], "text at the moment itself is outside the window")
 
     def test_the_decision_rule(self):
         base = {"R": 0.2, "W": 0.4, "N": 0.4}

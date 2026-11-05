@@ -346,13 +346,14 @@ def main():
             owner_times[c.get("session")].add(t)
     cache, rows = {}, []
     skipped = collections.Counter()
-    # One delivery is one row: the same block (session, event, moment) can
-    # come in several label sets; a fact graded two ways there is left out.
+    # One delivery is one row: the same block can come in several label sets
+    # (one case id, deliveries.py's hash of the block); a fact graded two
+    # ways there is left out.
     seen_grade, conflicts = {}, set()
     for c in cases:
         labels = {**(c.get("labels") or {}), **{n: g for n, g in extra.get(c["id"], {}).items() if n in (c.get("delivered") or [])}}
         for n, g in labels.items():
-            k = (c.get("session"), c.get("event"), c.get("ts"), n)
+            k = (c["id"], n)
             if k in seen_grade and seen_grade[k] != g:
                 conflicts.add(k)
             seen_grade.setdefault(k, g)
@@ -374,7 +375,7 @@ def main():
             cache[path] = (transcript_events(path), os.path.getsize(path))
         events, size = cache[path]
         for name, grade in labels.items():
-            k = (c.get("session"), c.get("event"), c.get("ts"), name)
+            k = (c["id"], name)
             if k in conflicts or k in done:
                 skipped["graded two ways" if k in conflicts else "duplicate"] += 1
                 done.add(k)
@@ -387,13 +388,14 @@ def main():
             desc, ruling = f
             ruling = ruling or name in (c.get("rules") or [])
             end = window_end(events, start, name)
+            owner = c.get("session") in owner_times
             # A compaction in the window with no start block recorded after it.
             summaries = [t for t, k, _ in events if k == "summary" and start < t < end]
             crossed = bool(summaries) and not any(k == "start" and summaries[0] <= t < end for t, k, _ in events)
             rows.append({"case": c["id"], "session": c.get("session"), "fact": name, "grade": grade, "ruling": ruling,
                          "origin": c.get("origin"), "window_ended_early": end < start + timedelta(hours=WINDOW_HOURS),
                          "crossed_unrecorded_compaction": crossed,
-                         "transcript_bytes": size, **signals_for(events, start, end, name, desc, ruling, c.get("session") in owner_times, frozenset(owner_times[c.get("session")]))})
+                         "transcript_bytes": size, **signals_for(events, start, end, name, desc, ruling, owner, frozenset(owner_times.get(c.get("session"), ())))})
     n = len(rows)
     base = {g: sum(r["grade"] == g for r in rows) / n for g in "RWN"} if n else {g: 0 for g in "RWN"}
     report = {"lines": n, "sessions": len({r["session"] for r in rows}), "skipped": dict(skipped), "base": base,
@@ -403,10 +405,12 @@ def main():
     for sig, good in (("summary_kept", "R"), ("needed_again", "R"), ("carried_forward", "R"), ("opened", "R")):
         report["signals"][sig] = verdict(rows, sig, good, base)
     restated = [r for r in rows if r["owner_restated"]]
-    turns = sum(1 for path, (evs, _) in cache.items() for t, k, _ in evs if k == "user")
-    owner_turns = sum(1 for sess, times in owner_times.items() for _ in times)
+    # Over the owner's sessions that have rows: the turns a case marks as
+    # the owner's (the only ones read), and all the string turns there.
+    mine = {r["session"] for r in rows if r["owner_restated"] is not None}
     report["signals"]["owner_restated"] = {"fires": len(restated), "lines": sum(1 for r in rows if r["owner_restated"] is not None),
-                                           "owner_turns_read": owner_turns, "user_turns": turns}
+                                           "owner_case_turns": sum(len(owner_times[x]) for x in mine),
+                                           "string_turns_in_owner_sessions": sum(1 for x in mine for _, k, _ in cache[transcripts[x]][0] if k == "user")}
     with open(a.out, "w") as fh:
         json.dump({"report": report, "rows": rows}, fh, indent=1, default=str)
     os.chmod(a.out, 0o600)
