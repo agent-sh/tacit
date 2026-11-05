@@ -7,105 +7,219 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/agent-sh/tacit/client/internal/events"
 )
 
-// The judge's environment has no Bedrock or AWS variable, and a name the
-// strip does not know but that says Bedrock is refused rather than passed.
+// The judge's environment keeps only what a process needs to find its tools
+// and the subscription's login: no Bedrock or AWS route, no gateway, no other
+// config directory; a refused name that the keep list would pass is an error.
 func TestJudgeEnvNeverBedrock(t *testing.T) {
-	env, err := judgeEnv([]string{"PATH=/bin", "HOME=/h", "AWS_REGION=x", "AWS_PROFILE=y", "CLAUDE_CODE_USE_BEDROCK=1", "CLAUDE_CODE_SKIP_BEDROCK_AUTH=1",
-		"ANTHROPIC_BEDROCK_BASE_URL=u", "ANTHROPIC_DEFAULT_OPUS_MODEL=global.x", "ANTHROPIC_MODEL=m"})
-	if err != nil || strings.Join(env, " ") != "PATH=/bin HOME=/h" {
-		t.Fatalf("stripped: %v %v", env, err)
+	env, err := judgeEnv([]string{"PATH=/bin", "HOME=/h", "AWS_REGION=x", "AWS_BEARER_TOKEN_BEDROCK=t", "CLAUDE_CODE_USE_BEDROCK=1",
+		"ANTHROPIC_BASE_URL=https://gw", "ANTHROPIC_AUTH_TOKEN=t", "ANTHROPIC_API_KEY=k", "ANTHROPIC_CUSTOM_HEADERS=h", "CLAUDE_CONFIG_DIR=/c",
+		"CLAUDE_CODE_USE_VERTEX=1", "CLAUDE_CODE_PLUGIN_DIRS=/p", "ANTHROPIC_MODEL=m", "LANG=C.UTF-8"})
+	if err != nil || strings.Join(env, " ") != "PATH=/bin HOME=/h LANG=C.UTF-8" {
+		t.Fatalf("kept: %v %v", env, err)
 	}
-	if _, err := judgeEnv([]string{"PATH=/bin", "MY_BEDROCK_ROUTE=1"}); err == nil {
-		t.Fatal("a Bedrock variable was passed")
+	old := judgeEnvKeep
+	t.Cleanup(func() { judgeEnvKeep = old })
+	judgeEnvKeep = regexp.MustCompile(`^(PATH|AWS_REGION)$`)
+	if _, err := judgeEnv([]string{"PATH=/bin", "AWS_REGION=x"}); err == nil {
+		t.Fatal("a route variable was passed")
 	}
 }
 
-// A dream pass judges a sample of the settled delivered lines, up to the
-// day's cap, logging each verdict with the probability its line had of
-// being judged; lines judged before are not judged again; a refusal of the
-// subscription counts nothing and falls back to nothing.
-func TestDeliveryJudgePass(t *testing.T) {
+// The judge's call is `claude -p` with the reduced environment, local
+// settings only, no MCP server, no tools and no session kept.
+func TestJudgeCommand(t *testing.T) {
+	t.Setenv("ANTHROPIC_BASE_URL", "https://gw")
+	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+	t.Setenv("AWS_PROFILE", "p")
+	cmd, err := judgeCommand(context.Background(), "opus", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kv := range cmd.Env {
+		if judgeEnvRefuse.MatchString(strings.SplitN(kv, "=", 2)[0]) {
+			t.Fatalf("passed %s", kv)
+		}
+	}
+	args := strings.Join(cmd.Args, " ")
+	for _, want := range []string{"claude -p", "--model opus", "--tools  ", "--setting-sources local", "--strict-mcp-config", "--no-session-persistence"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("args %q lack %q", args, want)
+		}
+	}
+}
+
+type judgeFixture struct {
+	state, tr string
+	off       int64
+	now       time.Time
+	sent      []string
+	refuse    bool
+}
+
+// newJudgeFixture writes a transcript (the prompt written after the
+// block's moment, as the hook can run first; a push's call before its
+// moment) and a delivery log of a prompt block of n notes, a push block, a
+// start block and a fresh block.
+func newJudgeFixture(t *testing.T, n int) *judgeFixture {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	state := filepath.Join(home, "state")
-	t.Setenv("TACIT_STATE_DIR", state)
-	t.Setenv("TACIT_DELIVERY_JUDGE_DAILY", "3")
-	tr := filepath.Join(home, ".claude", "projects", "-demo", "s1.jsonl")
-	os.MkdirAll(filepath.Dir(tr), 0o755)
-	lines := []string{
-		`{"type":"user","timestamp":"2026-11-01T10:00:00Z","sessionId":"s1","userType":"external","message":{"role":"user","content":"fix the scheduler lock race"}}`,
-		`{"type":"assistant","timestamp":"2026-11-01T10:01:00Z","sessionId":"s1","message":{"role":"assistant","content":[{"type":"text","text":"I will take the shard lock first."}]}}`,
-	}
-	os.WriteFile(tr, []byte(lines[0]+"\n"), 0o644)
-	off := int64(len(lines[0]) + 1)
-	f, _ := os.OpenFile(tr, os.O_APPEND|os.O_WRONLY, 0o644)
-	f.WriteString(lines[1] + "\n")
-	f.Close()
-	now := time.Now()
-	old := now.Add(-2 * time.Hour).UTC().Format(time.RFC3339Nano)
+	f := &judgeFixture{state: filepath.Join(home, "state"), now: time.Now()}
+	t.Setenv("TACIT_STATE_DIR", f.state)
+	t.Setenv("TACIT_DELIVERY_JUDGE", "on")
+	f.tr = filepath.Join(home, ".claude", "projects", "-demo", "s1.jsonl")
+	os.MkdirAll(filepath.Dir(f.tr), 0o755)
+	first := `{"type":"user","timestamp":"2026-11-01T09:00:00Z","sessionId":"s1","userType":"external","message":{"role":"user","content":"an earlier request"}}` + "\n"
+	rest := `{"type":"user","timestamp":"2026-11-01T10:00:00Z","sessionId":"s1","userType":"external","message":{"role":"user","content":"fix the scheduler lock race SECRET-a"}}` + "\n" +
+		`{"type":"assistant","timestamp":"2026-11-01T10:01:00Z","sessionId":"s1","message":{"role":"assistant","content":[{"type":"text","text":"I will take the shard lock first."},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"go test ./sched"}}]}}` + "\n"
+	os.WriteFile(f.tr, []byte(first+rest), 0o644)
+	f.off = int64(len(first))
+	pushOff := int64(len(first + rest))
+	os.WriteFile(f.tr, []byte(first+rest+`{"type":"user","timestamp":"2026-11-01T10:02:00Z","sessionId":"s1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok sched"}]}}`+"\n"), 0o644)
+	old := f.now.Add(-2 * time.Hour).UTC().Format(time.RFC3339Nano)
 	var cands []logCand
-	for i := 0; i < 5; i++ {
+	for i := 0; i < n; i++ {
 		cands = append(cands, logCand{Name: fmt.Sprintf("note-%d", i), Delivered: true, Prov: "agent"})
 	}
-	writeLogEntry(&logEntry{V: 1, ID: "00000000000000a1", TS: old, Hook: "prompt", Session: "s1", TranscriptPath: tr, Transcript: off, Cands: cands}, now)
-	writeLogEntry(&logEntry{V: 1, ID: "00000000000000a2", TS: now.UTC().Format(time.RFC3339Nano), Hook: "prompt", Session: "s1", TranscriptPath: tr, Transcript: off,
-		Cands: []logCand{{Name: "too-fresh", Delivered: true}}}, now)
-	t.Setenv("TACIT_DELIVERY_JUDGE", "on")
-	call, redact := judgeCall, judgeRedact
-	t.Cleanup(func() { judgeCall, judgeRedact = call, redact })
-	judgeRedact = func(ctx context.Context, evs []events.Event) ([]events.Event, error) { return evs, nil }
-	var seen []string
-	judgeCall = func(ctx context.Context, model, prompt string) (string, error) {
-		seen = append(seen, prompt)
-		n := strings.Count(prompt, "## Case ")
+	cands = append(cands, logCand{Name: "not-shown", Delivered: false})
+	writeLogEntry(&logEntry{V: 1, ID: "00000000000000a1", TS: old, Hook: "prompt", Session: "s1", TranscriptPath: f.tr, Transcript: f.off, Cands: cands}, f.now)
+	writeLogEntry(&logEntry{V: 1, ID: "00000000000000a2", TS: old, Hook: "push", Tool: "Bash", Session: "s1", TranscriptPath: f.tr, Transcript: pushOff,
+		Cands: []logCand{{Name: "push-note", Delivered: true}}}, f.now)
+	writeLogEntry(&logEntry{V: 1, ID: "00000000000000a3", TS: old, Hook: "start", Session: "s1", TranscriptPath: f.tr, Transcript: 0,
+		Cands: []logCand{{Name: "start-note", Delivered: true}}}, f.now)
+	writeLogEntry(&logEntry{V: 1, ID: "00000000000000a4", TS: f.now.UTC().Format(time.RFC3339Nano), Hook: "prompt", Session: "s1", TranscriptPath: f.tr, Transcript: f.off,
+		Cands: []logCand{{Name: "too-fresh", Delivered: true}}}, f.now)
+	call, red, rnd := judgeCall, judgeRedactTexts, judgeRand
+	t.Cleanup(func() { judgeCall, judgeRedactTexts, judgeRand = call, red, rnd })
+	judgeRedactTexts = func(ctx context.Context, texts []string) ([]string, error) {
+		out := make([]string, len(texts))
+		for i, s := range texts {
+			out[i] = strings.ReplaceAll(s, "SECRET", "[redacted]")
+		}
+		return out, nil
+	}
+	judgeRand = func() float64 { return 0 } // every line drawn
+	judgeCall = func(ctx context.Context, model, prompt string) (string, string, error) {
+		if f.refuse {
+			return "", "", errJudgeRefused
+		}
+		f.sent = append(f.sent, prompt)
 		var ls []string
-		for i := 1; i <= n; i++ {
+		for i := 1; i <= strings.Count(prompt, "## Case "); i++ {
 			ls = append(ls, fmt.Sprintf(`{"i":%d,"relevant":"yes","confused":"no","novel":"unsure"}`, i))
 		}
-		return `{"lines":[` + strings.Join(ls, ",") + `]}`, nil
+		return `{"lines":[` + strings.Join(ls, ",") + `]}`, "claude-test-model", nil
 	}
-	n, err := deliveryJudgePass(context.Background(), nil, now)
+	return f
+}
+
+func judgeEntries(t *testing.T, state string) (verdicts []judgeVerdict, passes []judgePassLog) {
+	for _, e := range readDeliveryLog(t, state) {
+		switch {
+		case e.Hook == "judge" && e.Judge != nil:
+			verdicts = append(verdicts, *e.Judge)
+		case e.Hook == "judge-pass" && e.JudgePass != nil:
+			passes = append(passes, *e.JudgePass)
+		}
+	}
+	return
+}
+
+// A pass draws each settled prompt or push line once, at the day's rate,
+// judges the drawn lines up to the cap with each verdict's draw probability
+// and the model that answered, and leaves the rest waiting; start lines,
+// lines not shown and fresh lines are not drawn; every text is redacted.
+func TestDeliveryJudgePass(t *testing.T) {
+	f := newJudgeFixture(t, 5)
+	t.Setenv("TACIT_DELIVERY_JUDGE_DAILY", "3")
+	n, err := deliveryJudgePass(context.Background(), nil, f.now)
 	if err != nil || n != 3 {
 		t.Fatalf("judged %d: %v", n, err)
 	}
-	if len(seen) != 1 || !strings.Contains(seen[0], "fix the scheduler lock race") || !strings.Contains(seen[0], "take the shard lock first") || strings.Contains(seen[0], "too-fresh") {
-		t.Fatalf("prompt: %s", seen)
+	p := f.sent[0]
+	if len(f.sent) != 1 || !strings.Contains(p, "Request: fix the scheduler lock race [redacted]-a") || strings.Contains(p, "SECRET") ||
+		!strings.Contains(p, "take the shard lock first") || strings.Contains(p, "too-fresh") || strings.Contains(p, "start-note") || strings.Contains(p, "not-shown") {
+		t.Fatalf("prompt: %s", p)
 	}
-	var verdicts []judgeVerdict
-	for _, e := range readDeliveryLog(t, state) {
-		if e.Hook == "judge" {
-			verdicts = append(verdicts, *e.Judge)
-		}
-	}
-	if len(verdicts) != 3 || verdicts[0].P != 0.6 || verdicts[0].Relevant != "yes" || verdicts[0].Block != "00000000000000a1" {
+	verdicts, passes := judgeEntries(t, f.state)
+	// The rate is the cap over the lines of the first pool: 3 of 6.
+	if len(verdicts) != 3 || verdicts[0].P != 0.5 || verdicts[0].Model != "claude-test-model" || verdicts[0].Prompt != judgePromptID || verdicts[0].Block != "00000000000000a1" {
 		t.Fatalf("verdicts: %+v", verdicts)
 	}
-	// The day's cap is spent: nothing more today.
-	if n, _ := deliveryJudgePass(context.Background(), nil, now); n != 0 {
+	if len(passes) != 1 || passes[0].Pool != 6 || passes[0].Drawn != 6 || passes[0].Judged != 3 || passes[0].Waiting != 3 {
+		t.Fatalf("pass: %+v", passes)
+	}
+	// The cap is spent: nothing more today, and no line is drawn twice.
+	if n, _ := deliveryJudgePass(context.Background(), nil, f.now.Add(time.Minute)); n != 0 {
 		t.Fatalf("past the cap: %d", n)
 	}
-	// Another day: the two lines left, and a refusal counts nothing.
-	judgeCall = func(ctx context.Context, model, prompt string) (string, error) { return "", errJudgeRefused }
-	if n, err := deliveryJudgePass(context.Background(), nil, now.Add(24*time.Hour)); n != 0 || err != errJudgeRefused {
+	// Another day: a refusal keeps the waiting lines and counts nothing.
+	f.refuse = true
+	if n, err := deliveryJudgePass(context.Background(), nil, f.now.Add(24*time.Hour)); n != 0 || !errors.Is(err, errJudgeRefused) {
 		t.Fatalf("refused: %d %v", n, err)
 	}
-	b, _ := os.ReadFile(judgeStatePath())
-	var st judgeState
-	json.Unmarshal(b, &st)
-	if st.Count != 0 {
-		t.Fatalf("a refused pass counted: %+v", st)
+	f.refuse = false
+	n, err = deliveryJudgePass(context.Background(), nil, f.now.Add(25*time.Hour))
+	if err != nil || n != 3 {
+		t.Fatalf("the waiting lines: %d %v", n, err)
+	}
+	verdicts, _ = judgeEntries(t, f.state)
+	var push *judgeVerdict
+	seen := map[string]int{}
+	for i, v := range verdicts {
+		seen[v.Block+"/"+v.Fact]++
+		if v.Fact == "push-note" {
+			push = &verdicts[i]
+		}
+	}
+	if len(verdicts) != 6 || push == nil || push.P != 0.5 {
+		t.Fatalf("verdicts: %+v", verdicts)
+	}
+	for k, c := range seen {
+		if c != 1 {
+			t.Fatalf("%s judged %d times", k, c)
+		}
+	}
+	last := f.sent[len(f.sent)-1]
+	if !strings.Contains(last, "At: a tool call about to run\nRequest: the tool call Bash: ") || !strings.Contains(last, "go test ./sched") || !strings.Contains(last, "made for the request: fix the scheduler") {
+		t.Fatalf("the push's case: %s", last)
 	}
 	// Off: nothing.
 	t.Setenv("TACIT_DELIVERY_JUDGE", "off")
-	if n, _ := deliveryJudgePass(context.Background(), nil, now.Add(24*time.Hour)); n != 0 {
+	writeLogEntry(&logEntry{V: 1, ID: "00000000000000a5", TS: f.now.Add(24 * time.Hour).UTC().Format(time.RFC3339Nano), Hook: "prompt", Session: "s1", TranscriptPath: f.tr, Transcript: f.off,
+		Cands: []logCand{{Name: "later", Delivered: true}}}, f.now.Add(24*time.Hour))
+	if n, _ := deliveryJudgePass(context.Background(), nil, f.now.Add(26*time.Hour)); n != 0 {
 		t.Fatal("judged with the judge off")
+	}
+}
+
+// A line the draw passes over is never drawn again, and a failed redaction
+// sends nothing and counts the line unreadable.
+func TestJudgeDrawsOnceAndRedactsFirst(t *testing.T) {
+	f := newJudgeFixture(t, 2)
+	t.Setenv("TACIT_DELIVERY_JUDGE_DAILY", "1") // a rate of 1 in 3
+	judgeRand = func() float64 { return 0.99 }  // nothing drawn
+	if n, _ := deliveryJudgePass(context.Background(), nil, f.now); n != 0 {
+		t.Fatalf("judged %d", n)
+	}
+	judgeRand = func() float64 { return 0 }
+	if n, _ := deliveryJudgePass(context.Background(), nil, f.now.Add(time.Minute)); n != 0 || len(f.sent) != 0 {
+		t.Fatalf("a line had a second draw: %d", n)
+	}
+	f2 := newJudgeFixture(t, 2)
+	t.Setenv("TACIT_DELIVERY_JUDGE_DAILY", "36")
+	judgeRedactTexts = func(ctx context.Context, texts []string) ([]string, error) { return nil, errors.New("no redactor") }
+	if n, _ := deliveryJudgePass(context.Background(), nil, f2.now); n != 0 || len(f2.sent) != 0 {
+		t.Fatalf("sent without redaction: %d %q", n, f2.sent)
+	}
+	_, passes := judgeEntries(t, f2.state)
+	if len(passes) != 1 || passes[0].Unreadable != 3 {
+		t.Fatalf("pass: %+v", passes)
 	}
 }
 
@@ -116,49 +230,41 @@ func TestJudgeAnswersAreChecked(t *testing.T) {
 	t.Cleanup(func() { judgeCall = call })
 	cases := []judgeCase{{Block: "b", Fact: "f1"}, {Block: "b", Fact: "f2"}}
 	for _, ans := range []string{`{"lines":[{"i":1,"relevant":"yes","confused":"no","novel":"no"}]}`, `{"lines":[{"i":1,"relevant":"maybe","confused":"no","novel":"no"},{"i":2,"relevant":"yes","confused":"no","novel":"no"}]}`, "no json"} {
-		judgeCall = func(ctx context.Context, model, prompt string) (string, error) { return ans, nil }
+		judgeCall = func(ctx context.Context, model, prompt string) (string, string, error) { return ans, model, nil }
 		if _, err := judgeCases(context.Background(), "m", cases); err == nil {
 			t.Errorf("accepted %q", ans)
 		}
 	}
 }
 
-// The eval's command redacts every case before the call, and sends nothing
-// when redaction fails.
-func TestDeliveryJudgeCommandRedacts(t *testing.T) {
-	call, red := judgeCall, judgeRedactTexts
-	t.Cleanup(func() { judgeCall, judgeRedactTexts = call, red })
-	var sent []string
-	judgeCall = func(ctx context.Context, model, prompt string) (string, error) {
-		sent = append(sent, prompt)
-		return `{"lines":[{"i":1,"relevant":"yes","confused":"no","novel":"no"}]}`, nil
-	}
-	run := func() int {
-		r, w, err := os.Pipe()
-		if err != nil {
-			t.Fatal(err)
-		}
-		w.WriteString(`{"block":"b","fact":"f","hook":"prompt","line":"f: SECRET-x","request":"r","next":["SECRET-y"]}` + "\n")
+// The eval's command builds each case from its moment as the dream pass
+// does, with the line as delivered, redacts it, and sends nothing when a
+// moment fails.
+func TestDeliveryJudgeCommand(t *testing.T) {
+	f := newJudgeFixture(t, 1)
+	run := func(in string) (int, string) {
+		r, w, _ := os.Pipe()
+		w.WriteString(in)
 		w.Close()
-		in, out := os.Stdin, os.Stdout
-		devnull, _ := os.Open(os.DevNull)
-		os.Stdin, os.Stdout = r, devnull
-		defer func() { os.Stdin, os.Stdout = in, out; r.Close(); devnull.Close() }()
-		return runDeliveryJudge(nil)
+		out := filepath.Join(t.TempDir(), "out")
+		of, _ := os.Create(out)
+		stdin, stdout := os.Stdin, os.Stdout
+		os.Stdin, os.Stdout = r, of
+		code := runDeliveryJudge(nil)
+		os.Stdin, os.Stdout = stdin, stdout
+		r.Close()
+		of.Close()
+		b, _ := os.ReadFile(out)
+		return code, string(b)
 	}
-	judgeRedactTexts = func(ctx context.Context, texts []string) ([]string, error) {
-		out := make([]string, len(texts))
-		for i, s := range texts {
-			out[i] = strings.ReplaceAll(s, "SECRET", "[redacted]")
-		}
-		return out, nil
+	m, _ := json.Marshal(judgeMoment{Block: "b1", Fact: "f", Hook: "prompt", Transcript: f.tr, Offset: f.off, Line: "f: SECRET-x as delivered"})
+	code, out := run(string(m) + "\n")
+	if code != 0 || len(f.sent) != 1 || strings.Contains(f.sent[0], "SECRET") || !strings.Contains(f.sent[0], "Line: f: [redacted]-x as delivered") ||
+		!strings.Contains(f.sent[0], "Request: fix the scheduler lock race") || !strings.Contains(out, `"fact":"f"`) {
+		t.Fatalf("code %d, out %s, sent %q", code, out, f.sent)
 	}
-	if code := run(); code != 0 || len(sent) != 1 || strings.Contains(sent[0], "SECRET") || !strings.Contains(sent[0], "[redacted]-y") {
-		t.Fatalf("code %d, sent %q", code, sent)
-	}
-	sent = nil
-	judgeRedactTexts = func(ctx context.Context, texts []string) ([]string, error) { return nil, errors.New("no redactor") }
-	if code := run(); code == 0 || len(sent) != 0 {
-		t.Fatalf("a failed redaction sent %d prompt(s), code %d", len(sent), code)
+	bad, _ := json.Marshal(judgeMoment{Block: "b2", Fact: "g", Hook: "prompt", Transcript: filepath.Join(t.TempDir(), "gone.jsonl")})
+	if code, _ := run(string(m) + "\n" + string(bad) + "\n"); code == 0 || len(f.sent) != 1 {
+		t.Fatalf("a failed moment still sent: code %d, %d prompt(s)", code, len(f.sent))
 	}
 }

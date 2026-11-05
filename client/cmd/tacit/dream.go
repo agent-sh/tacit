@@ -56,7 +56,7 @@ const defaultIdle = 20 * time.Minute
 // dreamLockWait. An idle or session run also passes over a transcript that
 // failed within dream.FailureBackoff (the full run retries it), and on a
 // machine that cannot write as the dreamer it does nothing, quietly.
-func runDream(args []string) int {
+func runDream(args []string) (code int) {
 	fs := flag.NewFlagSet("dream", flag.ExitOnError)
 	model := fs.String("model", dream.DefaultModel, "extraction model")
 	dry := fs.Bool("dry-run", false, "extract and print, write nothing, keep cursors")
@@ -180,10 +180,15 @@ func runDream(args []string) int {
 			return 2
 		}
 	}
-	// A full run ends with the delivery judge's pass over a sample of the
-	// lines the hooks delivered (delivery_judge.go), on its own route.
+	// A full run that succeeded ends with the delivery judge's pass over a
+	// sample of the lines the hooks delivered (delivery_judge.go), on its
+	// own route, while the run still holds the dreamer's lock.
 	if !selecting && !*dry {
-		defer runDreamJudge()
+		defer func() {
+			if code == 0 {
+				runDreamJudge()
+			}
+		}()
 	}
 	recover := func() int {
 		if local {

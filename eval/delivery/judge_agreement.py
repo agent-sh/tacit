@@ -3,14 +3,16 @@
 
 For each graded line of a case file (deliveries.py's cases, with labels or a
 --grades TSV; the same rows signals.py reads: a subagent's delivery, a
-duplicate and a line graded two ways are left out), build the case the judge
-reads in the dream pass (delivery_judge.go, momentOf): where the line came,
-the request (the case's prompt; a push's tool call), the line (the fact's
-name and description at the case's commit) and the first events of the
-session after the moment (reply text, tool calls, tool results, the owner's
-turns; each clipped to 800 characters, at most 12). `tacit delivery-judge`
-redacts them, asks the judge on the same route as the dream pass (`claude
--p` on the subscription's login, never Bedrock) and prints its verdicts.
+duplicate and a line graded two ways are left out), find the line's moment
+in the session's transcript (the byte offset of a prompt's own turn, or of
+the first line after a push's moment, as the hook's transcript size would
+be) and hand it to `tacit delivery-judge`. That command builds the case
+exactly as the dream pass does (delivery_judge.go, momentOf: the request,
+what the session did next), with the line as it was delivered (the fact's
+name and description at the case's commit), redacts it and asks the judge
+on the dream pass's route (`claude -p` on the subscription's login, never
+Bedrock). The rows go to the judge shuffled, so a batch mixes sessions as
+the dream pass's draw does.
 
 Agreement, under the rule eval/DELIVERY.md ("Scoring each delivery", step 5)
 wrote before the first run:
@@ -41,54 +43,52 @@ _spec = importlib.util.spec_from_file_location("signals", os.path.join(os.path.d
 signals = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(signals)
 
-AFTER, TEXT = 12, 800  # delivery_judge.go: judgeAfter, judgeTextLen
 # The rule (eval/DELIVERY.md, step 5).
 MIN_LINES, MIN_SESSIONS = 200, 30
 KAPPA, KAPPA_LOW, MAX_UNSURE = 0.41, 0.21, 0.2
-HOOKS = {"prompt": "the owner's prompt", "push": "a tool call about to run", "start": "the session's start"}
+BATCH = 12  # delivery_judge.go: judgeBatch
+# deliveries.py's events as the delivery log's hooks; the judge reads no
+# start lines.
+HOOKS = {"prompt": "prompt", "pre-tool": "push"}
 
 
-def clip(s, n=TEXT):
-    s = " ".join(str(s).split())
-    return s[:n]
+def turn_text(d):
+    """A person's turn's text: a string, a queued prompt, or text blocks."""
+    att = d.get("attachment") or {}
+    if d.get("type") == "attachment" and att.get("type") == "queued_command":
+        return str(att.get("prompt") or att.get("content") or "")
+    if d.get("type") != "user":
+        return ""
+    content = (d.get("message") or {}).get("content")
+    if isinstance(content, list):
+        content = " ".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+    return content if isinstance(content, str) else ""
 
 
-def after_events(path, start):
-    """The first AFTER events of the main chain after start, as momentOf
-    words them."""
-    out = []
-    with open(path, encoding="utf-8", errors="replace") as fh:
-        for line in fh:
+def offset_of(path, start, hook, prompt=""):
+    """The moment's byte offset: for a prompt, its own turn (the last turn
+    holding the case's prompt up to a minute after its time); else, or when
+    none does, the first line after the moment, as the hook's transcript
+    size would be."""
+    pos, first_after, own = 0, None, None
+    want = " ".join(prompt.split())
+    with open(path, "rb") as fh:
+        for raw in fh:
             try:
-                d = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            ts = signals.parse_ts(d.get("timestamp") or "")
-            if ts is None or ts <= start or d.get("isSidechain") or d.get("isMeta"):
-                continue
-            content = (d.get("message") or {}).get("content")
-            if d.get("type") == "user":
-                if isinstance(content, str):
-                    if d.get("userType") == "external" and content and not content.startswith("<"):
-                        out.append("owner: " + clip(content))
-                elif isinstance(content, list):
-                    for b in content:
-                        if isinstance(b, dict) and b.get("type") == "tool_result":
-                            c = b.get("content")
-                            if isinstance(c, list):
-                                c = " ".join(x.get("text", "") for x in c if isinstance(x, dict))
-                            out.append("tool result: " + clip(c or ""))
-            elif d.get("type") == "assistant" and isinstance(content, list):
-                for b in content:
-                    if not isinstance(b, dict):
-                        continue
-                    if b.get("type") == "text" and b.get("text"):
-                        out.append("agent: " + clip(b["text"]))
-                    elif b.get("type") == "tool_use":
-                        out.append("tool call " + str(b.get("name", "")) + ": " + clip(json.dumps(b.get("input") or {}, ensure_ascii=False)))
-            if len(out) >= AFTER:
-                return out[:AFTER]
-    return out
+                d = json.loads(raw)
+            except ValueError:
+                d = None
+            if isinstance(d, dict) and not d.get("isSidechain"):
+                ts = signals.parse_ts(d.get("timestamp") or "")
+                if ts is not None:
+                    if hook == "prompt" and want and (ts - start).total_seconds() <= 60 and " ".join(turn_text(d).split()) == want:
+                        own = pos
+                    if first_after is None and ts > start:
+                        first_after = pos
+            pos += len(raw)
+    if own is not None:
+        return own
+    return first_after if first_after is not None else pos
 
 
 def rows_of(a):
@@ -96,11 +96,13 @@ def rows_of(a):
     transcripts = {os.path.basename(p)[:-6]: p for p in glob.glob(os.path.join(a.projects, "*", "*.jsonl"))}
     extra = collections.defaultdict(dict)
     for g in a.grades or []:
-        for line in open(g):
-            f = line.rstrip("\n").split("\t")
-            if len(f) >= 3 and f[2] in ("R", "W", "N"):
-                extra[f[0]][f[1]] = f[2]
-    cases = [json.loads(line) for line in open(a.cases)]
+        with open(g) as fh:
+            for line in fh:
+                f = line.rstrip("\n").split("\t")
+                if len(f) >= 3 and f[2] in ("R", "W", "N"):
+                    extra[f[0]][f[1]] = f[2]
+    with open(a.cases) as fh:
+        cases = [json.loads(line) for line in fh]
 
     def labels_of(c):
         return {**(c.get("labels") or {}), **{n: g for n, g in extra.get(c["id"], {}).items() if n in (c.get("delivered") or [])}}
@@ -120,11 +122,15 @@ def rows_of(a):
         if c.get("sidechain"):
             skipped["sidechain"] += len(labels)
             continue
+        hook = HOOKS.get(c.get("event") or "prompt")
+        if hook is None:
+            skipped["hook not judged"] += len(labels)
+            continue
         path, start = transcripts.get(c.get("session") or ""), signals.parse_ts(c.get("ts") or "")
         if not path or start is None:
             skipped["no transcript"] += len(labels)
             continue
-        nxt = None
+        off = None
         for name, grade in sorted(labels.items()):
             k = (signals.block_key(c), name)
             if k in conflicts or k in done:
@@ -136,30 +142,33 @@ def rows_of(a):
             if f is None:
                 skipped["fact not in the store"] += 1
                 continue
-            if nxt is None:
-                nxt = after_events(path, start)
-            hook = c.get("event") or "prompt"
-            request = clip(c.get("prompt") or "") if hook != "push" else "a tool call (" + clip(json.dumps(c.get("tool_input"), ensure_ascii=False), 300) + ")"
+            if off is None:
+                off = offset_of(path, start, hook, c.get("prompt") or "")
             rows.append({"session": c.get("session"), "fact": name, "grade": grade,
-                         "case": {"block": c["id"], "fact": name, "hook": HOOKS.get(hook, hook), "line": name + ": " + f[0], "request": request, "next": nxt}})
+                         "moment": {"block": c["id"], "fact": name, "hook": hook, "tool": c.get("tool_name") or "",
+                                    "transcript": path, "offset": off, "line": name + ": " + f[0]}})
     return rows, dict(skipped)
 
 
-def judge(rows, tacit, model):
-    """Verdicts for rows, in order, from `tacit delivery-judge`."""
+def judge(rows, tacit, model, seed=7):
+    """Verdicts for rows, in order, from `tacit delivery-judge`, asked in
+    shuffled batches of its batch size."""
     cmd = [tacit, "delivery-judge"] + (["--model", model] if model else [])
-    out = []
-    for i in range(0, len(rows), 12):
-        batch = rows[i:i + 12]
-        r = subprocess.run(cmd, input="".join(json.dumps(x["case"]) + "\n" for x in batch), capture_output=True, text=True, timeout=1800)
+    order = list(range(len(rows)))
+    random.Random(seed).shuffle(order)
+    got = {}
+    for i in range(0, len(order), BATCH):
+        part = order[i:i + BATCH]
+        batch = [rows[k] for k in part]
+        r = subprocess.run(cmd, input="".join(json.dumps(x["moment"]) + "\n" for x in batch), capture_output=True, text=True, timeout=1800)
         if r.returncode != 0:
-            sys.exit(f"delivery-judge failed at row {i}: {r.stderr.strip()[:500]}")
-        got = [json.loads(line) for line in r.stdout.splitlines() if line.strip()]
-        if len(got) != len(batch):
-            sys.exit(f"delivery-judge answered {len(got)} of {len(batch)} at row {i}")
-        out += got
-        print(f"judged {len(out)}/{len(rows)}", file=sys.stderr)
-    return out
+            sys.exit(f"delivery-judge failed at batch {i // BATCH}: {r.stderr.strip()[:500]}")
+        answers = [json.loads(line) for line in r.stdout.splitlines() if line.strip()]
+        if [(v.get("block"), v.get("fact")) for v in answers] != [(x["moment"]["block"], x["fact"]) for x in batch]:
+            sys.exit(f"delivery-judge's answers do not match batch {i // BATCH}")
+        got.update(zip(part, answers))
+        print(f"judged {len(got)}/{len(rows)}", file=sys.stderr)
+    return [got[k] for k in range(len(rows))]
 
 
 def kappa(pairs):
@@ -225,15 +234,20 @@ def main():
     a = ap.parse_args()
     rows, skipped = rows_of(a)
     if a.verdicts:
-        verdicts = [json.loads(line) for line in open(a.verdicts)]
+        with open(a.verdicts) as fh:
+            verdicts = [json.loads(line) for line in fh]
     else:
         verdicts = judge(rows, a.tacit, a.model)
         with open(a.out + ".verdicts.jsonl", "w") as fh:
             fh.writelines(json.dumps(v) + "\n" for v in verdicts)
-    if len(verdicts) != len(rows) or any(v.get("fact") != r["fact"] for r, v in zip(rows, verdicts)):
+    if len(verdicts) != len(rows) or any((v.get("block"), v.get("fact")) != (r["moment"]["block"], r["fact"]) for r, v in zip(rows, verdicts)):
         sys.exit("the verdicts do not match the rows")
+    if len({(v.get("model"), v.get("prompt")) for v in verdicts}) > 1:
+        sys.exit("the verdicts come from more than one judge (model and prompt): measure each apart")
     base = collections.Counter(r["grade"] for r in rows)
     report = {"lines": len(rows), "sessions": len({r["session"] for r in rows}), "skipped": skipped, "grades": dict(base),
+              # A judge is its prompt and its model: one pair per measurement.
+              "judges": dict(collections.Counter(f"{v.get('model')} {v.get('prompt')}" for v in verdicts)),
               "rule": {"min_lines": MIN_LINES, "min_sessions": MIN_SESSIONS, "kappa": KAPPA, "kappa_low": KAPPA_LOW, "max_unsure": MAX_UNSURE},
               "relevant": measure(rows, verdicts, "relevant", ("R", "W")),
               "useful": measure(rows, verdicts, "useful", ("R",)),

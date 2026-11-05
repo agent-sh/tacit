@@ -92,6 +92,8 @@ type logEntry struct {
 	Mark      *logMarkStep `json:"mark,omitempty"`
 	// Judge is a judge entry's labels (the dreamer's judge).
 	Judge *judgeVerdict `json:"judge,omitempty"`
+	// JudgePass is a judge-pass entry: one pass's draw and what became of it.
+	JudgePass *judgePassLog `json:"judge_pass,omitempty"`
 	// Nav is a nav entry's step through the store (no block: its
 	// nothing fields say nothing).
 	Nav *logNav `json:"nav,omitempty"`

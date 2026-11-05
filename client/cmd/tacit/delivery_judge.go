@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -20,20 +22,20 @@ import (
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/events"
 	"github.com/agent-sh/tacit/client/internal/fact"
-	"github.com/agent-sh/tacit/client/internal/modelrun"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
 // The dreamer's judge (SPEC.md, "The dreamer's judge"): after a full dream
-// run, a model reads a sample of the moments the hooks delivered lines at,
-// with hindsight (the request before, what the agent did after), and says
-// per line whether it was relevant to what the session was doing, whether
-// it confused or misled the agent, and whether it was novel (not already in
-// the context, nor found by the agent on its own a moment later). Its
-// labels are judge entries of the private delivery log: they label data a
-// ranker trains on, so the call runs on the owner's subscription, never
-// Bedrock (judgeEnv), and moves no score until its agreement with the hand
-// grades clears the rule written before it was measured.
+// run that succeeded, a model reads a sample of the moments the prompt and
+// push hooks delivered lines at, with hindsight (the request, what the
+// session did after), and says per line whether it was relevant to what the
+// session was doing, whether it confused or misled the agent, and whether it
+// was novel (not already in the context, nor found by the agent on its own a
+// moment later). Its labels are judge entries of the private delivery log:
+// they label data a ranker trains on, so the call runs on the owner's
+// subscription, never Bedrock or another gateway (judgeEnv), and moves no
+// score until its agreement with the hand grades clears the rule written
+// before it was measured.
 
 const (
 	// judgeDaily is the most lines judged a day: three calls of
@@ -41,10 +43,15 @@ const (
 	// gathers about a thousand labels a month for the calibration.
 	judgeDaily = 36
 	judgeBatch = 12
-	// judgeAge: a line is judged once its session moved on past it (what
-	// the agent did after is in the transcript), within judgeDays.
+	// judgeAge: a line enters a pass once its session moved on past it
+	// (what the agent did after is in the transcript), within judgeDays.
 	judgeAge  = 30 * time.Minute
 	judgeDays = 2
+	// judgePending is the most drawn lines kept waiting for the cap or a
+	// refused call; judgeTries the calls a line may fail before it is
+	// dropped (both counted in the pass's entry).
+	judgePending = 3 * judgeDaily
+	judgeTries   = 3
 	// judgeContext bounds what the judge reads of the transcript around a
 	// moment: the bytes before it, the events after it, each event's text.
 	judgeBefore  = 256 << 10
@@ -59,86 +66,147 @@ type judgeVerdict struct {
 	Relevant string  `json:"relevant"` // yes, no, unsure
 	Confused string  `json:"confused"`
 	Novel    string  `json:"novel"`
-	Why      string  `json:"why,omitempty"`
-	Model    string  `json:"model,omitempty"`
-	P        float64 `json:"p"` // the probability the line had of being judged
+	Model    string  `json:"model,omitempty"`  // the model that answered, as the CLI reports it
+	Prompt   string  `json:"prompt,omitempty"` // judgePromptID: which judge this is
+	P        float64 `json:"p"`                // the probability the line had of being drawn
+}
+
+// judgePassLog is a pass's own entry: what it drew from, at what rate, and
+// what became of the drawn lines, so the analysis sees every draw.
+type judgePassLog struct {
+	Pool       int     `json:"pool"` // lines that entered this pass's draw
+	Rate       float64 `json:"rate"` // each one's probability of being drawn
+	Drawn      int     `json:"drawn"`
+	Judged     int     `json:"judged"`
+	Waiting    int     `json:"waiting"`              // drawn and not judged yet (the cap, a refusal)
+	Dropped    int     `json:"dropped,omitempty"`    // drawn and given up: too many waiting, or failed judgeTries times
+	Unreadable int     `json:"unreadable,omitempty"` // drawn and left out: the transcript or its redaction failed
+	Refused    bool    `json:"refused,omitempty"`
+}
+
+// judgeMoment is one drawn line as the judge's case is built from it.
+type judgeMoment struct {
+	Block      string  `json:"block"`
+	Fact       string  `json:"fact"`
+	Hook       string  `json:"hook"` // prompt, push
+	Tool       string  `json:"tool,omitempty"`
+	Transcript string  `json:"transcript"`
+	Offset     int64   `json:"offset"`
+	FactPath   string  `json:"fact_path,omitempty"`
+	Line       string  `json:"line,omitempty"` // the line as delivered, when known (the eval's); else built from the store
+	P          float64 `json:"p,omitempty"`
+	Tries      int     `json:"tries,omitempty"`
 }
 
 // judgeCase is what the judge reads of one line's moment, redacted.
 type judgeCase struct {
-	Block   string   `json:"block"`
-	Fact    string   `json:"fact"`
-	Hook    string   `json:"hook"`
-	Line    string   `json:"line"`
-	Request string   `json:"request"`
-	Next    []string `json:"next"`
+	Block   string
+	Fact    string
+	Hook    string
+	Line    string
+	Request string
+	Next    []string
 }
 
-// bedrockVar is an environment variable that routes a model call through
-// Bedrock or AWS.
-var bedrockVar = regexp.MustCompile(`^(AWS_|CLAUDE_CODE_USE_BEDROCK|CLAUDE_CODE_SKIP_BEDROCK_AUTH|ANTHROPIC_BEDROCK_|ANTHROPIC_DEFAULT_|ANTHROPIC_MODEL$|ANTHROPIC_SMALL_FAST_MODEL)`)
+// judgeEnvKeep is what the judge's environment keeps of the dreamer's: the
+// names a process needs to find its tools, its home and the subscription's
+// login. Nothing else passes: no Bedrock or AWS route, no gateway
+// (ANTHROPIC_BASE_URL, a token, a custom header), no other Claude config
+// directory, no plugin directories.
+var judgeEnvKeep = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|SHELL|TERM|TZ|TMPDIR|TEMP|TMP|LANG|LC_[A-Z]+|XDG_RUNTIME_DIR|USERPROFILE|APPDATA|LOCALAPPDATA|HOMEDRIVE|HOMEPATH|SYSTEMROOT|SystemRoot|COMSPEC|ComSpec|PATHEXT|WINDIR|windir)$`)
 
-// judgeEnv is env with every Bedrock and AWS variable removed, and an
-// error if one is left: the judge runs on the owner's subscription, never
-// Bedrock (training data is theirs to label on their own plan).
+// judgeEnvRefuse is a name that must never reach the judge.
+var judgeEnvRefuse = regexp.MustCompile(`(?i)bedrock|vertex|foundry|^(ANTHROPIC_|AWS_|CLAUDE_)`)
+
+// judgeEnv is env reduced to judgeEnvKeep, and an error if a name
+// judgeEnvRefuse names is left: the judge runs on the owner's subscription,
+// never Bedrock or a gateway (training data is theirs to label on their
+// own plan).
 func judgeEnv(env []string) ([]string, error) {
 	var out []string
 	for _, kv := range env {
 		k, _, _ := strings.Cut(kv, "=")
-		if bedrockVar.MatchString(k) {
-			continue
+		if judgeEnvKeep.MatchString(k) {
+			out = append(out, kv)
 		}
-		out = append(out, kv)
 	}
 	for _, kv := range out {
 		k, _, _ := strings.Cut(kv, "=")
-		if bedrockVar.MatchString(k) || strings.Contains(strings.ToUpper(k), "BEDROCK") {
-			return nil, fmt.Errorf("a Bedrock variable is left in the judge's environment: %s", k)
+		if judgeEnvRefuse.MatchString(k) {
+			return nil, fmt.Errorf("a route variable is left in the judge's environment: %s", k)
 		}
 	}
 	return out, nil
+}
+
+// judgeCommand is the judge's `claude -p` call: the subscription's login,
+// judgeEnv's environment, no user settings or hooks (local settings only,
+// from a scratch working directory), no MCP server, no tools, no session
+// kept on disk.
+func judgeCommand(ctx context.Context, model, dir string) (*exec.Cmd, error) {
+	env, err := judgeEnv(os.Environ())
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, "claude", "-p", "--output-format", "json", "--model", model,
+		"--tools", "", "--setting-sources", "local", "--strict-mcp-config", "--no-session-persistence")
+	cmd.Dir, cmd.Env = dir, env
+	return cmd, nil
 }
 
 // errJudgeRefused is a refusal or a rate limit of the subscription: the
 // pass stops and a later one tries again.
 var errJudgeRefused = errors.New("the subscription refused the judge's call")
 
-var rateLimitRx = regexp.MustCompile(`(?i)rate.?limit|usage limit|quota|overloaded|429|too many requests`)
+var rateLimitRx = regexp.MustCompile(`(?i)rate.?limit|usage limit|hit your .*limit|quota|overloaded|429|too many requests`)
 
-// judgeCall runs one judge prompt on `claude -p` with the subscription's
-// login: no Bedrock environment, no user settings or hooks (a scratch
-// working directory, local settings only), no MCP server, no tools; the
-// session is excluded from dreaming. Tests replace it.
-var judgeCall = func(ctx context.Context, model, prompt string) (string, error) {
-	env, err := judgeEnv(os.Environ())
-	if err != nil {
-		return "", err
+// judgeCall runs one judge prompt and answers its text and the model that
+// answered. Tests replace it.
+var judgeCall = func(ctx context.Context, model, prompt string) (string, string, error) {
+	if err := os.MkdirAll(deliveryLogDir(), 0o700); err != nil {
+		return "", "", err
 	}
-	dir, err := os.MkdirTemp(filepath.Join(deliveryLogDir()), "judge-")
+	dir, err := os.MkdirTemp(deliveryLogDir(), "judge-")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer os.RemoveAll(dir)
-	sid := modelrun.NewSessionID()
-	_ = modelrun.Exclude(sid)
-	cmd := exec.CommandContext(ctx, "claude", "-p", "--output-format", "json", "--model", model, "--session-id", sid,
-		"--tools", "", "--setting-sources", "local", "--strict-mcp-config")
-	cmd.Dir, cmd.Env, cmd.Stdin = dir, env, strings.NewReader(prompt)
+	cmd, err := judgeCommand(ctx, model, dir)
+	if err != nil {
+		return "", "", err
+	}
+	cmd.Stdin = strings.NewReader(prompt)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err = cmd.Run()
 	var res struct {
-		Result  string `json:"result"`
-		IsError bool   `json:"is_error"`
+		Result     string                     `json:"result"`
+		IsError    bool                       `json:"is_error"`
+		ModelUsage map[string]json.RawMessage `json:"modelUsage"`
 	}
 	_ = json.Unmarshal(out.Bytes(), &res)
 	if err != nil || res.IsError {
 		if rateLimitRx.MatchString(errb.String() + res.Result) {
-			return "", errJudgeRefused
+			return "", "", errJudgeRefused
 		}
-		return "", fmt.Errorf("claude -p: %v %s", err, strings.TrimSpace(errb.String()+" "+res.Result))
+		return "", "", fmt.Errorf("claude -p: %v %s", err, judgeClip(errb.String()+" "+res.Result, 300))
 	}
-	return res.Result, nil
+	return res.Result, answeredBy(res.ModelUsage, model), nil
+}
+
+// answeredBy is the model the CLI says answered: modelUsage's one key that
+// is not a small helper model, else the name asked for.
+func answeredBy(usage map[string]json.RawMessage, asked string) string {
+	var names []string
+	for k := range usage {
+		if !strings.Contains(k, "haiku") {
+			names = append(names, k)
+		}
+	}
+	if len(names) == 1 {
+		return names[0]
+	}
+	return asked
 }
 
 func judgeModel() string {
@@ -148,16 +216,23 @@ func judgeModel() string {
 	return "opus"
 }
 
-const judgePrompt = `You judge, with hindsight, lines a memory tool gave a coding agent. For each case you get where the line came (the session's start, the owner's prompt, a tool call about to run), the request it answered, the line, and what the session did next.
+const judgePrompt = `You judge, with hindsight, lines a memory tool gave a coding agent. For each case you get where the line came (the owner's prompt, or a tool call about to run), the request it answered, the line, and what the session did next.
 
 Answer three questions per line, each yes, no or unsure:
 - relevant: was the line about what the session was doing at that moment?
 - confused: did the line mislead or distract the agent (it acted on it wrongly, or chased it off the task)?
 - novel: did the line give something the agent did not already have in its context and would not have found on its own a moment later? A correct line the agent already had, or read itself right after, is not novel.
 
-Judge the line's worth at that moment, not whether it is true. Answer JSON only: {"lines":[{"i":<case number>,"relevant":"yes|no|unsure","confused":"yes|no|unsure","novel":"yes|no|unsure","why":"<a few words>"}]}.
+Judge the line's worth at that moment, not whether it is true. Answer JSON only: {"lines":[{"i":<case number>,"relevant":"yes|no|unsure","confused":"yes|no|unsure","novel":"yes|no|unsure"}]}.
 
 %s`
+
+// judgePromptID names the judge: its prompt's digest. A changed prompt is a
+// new judge, measured again (eval/DELIVERY.md, step 5).
+var judgePromptID = func() string {
+	h := sha256.Sum256([]byte(judgePrompt))
+	return hex.EncodeToString(h[:6])
+}()
 
 func judgeText(cases []judgeCase) string {
 	var b strings.Builder
@@ -179,7 +254,7 @@ var answerWord = map[string]bool{"yes": true, "no": true, "unsure": true}
 // judgeCases asks the model for one batch; an answer without three valid
 // words for every case is a failure, and nothing of it is kept.
 func judgeCases(ctx context.Context, model string, cases []judgeCase) ([]judgeVerdict, error) {
-	text, err := judgeCall(ctx, model, judgeText(cases))
+	text, by, err := judgeCall(ctx, model, judgeText(cases))
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +262,6 @@ func judgeCases(ctx context.Context, model string, cases []judgeCase) ([]judgeVe
 		Lines []struct {
 			I                         int
 			Relevant, Confused, Novel string
-			Why                       string
 		} `json:"lines"`
 	}
 	if err := json.Unmarshal([]byte(jsonObjectOf(text)), &ans); err != nil {
@@ -199,7 +273,7 @@ func judgeCases(ctx context.Context, model string, cases []judgeCase) ([]judgeVe
 			return nil, fmt.Errorf("the judge's answer has an invalid line: %+v", l)
 		}
 		c := cases[l.I-1]
-		got[l.I] = judgeVerdict{Block: c.Block, Fact: c.Fact, Relevant: l.Relevant, Confused: l.Confused, Novel: l.Novel, Why: judgeClip(l.Why, 200), Model: model}
+		got[l.I] = judgeVerdict{Block: c.Block, Fact: c.Fact, Relevant: l.Relevant, Confused: l.Confused, Novel: l.Novel, Model: by, Prompt: judgePromptID}
 	}
 	if len(got) != len(cases) {
 		return nil, fmt.Errorf("the judge answered %d of %d lines", len(got), len(cases))
@@ -227,10 +301,16 @@ func judgeClip(s string, n int) string {
 	return s
 }
 
-// judgeState is the day's count, kept beside the log.
+// judgeState is the judge's place, kept beside the log: the day's count and
+// rate, how far the draws have come, and the drawn lines still waiting.
 type judgeState struct {
-	Day   string `json:"day"`
-	Count int    `json:"count"`
+	Day      string        `json:"day"`
+	Count    int           `json:"count"`
+	Rate     float64       `json:"rate,omitempty"`      // the day's draw rate
+	Seen     int           `json:"seen,omitempty"`      // lines that entered a draw today
+	PrevSeen int           `json:"prev_seen,omitempty"` // and on the last day with a pass
+	Through  string        `json:"through,omitempty"`   // every line up to here has had its one draw
+	Pending  []judgeMoment `json:"pending,omitempty"`
 }
 
 func judgeStatePath() string { return filepath.Join(deliveryLogDir(), "judge-state.json") }
@@ -241,49 +321,47 @@ func readJudgeState(day string) judgeState {
 		_ = json.Unmarshal(b, &st)
 	}
 	if st.Day != day {
-		st = judgeState{Day: day}
+		if st.Day != "" {
+			st.PrevSeen = st.Seen
+		}
+		st.Day, st.Count, st.Rate, st.Seen = day, 0, 0, 0
 	}
 	return st
 }
 
-func writeJudgeState(st judgeState) {
-	b, _ := json.Marshal(st)
+func writeJudgeState(st judgeState) error {
+	b, err := json.Marshal(st)
+	if err != nil {
+		return err
+	}
 	tmp := judgeStatePath() + ".tmp"
-	if os.WriteFile(tmp, b, 0o600) == nil {
-		os.Rename(tmp, judgeStatePath())
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
 	}
+	return os.Rename(tmp, judgeStatePath())
 }
 
-// judgeLine is one delivered line the judge may read.
-type judgeLine struct {
-	entry logEntry
-	cand  logCand
-}
-
-// judgeable is the log's delivered lines of the window that a judge may
-// read: settled (judgeAge), with a transcript to read, not judged yet.
-func judgeable(now time.Time) []judgeLine {
-	all := readJudgeDays(now.AddDate(0, 0, -judgeDays))
-	judged := map[string]bool{}
-	for _, e := range all {
-		if e.Hook == "judge" && e.Judge != nil {
-			judged[e.Judge.Block+"/"+e.Judge.Fact] = true
-		}
+// judgePool is the lines that enter this pass's draw: delivered by a
+// prompt or push block whose moment is after the last pass's (through) and
+// at least judgeAge old, within judgeDays, with a transcript to read. Each
+// line enters exactly one draw.
+func judgePool(now time.Time, through time.Time) []judgeMoment {
+	cutoff, floor := now.Add(-judgeAge), now.AddDate(0, 0, -judgeDays)
+	if through.Before(floor) {
+		through = floor
 	}
-	var out []judgeLine
-	for _, e := range all {
+	var out []judgeMoment
+	for _, e := range readJudgeDays(through) {
 		t, err := time.Parse(time.RFC3339Nano, e.TS)
-		if err != nil || now.Sub(t) < judgeAge || e.TranscriptPath == "" || e.Transcript < 0 {
+		if err != nil || !t.After(through) || t.After(cutoff) || e.TranscriptPath == "" || e.Transcript < 0 {
 			continue
 		}
-		switch e.Hook {
-		case "start", "prompt", "push":
-		default:
+		if e.Hook != "prompt" && e.Hook != "push" {
 			continue
 		}
 		for _, c := range e.Cands {
-			if c.Delivered && !judged[e.ID+"/"+c.Name] {
-				out = append(out, judgeLine{entry: e, cand: c})
+			if c.Delivered {
+				out = append(out, judgeMoment{Block: e.ID, Fact: c.Name, Hook: e.Hook, Tool: e.Tool, Transcript: e.TranscriptPath, Offset: e.Transcript, FactPath: c.Path})
 			}
 		}
 	}
@@ -321,69 +399,118 @@ func readJudgeDays(since time.Time) []logEntry {
 	return out
 }
 
-// judgeRedact redacts what the judge reads (events.Redact, which fails
-// closed); tests stand in for it.
-var judgeRedact = events.Redact
-
-// judgeRedactTexts redacts plain texts the same way (digest's redactor).
+// judgeRedactTexts redacts what the judge reads (the dreamer's redactor,
+// which fails closed); tests stand in for it.
 var judgeRedactTexts = digest.RedactAllContext
 
-// momentOf is a line's moment as the judge reads it: the last turn before
-// the block (the request), the block's line (the fact's name and
-// description as the store holds them now), and the first events after it,
-// all redacted. ok is false when the transcript cannot be read.
-func momentOf(ctx context.Context, s *store.Store, l judgeLine) (judgeCase, bool) {
+// judgeRand is the draw's source; tests fix it.
+var judgeRand = rand.Float64
+
+// judgeHookWords is where a line came, as the judge reads it.
+var judgeHookWords = map[string]string{"prompt": "the owner's prompt", "push": "a tool call about to run"}
+
+// momentOf is a drawn line's case: the request (a prompt block's own prompt,
+// the owner's turn at the block, written just before or just after the
+// moment; a push's tool call and the request it serves), the line (as
+// delivered when the moment holds it, else the fact's name and description
+// as the store holds them now) and the first events after it. Every text is
+// redacted before it is clipped; ok is false when the transcript cannot be
+// read or redaction fails, and nothing is sent.
+func momentOf(ctx context.Context, s *store.Store, m judgeMoment) (judgeCase, bool) {
 	home, _ := os.UserHomeDir()
-	format, ok := transcriptFormat(home, l.entry.TranscriptPath)
-	if !ok {
+	format, ok := transcriptFormat(home, m.Transcript)
+	if !ok || judgeHookWords[m.Hook] == "" {
 		return judgeCase{}, false
 	}
-	from := alignedLineStart(l.entry.TranscriptPath, l.entry.Transcript-judgeBefore)
-	var before, after []events.Event
+	from := alignedLineStart(m.Transcript, m.Offset-judgeBefore)
+	var owner, last *events.Event // the owner's last turn, the last event, before the moment
+	var after []events.Event
 	stop := errors.New("enough")
-	_, err := events.ReadFile(l.entry.TranscriptPath, format, from, func(ev events.Event) error {
-		switch {
-		case ev.Offset < l.entry.Transcript:
-			if ev.Kind == events.KindOwnerText || ev.Kind == events.KindAgentText && ev.Role == "user" {
-				before = append(before, ev)
+	_, err := events.ReadFile(m.Transcript, format, from, func(ev events.Event) error {
+		if ev.Kind == events.KindHarnessText {
+			return nil
+		}
+		if ev.Offset < m.Offset {
+			ev := ev
+			last = &ev
+			if judgeOwnerTurn(ev) {
+				owner = &ev
 			}
-		case ev.Kind != events.KindHarnessText:
-			after = append(after, ev)
-			if len(after) >= judgeAfter {
-				return stop
-			}
+			return nil
+		}
+		after = append(after, ev)
+		if len(after) > judgeAfter {
+			return stop
 		}
 		return nil
 	})
 	if err != nil && !errors.Is(err, stop) {
 		return judgeCase{}, false
 	}
-	evs := append(before[max(0, len(before)-1):], after...)
-	evs, err = judgeRedact(ctx, evs)
-	if err != nil {
+	const pre = 4 * judgeTextLen // clipped to this before redaction, to judgeTextLen after
+	var req []string
+	switch m.Hook {
+	case "prompt":
+		// The hook may run before the harness writes the prompt.
+		if len(after) > 0 && judgeOwnerTurn(after[0]) {
+			req, after = append(req, judgeClip(after[0].Text, pre)), after[1:]
+		} else if owner != nil {
+			req = append(req, judgeClip(owner.Text, pre))
+		}
+	case "push":
+		// The call is the last event before the block, or the first after
+		// it when the harness writes it later.
+		var call *events.Event
+		if len(after) > 0 && after[0].Kind == events.KindToolCall && after[0].ToolName == m.Tool {
+			call, after = &after[0], after[1:]
+		} else if last != nil && last.Kind == events.KindToolCall && last.ToolName == m.Tool {
+			call = last
+		}
+		if call != nil {
+			req = append(req, "the tool call "+call.ToolName+": "+judgeClip(call.ToolInput, pre))
+		} else {
+			req = append(req, "a tool call ("+m.Tool+")")
+		}
+		if owner != nil {
+			req = append(req, "made for the request: "+judgeClip(owner.Text, pre))
+		}
+	}
+	if len(after) > judgeAfter {
+		after = after[:judgeAfter]
+	}
+	line := m.Line
+	if line == "" {
+		line = m.Fact + ": " + factDescription(s, m.FactPath)
+	}
+	texts := []string{strings.Join(req, "; "), judgeClip(line, pre)}
+	for _, ev := range after {
+		texts = append(texts, eventWords(ev, pre))
+	}
+	red, err := judgeRedactTexts(ctx, texts)
+	if err != nil || len(red) != len(texts) {
 		return judgeCase{}, false // nothing leaves the machine unredacted
 	}
-	c := judgeCase{Block: l.entry.ID, Fact: l.cand.Name, Hook: l.entry.Hook, Line: l.cand.Name + ": " + factDescription(s, l.cand.Path)}
-	if len(before) > 0 {
-		c.Request = judgeClip(evs[0].Text, judgeTextLen)
-		evs = evs[1:]
-	} else if l.entry.Hook == "push" {
-		c.Request = "a tool call (" + l.entry.Tool + ")"
-	}
-	for _, ev := range evs {
-		text := ev.Text
-		who := "agent"
-		switch ev.Kind {
-		case events.KindToolCall:
-			who, text = "tool call "+ev.ToolName, ev.ToolInput
-		case events.KindToolResult:
-			who, text = "tool result", ev.ToolOutput
-		case events.KindOwnerText:
-			who = "owner"
-		}
-		c.Next = append(c.Next, who+": "+judgeClip(text, judgeTextLen))
+	c := judgeCase{Block: m.Block, Fact: m.Fact, Hook: judgeHookWords[m.Hook], Request: judgeClip(red[0], judgeTextLen), Line: judgeClip(red[1], judgeTextLen)}
+	for _, t := range red[2:] {
+		c.Next = append(c.Next, judgeClip(t, judgeTextLen))
 	}
 	return c, true
+}
+
+func judgeOwnerTurn(ev events.Event) bool {
+	return ev.Kind == events.KindOwnerText || ev.Kind == events.KindAgentText && ev.Role == "user"
+}
+
+func eventWords(ev events.Event, n int) string {
+	switch ev.Kind {
+	case events.KindToolCall:
+		return "tool call " + ev.ToolName + ": " + judgeClip(ev.ToolInput, n)
+	case events.KindToolResult:
+		return "tool result: " + judgeClip(ev.ToolOutput, n)
+	case events.KindOwnerText:
+		return "owner: " + judgeClip(ev.Text, n)
+	}
+	return "agent: " + judgeClip(ev.Text, n)
 }
 
 func alignedLineStart(path string, off int64) int64 {
@@ -422,64 +549,116 @@ func factDescription(s *store.Store, rel string) string {
 	return f.Meta.Description
 }
 
-// deliveryJudgePass judges a sample of the window's delivered lines, up to
-// what is left of the day's cap: each settled line is drawn with the same
-// probability, logged with its labels. A refusal of the subscription (a
-// rate limit) ends the pass with nothing counted; a later pass tries again.
-// It never falls back to another route.
+// deliveryJudgePass gives every line that settled since the last pass its
+// one draw, at the day's rate (judgeDaily over the last day's lines, so
+// about judgeDaily are drawn a day), and judges the drawn lines up to what
+// is left of the day's cap; the rest wait for a later pass. Each verdict
+// carries its line's draw probability, and the pass logs its own entry. A
+// refusal of the subscription (a rate limit) ends the pass, the lines wait,
+// and a later pass tries again; it never falls back to another route.
 func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int, error) {
 	if !deliveryOn("JUDGE", true) || !deliveryLogOn() {
 		return 0, nil
 	}
-	day := now.UTC().Format("2006-01-02")
-	st := readJudgeState(day)
-	left := deliveryInt("JUDGE_DAILY", judgeDaily) - st.Count
-	lines := judgeable(now)
-	if left <= 0 || len(lines) == 0 {
-		return 0, nil
-	}
-	n := min(left, len(lines))
-	p := float64(n) / float64(len(lines))
-	rand.Shuffle(len(lines), func(i, j int) { lines[i], lines[j] = lines[j], lines[i] })
-	var cases []judgeCase
-	for _, l := range lines {
-		if len(cases) >= n {
-			break
+	st := readJudgeState(now.UTC().Format("2006-01-02"))
+	through, _ := time.Parse(time.RFC3339Nano, st.Through)
+	pool := judgePool(now, through)
+	daily := deliveryInt("JUDGE_DAILY", judgeDaily)
+	pass := judgePassLog{Pool: len(pool)}
+	if len(pool) > 0 {
+		if st.Rate == 0 {
+			base := st.PrevSeen
+			if base == 0 {
+				base = len(pool)
+			}
+			st.Rate = min(1, float64(daily)/float64(base))
 		}
-		if c, ok := momentOf(ctx, s, l); ok {
-			cases = append(cases, c)
-		}
-	}
-	model, judged := judgeModel(), 0
-	for i := 0; i < len(cases); i += judgeBatch {
-		batch := cases[i:min(i+judgeBatch, len(cases))]
-		verdicts, err := judgeCases(ctx, model, batch)
-		if err != nil {
-			writeJudgeState(st)
-			return judged, err
-		}
-		for _, v := range verdicts {
-			v.P = p
-			v := v
-			e := &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: "judge", Judge: &v}
-			e.ID = logID(e)
-			if appendLogEntry(e, time.Now()) == nil {
-				judged++
-				st.Count++
+		pass.Rate = st.Rate
+		for _, m := range pool {
+			if judgeRand() < st.Rate {
+				m.P = st.Rate
+				st.Pending = append(st.Pending, m)
+				pass.Drawn++
 			}
 		}
+		st.Seen += len(pool)
 	}
-	writeJudgeState(st)
-	return judged, nil
+	st.Through = now.Add(-judgeAge).UTC().Format(time.RFC3339Nano)
+	if over := len(st.Pending) - judgePending; over > 0 {
+		st.Pending, pass.Dropped = st.Pending[over:], over // the oldest go first
+	}
+	var err error
+	if len(st.Pending) > 0 && st.Count < daily {
+		take := st.Pending[:min(len(st.Pending), daily-st.Count)]
+		rest := slicesClone(st.Pending[len(take):])
+		var cases []judgeCase
+		var moments []judgeMoment
+		for _, m := range take {
+			if c, ok := momentOf(ctx, s, m); ok {
+				cases, moments = append(cases, c), append(moments, m)
+			} else {
+				pass.Unreadable++
+			}
+		}
+		model := judgeModel()
+		var waiting []judgeMoment
+		for i := 0; i < len(cases); i += judgeBatch {
+			j := min(i+judgeBatch, len(cases))
+			if err != nil {
+				waiting = append(waiting, moments[i:j]...)
+				continue
+			}
+			var verdicts []judgeVerdict
+			verdicts, err = judgeCases(ctx, model, cases[i:j])
+			if err != nil {
+				pass.Refused = errors.Is(err, errJudgeRefused)
+				for _, m := range moments[i:j] {
+					if !pass.Refused {
+						m.Tries++
+					}
+					if m.Tries >= judgeTries {
+						pass.Dropped++
+					} else {
+						waiting = append(waiting, m)
+					}
+				}
+				continue
+			}
+			for k, v := range verdicts {
+				v.P = moments[i+k].P
+				v := v
+				e := &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: "judge", Judge: &v}
+				e.ID = logID(e)
+				if appendLogEntry(e, time.Now()) == nil {
+					pass.Judged++
+					st.Count++
+				}
+			}
+		}
+		st.Pending = append(waiting, rest...)
+	}
+	pass.Waiting = len(st.Pending)
+	if pass.Pool > 0 || pass.Drawn > 0 || pass.Judged > 0 || pass.Dropped > 0 || pass.Unreadable > 0 || pass.Refused {
+		e := &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: "judge-pass", JudgePass: &pass}
+		e.ID = logID(e)
+		_ = appendLogEntry(e, time.Now())
+	}
+	if werr := writeJudgeState(st); werr != nil && err == nil {
+		err = werr
+	}
+	return pass.Judged, err
 }
 
-// runDreamJudge is the judge's step of a full dream run.
+func slicesClone(m []judgeMoment) []judgeMoment { return append([]judgeMoment(nil), m...) }
+
+// runDreamJudge is the judge's step of a full dream run that succeeded,
+// while the run still holds the dreamer's lock.
 func runDreamJudge() {
 	s, err := store.Default()
 	if err != nil || !s.Exists() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	n, err := deliveryJudgePass(ctx, s, time.Now())
 	switch {
@@ -492,47 +671,37 @@ func runDreamJudge() {
 	}
 }
 
-// runDeliveryJudge is `tacit delivery-judge`: judge cases read as JSON
-// lines on stdin and print the verdicts, one JSON line each, for the eval
-// that measures the judge against the hand grades
-// (eval/delivery/judge_agreement.py). It runs on the same route as the
-// dream pass.
+// runDeliveryJudge is `tacit delivery-judge`: judge moments read as JSON
+// lines on stdin (judgeMoment: a transcript, the offset of the moment, the
+// hook, a push's tool, the line as delivered) and print the verdicts, one
+// JSON line each, for the eval that measures the judge against the hand
+// grades (eval/delivery/judge_agreement.py). The cases are built, redacted
+// and asked exactly as the dream pass does.
 func runDeliveryJudge(args []string) int {
 	fs := flag.NewFlagSet("delivery-judge", flag.ExitOnError)
 	model := fs.String("model", judgeModel(), "the judge's model")
 	fs.Parse(args)
-	var cases []judgeCase
+	var moments []judgeMoment
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Buffer(make([]byte, 1<<20), 1<<26)
 	for sc.Scan() {
-		var c judgeCase
-		if err := json.Unmarshal(sc.Bytes(), &c); err != nil {
+		var m judgeMoment
+		if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
 			fmt.Fprintln(os.Stderr, "delivery-judge:", err)
 			return 2
 		}
-		cases = append(cases, c)
+		moments = append(moments, m)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	// Every text that leaves the machine is redacted first; a failure sends
-	// nothing.
-	var texts []string
-	for _, c := range cases {
-		texts = append(append(texts, c.Request, c.Line), c.Next...)
-	}
-	red, err := judgeRedactTexts(ctx, texts)
-	if err != nil || len(red) != len(texts) {
-		fmt.Fprintln(os.Stderr, "delivery-judge: redaction failed; nothing was sent:", err)
-		return 1
-	}
-	k := 0
-	for i := range cases {
-		cases[i].Request, cases[i].Line = red[k], red[k+1]
-		k += 2
-		for j := range cases[i].Next {
-			cases[i].Next[j] = red[k]
-			k++
+	var cases []judgeCase
+	for _, m := range moments {
+		c, ok := momentOf(ctx, nil, m)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "delivery-judge: %s/%s: the transcript or its redaction failed; nothing was sent\n", m.Block, m.Fact)
+			return 1
 		}
+		cases = append(cases, c)
 	}
 	enc := json.NewEncoder(os.Stdout)
 	for i := 0; i < len(cases); i += judgeBatch {
