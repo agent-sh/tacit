@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -103,6 +104,9 @@ type judgePassLog struct {
 	From         string   `json:"from,omitempty"`
 	To           string   `json:"to,omitempty"`
 	UnreadBlocks []string `json:"unread_blocks,omitempty"`
+	// Answered is the models that answered this pass's calls, as the
+	// labels carry them.
+	Answered []string `json:"answered,omitempty"`
 }
 
 // judgeMoment is one drawn line as the judge's case is built from it.
@@ -381,6 +385,7 @@ func judgePool(now time.Time, through time.Time) (out []judgeMoment, unread []st
 		through = floor
 	}
 	home, _ := os.UserHomeDir()
+	opened := map[string]bool{}
 	for _, e := range readJudgeDays(through) {
 		t, err := time.Parse(time.RFC3339Nano, e.TS)
 		if err != nil || !t.After(through) || t.After(cutoff) || e.TranscriptPath == "" || e.Transcript < 0 {
@@ -395,7 +400,7 @@ func judgePool(now time.Time, through time.Time) (out []judgeMoment, unread []st
 			unread = append(unread, e.ID)
 			continue
 		}
-		if fi, err := os.Stat(e.TranscriptPath); err != nil || !fi.Mode().IsRegular() {
+		if !transcriptOpens(e.TranscriptPath, opened) {
 			unread = append(unread, e.ID)
 			continue
 		}
@@ -406,6 +411,25 @@ func judgePool(now time.Time, through time.Time) (out []judgeMoment, unread []st
 		}
 	}
 	return out, unread, through, cutoff
+}
+
+// transcriptOpens reports a transcript that is a regular file this process
+// can open and read, once per path (cache).
+func transcriptOpens(path string, cache map[string]bool) bool {
+	if ok, seen := cache[path]; seen {
+		return ok
+	}
+	ok := false
+	if f, err := os.Open(path); err == nil {
+		if fi, err := f.Stat(); err == nil && fi.Mode().IsRegular() {
+			buf := make([]byte, 1)
+			_, rerr := f.Read(buf)
+			ok = rerr == nil || errors.Is(rerr, io.EOF)
+		}
+		f.Close()
+	}
+	cache[path] = ok
+	return ok
 }
 
 func readJudgeDays(since time.Time) []logEntry {
@@ -681,6 +705,9 @@ func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int,
 				continue
 			}
 			for k, v := range verdicts {
+				if !slices.Contains(pass.Answered, v.Model) {
+					pass.Answered = append(pass.Answered, v.Model)
+				}
 				v.P = moments[i+k].P
 				v := v
 				e := &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: "judge", Judge: &v}

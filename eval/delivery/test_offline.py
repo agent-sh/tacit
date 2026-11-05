@@ -140,15 +140,20 @@ class Population(unittest.TestCase):
         late = dict(moment, id="late", ts="2026-11-01T11:45:00Z")  # less than 30 minutes before it
         bare = dict(moment, id="bare", transcript_path="")
         unreadable = dict(moment, id="unreadable")
+        empty = {k: v for k, v in moment.items() if k != "cands"}
+        empty["id"] = "empty"  # a block that showed nothing
         after = dict(moment, id="after", ts="2026-11-02T10:00:00Z")  # in a pass that left lines waiting
         waiting = {"id": "pass2", "ts": "2026-11-02T12:00:00Z", "hook": "judge-pass", "judge_pass": {"pool": 1, "waiting": 3, "prompt": "p"}}
-        unread = {"id": "pass0", "ts": "2026-11-01T11:59:00Z", "hook": "judge-pass",
-                  "judge_pass": {"pool": 1, "waiting": 0, "prompt": "p", "unread": [moment["id"] + "/f0"], "unread_blocks": ["unreadable"]}}
-        moments, info = off.moments_of(entries + [early, late, bare, unreadable, after, waiting, unread])
+        entries = [e for e in entries if e.get("hook") != "judge-pass"]
+        pass1 = {"id": "pass1", "ts": "2026-11-01T12:00:00Z", "hook": "judge-pass",
+                 "judge_pass": {"pool": 1, "waiting": 0, "prompt": "p", "drawn": 10, "failed": [moment["id"] + "/f0"], "unread_blocks": ["unreadable"]}}
+        moments, info = off.moments_of(entries + [early, late, bare, unreadable, empty, after, waiting, pass1])
         ids = {m["id"] for m in moments}
         self.assertFalse(ids & {"early", "late", "bare", "unreadable", "after"}, ids)
+        self.assertIn("empty", ids)
         self.assertEqual(info["left_out"]["no transcript to read"], 2)
-        # The drawn line the judge could not read stays a candidate (a policy
+        self.assertEqual(info["failed_share"], 0.1)
+        # The drawn line whose calls kept failing stays a candidate (a policy
         # ranks it), and counts in no sum.
         got = next(m for m in moments if m["id"] == moment["id"])
         f0 = next(c for c in got["cands"] if c["name"] == "f0")
@@ -157,6 +162,10 @@ class Population(unittest.TestCase):
         self.assertEqual([c["name"] for c in got["cands"] if top1(got, c)], ["f0"])
         sums = off.session_sums([got], top1, lambda m, c: (0.5, 0.5))
         self.assertEqual(sums[got["session"]]["pi"], 0.0)
+        # A pass that could not read a drawn line's moment: its window goes.
+        pass1["judge_pass"]["unread"] = [moment["id"] + "/f1"]
+        moments, info = off.moments_of(entries + [pass1])
+        self.assertEqual(moments, [])
 
     def test_another_judges_pool(self):
         # Passes of judges p, q, p: a moment in q's pool is not p's, though
@@ -171,9 +180,33 @@ class Population(unittest.TestCase):
         moments, _ = off.moments_of(entries + [mid, p1, q, p2], ("m", "p"))
         self.assertEqual({m["id"] for m in moments}, {moment["id"]})
         # Logged windows win over the passes' times.
+        q["judge_pass"].update({"from": "2026-11-01T11:30:00Z", "to": "2026-11-01T12:30:00Z"})
         p2["judge_pass"].update({"from": "2026-11-01T12:30:00Z", "to": "2026-11-01T15:30:00Z"})
         moments, _ = off.moments_of(entries + [mid, p1, q, p2], ("m", "p"))
         self.assertEqual({m["id"] for m in moments}, {moment["id"], "mid"})
+
+    def test_another_model_under_one_prompt(self):
+        # The model behind an alias changed under one prompt: a window whose
+        # labels are another model's is not the chosen judge's, and one with
+        # no labels is when no other model answered its pass.
+        entries, _ = world(sessions=2, per=1)
+        entries = [e for e in entries if e.get("hook") != "judge-pass"]
+        for e in entries:
+            if e.get("hook") == "judge":
+                e["judge"]["model"] = "old"
+        old = {"id": "w1", "ts": "2026-11-01T12:00:00Z", "hook": "judge-pass",
+               "judge_pass": {"waiting": 0, "prompt": "p", "answered": ["old"], "from": "2026-11-01T09:00:00Z", "to": "2026-11-01T11:30:00Z"}}
+        later = dict(next(e for e in entries if e.get("hook") == "prompt"), id="later", ts="2026-11-01T13:00:00Z")
+        new = {"id": "w2", "ts": "2026-11-01T14:00:00Z", "hook": "judge-pass",
+               "judge_pass": {"waiting": 0, "prompt": "p", "answered": ["new"], "from": "2026-11-01T11:30:00Z", "to": "2026-11-01T13:30:00Z"}}
+        moments, _ = off.moments_of(entries + [old, later, new], ("new", "p"))
+        self.assertEqual({m["id"] for m in moments}, {"later"})
+        moments, _ = off.moments_of(entries + [old, later, new], ("old", "p"))
+        self.assertNotIn("later", {m["id"] for m in moments})
+        # With no --judge, the one judge the labels hold.
+        moments, info = off.moments_of(entries + [old, later, new])
+        self.assertEqual(info["judge"], "old p")
+        self.assertNotIn("later", {m["id"] for m in moments})
 
     def test_cross_fitting(self):
         # Sessions of one half hold only useful labels, the other only
@@ -215,6 +248,20 @@ class Robust(unittest.TestCase):
         self.assertEqual(off.LAMBDA, 1.0)
 
 
+class Refit(unittest.TestCase):
+    def test_the_model_is_refit_in_every_sample(self):
+        entries, _ = world(sessions=6, per=3)
+        moments, _ = off.moments_of(entries)
+        calls = []
+        real = off.cross_fit
+        try:
+            off.cross_fit = lambda m, s: calls.append(len(s)) or real(m, s)
+            off.evaluate(moments, {"logged": off.logged}, n=7)
+        finally:
+            off.cross_fit = real
+        self.assertGreaterEqual(len(calls), 1 + 7)
+
+
 class Rules(unittest.TestCase):
     def test_verdicts(self):
         point = {"support": 1.0}
@@ -250,9 +297,12 @@ class Rules(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             with open(out) as fh:
                 rep = json.load(fh)
+            self.assertEqual(os.stat(out).st_mode & 0o777, 0o600)
             n = sum(1 for e in entries if e.get("hook") == "judge")
             self.assertEqual(rep["coverage"]["labels"], n - 1)
-            self.assertEqual(sorted(rep["policies"]), ["logged", "top1"])
+            # The one pass's window holds another judge's label: it is not
+            # m's, and nothing is read.
+            self.assertEqual(rep["moments"], 0)
 
 
 if __name__ == "__main__":

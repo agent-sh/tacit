@@ -157,7 +157,7 @@ func TestDeliveryJudgePass(t *testing.T) {
 	if len(passes) != 1 || passes[0].Pool != 6 || passes[0].Drawn != 6 || passes[0].Judged != 3 || passes[0].Waiting != 3 {
 		t.Fatalf("pass: %+v", passes)
 	}
-	if strings.Join(passes[0].UnreadBlocks, ",") != "00000000000000a6" || passes[0].From == "" || passes[0].To == "" {
+	if strings.Join(passes[0].UnreadBlocks, ",") != "00000000000000a6" || passes[0].From == "" || passes[0].To == "" || strings.Join(passes[0].Answered, ",") != "claude-test-model" {
 		t.Fatalf("the pass's window: %+v", passes[0])
 	}
 	// The cap is spent: nothing more today, and no line is drawn twice.

@@ -29,10 +29,13 @@ support is the share of pi on lines the logging policy could deliver
 (p > 0): ips and snips count nothing for the rest, dr only its model's
 guess. Intervals are 95% bootstraps over sessions. The population is the
 moments in the pools of the chosen judge's passes (each pass logs its pool's
-window; another judge's pass keeps its own window), up to its last pass that
-left no drawn line waiting, with a transcript the judge could read when the
-pool was built; a drawn line it then could not read, or whose calls kept
-failing, stays a candidate every policy sees but counts in no sum. The
+window; a window is the judge's when its moments' labels all are, or with
+none, when its pass asked the judge's prompt and no other model answered),
+up to its last pass that left no drawn line waiting, less a pass's whole
+window when it could not read a drawn line, and less the moments with no
+transcript it could read when the pool was built; blocks that showed nothing
+count. A drawn line whose calls kept failing stays a candidate every policy
+sees but counts in no sum; the report gives their share. The
 decision rule is eval/DELIVERY.md ("Scoring each delivery", step 6): no
 offline estimate ships a change; one can only promote a candidate to a live
 test. The log, labels and report stay private: write --out outside the
@@ -86,25 +89,24 @@ def moments_of(entries, judge=None):
     """The judged population (see the module's doc) and what was left out.
     judge is (model, prompt digest): only its labels count, and only the
     pools of its passes; with none given, the one judge the labels hold."""
-    labels, passes, judges = {}, [], collections.Counter()
-    for e in entries:
-        if e.get("hook") == "judge" and e.get("judge"):
-            judges[(e["judge"].get("model"), e["judge"].get("prompt"))] += 1
-        elif e.get("hook") == "judge-pass" and e.get("judge_pass") and parse_ts(e.get("ts")):
-            passes.append((parse_ts(e["ts"]), e["judge_pass"]))
-    if judge is None and len(judges) == 1:
-        judge = next(iter(judges))
+    found, passes, judges = [], [], collections.Counter()
+    when = {}
     for e in entries:
         if e.get("hook") == "judge" and e.get("judge"):
             j = e["judge"]
-            if judge is None or (j.get("model"), j.get("prompt")) == judge:
-                labels[(j.get("block"), j.get("fact"))] = j
+            judges[(j.get("model"), j.get("prompt"))] += 1
+            found.append(j)
+        elif e.get("hook") == "judge-pass" and e.get("judge_pass") and parse_ts(e.get("ts")):
+            passes.append((parse_ts(e["ts"]), e["judge_pass"]))
+        elif e.get("hook") in HOOKS and parse_ts(e.get("ts")):
+            when[e["id"]] = parse_ts(e["ts"])
+    if judge is None and len(judges) == 1:
+        judge = next(iter(judges))
+    labels = {(j.get("block"), j.get("fact")): j for j in found if judge is None or (j.get("model"), j.get("prompt")) == judge}
     passes.sort(key=lambda x: x[0])
     info = {"passes": len(passes), "labels": len(labels), "judges": {f"{m} {p}": n for (m, p), n in judges.items()}}
-    # Each pass's pool window, from all passes (another judge's pass took
-    # its own window's draws): logged by the pass, else from the passes'
-    # times. Then the chosen judge's windows, up to its last pass that left
-    # nothing waiting: every line drawn by then has its label or is lost.
+    # Each pass's pool window, from all passes: logged by the pass, else from
+    # the passes' times.
     windows = []
     for i, (t, jp) in enumerate(passes):
         lo, hi = parse_ts(jp.get("from")), parse_ts(jp.get("to"))
@@ -113,40 +115,75 @@ def moments_of(entries, judge=None):
             if i > 0:
                 lo = max(lo, passes[i - 1][0] - JUDGE_AGE)
         windows.append((lo, hi, jp))
-    mine = [w for w in windows if judge is None or w[2].get("prompt") in (None, "", judge[1])]
-    last = max((i for i, w in enumerate(mine) if not w[2].get("waiting")), default=-1)
-    mine = mine[:last + 1]
-    if not mine:
+
+    def window_of(t):
+        return next((k for k, (lo, hi, _) in enumerate(windows) if t is not None and lo < t <= hi), None)
+
+    # A window is the chosen judge's when the labels of its moments are all
+    # the judge's; with none, when its pass asked with the judge's prompt and
+    # no other model answered it.
+    owners = collections.defaultdict(set)
+    for j in found:
+        k = window_of(when.get(j.get("block")))
+        if k is not None:
+            owners[k].add((j.get("model"), j.get("prompt")))
+
+    def mine(k):
+        jp = windows[k][2]
+        if judge is None:
+            return True
+        if owners[k]:
+            return owners[k] == {judge}
+        return jp.get("prompt") in (None, "", judge[1]) and all(m == judge[0] for m in jp.get("answered") or [])
+
+    keep = [k for k in range(len(windows)) if mine(k)]
+    # Up to the judge's last pass that left nothing waiting: every line
+    # drawn by then has its label or is lost.
+    last = max((k for k in keep if not windows[k][2].get("waiting")), default=-1)
+    keep = [k for k in keep if k <= last]
+    # A pass that could not read a drawn line's moment leaves its window out
+    # whole: what failed (the transcript, the redactor) may have failed for
+    # the moments it did not draw.
+    dropped = [k for k in keep if windows[k][2].get("unread")]
+    keep = [k for k in keep if k not in dropped]
+    if not keep:
         return [], info
-    unread_blocks, excluded = set(), set()
-    for _, _, jp in mine:
+    unread_blocks, failed = set(), set()
+    drawn = 0
+    for k in keep:
+        jp = windows[k][2]
         unread_blocks.update(jp.get("unread_blocks") or [])
-        excluded.update(jp.get("unread") or [])
-        excluded.update(jp.get("failed") or [])
+        failed.update(jp.get("failed") or [])
+        drawn += int(jp.get("drawn") or 0)
+    kept = set(keep)
     out, left = [], collections.Counter()
     for e in entries:
         t = parse_ts(e.get("ts"))
-        if e.get("hook") not in HOOKS or t is None or not e.get("cands"):
+        if e.get("hook") not in HOOKS or t is None:
             continue
-        if not any(lo < t <= hi for lo, hi, _ in mine):
-            left["outside the passes' pools"] += 1
+        k = window_of(t)
+        if k not in kept:
+            left["window dropped (an unread drawn line)" if k in dropped else "outside the judge's pools"] += 1
             continue
         if not e.get("transcript_path") or (e.get("transcript") or 0) < 0 or e["id"] in unread_blocks:
             left["no transcript to read"] += 1
             continue
         cands = []
-        for c in e["cands"]:
+        for c in e.get("cands") or []:  # a block that showed nothing has none
             c = dict(c)
             c["label"] = labels.get((e["id"], c.get("name")))
-            # A drawn line the judge could not read, or whose calls kept
-            # failing: it stays a candidate the policy sees, and counts in
-            # no sum.
-            c["excluded"] = e["id"] + "/" + str(c.get("name")) in excluded
-            left["excluded lines"] += c["excluded"]
+            # A drawn line whose calls kept failing: it stays a candidate the
+            # policy sees, and counts in no sum.
+            c["excluded"] = e["id"] + "/" + str(c.get("name")) in failed
+            left["failed lines"] += c["excluded"]
             cands.append(c)
         out.append({"id": e["id"], "session": e.get("session") or e["id"], "hook": e["hook"], "cands": cands})
-    info.update({"judge": f"{judge[0]} {judge[1]}" if judge else None, "from": min(w[0] for w in mine).isoformat(),
-                 "to": max(w[1] for w in mine).isoformat(), "left_out": dict(left)})
+    info.update({"judge": f"{judge[0]} {judge[1]}" if judge else None, "from": min(windows[k][0] for k in keep).isoformat(),
+                 "to": max(windows[k][1] for k in keep).isoformat(), "left_out": dict(left),
+                 # Failed lines are left out of the sums, but an undrawn line
+                 # that would fail keeps its model guess in dr: the share says
+                 # how much that can be.
+                 "failed_share": round(len(failed) / drawn, 4) if drawn else 0.0})
     return out, info
 
 
@@ -360,7 +397,10 @@ def main():
     report = {"coverage": cover, "moments": len(moments), "sessions": len({m["session"] for m in moments}),
               "rule": {"min_lines": MIN_LINES, "min_sessions": MIN_SESSIONS, "min_support": MIN_SUPPORT, "lambda": LAMBDA},
               "policies": evaluate(moments, policies, n=a.boot) if moments else {}}
-    with open(a.out, "w") as fh:
+    # The report is private: this user's alone, whatever the umask.
+    fd = os.open(a.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w") as fh:
         json.dump(report, fh, indent=1)
     print(f"{len(moments)} moments, {report['sessions']} sessions, {cover.get('labels', 0)} labels")
     for n, r in report["policies"].items():
