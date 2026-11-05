@@ -87,6 +87,10 @@ class Signals(unittest.TestCase):
                  "labels": {"queue-retry-backoff": "R", "pool-lock-order": "R", "printer-floor": "N", "signoff-rule": "R"}},
                 {"id": "c2", "session": "s2", "ts": t(0), "event": "prompt", "origin": "headless", "commit": "HEAD", "delivered": ["printer-floor"], "labels": {"printer-floor": "N"}},
                 {"id": "c4", "session": "s1", "ts": t(14), "event": "prompt", "origin": "typed", "commit": "HEAD", "delivered": []},
+                # The same block in a second label set: one row; a fact
+                # graded two ways there is left out.
+                {"id": "c5", "session": "s1", "ts": t(0), "event": "prompt", "origin": "typed", "commit": "HEAD",
+                 "delivered": ["queue-retry-backoff", "pool-lock-order"], "labels": {"queue-retry-backoff": "R", "pool-lock-order": "N"}},
                 {"id": "c3", "session": "s1", "ts": t(1), "event": "prompt", "sidechain": True, "commit": "HEAD", "labels": {"pool-lock-order": "W"}},
             ])
             by = {r["fact"]: r for r in res["rows"] if r["session"] == "s1"}
@@ -94,15 +98,15 @@ class Signals(unittest.TestCase):
             self.assertIsNone(other["owner_restated"], "a session of no owner case is not the owner's")
             self.assertTrue(by["queue-retry-backoff"]["carried_forward"])
             self.assertTrue(by["queue-retry-backoff"]["summary_dropped"] and by["queue-retry-backoff"]["needed_again"], "opened after the drop")
-            self.assertTrue(by["pool-lock-order"]["summary_kept"] and not by["pool-lock-order"]["summary_dropped"])
-            self.assertFalse(by["pool-lock-order"]["carried_forward"], "text at the moment itself is outside the window")
+
             self.assertFalse(by["signoff-rule"]["carried_forward"], "a ruling is held by its name only")
             p = by["printer-floor"]
             self.assertTrue(p["summary_dropped"] and p["needed_again"], "the search after the drop")
             self.assertFalse(p["opened"], "the open after its next delivery is outside the window")
             self.assertTrue(p["window_ended_early"])
             self.assertTrue(p["owner_restated"])
-            self.assertEqual(res["report"]["skipped"], {"sidechain": 1})
+            self.assertEqual(res["report"]["skipped"], {"sidechain": 1, "duplicate": 1, "graded two ways": 2})
+            self.assertNotIn("pool-lock-order", by, "graded two ways")
 
     def test_the_decision_rule(self):
         base = {"R": 0.2, "W": 0.4, "N": 0.4}

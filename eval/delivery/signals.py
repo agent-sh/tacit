@@ -20,7 +20,9 @@ moment and compute, without a model:
                    time is a case's of the owner's origin (deliveries.py's
                    typed and queued; "owner" in older files), so a program's
                    prompt or a task notification in the same session is not
-                   theirs (a curator flag, never a score)
+                   theirs; only turns that make a case are read, so without
+                   --silent cases most of the owner's turns are not (the
+                   report counts them; a curator flag, never a score)
 
 "Holds" approximates the hooks' summary rule (hooks_restart.go,
 summaryOf/holds), without their stemming (search.TermKey) or the in-order
@@ -30,7 +32,7 @@ a ruling is held by its name only, since a rule's words are the work's
 words. A ruling approximates fact.IsRuling at the case's commit: in a store
 with the rulings audit, source.kind user with an owner quote or an
 endorsement, or written by the owner (harness human, outside local/ and the
-other agents' inbox folders); before it, source.kind user or type
+other agents' inbox folders; the app-note check is left out); before it, source.kind user or type
 user_standard (the ledgers that back the evidence are not read).
 
 The window runs from the line's moment (plus 5 seconds, so the line's own
@@ -337,7 +339,6 @@ def main():
     cases = [json.loads(line) for line in open(a.cases)]
     # A session is the owner's when one of its prompts is: deliveries.py's
     # typed and queued origins, and "owner" in older case files.
-    owner_sessions = {c.get("session") for c in cases if c.get("origin") in ("typed", "queued", "owner")}
     owner_times = collections.defaultdict(set)
     for c in cases:
         t = parse_ts(c.get("ts") or "")
@@ -345,6 +346,17 @@ def main():
             owner_times[c.get("session")].add(t)
     cache, rows = {}, []
     skipped = collections.Counter()
+    # One delivery is one row: the same block (session, event, moment) can
+    # come in several label sets; a fact graded two ways there is left out.
+    seen_grade, conflicts = {}, set()
+    for c in cases:
+        labels = {**(c.get("labels") or {}), **{n: g for n, g in extra.get(c["id"], {}).items() if n in (c.get("delivered") or [])}}
+        for n, g in labels.items():
+            k = (c.get("session"), c.get("event"), c.get("ts"), n)
+            if k in seen_grade and seen_grade[k] != g:
+                conflicts.add(k)
+            seen_grade.setdefault(k, g)
+    done = set()
     for c in cases:
         # Extra grades only for what the block delivered (deliveries.py's rule).
         labels = {**(c.get("labels") or {}), **{n: g for n, g in extra.get(c["id"], {}).items() if n in (c.get("delivered") or [])}}
@@ -362,6 +374,12 @@ def main():
             cache[path] = (transcript_events(path), os.path.getsize(path))
         events, size = cache[path]
         for name, grade in labels.items():
+            k = (c.get("session"), c.get("event"), c.get("ts"), name)
+            if k in conflicts or k in done:
+                skipped["graded two ways" if k in conflicts else "duplicate"] += 1
+                done.add(k)
+                continue
+            done.add(k)
             f = store.fact(name, c.get("commit") or "HEAD")
             if f is None:
                 skipped["fact not in the store"] += 1
@@ -375,7 +393,7 @@ def main():
             rows.append({"case": c["id"], "session": c.get("session"), "fact": name, "grade": grade, "ruling": ruling,
                          "origin": c.get("origin"), "window_ended_early": end < start + timedelta(hours=WINDOW_HOURS),
                          "crossed_unrecorded_compaction": crossed,
-                         "transcript_bytes": size, **signals_for(events, start, end, name, desc, ruling, c.get("session") in owner_sessions, frozenset(owner_times[c.get("session")]))})
+                         "transcript_bytes": size, **signals_for(events, start, end, name, desc, ruling, c.get("session") in owner_times, frozenset(owner_times[c.get("session")]))})
     n = len(rows)
     base = {g: sum(r["grade"] == g for r in rows) / n for g in "RWN"} if n else {g: 0 for g in "RWN"}
     report = {"lines": n, "sessions": len({r["session"] for r in rows}), "skipped": dict(skipped), "base": base,
@@ -385,7 +403,10 @@ def main():
     for sig, good in (("summary_kept", "R"), ("needed_again", "R"), ("carried_forward", "R"), ("opened", "R"), ("summary_dropped", "N")):
         report["signals"][sig] = verdict(rows, sig, good, base)
     restated = [r for r in rows if r["owner_restated"]]
-    report["signals"]["owner_restated"] = {"fires": len(restated), "of": sum(1 for r in rows if r["owner_restated"] is not None)}
+    turns = sum(1 for path, (evs, _) in cache.items() for t, k, _ in evs if k == "user")
+    owner_turns = sum(1 for sess, times in owner_times.items() for _ in times)
+    report["signals"]["owner_restated"] = {"fires": len(restated), "lines": sum(1 for r in rows if r["owner_restated"] is not None),
+                                           "owner_turns_read": owner_turns, "user_turns": turns}
     with open(a.out, "w") as fh:
         json.dump({"report": report, "rows": rows}, fh, indent=1, default=str)
     os.chmod(a.out, 0o600)
