@@ -191,9 +191,6 @@ func redactRecordsOn(ctx context.Context, run *scrumpRun, texts []string) ([]str
 		run.end()
 		return nil, ErrNoRecords
 	}
-	if mode == 2 {
-		return nil, ErrNoRecords
-	}
 	// The first call of the process carries the probe ahead of the texts:
 	// a scrump that takes the flag but does not keep records apart is told
 	// from one that does at no cost of its own.

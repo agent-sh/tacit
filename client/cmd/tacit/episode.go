@@ -833,6 +833,13 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 		return "", errEpisode{"the words are the redactor's mask: not searched"}
 	}
 	terms = kept
+	limitOff, limitIdx, paged := int64(-1), 0, strings.TrimSpace(before) != ""
+	if paged {
+		var ok bool
+		if limitOff, limitIdx, ok = parseRef(before); !ok {
+			return "", errEpisode{"not a ref: " + before}
+		}
+	}
 	// scrump starts now, so it loads its rules while the transcript is read.
 	red := events.NewRedactor()
 	defer red.Close()
@@ -878,13 +885,6 @@ func episodeFind(ctx context.Context, t episodeTarget, query, before string, any
 			return fmt.Errorf("redaction failed, nothing searched: %v", err)
 		}
 		return checkQuery(masked[0])
-	}
-	limitOff, limitIdx, paged := int64(-1), 0, strings.TrimSpace(before) != ""
-	if paged {
-		var ok bool
-		if limitOff, limitIdx, ok = parseRef(before); !ok {
-			return "", errEpisode{"not a ref: " + before}
-		}
 	}
 	type cand struct {
 		ev  events.Event
