@@ -185,12 +185,21 @@ class Population(unittest.TestCase):
         ids = {m["id"] for m in got}
         self.assertNotIn(a["id"], ids)  # its window holds an unread line
         self.assertIn(b["id"], ids)
-        # A failed line logged by a later pass is excluded in its own window.
+        # A failed line logged by a later pass whose own window is not kept
+        # (its moment holds another model's label) is excluded in the window
+        # its moment lies in, and counts in that window's failed share.
         w2["judge_pass"].update(unread=[], failed=[a["id"] + "/f1"])
-        got, info = off.moments_of(entries + [w1, w2])
+        other = {"id": "jx", "ts": "2026-11-01T14:00:00Z", "hook": "judge",
+                 "judge": {"block": b["id"], "fact": "f0", "relevant": "yes", "novel": "yes", "p": 0.5, "model": "m2", "prompt": "p"}}
+        w3 = {"id": "w3", "ts": "2026-11-01T16:00:00Z", "hook": "judge-pass",
+              "judge_pass": {"waiting": 0, "prompt": "p", "drawn": 2, "from": "2026-11-01T13:30:00Z", "to": "2026-11-01T15:30:00Z"}}
+        got, info = off.moments_of(entries + [w1, w2, w3, other], ("m", "p"))
+        ids = {x["id"] for x in got}
+        self.assertNotIn(b["id"], ids)  # w2's window holds m2's label: not m's
         m = next(x for x in got if x["id"] == a["id"])
         self.assertTrue(next(c for c in m["cands"] if c["name"] == "f1")["excluded"])
-        self.assertEqual(info["failed_share"], round(1 / 8, 4))
+        # Kept: w1 (4 drawn) and w3 (2 drawn); the one failed line lies in w1.
+        self.assertEqual(info["failed_share"], round(1 / 6, 4))
 
     def test_another_judges_pool(self):
         # Passes of judges p, q, p: a moment in q's pool is not p's, though
