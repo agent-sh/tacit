@@ -99,6 +99,8 @@ New rule asks "What is the rule?": in your words, which repo it is about, who it
 | `--pencil` | `#b3262c` | `#ff8a7a` | The primary action only; "would stop reaching agents" |
 | `--query` | `#2b52b8` | `#94b2ff` | Lines a draft lacks; "marked as conflicting" |
 
+The README's figures (docs/images, drawn by `docs/images/diagram.py` and `eval/recall/charts.py`) use these tokens on galley, with a few steps between them for cards, arrows and grid lines. One change: in dark, query is `#6d8ff0` for chart marks and figure accents. `#94b2ff` is far lighter than the ink-3 gray series and would outweigh it.
+
 Pencil means "this is the action that matters here": the suggested answer, Edit, Save, Keep my draft, Make it my rule, Apply the fix. Nothing else is crimson. Where you are is ink.
 
 ## Type

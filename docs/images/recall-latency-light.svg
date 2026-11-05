@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="480" viewBox="0 0 880 480" role="img" aria-labelledby="t d">
+<title id="t">tacit takes 2.6 s at 64 MiB; grep takes 34 ms</title><desc id="d">Lower is better. Median of 16 planted tasks per size, each the median of 5 launches. Whiskers show the tasks' min to max; ranges smaller than a marker are not drawn.</desc>
+<style>text{font-family:'Atkinson Hyperlegible Next', 'Atkinson Hyperlegible', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;fill:#1c1d1a}.s{fill:#55574f}.m{fill:#6b6d64;font-variant-numeric:tabular-nums}</style>
+<rect x="0.5" y="0.5" width="879" height="479" rx="8" fill="#fbfbf8" stroke="#dfe0d9"/>
+<text x="24" y="38" font-size="18" font-weight="600">tacit takes 2.6 s at 64 MiB; grep takes 34 ms</text>
+<text class="s" x="24" y="62" font-size="14">Lower is better. Median of 16 planted tasks per size, each the median of 5 launches.</text>
+<text class="s" x="24" y="82" font-size="14">Whiskers show the tasks' min to max; ranges smaller than a marker are not drawn.</text>
+<line x1="24" x2="46" y1="114" y2="114" stroke="#2b52b8" stroke-width="2" stroke-linecap="round"/><circle cx="35.0" cy="114.0" r="4.5" fill="#2b52b8"/>
+<text class="s" x="54" y="119" font-size="13">tacit: episode find, then show</text>
+<line x1="300" x2="322" y1="114" y2="114" stroke="#6b6d64" stroke-width="2" stroke-linecap="round"/><rect x="306.5" y="109.5" width="9" height="9" fill="#6b6d64"/>
+<text class="s" x="330" y="119" font-size="13">grep: the matching lines, by hand</text>
+<line x1="72" x2="714" y1="416.0" y2="416.0" stroke="#e6e7e0" stroke-width="1"/>
+<text class="m" x="62" y="420.0" font-size="12" text-anchor="end">1 ms</text>
+<line x1="72" x2="714" y1="367.2" y2="367.2" stroke="#e6e7e0" stroke-width="1"/>
+<text class="m" x="62" y="371.2" font-size="12" text-anchor="end">10 ms</text>
+<line x1="72" x2="714" y1="318.4" y2="318.4" stroke="#e6e7e0" stroke-width="1"/>
+<text class="m" x="62" y="322.4" font-size="12" text-anchor="end">100 ms</text>
+<line x1="72" x2="714" y1="269.6" y2="269.6" stroke="#e6e7e0" stroke-width="1"/>
+<text class="m" x="62" y="273.6" font-size="12" text-anchor="end">1 s</text>
+<line x1="72" x2="714" y1="220.8" y2="220.8" stroke="#e6e7e0" stroke-width="1"/>
+<text class="m" x="62" y="224.8" font-size="12" text-anchor="end">10 s</text>
+<line x1="72" x2="714" y1="172.0" y2="172.0" stroke="#e6e7e0" stroke-width="1"/>
+<text class="m" x="62" y="176.0" font-size="12" text-anchor="end">100 s</text>
+<line x1="72" x2="714" y1="416" y2="416" stroke="#b9bbb2" stroke-width="1"/>
+<text class="m" x="92.0" y="436" font-size="12" text-anchor="middle">1</text>
+<text class="m" x="192.3" y="436" font-size="12" text-anchor="middle">2</text>
+<text class="m" x="292.7" y="436" font-size="12" text-anchor="middle">4</text>
+<text class="m" x="393.0" y="436" font-size="12" text-anchor="middle">8</text>
+<text class="m" x="493.3" y="436" font-size="12" text-anchor="middle">16</text>
+<text class="m" x="593.7" y="436" font-size="12" text-anchor="middle">32</text>
+<text class="m" x="694.0" y="436" font-size="12" text-anchor="middle">64</text>
+<text class="m" x="393.0" y="460" font-size="12" text-anchor="middle">Transcript size, MiB (log scale)</text>
+<text class="m" x="24" y="152" font-size="12">Time per task, all calls</text>
+<path d="M92.0,408.9 V392.7 M89.0,408.9 h6 M89.0,392.7 h6" stroke="#909289" stroke-width="1" fill="none"/>
+<path d="M192.3,401.3 V387.7 M189.3,401.3 h6 M189.3,387.7 h6" stroke="#909289" stroke-width="1" fill="none"/>
+<polyline points="92.0,401.3 192.3,397.9 292.7,390.4 393.0,380.1 493.3,367.7 593.7,353.2 694.0,341.0" fill="none" stroke="#6b6d64" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="87.5" y="396.8" width="9" height="9" fill="#6b6d64" stroke="#fbfbf8" stroke-width="2"/>
+<rect x="187.8" y="393.4" width="9" height="9" fill="#6b6d64" stroke="#fbfbf8" stroke-width="2"/>
+<rect x="288.2" y="385.9" width="9" height="9" fill="#6b6d64" stroke="#fbfbf8" stroke-width="2"/>
+<rect x="388.5" y="375.6" width="9" height="9" fill="#6b6d64" stroke="#fbfbf8" stroke-width="2"/>
+<rect x="488.8" y="363.2" width="9" height="9" fill="#6b6d64" stroke="#fbfbf8" stroke-width="2"/>
+<rect x="589.2" y="348.7" width="9" height="9" fill="#6b6d64" stroke="#fbfbf8" stroke-width="2"/>
+<rect x="689.5" y="336.5" width="9" height="9" fill="#6b6d64" stroke="#fbfbf8" stroke-width="2"/>
+<path d="M92.0,270.2 V254.4 M89.0,270.2 h6 M89.0,254.4 h6" stroke="#6a8ade" stroke-width="1" fill="none"/>
+<path d="M192.3,270.1 V250.0 M189.3,270.1 h6 M189.3,250.0 h6" stroke="#6a8ade" stroke-width="1" fill="none"/>
+<path d="M292.7,269.8 V249.7 M289.7,269.8 h6 M289.7,249.7 h6" stroke="#6a8ade" stroke-width="1" fill="none"/>
+<path d="M393.0,268.7 V248.7 M390.0,268.7 h6 M390.0,248.7 h6" stroke="#6a8ade" stroke-width="1" fill="none"/>
+<path d="M493.3,267.0 V246.6 M490.3,267.0 h6 M490.3,246.6 h6" stroke="#6a8ade" stroke-width="1" fill="none"/>
+<path d="M593.7,264.7 V234.2 M590.7,264.7 h6 M590.7,234.2 h6" stroke="#6a8ade" stroke-width="1" fill="none"/>
+<path d="M694.0,259.6 V214.2 M691.0,259.6 h6 M691.0,214.2 h6" stroke="#6a8ade" stroke-width="1" fill="none"/>
+<polyline points="92.0,268.2 192.3,269.6 292.7,268.8 393.0,267.8 493.3,266.6 593.7,255.8 694.0,249.1" fill="none" stroke="#2b52b8" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="92.0" cy="268.2" r="4.5" fill="#2b52b8" stroke="#fbfbf8" stroke-width="2"/>
+<circle cx="192.3" cy="269.6" r="4.5" fill="#2b52b8" stroke="#fbfbf8" stroke-width="2"/>
+<circle cx="292.7" cy="268.8" r="4.5" fill="#2b52b8" stroke="#fbfbf8" stroke-width="2"/>
+<circle cx="393.0" cy="267.8" r="4.5" fill="#2b52b8" stroke="#fbfbf8" stroke-width="2"/>
+<circle cx="493.3" cy="266.6" r="4.5" fill="#2b52b8" stroke="#fbfbf8" stroke-width="2"/>
+<circle cx="593.7" cy="255.8" r="4.5" fill="#2b52b8" stroke="#fbfbf8" stroke-width="2"/>
+<circle cx="694.0" cy="249.1" r="4.5" fill="#2b52b8" stroke="#fbfbf8" stroke-width="2"/>
+<text x="726" y="253.1" font-size="13" font-weight="600">2.6 s<tspan class="s" font-weight="400"> tacit</tspan></text>
+<text x="726" y="345.0" font-size="13" font-weight="600">34 ms<tspan class="s" font-weight="400"> grep</tspan></text>
+</svg>

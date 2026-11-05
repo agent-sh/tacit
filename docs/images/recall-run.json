@@ -1,0 +1,9 @@
+{
+ "tacit": "tacit v0.9.29",
+ "scrump": "scrump-cli 0.2.0",
+ "grep": "grep (GNU grep) 3.12",
+ "python": "3.14.4",
+ "sizes": "1,2,4,8,16,32,64",
+ "seed": 7,
+ "reps": 5
+}

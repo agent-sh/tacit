@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="480" viewBox="0 0 880 480" role="img" aria-labelledby="t d">
+<title id="t">At 64 MiB, grep's median task brings 9.7x tacit's context</title><desc id="d">Lower is better. Median of 16 planted tasks per size. Whiskers show the tasks' min to max; ranges smaller than a marker are not drawn.</desc>
+<style>text{font-family:'Atkinson Hyperlegible Next', 'Atkinson Hyperlegible', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;fill:#1c1d1a}.s{fill:#55574f}.m{fill:#6b6d64;font-variant-numeric:tabular-nums}</style>
+<rect x="0.5" y="0.5" width="879" height="479" rx="8" fill="#fbfbf8" stroke="#dfe0d9"/>
+<text x="24" y="38" font-size="18" font-weight="600">At 64 MiB, grep's median task brings 9.7x tacit's context</text>
+<text class="s" x="24" y="62" font-size="14">Lower is better. Median of 16 planted tasks per size.</text>
+<text class="s" x="24" y="82" font-size="14">Whiskers show the tasks' min to max; ranges smaller than a marker are not drawn.</text>
+<line x1="24" x2="46" y1="114" y2="114" stroke="#2b52b8" stroke-width="2" stroke-linecap="round"/><circle cx="35.0" cy="114.0" r="4.5" fill="#2b52b8"/>
+<text class="s" x="54" y="119" font-size="13">tacit: episode find, then show</text>
+<line x1="300" x2="322" y1="114" y2="114" stroke="#6b6d64" stroke-width="2" stroke-linecap="round"/><rect x="306.5" y="109.5" width="9" height="9" fill="#6b6d64"/>
+<text class="s" x="330" y="119" font-size="13">grep: the matching lines, by hand</text>
+<line x1="72" x2="714" y1="416.0" y2="416.0" stroke="#e6e7e0" stroke-width="1"/>
+<text class="m" x="62" y="420.0" font-size="12" text-anchor="end">100</text>
+<line x1="72" x2="714" y1="355.0" y2="355.0" stroke="#e6e7e0" stroke-width="1"/>
+<text class="m" x="62" y="359.0" font-size="12" text-anchor="end">1K</text>
+<line x1="72" x2="714" y1="294.0" y2="294.0" stroke="#e6e7e0" stroke-width="1"/>
+<text class="m" x="62" y="298.0" font-size="12" text-anchor="end">10K</text>
+<line x1="72" x2="714" y1="233.0" y2="233.0" stroke="#e6e7e0" stroke-width="1"/>
+<text class="m" x="62" y="237.0" font-size="12" text-anchor="end">100K</text>
+<line x1="72" x2="714" y1="172.0" y2="172.0" stroke="#e6e7e0" stroke-width="1"/>
+<text class="m" x="62" y="176.0" font-size="12" text-anchor="end">1M</text>
+<line x1="72" x2="714" y1="416" y2="416" stroke="#b9bbb2" stroke-width="1"/>
+<text class="m" x="92.0" y="436" font-size="12" text-anchor="middle">1</text>
+<text class="m" x="192.3" y="436" font-size="12" text-anchor="middle">2</text>
+<text class="m" x="292.7" y="436" font-size="12" text-anchor="middle">4</text>
+<text class="m" x="393.0" y="436" font-size="12" text-anchor="middle">8</text>
+<text class="m" x="493.3" y="436" font-size="12" text-anchor="middle">16</text>
+<text class="m" x="593.7" y="436" font-size="12" text-anchor="middle">32</text>
+<text class="m" x="694.0" y="436" font-size="12" text-anchor="middle">64</text>
+<text class="m" x="393.0" y="460" font-size="12" text-anchor="middle">Transcript size, MiB (log scale)</text>
+<text class="m" x="24" y="152" font-size="12">Characters per task, all calls</text>
+<path d="M83.0,376.0 V276.1 M80.0,376.0 h6 M80.0,276.1 h6" stroke="#909289" stroke-width="1" fill="none"/>
+<path d="M183.3,375.9 V268.9 M180.3,375.9 h6 M180.3,268.9 h6" stroke="#909289" stroke-width="1" fill="none"/>
+<path d="M283.7,357.4 V263.2 M280.7,357.4 h6 M280.7,263.2 h6" stroke="#909289" stroke-width="1" fill="none"/>
+<path d="M384.0,330.1 V269.6 M381.0,330.1 h6 M381.0,269.6 h6" stroke="#909289" stroke-width="1" fill="none"/>
+<path d="M484.3,330.1 V267.4 M481.3,330.1 h6 M481.3,267.4 h6" stroke="#909289" stroke-width="1" fill="none"/>
+<path d="M584.7,330.5 V240.9 M581.7,330.5 h6 M581.7,240.9 h6" stroke="#909289" stroke-width="1" fill="none"/>
+<path d="M685.0,329.7 V197.3 M682.0,329.7 h6 M682.0,197.3 h6" stroke="#909289" stroke-width="1" fill="none"/>
+<polyline points="83.0,322.5 183.3,294.3 283.7,303.0 384.0,293.0 484.3,287.8 584.7,269.1 685.0,260.2" fill="none" stroke="#6b6d64" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="78.5" y="318.0" width="9" height="9" fill="#6b6d64" stroke="#fbfbf8" stroke-width="2"/>
+<rect x="178.8" y="289.8" width="9" height="9" fill="#6b6d64" stroke="#fbfbf8" stroke-width="2"/>
+<rect x="279.2" y="298.5" width="9" height="9" fill="#6b6d64" stroke="#fbfbf8" stroke-width="2"/>
+<rect x="379.5" y="288.5" width="9" height="9" fill="#6b6d64" stroke="#fbfbf8" stroke-width="2"/>
+<rect x="479.8" y="283.3" width="9" height="9" fill="#6b6d64" stroke="#fbfbf8" stroke-width="2"/>
+<rect x="580.2" y="264.6" width="9" height="9" fill="#6b6d64" stroke="#fbfbf8" stroke-width="2"/>
+<rect x="680.5" y="255.7" width="9" height="9" fill="#6b6d64" stroke="#fbfbf8" stroke-width="2"/>
+<path d="M101.0,381.8 V291.0 M98.0,381.8 h6 M98.0,291.0 h6" stroke="#6a8ade" stroke-width="1" fill="none"/>
+<path d="M201.3,381.6 V278.9 M198.3,381.6 h6 M198.3,278.9 h6" stroke="#6a8ade" stroke-width="1" fill="none"/>
+<path d="M301.7,376.6 V287.6 M298.7,376.6 h6 M298.7,287.6 h6" stroke="#6a8ade" stroke-width="1" fill="none"/>
+<path d="M402.0,376.6 V280.4 M399.0,376.6 h6 M399.0,280.4 h6" stroke="#6a8ade" stroke-width="1" fill="none"/>
+<path d="M502.3,376.5 V277.1 M499.3,376.5 h6 M499.3,277.1 h6" stroke="#6a8ade" stroke-width="1" fill="none"/>
+<path d="M602.7,372.9 V278.9 M599.7,372.9 h6 M599.7,278.9 h6" stroke="#6a8ade" stroke-width="1" fill="none"/>
+<path d="M703.0,376.0 V264.6 M700.0,376.0 h6 M700.0,264.6 h6" stroke="#6a8ade" stroke-width="1" fill="none"/>
+<polyline points="101.0,372.2 201.3,362.7 301.7,359.4 402.0,359.3 502.3,359.3 602.7,317.0 703.0,320.4" fill="none" stroke="#2b52b8" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="101.0" cy="372.2" r="4.5" fill="#2b52b8" stroke="#fbfbf8" stroke-width="2"/>
+<circle cx="201.3" cy="362.7" r="4.5" fill="#2b52b8" stroke="#fbfbf8" stroke-width="2"/>
+<circle cx="301.7" cy="359.4" r="4.5" fill="#2b52b8" stroke="#fbfbf8" stroke-width="2"/>
+<circle cx="402.0" cy="359.3" r="4.5" fill="#2b52b8" stroke="#fbfbf8" stroke-width="2"/>
+<circle cx="502.3" cy="359.3" r="4.5" fill="#2b52b8" stroke="#fbfbf8" stroke-width="2"/>
+<circle cx="602.7" cy="317.0" r="4.5" fill="#2b52b8" stroke="#fbfbf8" stroke-width="2"/>
+<circle cx="703.0" cy="320.4" r="4.5" fill="#2b52b8" stroke="#fbfbf8" stroke-width="2"/>
+<text x="726" y="264.2" font-size="13" font-weight="600">36K chars<tspan class="s" font-weight="400"> grep</tspan></text>
+<text x="726" y="324.4" font-size="13" font-weight="600">3.7K chars<tspan class="s" font-weight="400"> tacit</tspan></text>
+</svg>

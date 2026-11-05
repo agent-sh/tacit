@@ -30,6 +30,7 @@ Your own inputs (`truth.jsonl`, `ab/tasks.json`, `ab/results/`, a corpus manifes
 | `../client/tools/envelope` (Go) | The curator's rulings pass for single inbox notes through the judge route: how many answers are no JSON array (the curator refuses them whole), whether a sent-back answer comes back clean, and how many hold an entry; `-template` measures another prompt. | one per call, two with a retry |
 | `curate/link_history.py` | Every link the curator's link step changed in a fact file, from git: whether the fact had replaced the target (provenance), another fact had, or no fact had the name. | none |
 | `derived/backtest.py` | The thresholds behind derived hot spots and co-change, from plain git history. | none |
+| `recall/bench.py` | Recall from a session's own transcript, by hand (grep, then the matching lines) and with `tacit episode`, on synthetic sessions from `recall/corpus.py` (1 to 64 MiB, each with 16 planted tasks: 4 ids, 4 commands, 4 paths, 4 errors, every value beside a fake secret): found and right, tool calls, characters brought into context, planted secrets that reached it, latency over 5 launches. Writes the CSVs and charts in `docs/images`. Needs grep, scrump and tacit. | none |
 | `secrets/token_rules.py` | The pre-receive secret scan, run the hook's way, on random keys of each provider's shape (`sk-`, Slack, Tailscale) and on fact names with a segment that starts like one: the share it refuses, beside any `--compare` regex, for this hook or another (`--hook`). Needs GNU grep. | none |
 
 ## Inputs
@@ -56,6 +57,16 @@ python3 -I eval/baseline/grep_baseline.py --truth eval/examples/truth.sample.jso
 ```
 
 `--home` stands in for `~`, so the sample's `existing_memory` paths resolve to `examples/home/.claude/projects/...`.
+
+## Recall benchmark
+
+```
+python3 -I eval/recall/bench.py
+```
+
+It generates the sessions under `~/.cache/tacit-recall-bench` (about 130 MiB; `--work` moves them), runs both arms, and rewrites `docs/images/recall-tasks.csv` (one row per size, arm and task), `docs/images/recall-summary.csv` (medians with min and max over the tasks), `docs/images/recall-run.json` (tacit, scrump, grep and Python versions, seed, launches), the `recall-*.svg` charts and the table under them in README.md. `--charts-only` redraws the charts and the table from the summary. In the summary, a latency's min and max are over the tasks' medians; in the tasks file, over one task's launches. For a partial run (`--sizes 1`), pass `--out` elsewhere, or it overwrites the committed data. Each arm follows fixed rules, written at the top of `bench.py`, so no model is called. The latency is this machine's; the other columns are the same on any machine for the same seed and tool versions.
+
+The by-hand arm counts everything grep printed: whole transcript lines, before any cap a harness puts on tool output, so its found-and-right count also assumes the whole output reaches the agent. The comparison is with reading the matching events: a grep narrowed to the value's shape (`grep -oE`) would print a few dozen characters and no secret, but the by-hand arm assumes the agent does not know the value's shape. Both arms are given the session: grep its transcript file, tacit its id. Every task's matching lines include the event that holds its fake secret, so grep's output carries one. In the committed run, tacit's four misses are all deploy ids: two older decoys, one no answer, and one other deploy's id, which grep gives too. In the first three, the deploy event's clip lands on an earlier mention of the first word. In two (1 and 2 MiB), `show` cuts the event at 8,000 characters, before the id (past 9,000), and the rules go on to the older decoy. In the third (16 MiB), the three reads go to newer log events that hold the words, so the deploy is never read whole. The fourth, which grep misses too, is a newer deploy whose log holds the same three words. One task (64 MiB) was right only on its tenth call, the cap.
 
 ## Run it on your own data
 

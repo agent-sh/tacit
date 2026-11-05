@@ -15,3 +15,10 @@ tacit app --browser
 ```
 
 Choose **All facts**, select **Scratch files go under ~/.cache, not /tmp**, then open **Details**. Use the light/dark button to switch themes. The example fixture contains generic project and workstation names.
+
+## Diagram and charts
+
+The README's figures are SVG, one file per theme, in the app's colors, naming its font with system fallbacks (an image cannot load a web font). Each is made by a script, so edit the script and run it again rather than the SVG:
+
+- `how-it-works-{light,dark}.svg`: `python3 -I docs/images/diagram.py`
+- `recall-context-*.svg` and `recall-latency-*.svg`, with their data in `recall-tasks.csv`, `recall-summary.csv` and `recall-run.json` (tool versions, seed, launches per call): `python3 -I eval/recall/bench.py` ([Recall benchmark](../../eval/README.md#recall-benchmark)).

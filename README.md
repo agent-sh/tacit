@@ -80,6 +80,11 @@ Open **Inbox** to inspect the note and its source. After curation, installed int
 
 ## How it works
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/how-it-works-dark.svg">
+  <img alt="Agents send notes to collect, and a dreamer reads their transcripts; collect writes both to a git store; curate turns them into facts there; deliver gives facts back at session start and per prompt; check and organize maintain the store. All of it runs in the local client; an optional shared server syncs stores between machines, and then one machine curates the shared store." src="docs/images/how-it-works-light.svg" width="880">
+</picture>
+
 1. **Collect.** Agents write short inbox notes. Imports bring in existing memory files. An optional dreamer extracts candidates from redacted transcript deltas: from the prompt hook once a session's undreamed part fills a dream window, before a compaction, every 10 minutes for the sessions that went quiet, and every 4 hours as a backstop. It saves each successful window before the next call and recovers pending notes after interrupted runs.
 2. **Curate.** Notes become individual facts with sources and scopes. Contradictions and uncertain changes become review items. A quick run after the idle dream curates the last day's notes, so a session's fact reaches other sessions within about an hour.
 3. **Deliver.** A local SQLite FTS5 index matches facts to the repo, host and prompt. Hooks supply up to 6 of a repo's facts (10 for a host outside a repo) at session start, again after a compaction, resume, clear or fork, and up to 5 curated facts per prompt, with a separate match for a computed fact. Explicit search can return the full text.
@@ -275,6 +280,48 @@ Those measurements shaped the client: lexical retrieval beat the dense variants 
 [Methods and decisions](eval/VALUE.md) · [Grep baseline](eval/BASELINE.md) · [Run the synthetic sample](eval/README.md#run-the-sample)
 
 The synthetic sample runs without a server or model account. It demonstrates the formats and scoring. Long-session outcomes and delivery in other harnesses have not been measured.
+
+### Recall from a session's own transcript
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/recall-context-dark.svg">
+  <img alt="Characters brought into context per task, by transcript size from 1 to 64 MiB: tacit episode brings 523 at 1 MiB and 3.7K at 64 MiB, grep's matching lines 3.4K and 36K." src="docs/images/recall-context-light.svg" width="880">
+</picture>
+
+*At 64 MiB, `tacit episode` brings a median of 3.7K characters into context per task. grep prints whole transcript lines and brings 36K. Each task's matching events include one with a fake secret. Every grep output carried one. None reached tacit's output: scrump masked the ones it printed, and the rest lay outside what it printed. tacit found the right value in 108 of 112 tasks, grep in 111 ([the misses](eval/README.md#recall-benchmark)). Both counts assume the whole output reaches the agent, with no harness cap on tool output. Synthetic sessions, 16 tasks per size: `python3 -I eval/recall/bench.py`.*
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/recall-latency-dark.svg">
+  <img alt="Time per task, by transcript size from 1 to 64 MiB: tacit episode takes 1.1 s at 1 MiB and 2.6 s at 64 MiB, grep 2.0 ms and 34 ms." src="docs/images/recall-latency-light.svg" width="880">
+</picture>
+
+*grep is faster: 2.0 ms per task at 1 MiB and 34 ms at 64 MiB, where tacit takes 1.1 s and 2.6 s. Times are from one machine; same run and command.*
+
+<details>
+<summary>The numbers: median (min to max) of 16 tasks; a task's time is the median of 5 launches</summary>
+
+<!-- recall-table -->
+
+| MiB | Arm | Right | Characters | Planted secrets | Calls | Time |
+|---|---|---|---|---|---|---|
+| 1 | tacit | 15 of 16 | 523 (363 to 11,190) | 0 (0 to 0) | 1 (1 to 3) | 1.1 s (973 ms to 2.0 s) |
+| 1 | grep | 16 of 16 | 3,416 (452 to 19,677) | 1 (1 to 2) | 1 (1 to 1) | 2.0 ms (1.4 ms to 3.0 ms) |
+| 2 | tacit | 15 of 16 | 747 (366 to 17,656) | 0 (0 to 0) | 1 (1 to 4) | 998 ms (976 ms to 2.5 s) |
+| 2 | grep | 16 of 16 | 9,876 (454 to 25,798) | 2 (1 to 3) | 1 (1 to 1) | 2.4 ms (2.0 ms to 3.8 ms) |
+| 4 | tacit | 16 of 16 | 848 (443 to 12,720) | 0 (0 to 0) | 1 (1 to 4) | 1.0 s (988 ms to 2.6 s) |
+| 4 | grep | 16 of 16 | 7,131 (914 to 31,968) | 2 (1 to 2) | 1 (1 to 1) | 3.4 ms (3.0 ms to 4.7 ms) |
+| 8 | tacit | 16 of 16 | 850 (442 to 16,699) | 0 (0 to 0) | 1 (1 to 4) | 1.1 s (1.0 s to 2.7 s) |
+| 8 | grep | 16 of 16 | 10,400 (2,561 to 25,115) | 1 (1 to 2) | 1 (1 to 1) | 5.5 ms (5.0 ms to 7.9 ms) |
+| 16 | tacit | 15 of 16 | 849 (445 to 18,915) | 0 (0 to 0) | 1 (1 to 4) | 1.2 s (1.1 s to 3.0 s) |
+| 16 | grep | 16 of 16 | 12,636 (2,557 to 27,297) | 1 (1 to 2) | 1 (1 to 1) | 9.8 ms (8.7 ms to 13 ms) |
+| 32 | tacit | 16 of 16 | 4,190 (509 to 17,691) | 0 (0 to 0) | 1.5 (1 to 5) | 1.9 s (1.3 s to 5.3 s) |
+| 32 | grep | 16 of 16 | 25,626 (2,520 to 74,165) | 2 (1 to 2) | 1 (1 to 1) | 19 ms (17 ms to 28 ms) |
+| 64 | tacit | 15 of 16 | 3,688 (453 to 30,382) | 0 (0 to 0) | 1.5 (1 to 10) | 2.6 s (1.6 s to 13.7 s) |
+| 64 | grep | 15 of 16 | 35,838 (2,597 to 384,925) | 2 (1 to 2) | 1 (1 to 1) | 34 ms (32 ms to 48 ms) |
+
+<!-- /recall-table -->
+
+</details>
 
 ## Security model
 
