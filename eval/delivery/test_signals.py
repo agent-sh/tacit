@@ -97,11 +97,11 @@ class Signals(unittest.TestCase):
             other = [r for r in res["rows"] if r["session"] == "s2"][0]
             self.assertIsNone(other["owner_restated"], "a session of no owner case is not the owner's")
             self.assertTrue(by["queue-retry-backoff"]["carried_forward"])
-            self.assertTrue(by["queue-retry-backoff"]["summary_dropped"] and by["queue-retry-backoff"]["needed_again"], "opened after the drop")
+            self.assertTrue(by["queue-retry-backoff"]["needed_again"], "opened after the drop")
 
             self.assertFalse(by["signoff-rule"]["carried_forward"], "a ruling is held by its name only")
             p = by["printer-floor"]
-            self.assertTrue(p["summary_dropped"] and p["needed_again"], "the search after the drop")
+            self.assertTrue(p["needed_again"], "the search after the drop")
             self.assertFalse(p["opened"], "the open after its next delivery is outside the window")
             self.assertTrue(p["window_ended_early"])
             self.assertTrue(p["owner_restated"])

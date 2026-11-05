@@ -6,8 +6,8 @@ For each graded line of a case file (deliveries.py's cases, with labels or a
 moment and compute, without a model:
 
   summary_kept     a compaction summary in the window holds the fact
-  summary_dropped  a compaction summary in the window does not hold it
-  needed_again     after such a drop, the agent opened the fact (tacit_fact,
+  needed_again     after a compaction summary in the window that does not
+                   hold the fact, the agent opened the fact (tacit_fact,
                    `tacit fact`) or ran a tacit search whose words the fact's
                    description holds (whether the search returned the fact
                    is not checked)
@@ -247,7 +247,7 @@ def transcript_events(path):
 
 def signals_for(events, start, end, name, desc, ruling, owner_session, owner_times=frozenset()):
     dt = terms(desc)
-    s = {"summary_kept": False, "summary_dropped": False, "needed_again": False,
+    s = {"summary_kept": False, "needed_again": False,
          "carried_forward": False, "opened": False, "owner_restated": None if not owner_session else False}
     dropped_at = None
     for t, kind, text in events:
@@ -257,7 +257,7 @@ def signals_for(events, start, end, name, desc, ruling, owner_session, owner_tim
             if holds(text, name, dt, ruling):
                 s["summary_kept"] = True
             elif dropped_at is None:
-                s["summary_dropped"], dropped_at = True, t
+                dropped_at = t
         elif kind == "open" and text == name:
             s["opened"] = True
             if dropped_at is not None:
@@ -400,7 +400,7 @@ def main():
               "description_fallbacks": store.fallbacks, "windows_ended_early": sum(r["window_ended_early"] for r in rows),
               "windows_through_unrecorded_compaction": sum(r["crossed_unrecorded_compaction"] for r in rows),
               "window_hours": WINDOW_HOURS, "min_units": MIN_UNITS, "min_sessions": MIN_SESSIONS, "signals": {}}
-    for sig, good in (("summary_kept", "R"), ("needed_again", "R"), ("carried_forward", "R"), ("opened", "R"), ("summary_dropped", "N")):
+    for sig, good in (("summary_kept", "R"), ("needed_again", "R"), ("carried_forward", "R"), ("opened", "R")):
         report["signals"][sig] = verdict(rows, sig, good, base)
     restated = [r for r in rows if r["owner_restated"]]
     turns = sum(1 for path, (evs, _) in cache.items() for t, k, _ in evs if k == "user")
