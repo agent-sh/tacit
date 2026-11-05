@@ -167,6 +167,31 @@ class Population(unittest.TestCase):
         moments, info = off.moments_of(entries + [pass1])
         self.assertEqual(moments, [])
 
+    def test_a_line_that_waits(self):
+        # Lines drawn in window 1 wait into pass 2, which names one unread
+        # and one failed: window 1 is left out (unread), and the failed line
+        # is attributed to its own window.
+        entries, _ = world(sessions=2, per=2)
+        entries = [e for e in entries if e.get("hook") != "judge-pass"]
+        moments_ = [e for e in entries if e.get("hook") == "prompt"]
+        a, b = moments_[0], moments_[1]
+        b["ts"] = "2026-11-01T13:00:00Z"
+        w1 = {"id": "w1", "ts": "2026-11-01T12:00:00Z", "hook": "judge-pass",
+              "judge_pass": {"waiting": 2, "prompt": "p", "drawn": 4, "from": "2026-11-01T09:00:00Z", "to": "2026-11-01T11:30:00Z"}}
+        w2 = {"id": "w2", "ts": "2026-11-01T14:00:00Z", "hook": "judge-pass",
+              "judge_pass": {"waiting": 0, "prompt": "p", "drawn": 4, "from": "2026-11-01T11:30:00Z", "to": "2026-11-01T13:30:00Z",
+                             "unread": [a["id"] + "/f0"], "failed": []}}
+        got, _ = off.moments_of(entries + [w1, w2])
+        ids = {m["id"] for m in got}
+        self.assertNotIn(a["id"], ids)  # its window holds an unread line
+        self.assertIn(b["id"], ids)
+        # A failed line logged by a later pass is excluded in its own window.
+        w2["judge_pass"].update(unread=[], failed=[a["id"] + "/f1"])
+        got, info = off.moments_of(entries + [w1, w2])
+        m = next(x for x in got if x["id"] == a["id"])
+        self.assertTrue(next(c for c in m["cands"] if c["name"] == "f1")["excluded"])
+        self.assertEqual(info["failed_share"], round(1 / 8, 4))
+
     def test_another_judges_pool(self):
         # Passes of judges p, q, p: a moment in q's pool is not p's, though
         # p's next pass comes after it.
@@ -303,6 +328,18 @@ class Rules(unittest.TestCase):
             # The one pass's window holds another judge's label: it is not
             # m's, and nothing is read.
             self.assertEqual(rep["moments"], 0)
+        # A log of one judge: the CLI reads it end to end.
+        entries, _ = world(sessions=4, per=3)
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "2026-11-01.jsonl"), "w") as fh:
+                fh.writelines(json.dumps(e) + "\n" for e in entries)
+            out = os.path.join(d, "o.json")
+            r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "offline.py"), "--log", d, "--out", out, "--boot", "20", "--policy", "top1"], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            with open(out) as fh:
+                rep = json.load(fh)
+            self.assertEqual(sorted(rep["policies"]), ["logged", "top1"])
+            self.assertGreater(rep["moments"], 0)
 
 
 if __name__ == "__main__":

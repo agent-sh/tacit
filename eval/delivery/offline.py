@@ -141,21 +141,27 @@ def moments_of(entries, judge=None):
     # drawn by then has its label or is lost.
     last = max((k for k in keep if not windows[k][2].get("waiting")), default=-1)
     keep = [k for k in keep if k <= last]
-    # A pass that could not read a drawn line's moment leaves its window out
-    # whole: what failed (the transcript, the redactor) may have failed for
-    # the moments it did not draw.
-    dropped = [k for k in keep if windows[k][2].get("unread")]
+    # A drawn line can wait through several passes (the cap, a refusal), so
+    # the pass that names it unread or failed is often not the pass whose
+    # pool drew it: each name is put in the window its moment lies in. A
+    # window holding a line the judge could not read is left out whole: what
+    # failed (the transcript, the redactor) may have failed for the moments
+    # it did not draw. A failed line is left out of the sums wherever it is.
+    unread_blocks, failed, unread_in = set(), set(), set()
+    for _, _, jp in windows:
+        unread_blocks.update(jp.get("unread_blocks") or [])
+        failed.update(jp.get("failed") or [])
+        for name in jp.get("unread") or []:
+            k = window_of(when.get(name.split("/", 1)[0]))
+            if k is not None:
+                unread_in.add(k)
+    dropped = [k for k in keep if k in unread_in]
     keep = [k for k in keep if k not in dropped]
     if not keep:
         return [], info
-    unread_blocks, failed = set(), set()
-    drawn = 0
-    for k in keep:
-        jp = windows[k][2]
-        unread_blocks.update(jp.get("unread_blocks") or [])
-        failed.update(jp.get("failed") or [])
-        drawn += int(jp.get("drawn") or 0)
     kept = set(keep)
+    drawn = sum(int(windows[k][2].get("drawn") or 0) for k in keep)
+    failed_kept = {n for n in failed if window_of(when.get(n.split("/", 1)[0])) in kept}
     out, left = [], collections.Counter()
     for e in entries:
         t = parse_ts(e.get("ts"))
@@ -183,7 +189,7 @@ def moments_of(entries, judge=None):
                  # Failed lines are left out of the sums, but an undrawn line
                  # that would fail keeps its model guess in dr: the share says
                  # how much that can be.
-                 "failed_share": round(len(failed) / drawn, 4) if drawn else 0.0})
+                 "failed_share": round(len(failed_kept) / drawn, 4) if drawn else 0.0})
     return out, info
 
 
