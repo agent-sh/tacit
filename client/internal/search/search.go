@@ -1363,7 +1363,39 @@ func dated(label, day, extra string) string {
 // else is an agent's note, "agent note (<day>)", and one that claims the
 // owner's authority without evidence says so (no hook delivers it). Known
 // contradictions are marked.
-func Block(hits []Hit, title string) string {
+func Block(hits []Hit, title string) string { return block(hits, title, false) }
+
+// TitleBlock is Block with each line a title: its name, whose it is and its
+// type, no description, for an agent to open what it needs (tacit_fact).
+// The owner's own lines stay whole (OwnerLine): their rules, their rulings
+// and statements are never only titles.
+func TitleBlock(hits []Hit, title string) string { return block(hits, title, true) }
+
+// OwnerLine: a line the owner's own words or judgment make (a rule,
+// another ruling of theirs, a statement, a note holding words of theirs the
+// ledger backs, a note they confirmed), which a title block prints whole.
+func (h Hit) OwnerLine() bool {
+	_, _, said := statementOf(h)
+	p := h.Provenance()
+	return h.Rule() || h.Ruling || said || p == "words" || p == "confirmed"
+}
+
+// TypeWords is a fact type in words, for a title.
+func TypeWords(t string) string {
+	switch t {
+	case "user_standard":
+		return "standard"
+	case "design_decision":
+		return "decision"
+	case "structure":
+		return "module map"
+	case "":
+		return "note"
+	}
+	return strings.ReplaceAll(t, "_", " ")
+}
+
+func block(hits []Hit, title string, titles bool) string {
 	if len(hits) == 0 {
 		return ""
 	}
@@ -1393,15 +1425,24 @@ func Block(hits []Hit, title string) string {
 				desc += " (a check disagrees, maybe misread)"
 			}
 		} else {
+			whose := ""
 			switch h.Provenance() {
 			case "claim":
-				desc = dated("agent note", day, ClaimMark) + ": " + desc
+				whose = dated("agent note", day, ClaimMark)
 			case "confirmed":
-				desc = dated("you confirmed", day, "") + ": " + desc
+				whose = dated("you confirmed", day, "")
 			case "words":
-				desc = dated("agent note holding your words", day, ReviewMark(h.Review)) + ": " + desc
+				whose = dated("agent note holding your words", day, ReviewMark(h.Review))
 			case "agent", "statement":
-				desc = dated("agent note", day, ReviewMark(h.Review)) + ": " + desc
+				whose = dated("agent note", day, ReviewMark(h.Review))
+			}
+			switch {
+			case titles && !h.OwnerLine() && whose != "":
+				desc = whose + ", " + TypeWords(h.Type) // the type in place of the description
+			case titles && !h.OwnerLine():
+				desc = TypeWords(h.Type)
+			case whose != "":
+				desc = whose + ": " + desc
 			}
 		}
 		if h.Inbox {

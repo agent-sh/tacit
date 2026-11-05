@@ -8,6 +8,15 @@ happened). Every task runs in two arms with the same model and prompt:
 
   bare   no block
   block  a SessionStart hook prints the fact block for the task's repo/host
+  hooks:<name>[+KEY=VAL...]  the shipped hooks of a tacit binary
+         ($TACIT_AB_BIN) and its MCP server, with these delivery settings
+         (TACIT_DELIVERY_TITLES=off, say) and the build's defaults for the
+         rest, in place of the user's settings: an allowlist of the caller's
+         environment (no TACIT_* setting, no plugin or mod dirs), an empty
+         tacit config, the store and index $TACIT_STORE / $TACIT_INDEX or
+         the default ones;
+         each arm keeps its own state directory, so its sessions' delivery
+         log is read per run (lines delivered, titles, facts opened)
 
 Metrics per run: tool calls, Bash calls, detour hits, success, input/output
 tokens, cost, duration. Results go to eval/ab/results/<stamp>.jsonl (gitignored)
@@ -27,6 +36,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import statistics
 import subprocess
@@ -97,6 +107,75 @@ def build_block(task, oracle=False, cap=None, store=None):
     return "\n".join(lines) + "\n"
 
 
+def hook_arm(arm):
+    """hooks:<name>[+KEY=VAL...]: the arm's name and its environment."""
+    if not arm.startswith("hooks:"):
+        return None, None
+    name, *kv = arm[len("hooks:"):].split("+")
+    return name, dict(x.split("=", 1) for x in kv)
+
+
+def hook_settings(binary):
+    """The hooks `tacit install claude` writes, for this binary."""
+    def cmd(*a):
+        return {"type": "command", "command": " ".join(shlex.quote(x) for x in [binary, *a]), "timeout": 15}
+    return {"hooks": {
+        "SessionStart": [{"matcher": "startup|resume|clear|compact|fork", "hooks": [cmd("hook", "session-start", "--mcp")]}],
+        "UserPromptSubmit": [{"hooks": [cmd("hook", "prompt")]}],
+        "PreToolUse": [{"matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch|mcp__.*", "hooks": [cmd("hook", "pre-tool")]}],
+    }}
+
+
+def delivery_counts(state, sid):
+    """What the arm's hooks delivered to session sid, from its delivery log."""
+    out = {"lines": 0, "titles": 0, "opened": 0}
+    for f in sorted(Path(state, "delivery").glob("*.jsonl")) if state else []:
+        for line in f.read_text().splitlines():
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if e.get("session") != sid:
+                continue
+            for c in e.get("cands") or []:
+                if c.get("delivered"):
+                    out["lines"] += 1
+                    out["titles"] += c.get("form") == "title"
+            if e.get("hook") == "nav" and (e.get("nav") or {}).get("tool") == "fact":
+                out["opened"] += 1
+    return out
+
+
+# STAMP names this run: each hook arm's state directory is new per run and
+# per arm string, so runs and arms never share a delivery log.
+STAMP = time.strftime("%Y%m%dT%H%M%S")
+
+# What a hook arm's processes inherit: the session's own basics and the
+# model route, nothing else (no TACIT_* setting, no plugin or mod dirs).
+ENV_KEEP = {"PATH", "HOME", "USER", "LOGNAME", "LANG", "TERM", "SHELL", "TMPDIR", "SSH_AUTH_SOCK"}
+ENV_KEEP_PREFIX = ("LC_", "ANTHROPIC_", "AWS_", "CLAUDE_CODE_USE_", "CLAUDE_CODE_SKIP_")
+
+
+def arm_state(arm):
+    slug = re.sub(r"[^A-Za-z0-9_.=-]+", "_", arm)
+    state = SCRATCH / "state" / f"{STAMP}-{slug}"
+    (state / "sessions").mkdir(parents=True, exist_ok=True)
+    return state
+
+
+def arm_env(state):
+    """The arm's environment: an allowlist of the caller's, its own state
+    directory, an empty tacit config (the user's config's settings do not
+    apply), the machine's store and index, so both arms read one store."""
+    env = {k: v for k, v in os.environ.items() if k in ENV_KEEP or k.startswith(ENV_KEEP_PREFIX)}
+    cfg = state / "config.yaml"
+    cfg.write_text("# a hook arm: defaults only\n")
+    env.update(TACIT_AB="1", TACIT_STATE_DIR=str(state), TACIT_SETTINGS=str(cfg),
+               TACIT_STORE=os.environ.get("TACIT_STORE", str(Path.home() / ".local/share/tacit/store")),
+               TACIT_INDEX=os.environ.get("TACIT_INDEX", str(Path.home() / ".local/state/tacit/index")))
+    return env
+
+
 def setup_scratch(task, tag=""):
     d = SCRATCH / (task["id"] + tag)
     if d.exists():
@@ -132,11 +211,25 @@ def run_once(task, arm, block_path, rep):
         cmd += ["--tools", ""]  # decision tasks: one turn, no tools
     # `live`: no injected block; whatever hooks are installed in the user's
     # settings run (the shipped tacit hooks after 2026-10-08).
-    if arm not in ("bare", "live"):
+    env = {**os.environ, "TACIT_AB": "1"}
+    name, hook_env = hook_arm(arm)
+    state = None
+    if name is not None:
+        binary = os.environ.get("TACIT_AB_BIN") or shutil.which("tacit")
+        state = arm_state(arm)
+        with open(state / "dream-exclude", "a") as fh:
+            fh.write(sid + "\n")  # the dreams the arm's own hooks start read this one
+        env = arm_env(state)
+        mcp = {"mcpServers": {"tacit": {"command": binary, "args": ["mcp", "--harness", "claude"]}}}
+        cmd += ["--setting-sources", "project,local", "--settings", json.dumps(hook_settings(binary)),
+                "--mcp-config", json.dumps(mcp), "--strict-mcp-config"]
+        if task["allowed_tools"]:
+            cmd[cmd.index("--allowedTools") + 1:cmd.index("--allowedTools") + 1] = ["mcp__tacit__tacit_fact", "mcp__tacit__tacit_search", "mcp__tacit__tacit_tree"]
+        env.update(hook_env)
+    elif arm not in ("bare", "live"):
         path = SCRATCH / f"{task['id']}-{arm}.md"
         settings = {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": f"cat {path}"}]}]}}
         cmd += ["--settings", json.dumps(settings)]
-    env = {**os.environ, "TACIT_AB": "1"}
     t0 = time.time()
     try:
         proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=task.get("timeout", 900), env=env)
@@ -149,6 +242,7 @@ def run_once(task, arm, block_path, rep):
         proc = P()
     dur = time.time() - t0
     tool_calls, bash_cmds, detours, result = 0, [], 0, {}
+    tacit_calls = {}
     markers = task.get("detour_markers", [])
     for line in proc.stdout.splitlines():
         try:
@@ -159,6 +253,8 @@ def run_once(task, arm, block_path, rep):
             for b in ev.get("message", {}).get("content", []):
                 if b.get("type") == "tool_use":
                     tool_calls += 1
+                    if str(b.get("name", "")).startswith("mcp__tacit__"):
+                        tacit_calls[b["name"]] = tacit_calls.get(b["name"], 0) + 1
                     if b.get("name") == "Bash":
                         bash_cmds.append(b.get("input", {}).get("command", ""))
         elif ev.get("type") == "user":
@@ -186,6 +282,7 @@ def run_once(task, arm, block_path, rep):
         "in_tokens": (usage.get("input_tokens") or 0) + (usage.get("cache_creation_input_tokens") or 0) + (usage.get("cache_read_input_tokens") or 0),
         "out_tokens": usage.get("output_tokens"), "seconds": round(dur, 1),
         "exit": proc.returncode, "answer": answer[:600], "bash": bash_cmds[:20], "stderr": proc.stderr[-400:],
+        "tacit_calls": tacit_calls, "delivery": delivery_counts(state, sid) if state else None,
     }
 
 
@@ -215,7 +312,7 @@ def main():
     jobs = []
     for task in tasks:
         for arm in arms:
-            if arm not in ("bare", "live"):
+            if arm not in ("bare", "live") and not arm.startswith("hooks:"):
                 (SCRATCH / f"{task['id']}-{arm}.md").write_text(build_block(task, oracle=arm.startswith("oracle"), cap=arm_cap(arm), store=arm_store(arm)))
         for rep in range(args.reps):
             for arm in arms:

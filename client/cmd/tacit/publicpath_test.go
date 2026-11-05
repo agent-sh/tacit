@@ -45,6 +45,9 @@ func TestMain(m *testing.M) {
 	// A test that reads the delivery log back must not lose its line to a
 	// loaded machine; TestDeliveryLogWriteIsBounded checks the real bound.
 	logWriteWait = time.Minute
+	// The suite's tests read whole lines; the titles tests turn titles on
+	// themselves, and TestTitlesAreTheDefault checks the default.
+	os.Setenv("TACIT_DELIVERY_TITLES", "off")
 	os.Exit(m.Run())
 }
 

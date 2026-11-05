@@ -92,8 +92,10 @@ type logEntry struct {
 	// request, whose terms endLog takes, once the answer is printed.
 	full  string
 	words map[string]bool
-	ix    *search.Index
-	req   string
+	// titled: hookBlock printed the block's agents' notes as titles.
+	titled bool
+	ix     *search.Index
+	req    string
 }
 
 // logCand is one candidate of a block, delivered or not.
@@ -133,7 +135,41 @@ type logCand struct {
 	P float64 `json:"p"`
 	// Utility is the utility provider's score, when its scores chose.
 	Utility *float64 `json:"utility,omitempty"`
+	// Form is how a printed line read: "title" (no description: the agent
+	// opens it) or "full".
+	Form string `json:"form,omitempty"`
 }
+
+// hookBlock is the block of a hook the titles A/B measured (the start, the
+// prompt, a shell command's push): with the titles setting on
+// (TACIT_DELIVERY_TITLES, the default) an agent's note is a title the agent
+// opens, the owner's own lines whole, and note ends the block's first line;
+// off, or with no line to title, whole lines (SPEC.md, "Titles"). The
+// blocks no A/B measured (after a compaction, the summary's selection, a
+// resume, an edit's push) call search.Block.
+func hookBlock(hits []search.Hit, title, note string) string {
+	if !deliveryTitles() || !slices.ContainsFunc(hits, func(h search.Hit) bool { return !h.OwnerLine() }) {
+		return search.Block(hits, title)
+	}
+	if dlog != nil {
+		dlog.titled = true
+	}
+	if t, rest, ok := strings.Cut(title, "\n"); ok {
+		return search.TitleBlock(hits, t+note+"\n"+rest)
+	}
+	return search.TitleBlock(hits, title+note)
+}
+
+// titlesNote names both ways to open a fact: the MCP tool where the
+// harness has tacit's server, the command where it has not (the prompt and
+// push hooks do not know which). The start's first line already names the
+// way its harness has (openDetail), so it only says the lines are titles.
+const (
+	titlesNote      = " (titles: `tacit_fact <name>`, or `tacit fact <name>`, opens one)"
+	startTitlesNote = " (titles)"
+)
+
+func deliveryTitles() bool { return deliveryOn("TITLES", true) }
 
 // dlog is this process's open entry; nil when the log is off or no block
 // is being built. A hook is one process and builds its blocks one at a
@@ -354,6 +390,12 @@ func endLog(printed []search.Hit) {
 		}
 		if c.Delivered {
 			c.Dropped, c.P = "", 1
+			c.Form = "full"
+			for _, h := range printed {
+				if h.Name == c.Name && h.Path == c.Path && e.titled && !h.OwnerLine() {
+					c.Form = "title"
+				}
+			}
 		} else {
 			c.P = 0
 		}

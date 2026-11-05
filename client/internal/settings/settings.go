@@ -63,6 +63,7 @@ type Delivery struct {
 	PromptRelative *float64 `yaml:"prompt_relative"` // TACIT_DELIVERY_PROMPT_RELATIVE
 	MetaCeiling    *int     `yaml:"meta_ceiling"`    // TACIT_DELIVERY_META_CEILING
 	Log            string   `yaml:"log"`             // TACIT_DELIVERY_LOG: the private delivery log (SPEC.md, "Delivery log")
+	Titles         string   `yaml:"titles"`          // TACIT_DELIVERY_TITLES: hook lines as titles, on by default (SPEC.md, "Titles")
 	LogDays        *int     `yaml:"log_days"`        // TACIT_DELIVERY_LOG_DAYS
 }
 
@@ -214,7 +215,7 @@ func Load(path string, required bool) error {
 	default:
 		return fmt.Errorf("memory_md must be on or off")
 	}
-	for key, v := range map[string]string{"repo_start": c.Delivery.RepoStart, "repo_aliases": c.Delivery.RepoAliases, "prompt_metadata": c.Delivery.PromptMetadata, "prompt_action": c.Delivery.PromptAction, "instruction": c.Delivery.Instruction, "tool_push": c.Delivery.ToolPush, "tree_pointer": c.Delivery.TreePointer, "log": c.Delivery.Log} {
+	for key, v := range map[string]string{"repo_start": c.Delivery.RepoStart, "repo_aliases": c.Delivery.RepoAliases, "prompt_metadata": c.Delivery.PromptMetadata, "prompt_action": c.Delivery.PromptAction, "instruction": c.Delivery.Instruction, "tool_push": c.Delivery.ToolPush, "tree_pointer": c.Delivery.TreePointer, "log": c.Delivery.Log, "titles": c.Delivery.Titles} {
 		switch strings.ToLower(v) {
 		case "", "on", "off", "true", "false":
 		default:
@@ -269,7 +270,7 @@ func Load(path string, required bool) error {
 			return fmt.Errorf("utility timeout must be positive and no more than 2s")
 		}
 	}
-	for key, v := range map[string]string{"REPO_START": c.Delivery.RepoStart, "REPO_ALIASES": c.Delivery.RepoAliases, "PROMPT_METADATA": c.Delivery.PromptMetadata, "PROMPT_ACTION": c.Delivery.PromptAction, "INSTRUCTION": c.Delivery.Instruction, "TOOL_PUSH": c.Delivery.ToolPush, "TREE_POINTER": c.Delivery.TreePointer, "LOG": c.Delivery.Log} {
+	for key, v := range map[string]string{"REPO_START": c.Delivery.RepoStart, "REPO_ALIASES": c.Delivery.RepoAliases, "PROMPT_METADATA": c.Delivery.PromptMetadata, "PROMPT_ACTION": c.Delivery.PromptAction, "INSTRUCTION": c.Delivery.Instruction, "TOOL_PUSH": c.Delivery.ToolPush, "TREE_POINTER": c.Delivery.TreePointer, "LOG": c.Delivery.Log, "TITLES": c.Delivery.Titles} {
 		values["TACIT_DELIVERY_"+key] = strings.ToLower(v)
 	}
 	for key, v := range map[string]*int{"START_CEILING": c.Delivery.StartCeiling, "PROMPT_CEILING": c.Delivery.PromptCeiling, "META_CEILING": c.Delivery.MetaCeiling, "LOG_DAYS": c.Delivery.LogDays} {

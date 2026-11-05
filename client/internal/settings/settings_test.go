@@ -488,3 +488,21 @@ func TestDreamHeldCharsSetting(t *testing.T) {
 		}
 	}
 }
+
+// delivery.titles is a switch: on or off reach TACIT_DELIVERY_TITLES, any
+// other value is refused.
+func TestDeliveryTitlesSetting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte("delivery:\n  titles: off\n"), 0o600)
+	t.Setenv("TACIT_DELIVERY_TITLES", "")
+	os.Unsetenv("TACIT_DELIVERY_TITLES")
+	if err := Load(path, true); err != nil || os.Getenv("TACIT_DELIVERY_TITLES") != "off" {
+		t.Fatalf("titles off: %v, %q", err, os.Getenv("TACIT_DELIVERY_TITLES"))
+	}
+	os.WriteFile(path, []byte("delivery:\n  titles: sometimes\n"), 0o600)
+	os.Unsetenv("TACIT_DELIVERY_TITLES")
+	if err := Load(path, true); err == nil {
+		t.Fatal("an invalid titles value was accepted")
+	}
+}

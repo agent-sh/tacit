@@ -235,7 +235,7 @@ func runHook(args []string) int {
 			clearPending(in.SessionID)
 		}
 		remember(in.SessionID, hits)
-		fmt.Print(search.Block(hits, startTitle(sit, mcp)))
+		fmt.Print(hookBlock(hits, startTitle(sit, mcp), startTitlesNote))
 		fmt.Print(startTreeLine(ctx, ix, sit, len(hits), mcp))
 	case "prompt":
 		// First, and whatever the prompt: a session whose undreamed part
@@ -293,7 +293,7 @@ func runHook(args []string) int {
 		logDropped(strong, kept, "withheld")
 		strong = kept
 		remember(in.SessionID, strong)
-		fmt.Print(search.Block(strong, "# tacit: facts matching this request"))
+		fmt.Print(hookBlock(strong, "# tacit: facts matching this request", titlesNote))
 		endLog(strong)
 	default:
 		usage()

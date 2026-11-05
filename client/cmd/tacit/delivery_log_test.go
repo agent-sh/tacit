@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/search"
 )
 
@@ -570,5 +571,145 @@ func TestDeliveryLogHoldsAPoolsHeadOnly(t *testing.T) {
 	cut := fmt.Sprintf("c%03d", logCandCap-1)
 	if len(e.Cands) != logCandCap || e.Omitted != 30 || !slices.ContainsFunc(e.Cands, func(c logCand) bool { return c.Name == last }) || slices.ContainsFunc(e.Cands, func(c logCand) bool { return c.Name == cut }) {
 		t.Fatalf("capped: %d, omitted %d", len(e.Cands), e.Omitted)
+	}
+}
+
+// With the titles setting on, a hook's agent notes are titles, the block
+// says how to open one, and the log marks each printed line's form; off,
+// the block is as before.
+func TestHookTitlesWithTheSettingOn(t *testing.T) {
+	_, cwd := repoFirstRig(t,
+		fact.Meta{Name: "scheduler-shard-locks", Description: "The scheduler pool keeps one shard lock per tenant and a slot lock per job", Type: "design_decision", Scope: "projects/widget"},
+	)
+	state := filepath.Join(t.TempDir(), "state")
+	t.Setenv("TACIT_STATE_DIR", state)
+	t.Setenv("TACIT_DELIVERY_REPO_START", "off")
+	t.Setenv("TACIT_DELIVERY_PROMPT_ACTION", "off")
+	prompt := "Fix the scheduler pool shard lock and slot lock race"
+	t.Setenv("TACIT_DELIVERY_TITLES", "off")
+	if out := hookOut(t, promptPayload(cwd, "s1", prompt), "prompt"); !strings.Contains(out, "one shard lock per tenant") || strings.Contains(out, "titles:") {
+		t.Fatalf("off: %s", out)
+	}
+	t.Setenv("TACIT_DELIVERY_TITLES", "on")
+	out := hookOut(t, promptPayload(cwd, "s2", prompt), "prompt")
+	if strings.Contains(out, "one shard lock per tenant") || !strings.Contains(out, "- scheduler-shard-locks: agent note (") || !strings.Contains(out, "), decision\n") || !strings.Contains(out, titlesNote) {
+		t.Fatalf("on: %s", out)
+	}
+	var forms []string
+	for _, e := range readDeliveryLog(t, state) {
+		if c := candOf(e, "scheduler-shard-locks"); c != nil && c.Delivered {
+			forms = append(forms, e.Session+":"+c.Form)
+		}
+	}
+	if strings.Join(forms, " ") != "s1:full s2:title" {
+		t.Fatalf("forms: %v", forms)
+	}
+}
+
+// Titles are the default: with the setting unset, a hook prints titles.
+func TestTitlesAreTheDefault(t *testing.T) {
+	t.Setenv("TACIT_DELIVERY_TITLES", "")
+	if !deliveryTitles() {
+		t.Fatal("titles are not the default")
+	}
+	t.Setenv("TACIT_DELIVERY_TITLES", "off")
+	if deliveryTitles() {
+		t.Fatal("titles off is not off")
+	}
+}
+
+// Titles reach only the blocks the A/B measured: the start (its first line,
+// which names its own way to open a fact, ends with "(titles)"), the prompt
+// and a shell command's push. A resume, the start again after a compaction
+// and the summary's selection keep whole lines, as does an edit's push. The
+// log's form says which.
+func TestTitlesOnlyWhereMeasured(t *testing.T) {
+	r, home, payload := restartRig(t)
+	t.Setenv("TACIT_DELIVERY_TITLES", "on")
+	start := hookOut(t, payload("t1", "startup", ""), "session-start", "--mcp")
+	first, _, _ := strings.Cut(start, "\n")
+	if !strings.HasSuffix(first, startTitlesNote) || !strings.Contains(start, "- demo-note: agent note (") || strings.Contains(start, "a note about demo") {
+		t.Fatalf("start:\n%s", start)
+	}
+	if !strings.Contains(start, "RULE demo-quokka-scheduler-0") {
+		t.Fatalf("the owner's rule not whole:\n%s", start)
+	}
+	writeFact(t, r.clone, fact.Meta{Name: "demo-note-v3", Description: "a third curated note about demo", Type: "design_decision", Scope: "projects/demo"}, "body")
+	r.commitIndex(r.clone, "a note since")
+	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
+	buildIndexForHooks(r.s)
+	if out := hookOut(t, payload("t1", "resume", ""), "session-start", "--mcp"); !strings.Contains(out, "third curated note") || strings.Contains(out, "titles") {
+		t.Fatalf("resume:\n%s", out)
+	}
+	turns := []string{`{"type":"response_item","payload":{"type":"message","role":"user"}}`}
+	tr := writeTranscript(t, filepath.Join(home, ".codex", "sessions", "2026", "11", "04", "rollout-2026-11-04T10-00-00-t2.jsonl"),
+		append(turns, `{"timestamp":"2026-11-04T10:00:00Z","type":"compacted","payload":{"message":`+jsonString(compactSummaryText)+`,"replacement_history":[]}}`)...)
+	hookOut(t, payload("t2", "startup", ""), "session-start", "--mcp")
+	out := hookOut(t, payload("t2", "compact", tr), "session-start", "--mcp")
+	if !strings.Contains(out, "drops stale wombat entries") || strings.Contains(out, "(titles") {
+		t.Fatalf("after the compaction:\n%s", out)
+	}
+	forms := map[string]string{}
+	for _, e := range readDeliveryLog(t, platform.StateDir(home)) {
+		for _, c := range e.Cands {
+			if c.Delivered {
+				forms[e.Hook+":"+c.Name] = c.Form
+			}
+		}
+	}
+	for k, want := range map[string]string{"start:demo-note": "title", "start:demo-quokka-scheduler-0": "full", "resume:demo-note-v3": "full", "summary:demo-wombat-flusher": "full"} {
+		if forms[k] != want {
+			t.Errorf("form of %s: %q, want %q (%v)", k, forms[k], want, forms)
+		}
+	}
+}
+
+// A shell command's push is titled, as measured; an edit's keeps whole
+// lines. The forms say so.
+func TestPushTitlesForCommandsOnly(t *testing.T) {
+	_, cwd := repoFirstRig(t,
+		fact.Meta{Name: "lint-before-push", Description: "Run the linter with the strict profile", Type: "user_standard", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Commands: []string{"make lint"}}},
+		fact.Meta{Name: "worker-no-globals", Description: "Worker state lives in the pool, never in package globals", Type: "design_decision", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Paths: []string{"src/scheduler/**"}}},
+	)
+	state := filepath.Join(t.TempDir(), "state")
+	t.Setenv("TACIT_STATE_DIR", state)
+	t.Setenv("TACIT_DELIVERY_TITLES", "on")
+	if out := hookOut(t, toolPayload(cwd, "s1", "Bash", map[string]any{"command": "make lint"}), "pre-tool"); strings.Contains(out, "strict profile") || !strings.Contains(out, "lint-before-push: agent note (") || !strings.Contains(out, "titles:") {
+		t.Fatalf("command push: %s", out)
+	}
+	edit := toolPayload(cwd, "s1", "Edit", map[string]any{"file_path": filepath.Join(cwd, "src", "scheduler", "worker.go"), "old_string": "a", "new_string": "b"})
+	if out := hookOut(t, edit, "pre-tool"); !strings.Contains(out, "package globals") || strings.Contains(out, "titles:") {
+		t.Fatalf("edit push: %s", out)
+	}
+	forms := map[string]string{}
+	for _, e := range readDeliveryLog(t, state) {
+		for _, c := range e.Cands {
+			if c.Delivered {
+				forms[c.Name] = c.Form
+			}
+		}
+	}
+	if forms["lint-before-push"] != "title" || forms["worker-no-globals"] != "full" {
+		t.Fatalf("forms: %v", forms)
+	}
+}
+
+// A block of only the owner's own lines has nothing to title: whole lines,
+// no note, and the form full.
+func TestTitlesLeaveAnOwnersBlockWhole(t *testing.T) {
+	t.Setenv("TACIT_DELIVERY_TITLES", "on")
+	t.Setenv("TACIT_STATE_DIR", t.TempDir())
+	t.Cleanup(func() { dlog, logPending = nil, nil })
+	rule := search.Hit{Name: "signoff", Path: "user/signoff.md", Type: "user_standard", Ruling: true, Created: "2026-10-01", Description: "Every commit carries a Signed-off-by trailer"}
+	beginLog("prompt", hookInput{SessionID: "s1"}, "commit the change", nil, nil)
+	e := dlog
+	logChose([]search.Hit{rule}, "ranked")
+	out := hookBlock([]search.Hit{rule}, "# tacit: facts matching this request", titlesNote)
+	endLog([]search.Hit{rule})
+	if strings.Contains(out, "titles") || !strings.Contains(out, "Signed-off-by trailer") {
+		t.Fatalf("an owner's block: %s", out)
+	}
+	if c := candOf(*e, "signoff"); c == nil || c.Form != "full" {
+		t.Fatalf("form: %+v", c)
 	}
 }
