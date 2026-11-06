@@ -124,6 +124,7 @@ type judgeFixture struct {
 func newJudgeFixture(t *testing.T, n int) *judgeFixture {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // the home os.UserHomeDir reads on Windows
 	f := &judgeFixture{state: filepath.Join(home, "state"), now: time.Now()}
 	t.Setenv("TACIT_STATE_DIR", f.state)
 	t.Setenv("TACIT_DELIVERY_JUDGE", "on")
@@ -642,11 +643,11 @@ func TestJudgeLabelTheLogKeepsRefusing(t *testing.T) {
 // for it.
 var realJudgeCall = judgeCall
 
-// judgeFakeCLI is this test binary run as the judge's `claude` (a copy of
-// it named claude, see newFakeJudgeCLI): it keeps the prompt it reads,
-// prints the stdout and stderr files beside it and exits with the code in
-// its exit file. The judge's environment passes no test variable, so the
-// name tells.
+// judgeFakeCLI is this test binary run as the judge's `claude` (a link to
+// it, or a copy, named claude: see newFakeJudgeCLI). It keeps the prompt it
+// reads, waits the milliseconds in its sleep file, prints the stdout and
+// stderr files beside it and exits with the code in its exit file. The
+// judge's environment passes no test variable, so the name tells.
 func judgeFakeCLI() {
 	if strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") != "claude" {
 		return
@@ -658,6 +659,10 @@ func judgeFakeCLI() {
 	dir := filepath.Dir(exe)
 	prompt, _ := io.ReadAll(os.Stdin)
 	os.WriteFile(filepath.Join(dir, "prompt"), prompt, 0o600)
+	if b, err := os.ReadFile(filepath.Join(dir, "sleep")); err == nil {
+		ms, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+	}
 	out, _ := os.ReadFile(filepath.Join(dir, "stdout"))
 	os.Stdout.Write(out)
 	errb, _ := os.ReadFile(filepath.Join(dir, "stderr"))
@@ -671,6 +676,8 @@ func judgeFakeCLI() {
 
 // newFakeJudgeCLI puts a claude that answers as told first on PATH, with
 // a bearer route for the judge, and returns how to tell it what to print.
+// It is a hard link to this test binary where the file system allows one,
+// else a copy.
 func newFakeJudgeCLI(t *testing.T) (dir string, answer func(stdout, stderr string, exit int)) {
 	t.Helper()
 	exe, err := os.Executable()
@@ -678,16 +685,18 @@ func newFakeJudgeCLI(t *testing.T) (dir string, answer func(stdout, stderr strin
 		t.Fatal(err)
 	}
 	dir = t.TempDir()
-	name := "claude"
+	name := filepath.Join(dir, "claude")
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	b, err := os.ReadFile(exe)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, name), b, 0o700); err != nil {
-		t.Fatal(err)
+	if os.Link(exe, name) != nil {
+		b, err := os.ReadFile(exe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(name, b, 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv("PATH", dir)
 	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "1")
@@ -751,6 +760,30 @@ func TestJudgeAnswerAroundProse(t *testing.T) {
 	}
 }
 
+// rawPending is the judge state's waiting lines as written, a missing
+// count as 0.
+func rawPending(t *testing.T) []map[string]any {
+	t.Helper()
+	var st struct {
+		Pending []map[string]any `json:"pending"`
+	}
+	b, err := os.ReadFile(judgeStatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &st); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range st.Pending {
+		for _, k := range []string{"tries", "held"} {
+			if m[k] == nil {
+				m[k] = float64(0)
+			}
+		}
+	}
+	return st.Pending
+}
+
 // rawJudgePasses is the judge-pass entries of the log as written.
 func rawJudgePasses(t *testing.T, state string) []map[string]any {
 	t.Helper()
@@ -775,25 +808,32 @@ func rawJudgePasses(t *testing.T, state string) []map[string]any {
 }
 
 // A pass whose call gives no labels says why in its entry (answer_error),
-// as a class and never the answer's text. A call that could not start or
-// printed no result says nothing about the lines and, like a refusal (which
-// has no class), counts no try; the others count one. An answer that reads
-// labels every line.
+// as a class and never the answer's text, which its error does not carry
+// either. A call that could not start, that the pass's deadline ended or
+// that printed no result says nothing about the lines: like a refusal
+// (which has no class) it counts no try, and counts as held instead; the
+// others count one try. An answer that reads labels every line.
 func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 	const mark = "XYZZY-ANSWER-TEXT"
 	result := func(text, stop string) string {
 		b, _ := json.Marshal(map[string]any{"type": "result", "subtype": "success", "is_error": false, "stop_reason": stop, "result": text, "modelUsage": map[string]any{"claude-x": map[string]any{}}})
 		return string(b)
 	}
+	good := result(`{"lines":[{"i":1,"relevant":"yes","confused":"no","novel":"no"},{"i":2,"relevant":"no","confused":"no","novel":"no"}]}`, "end_turn")
 	for _, c := range []struct {
 		name, stdout, stderr string
 		exit                 int
 		localSettings        bool
-		want                 string // the class; "refused", "labelled"
-		tries                int    // each waiting line's tries after the pass
+		noCLI                bool          // no claude on PATH
+		sleep                time.Duration // the CLI's wait, past the pass's deadline when set
+		want                 string        // the class; "refused", "labelled"
+		tries, held          int           // each waiting line's after the pass
 	}{
-		{name: "no output", want: "no-output"},
-		{name: "setup", localSettings: true, stdout: result(`{"lines":[]}`, "end_turn"), want: "setup"},
+		{name: "no output", want: "no-output", held: 1},
+		{name: "no output and an exit", stderr: "error: unknown option '--tools'", exit: 1, want: "no-output", held: 1},
+		{name: "setup", localSettings: true, stdout: good, want: "setup", held: 1},
+		{name: "no claude", noCLI: true, want: "setup", held: 1},
+		{name: "deadline", sleep: 30 * time.Second, stdout: good, want: "timeout", held: 1},
 		{name: "empty", stdout: result("", "end_turn"), want: "empty", tries: 1},
 		{name: "prose", stdout: result("I cannot judge these lines. "+mark, "end_turn"), want: "prose", tries: 1},
 		{name: "prose with a brace", stdout: result("I cannot judge {these} lines. "+mark, "end_turn"), want: "prose", tries: 1},
@@ -802,20 +842,31 @@ func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 		{name: "output-token limit", stdout: result("", "max_tokens"), want: "truncated", tries: 1},
 		{name: "shape", stdout: result(`{"lines":[{"i":1,"relevant":"`+mark+`","confused":"no","novel":"no"}]}`, "end_turn"), want: "shape", tries: 1},
 		{name: "other", stdout: result(`{"lines":"`+mark+`"}`, "end_turn"), want: "other", tries: 1},
-		{name: "call", stdout: `{"type":"result","is_error":true,"api_error_status":400,"result":"API Error: 400 ` + mark + `"}`, exit: 1, want: "call", tries: 1},
+		{name: "call", stdout: `{"type":"result","is_error":true,"api_error_status":400,"result":"API Error: 400 prompt is too long"}`, exit: 1, want: "call", tries: 1},
+		{name: "exit after an answer", stdout: result(`{"lines":[{"i":1,"relevant":"yes","confused":"no","novel":"no","why":"`+mark+`"}]}`, "end_turn"), exit: 1, want: "call", tries: 1},
 		{name: "refused on stderr", stderr: "API Error: 429 Too many requests", exit: 1, want: "refused"},
 		{name: "refused on stdout", stdout: "API Error: 429 Too many requests\n", exit: 1, want: "refused"},
-		{name: "labelled", stdout: result(`{"lines":[{"i":1,"relevant":"yes","confused":"no","novel":"no"},{"i":2,"relevant":"no","confused":"no","novel":"no"}]}`, "end_turn"), want: "labelled"},
+		{name: "labelled", stdout: good, want: "labelled"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newJudgeFixture(t, 1)
-			_, answer := newFakeJudgeCLI(t)
+			dir, answer := newFakeJudgeCLI(t)
 			judgeCall = realJudgeCall
 			answer(c.stdout, c.stderr, c.exit)
 			if c.localSettings {
 				os.MkdirAll(filepath.Join(deliveryLogDir(), "judge-cwd", ".claude"), 0o700)
 			}
-			n, err := deliveryJudgePass(context.Background(), nil, f.now)
+			if c.noCLI {
+				t.Setenv("PATH", t.TempDir())
+			}
+			ctx := context.Background()
+			if c.sleep > 0 {
+				os.WriteFile(filepath.Join(dir, "sleep"), []byte(strconv.Itoa(int(c.sleep.Milliseconds()))), 0o600)
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, 2*time.Second)
+				defer cancel()
+			}
+			n, err := deliveryJudgePass(ctx, nil, f.now)
 			passes := rawJudgePasses(t, f.state)
 			if len(passes) != 1 {
 				t.Fatalf("passes %v", passes)
@@ -835,10 +886,18 @@ func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 					t.Fatalf("%d %v %v", n, err, p)
 				}
 			}
+			if err != nil && strings.Contains(err.Error(), mark) {
+				t.Fatalf("the error carries the answer's text: %v", err)
+			}
 			if c.want != "labelled" {
-				st := readJudgeState(f.now.UTC().Format("2006-01-02"))
-				if len(st.Pending) != 2 || st.Pending[0].Tries != c.tries || st.Pending[1].Tries != c.tries {
-					t.Fatalf("waiting %+v, want %d tries each", st.Pending, c.tries)
+				waiting := rawPending(t)
+				if len(waiting) != 2 {
+					t.Fatalf("waiting %v", waiting)
+				}
+				for _, m := range waiting {
+					if m["tries"] != float64(c.tries) || m["held"] != float64(c.held) {
+						t.Fatalf("waiting %v, want %d tries and %d held each", waiting, c.tries, c.held)
+					}
 				}
 			}
 			files, _ := filepath.Glob(filepath.Join(f.state, "delivery", "*"))
@@ -848,5 +907,30 @@ func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A line held 12 times (judgeHeldTries) by failures that say nothing about it
+// is given up, named in the pass's lost and failed lines; one held less
+// still waits.
+func TestJudgeHeldLinesAreGivenUp(t *testing.T) {
+	const heldTries = 12 // SPEC: two days of the dreamer's 4-hour runs
+	f := newJudgeFixture(t, 1)
+	_, answer := newFakeJudgeCLI(t)
+	judgeCall = realJudgeCall
+	answer("", "", 0) // no output: held
+	for i := 0; i < heldTries-1; i++ {
+		deliveryJudgePass(context.Background(), nil, f.now.Add(time.Duration(i)*time.Minute))
+	}
+	if w := rawPending(t); len(w) != 2 || w[0]["held"] != float64(heldTries-1) || w[0]["tries"] != float64(0) {
+		t.Fatalf("waiting %v", w)
+	}
+	deliveryJudgePass(context.Background(), nil, f.now.Add(time.Duration(heldTries-1)*time.Minute))
+	passes := rawJudgePasses(t, f.state)
+	last := passes[len(passes)-1]
+	failed, _ := last["failed"].([]any)
+	lost, _ := last["lost"].([]any)
+	if w := rawPending(t); len(w) != 0 || len(failed) != 2 || len(lost) != 2 {
+		t.Fatalf("waiting %v, last pass %v", w, last)
 	}
 }

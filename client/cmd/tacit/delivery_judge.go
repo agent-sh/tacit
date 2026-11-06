@@ -52,6 +52,13 @@ const (
 	// dropped (both counted in the pass's entry).
 	judgePending = 3 * judgeDaily
 	judgeTries   = 3
+	// judgeHeldTries is the most calls a line may be held by failures that
+	// say nothing about it (judgeFailClass) before it is dropped too: two
+	// days of the dreamer's 4-hour runs, the judgeDays a moment has to
+	// enter the draw. Long enough for the pass's answer_error to be seen and
+	// the cause fixed; a failure one batch causes ends there instead of
+	// coming back every pass.
+	judgeHeldTries = judgeDays * 24 / 4
 	// judgeAim is the share of the cap the day's rate aims at: below 1, so
 	// the waiting lines drain on an ordinary day and none are given up.
 	judgeAim = 0.8
@@ -125,6 +132,7 @@ type judgeMoment struct {
 	Line       string  `json:"line,omitempty"` // the line as delivered, when known (the eval's); else built from the store
 	P          float64 `json:"p,omitempty"`
 	Tries      int     `json:"tries,omitempty"`
+	Held       int     `json:"held,omitempty"` // calls that failed for a reason that says nothing about the line
 }
 
 // judgeCase is what the judge reads of one line's moment, redacted.
@@ -309,20 +317,33 @@ var judgeCall = func(ctx context.Context, model, prompt string) (string, string,
 	cmd.Stdin = strings.NewReader(prompt)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
-	// The output is read once the call has run: arguments are evaluated in
-	// order, so the buffers read in the same call as Run would be empty.
-	runErr := cmd.Run()
+	// A call that cannot start (no claude on PATH) or that the pass's
+	// deadline ends says nothing about the lines.
+	if err := cmd.Start(); err != nil {
+		if ctx.Err() != nil {
+			return "", "", &judgeFailure{Class: "timeout", Err: ctx.Err()}
+		}
+		return "", "", &judgeFailure{Class: "setup", Err: err}
+	}
+	runErr := cmd.Wait()
+	if ctx.Err() != nil {
+		return "", "", &judgeFailure{Class: "timeout", Err: fmt.Errorf("%v: %w", runErr, ctx.Err())}
+	}
+	// The output is read once the call has ended: arguments are evaluated
+	// in order, so buffers read in the same call as the run would be empty.
 	return judgeOutcome(out.Bytes(), errb.String(), runErr, model)
 }
 
 // judgeFailure is a call that gave no labels for another reason than a
 // refusal of the route. Class is the reason the pass's entry logs
-// (answer_error), never the text. Two say nothing about the lines and,
-// like a refusal, end the pass without counting against their tries:
-// setup (the call could not start) and no-output (the CLI printed no
-// result). The others count: call (the CLI ran and failed), empty,
-// truncated, prose (no JSON object), shape (JSON without three valid
-// words for every case), other (JSON that is no answer).
+// (answer_error), never the text. Three say nothing about the lines and,
+// like a refusal, end the pass without counting against their tries (they
+// count against judgeHeldTries): setup (the call could not start),
+// timeout (the pass's deadline ended it) and no-output (the CLI printed no
+// result, whatever its exit). The others count: call (the CLI ran and
+// failed with a result), empty, truncated, prose (no JSON object), shape
+// (JSON without three valid words for every case), other (JSON that is no
+// answer).
 type judgeFailure struct {
 	Class string
 	Err   error
@@ -343,7 +364,7 @@ func judgeFailClass(err error) (class string, held bool) {
 	case errors.Is(err, errJudgeRefused):
 		return "", true
 	case errors.As(err, &f):
-		return f.Class, f.Class == "setup" || f.Class == "no-output"
+		return f.Class, f.Class == "setup" || f.Class == "timeout" || f.Class == "no-output"
 	}
 	return "call", false
 }
@@ -413,13 +434,13 @@ func judgeResultObject(b []byte) (judgeCLIResult, bool) {
 // status when it gives one, else routeRefusal's words), or a judgeFailure.
 func judgeOutcome(out []byte, stderr string, runErr error, model string) (string, string, error) {
 	res, found := judgeResultOf(out)
-	// What the CLI said: its result, or all it printed when that holds none.
-	said := res.text()
-	if !found {
-		said = string(out)
-	}
 	if runErr != nil || res.IsError {
-		// A status decides alone; the words only when there is none.
+		// A status decides alone; the words only when there is none: the
+		// CLI's, or all it printed when that holds no result.
+		said := res.text()
+		if !found {
+			said = string(out)
+		}
 		switch res.APIErrorStatus {
 		case 401, 403, 429, 529:
 			return "", "", errJudgeRefused
@@ -428,10 +449,16 @@ func judgeOutcome(out []byte, stderr string, runErr error, model string) (string
 				return "", "", errJudgeRefused
 			}
 		}
-		return "", "", &judgeFailure{Class: "call", Err: fmt.Errorf("claude -p: %v %s", runErr, judgeClip(stderr+" "+said, 300))}
 	}
-	if !found {
-		return "", "", &judgeFailure{Class: "no-output", Err: fmt.Errorf("claude -p printed no result (%d bytes on stdout)", len(out))}
+	// The error carries the CLI's own error text, never the model's answer:
+	// a result's text only when the CLI marks it an error.
+	switch {
+	case !found:
+		return "", "", &judgeFailure{Class: "no-output", Err: fmt.Errorf("claude -p printed no result (%d bytes on stdout; %v) %s", len(out), runErr, judgeClip(stderr, 300))}
+	case res.IsError:
+		return "", "", &judgeFailure{Class: "call", Err: fmt.Errorf("claude -p: %v %s", runErr, judgeClip(stderr+" "+res.text(), 300))}
+	case runErr != nil:
+		return "", "", &judgeFailure{Class: "call", Err: fmt.Errorf("claude -p: %v after a result of %d bytes %s", runErr, len(res.text()), judgeClip(stderr, 300))}
 	}
 	if ans, _ := judgeAnswerOf(res.text()); ans == nil && res.StopReason == "max_tokens" {
 		return "", "", &judgeFailure{Class: "truncated", Err: errors.New("the answer stopped at the output-token limit")}
@@ -958,10 +985,14 @@ func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int,
 				class, held := judgeFailClass(err)
 				pass.Refused, pass.AnswerError = errors.Is(err, errJudgeRefused), class
 				for _, m := range moments[i:j] {
-					if !held {
+					switch {
+					case pass.Refused:
+					case held:
+						m.Held++
+					default:
 						m.Tries++
 					}
-					if m.Tries >= judgeTries {
+					if m.Tries >= judgeTries || m.Held >= judgeHeldTries {
 						pass.Dropped++
 						pass.Lost = append(pass.Lost, m.Block+"/"+m.Fact)
 						pass.Failed = append(pass.Failed, m.Block+"/"+m.Fact)
