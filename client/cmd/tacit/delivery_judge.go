@@ -331,16 +331,13 @@ var judgeCall = func(ctx context.Context, model, prompt string) (string, string,
 		return "", "", &judgeFailure{Class: "setup", Err: err}
 	}
 	runErr := cmd.Wait()
-	if runErr != nil && ctx.Err() != nil {
-		// A success result printed before the deadline still counts.
-		if res, found := judgeResultOf(out.Bytes()); found && judgeAnswered(res) {
-			return res.text(), answeredBy(res.ModelUsage, model), nil
-		}
-		return "", "", &judgeFailure{Class: "timeout", Err: fmt.Errorf("%v: %w", runErr, ctx.Err())}
+	var deadline error
+	if runErr != nil {
+		deadline = ctx.Err()
 	}
 	// The output is read once the call has ended: arguments are evaluated
 	// in order, so buffers read in the same call as the run would be empty.
-	return judgeOutcome(out.Bytes(), errb.String(), runErr, model)
+	return judgeOutcomeAt(out.Bytes(), errb.String(), runErr, model, deadline)
 }
 
 // judgeFailure is a call that gave no labels for another reason than a
@@ -350,8 +347,8 @@ var judgeCall = func(ctx context.Context, model, prompt string) (string, string,
 // count against judgeHeldTries): setup (the call could not start, or the
 // route does not know the model), timeout (the pass's deadline ended it),
 // no-output (the CLI printed no result, or a result with no result text,
-// whatever its exit) and server (an API error status of 500 or more but
-// 529, the CLI's words for a server or connection error). The others
+// whatever its exit) and server (an API error status of 408, or of 500 or
+// more but 529, the CLI's words for a server or connection error). The others
 // count: call (the CLI reported another error), declined (the model
 // refused), empty (an empty result text), truncated, prose (no JSON
 // object), shape (no answer with three valid words for every case, once
@@ -386,6 +383,7 @@ func judgeFailClass(err error) (class string, held bool) {
 type judgeCLIResult struct {
 	Type           string                     `json:"type"`
 	Result         *string                    `json:"result"`
+	Errors         []string                   `json:"errors"` // the error form's words, with no result
 	IsError        bool                       `json:"is_error"`
 	APIErrorStatus int                        `json:"api_error_status"`
 	StopReason     string                     `json:"stop_reason"`
@@ -445,7 +443,17 @@ func judgeResultObject(b []byte) (judgeCLIResult, bool) {
 // answered, errJudgeRefused for an error of the route (the CLI's HTTP
 // status when it gives one, else routeRefusal's words), or a judgeFailure.
 func judgeOutcome(out []byte, stderr string, runErr error, model string) (string, string, error) {
+	return judgeOutcomeAt(out, stderr, runErr, model, nil)
+}
+
+// judgeOutcomeAt is judgeOutcome for a call the pass's deadline may have
+// ended (deadline, its context's error): a success result printed before
+// it counts as any other, and anything else is timeout.
+func judgeOutcomeAt(out []byte, stderr string, runErr error, model string, deadline error) (string, string, error) {
 	res, found := judgeResultOf(out)
+	if deadline != nil && !(found && !res.IsError && res.Result != nil) {
+		return "", "", &judgeFailure{Class: "timeout", Err: fmt.Errorf("%v: %w", runErr, deadline)}
+	}
 	// A success result that holds an answer counts whatever the exit after
 	// it: the answer is whole, and judgeCases checks it. Any other failed
 	// call is read for the route's words first.
@@ -455,7 +463,7 @@ func judgeOutcome(out []byte, stderr string, runErr error, model string) (string
 		// are no JSON, read for the route's words.
 		quoted := stderr
 		if res.IsError {
-			quoted += " " + res.text()
+			quoted += " " + res.text() + " " + strings.Join(res.Errors, " ")
 		}
 		said := quoted
 		if !found {
@@ -474,10 +482,12 @@ func judgeOutcome(out []byte, stderr string, runErr error, model string) (string
 			// A model the route does not know, or cannot serve as named, is
 			// the setup's fault.
 			return "", "", &judgeFailure{Class: "setup", Err: fmt.Errorf("claude -p: %v %s", runErr, judgeClip(quoted, 300))}
-		case s >= 500 || s == 0 && judgeServerRx.MatchString(said):
+		case s == 408 || s >= 500 || s == 0 && judgeServerRx.MatchString(said):
 			return "", "", &judgeFailure{Class: "server", Err: fmt.Errorf("claude -p: %v %s", runErr, judgeClip(quoted, 300))}
-		case !found:
-			return "", "", &judgeFailure{Class: "no-output", Err: fmt.Errorf("claude -p printed no result (%d bytes on stdout; %v) %s", len(out), runErr, judgeClip(stderr, 300))}
+		case !found || res.IsError && res.Result == nil:
+			// No result, or the CLI's error form with no result text (an
+			// error during its run, its words in errors).
+			return "", "", &judgeFailure{Class: "no-output", Err: fmt.Errorf("claude -p printed no result (%d bytes on stdout; %v) %s", len(out), runErr, judgeClip(quoted, 300))}
 		case res.IsError:
 			return "", "", &judgeFailure{Class: "call", Err: fmt.Errorf("claude -p: %v %s", runErr, judgeClip(quoted, 300))}
 		}

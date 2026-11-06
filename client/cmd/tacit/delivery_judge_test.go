@@ -646,8 +646,8 @@ var realJudgeCall = judgeCall
 // judgeFakeCLI is this test binary run as the judge's `claude` (a link to
 // it, or a copy, named claude: see newFakeJudgeCLI). It keeps the prompt it
 // reads. With a child file it starts a child of its own that holds its
-// stdout and stderr (a wrapper's CLI) and writes child.survived if it is
-// still alive 5 s later. It waits the milliseconds in its sleep file (after
+// stdout and stderr (a wrapper's CLI), marks child.started, and the child
+// writes child.survived if it is still alive 5 s later. It waits the milliseconds in its sleep file (after
 // printing, with a late file), prints the stdout file (stdout.N on its Nth
 // call, when there is one) and the stderr file beside it, and exits with
 // the code in its exit file. The judge's environment passes no test
@@ -677,7 +677,10 @@ func judgeFakeCLI() {
 		child := exec.Command(exe)
 		child.Env = append(os.Environ(), "TACIT_FAKE_CLI_CHILD=1")
 		child.Stdout, child.Stderr = os.Stdout, os.Stderr
-		child.Start()
+		if child.Start() != nil {
+			os.Exit(3)
+		}
+		os.WriteFile(filepath.Join(dir, "child.started"), nil, 0o600)
 	}
 	wait := func() {
 		if b, err := os.ReadFile(filepath.Join(dir, "sleep")); err == nil {
@@ -888,6 +891,7 @@ func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 		sleep                time.Duration // the CLI's wait, past the pass's deadline when set
 		child                bool          // the CLI's child holds its pipes past the deadline
 		late                 bool          // the CLI waits after printing
+		deadline             time.Duration // the pass's, when the CLI sleeps (2 s by default)
 		want                 string        // the class; "refused", "labelled"
 		tries, held          int           // each waiting line's after the pass
 	}{
@@ -897,7 +901,12 @@ func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 		{name: "no claude", noCLI: true, want: "setup", held: 1},
 		{name: "deadline", sleep: 30 * time.Second, stdout: good, want: "timeout", held: 1},
 		{name: "deadline over a wrapper", sleep: 30 * time.Second, child: true, stdout: good, want: "timeout", held: 1},
-		{name: "deadline after an answer", sleep: 30 * time.Second, late: true, stdout: good, want: "labelled"},
+		{name: "deadline after an answer", sleep: 30 * time.Second, late: true, deadline: 5 * time.Second, stdout: good, want: "labelled"},
+		{name: "deadline after prose", sleep: 30 * time.Second, late: true, deadline: 5 * time.Second, stdout: result("I cannot judge these lines. "+mark, "end_turn"), want: "prose", tries: 1},
+		{name: "the error form with a throttle", stdout: `{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["API Error: 429 Too many requests"]}`, exit: 1, want: "refused"},
+		{name: "the error form with a connection error", stdout: `{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["API Error: Connection error."]}`, exit: 1, want: "server", held: 1},
+		{name: "the error form", stdout: `{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["something broke"]}`, exit: 1, want: "no-output", held: 1},
+		{name: "the model's timeout", stdout: `{"type":"result","is_error":true,"api_error_status":408,"result":"API Error: 408 Model has timed out"}`, exit: 1, want: "server", held: 1},
 		{name: "an empty result and a throttle", stdout: result("", "end_turn"), stderr: "API Error: 429 Too many requests", exit: 1, want: "refused"},
 		{name: "a notice and a cut-off result", stdout: "a notice\n" + `{"type":"result","is_error":false,"result":"{\"lines\":[{\"i\":1,\"relevant\":\"the rate limit of this ` + mark, exit: 1, want: "no-output", held: 1},
 		{name: "connection error", stderr: "API Error: Connection error.", exit: 1, want: "server", held: 1},
@@ -939,8 +948,12 @@ func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 			ctx := context.Background()
 			if c.sleep > 0 {
 				os.WriteFile(filepath.Join(dir, "sleep"), []byte(strconv.Itoa(int(c.sleep.Milliseconds()))), 0o600)
+				d := c.deadline
+				if d == 0 {
+					d = 2 * time.Second
+				}
 				var cancel context.CancelFunc
-				ctx, cancel = context.WithTimeout(ctx, 2*time.Second)
+				ctx, cancel = context.WithTimeout(ctx, d)
 				defer cancel()
 			}
 			if c.child {
@@ -960,6 +973,9 @@ func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 				// The child marks itself 5 s in, if the deadline's kill (at 2 s)
 				// left it alive.
 				time.Sleep(time.Until(start.Add(7 * time.Second)))
+				if _, err := os.Stat(filepath.Join(dir, "child.started")); err != nil {
+					t.Fatal("the CLI's child never started")
+				}
 				if _, err := os.Stat(filepath.Join(dir, "child.survived")); err == nil {
 					t.Fatal("the CLI's child outlived the deadline")
 				}
