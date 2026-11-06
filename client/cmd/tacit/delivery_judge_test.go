@@ -645,12 +645,19 @@ var realJudgeCall = judgeCall
 
 // judgeFakeCLI is this test binary run as the judge's `claude` (a link to
 // it, or a copy, named claude: see newFakeJudgeCLI). It keeps the prompt it
-// reads, waits the milliseconds in its sleep file, prints the stdout and
-// stderr files beside it and exits with the code in its exit file. The
-// judge's environment passes no test variable, so the name tells.
+// reads; with a child file it starts a child of its own that holds its
+// stdout and stderr and sleeps (a wrapper's CLI); it waits the
+// milliseconds in its sleep file, prints the stdout file (stdout.N on its
+// Nth call, when there is one) and the stderr file beside it, and exits
+// with the code in its exit file. The judge's environment passes no test
+// variable, so the name tells.
 func judgeFakeCLI() {
 	if strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") != "claude" {
 		return
+	}
+	if os.Getenv("TACIT_FAKE_CLI_CHILD") != "" {
+		time.Sleep(20 * time.Second)
+		os.Exit(0)
 	}
 	exe, err := os.Executable()
 	if err != nil {
@@ -659,11 +666,24 @@ func judgeFakeCLI() {
 	dir := filepath.Dir(exe)
 	prompt, _ := io.ReadAll(os.Stdin)
 	os.WriteFile(filepath.Join(dir, "prompt"), prompt, 0o600)
+	b, _ := os.ReadFile(filepath.Join(dir, "calls"))
+	n, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	n++
+	os.WriteFile(filepath.Join(dir, "calls"), []byte(strconv.Itoa(n)), 0o600)
+	if _, err := os.Stat(filepath.Join(dir, "child")); err == nil {
+		child := exec.Command(exe)
+		child.Env = append(os.Environ(), "TACIT_FAKE_CLI_CHILD=1")
+		child.Stdout, child.Stderr = os.Stdout, os.Stderr
+		child.Start()
+	}
 	if b, err := os.ReadFile(filepath.Join(dir, "sleep")); err == nil {
 		ms, _ := strconv.Atoi(strings.TrimSpace(string(b)))
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
-	out, _ := os.ReadFile(filepath.Join(dir, "stdout"))
+	out, err := os.ReadFile(filepath.Join(dir, "stdout."+strconv.Itoa(n)))
+	if err != nil {
+		out, _ = os.ReadFile(filepath.Join(dir, "stdout"))
+	}
 	os.Stdout.Write(out)
 	errb, _ := os.ReadFile(filepath.Join(dir, "stderr"))
 	os.Stderr.Write(errb)
@@ -758,6 +778,14 @@ func TestJudgeAnswerAroundProse(t *testing.T) {
 	if err != nil || len(v) != 1 || v[0].Relevant != "yes" || v[0].Novel != "unsure" {
 		t.Fatalf("%+v %v", v, err)
 	}
+	// An example of the format before the answer is passed over.
+	judgeCall = func(ctx context.Context, model, prompt string) (string, string, error) {
+		return `The format is {"lines":[{"i":1,"relevant":"yes|no|unsure","confused":"yes|no|unsure","novel":"yes|no|unsure"}]}, so: {"lines":[{"i":1,"relevant":"no","confused":"no","novel":"no"}]}`, model, nil
+	}
+	v, err = judgeCases(context.Background(), "m", []judgeCase{{Block: "b", Fact: "f"}})
+	if err != nil || len(v) != 1 || v[0].Relevant != "no" {
+		t.Fatalf("after an example: %+v %v", v, err)
+	}
 }
 
 // rawPending is the judge state's waiting lines as written, a missing
@@ -826,6 +854,7 @@ func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 		localSettings        bool
 		noCLI                bool          // no claude on PATH
 		sleep                time.Duration // the CLI's wait, past the pass's deadline when set
+		child                bool          // the CLI's child holds its pipes past the deadline
 		want                 string        // the class; "refused", "labelled"
 		tries, held          int           // each waiting line's after the pass
 	}{
@@ -834,6 +863,9 @@ func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 		{name: "setup", localSettings: true, stdout: good, want: "setup", held: 1},
 		{name: "no claude", noCLI: true, want: "setup", held: 1},
 		{name: "deadline", sleep: 30 * time.Second, stdout: good, want: "timeout", held: 1},
+		{name: "deadline over a wrapper", sleep: 30 * time.Second, child: true, stdout: good, want: "timeout", held: 1},
+		{name: "unknown model", stdout: `{"type":"result","subtype":"success","is_error":true,"api_error_status":400,"result":"API Error (m): 400 The provided model identifier is invalid.. Run --model to pick a different model."}`, stderr: "[claude-code:unrecognized_model] {}", exit: 1, want: "setup", held: 1},
+		{name: "declined", stdout: result("I can't help with that. "+mark, "refusal"), want: "declined", tries: 1},
 		{name: "empty", stdout: result("", "end_turn"), want: "empty", tries: 1},
 		{name: "prose", stdout: result("I cannot judge these lines. "+mark, "end_turn"), want: "prose", tries: 1},
 		{name: "prose with a brace", stdout: result("I cannot judge {these} lines. "+mark, "end_turn"), want: "prose", tries: 1},
@@ -843,7 +875,7 @@ func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 		{name: "shape", stdout: result(`{"lines":[{"i":1,"relevant":"`+mark+`","confused":"no","novel":"no"}]}`, "end_turn"), want: "shape", tries: 1},
 		{name: "other", stdout: result(`{"lines":"`+mark+`"}`, "end_turn"), want: "other", tries: 1},
 		{name: "call", stdout: `{"type":"result","is_error":true,"api_error_status":400,"result":"API Error: 400 prompt is too long"}`, exit: 1, want: "call", tries: 1},
-		{name: "exit after an answer", stdout: result(`{"lines":[{"i":1,"relevant":"yes","confused":"no","novel":"no","why":"`+mark+`"}]}`, "end_turn"), exit: 1, want: "call", tries: 1},
+		{name: "exit after an answer", stdout: result(`{"lines":[{"i":1,"relevant":"yes","confused":"no","novel":"no"},{"i":2,"relevant":"no","confused":"no","novel":"no"}]}`+"\nNo rate limit or overload here.", "end_turn"), exit: 1, want: "labelled"},
 		{name: "refused on stderr", stderr: "API Error: 429 Too many requests", exit: 1, want: "refused"},
 		{name: "refused on stdout", stdout: "API Error: 429 Too many requests\n", exit: 1, want: "refused"},
 		{name: "labelled", stdout: good, want: "labelled"},
@@ -866,7 +898,16 @@ func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 				ctx, cancel = context.WithTimeout(ctx, 2*time.Second)
 				defer cancel()
 			}
+			if c.child {
+				os.WriteFile(filepath.Join(dir, "child"), nil, 0o600)
+			}
+			start := time.Now()
 			n, err := deliveryJudgePass(ctx, nil, f.now)
+			// The deadline ends the call's whole tree, a child that holds
+			// its pipes too: the pass does not wait the child's 20 s.
+			if c.sleep > 0 && time.Since(start) > 12*time.Second {
+				t.Fatalf("the deadline took %s", time.Since(start))
+			}
 			passes := rawJudgePasses(t, f.state)
 			if len(passes) != 1 {
 				t.Fatalf("passes %v", passes)
@@ -932,5 +973,28 @@ func TestJudgeHeldLinesAreGivenUp(t *testing.T) {
 	lost, _ := last["lost"].([]any)
 	if w := rawPending(t); len(w) != 0 || len(failed) != 2 || len(lost) != 2 {
 		t.Fatalf("waiting %v, last pass %v", w, last)
+	}
+}
+
+// A held failure in a later batch of a pass leaves the earlier batch's
+// labels and holds only its own lines.
+func TestJudgeHeldInALaterBatch(t *testing.T) {
+	f := newJudgeFixture(t, judgeBatch) // a batch of notes and the push line
+	dir, answer := newFakeJudgeCLI(t)
+	judgeCall = realJudgeCall
+	var ls []string
+	for i := 1; i <= judgeBatch; i++ {
+		ls = append(ls, fmt.Sprintf(`{"i":%d,"relevant":"yes","confused":"no","novel":"no"}`, i))
+	}
+	b, _ := json.Marshal(map[string]any{"type": "result", "is_error": false, "result": `{"lines":[` + strings.Join(ls, ",") + `]}`})
+	answer("", "", 0) // the second call prints nothing: held
+	os.WriteFile(filepath.Join(dir, "stdout.1"), b, 0o600)
+	n, err := deliveryJudgePass(context.Background(), nil, f.now)
+	if n != judgeBatch || err == nil {
+		t.Fatalf("judged %d, %v", n, err)
+	}
+	w := rawPending(t)
+	if len(w) != 1 || w[0]["held"] != float64(1) || w[0]["tries"] != float64(0) {
+		t.Fatalf("waiting %v", w)
 	}
 }

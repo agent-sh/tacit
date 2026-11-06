@@ -22,6 +22,7 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/events"
+	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
@@ -53,12 +54,12 @@ const (
 	judgePending = 3 * judgeDaily
 	judgeTries   = 3
 	// judgeHeldTries is the most calls a line may be held by failures that
-	// say nothing about it (judgeFailClass) before it is dropped too: two
-	// days of the dreamer's 4-hour runs, the judgeDays a moment has to
-	// enter the draw. Long enough for the pass's answer_error to be seen and
-	// the cause fixed; a failure one batch causes ends there instead of
-	// coming back every pass.
-	judgeHeldTries = judgeDays * 24 / 4
+	// say nothing about it (judgeFailClass) before it is dropped too: the
+	// dreamer's runs in judgeDays (12 at its 4-hour interval), the days a
+	// moment has to enter the draw. Long enough for the pass's answer_error
+	// to be seen and the cause fixed; a failure one batch causes ends there
+	// instead of coming back every pass.
+	judgeHeldTries = judgeDays * 24 * 60 * 60 / dreamInterval
 	// judgeAim is the share of the cap the day's rate aims at: below 1, so
 	// the waiting lines drain on an ordinary day and none are given up.
 	judgeAim = 0.8
@@ -89,14 +90,14 @@ type judgePassLog struct {
 	Drawn      int     `json:"drawn"`
 	Judged     int     `json:"judged"`
 	Waiting    int     `json:"waiting"`              // drawn and not judged yet (the cap, a refusal)
-	Dropped    int     `json:"dropped,omitempty"`    // drawn and given up: too many waiting, or failed judgeTries times
+	Dropped    int     `json:"dropped,omitempty"`    // drawn and given up: too many waiting, failed judgeTries times or held judgeHeldTries times
 	Unreadable int     `json:"unreadable,omitempty"` // drawn and left out: the transcript or its redaction failed
 	// Lost names each drawn line given up or left out this pass
 	// (block/fact), so the analysis knows which draws came to no label;
 	// Unread and Failed are the ones of them left out because their moment
 	// could not be read or redacted, and the ones whose call failed
-	// judgeTries times (not random, unlike the give-ups past the waiting
-	// bound, which thin the waiting lines' p).
+	// judgeTries times or was held judgeHeldTries times (not random, unlike
+	// the give-ups past the waiting bound, which thin the waiting lines' p).
 	Lost    []string `json:"lost,omitempty"`
 	Unread  []string `json:"unread,omitempty"`
 	Failed  []string `json:"failed,omitempty"`
@@ -244,6 +245,10 @@ func judgeCommand(ctx context.Context, model, dir string) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, "claude", "-p", "--output-format", "json", "--model", model,
 		"--tools", "", "--setting-sources", "local", "--strict-mcp-config", "--no-session-persistence")
 	cmd.Dir, cmd.Env = dir, env
+	// The deadline ends the CLI's whole process tree (a wrapper's child
+	// too), and the wait does not outlast a child that keeps its pipes.
+	platform.Prepare(cmd)
+	cmd.WaitDelay = 2 * time.Second
 	return cmd, nil
 }
 
@@ -326,7 +331,7 @@ var judgeCall = func(ctx context.Context, model, prompt string) (string, string,
 		return "", "", &judgeFailure{Class: "setup", Err: err}
 	}
 	runErr := cmd.Wait()
-	if ctx.Err() != nil {
+	if runErr != nil && ctx.Err() != nil {
 		return "", "", &judgeFailure{Class: "timeout", Err: fmt.Errorf("%v: %w", runErr, ctx.Err())}
 	}
 	// The output is read once the call has ended: arguments are evaluated
@@ -338,12 +343,12 @@ var judgeCall = func(ctx context.Context, model, prompt string) (string, string,
 // refusal of the route. Class is the reason the pass's entry logs
 // (answer_error), never the text. Three say nothing about the lines and,
 // like a refusal, end the pass without counting against their tries (they
-// count against judgeHeldTries): setup (the call could not start),
-// timeout (the pass's deadline ended it) and no-output (the CLI printed no
-// result, whatever its exit). The others count: call (the CLI ran and
-// failed with a result), empty, truncated, prose (no JSON object), shape
-// (JSON without three valid words for every case), other (JSON that is no
-// answer).
+// count against judgeHeldTries): setup (the call could not start, or the
+// route does not know the model), timeout (the pass's deadline ended it)
+// and no-output (the CLI printed no result, whatever its exit). The others
+// count: call (the CLI reported an error), declined (the model refused),
+// empty, truncated, prose (no JSON object), shape (no answer with three
+// valid words for every case), other (JSON that is no answer).
 type judgeFailure struct {
 	Class string
 	Err   error
@@ -434,37 +439,55 @@ func judgeResultObject(b []byte) (judgeCLIResult, bool) {
 // status when it gives one, else routeRefusal's words), or a judgeFailure.
 func judgeOutcome(out []byte, stderr string, runErr error, model string) (string, string, error) {
 	res, found := judgeResultOf(out)
+	// The words a refusal or a setup fault is read from: the CLI's own, its
+	// error result or all it printed when that holds no result; never a
+	// result that is the model's answer.
+	said := stderr
+	switch {
+	case !found:
+		said += " " + string(out)
+	case res.IsError:
+		said += " " + res.text()
+	}
 	if runErr != nil || res.IsError {
-		// A status decides alone; the words only when there is none: the
-		// CLI's, or all it printed when that holds no result.
-		said := res.text()
-		if !found {
-			said = string(out)
-		}
+		// A status decides alone; the words only when there is none.
 		switch res.APIErrorStatus {
 		case 401, 403, 429, 529:
 			return "", "", errJudgeRefused
 		case 0:
-			if routeRefusal(stderr + " " + said) {
+			if routeRefusal(said) {
 				return "", "", errJudgeRefused
 			}
 		}
+		// A model the route does not know is the setup's fault, not the
+		// lines'.
+		if res.APIErrorStatus == 404 || judgeModelUnknownRx.MatchString(said) {
+			return "", "", &judgeFailure{Class: "setup", Err: fmt.Errorf("claude -p: %v %s", runErr, judgeClip(said, 300))}
+		}
 	}
-	// The error carries the CLI's own error text, never the model's answer:
-	// a result's text only when the CLI marks it an error.
+	// The error carries the CLI's own words, never the model's answer.
 	switch {
 	case !found:
 		return "", "", &judgeFailure{Class: "no-output", Err: fmt.Errorf("claude -p printed no result (%d bytes on stdout; %v) %s", len(out), runErr, judgeClip(stderr, 300))}
 	case res.IsError:
-		return "", "", &judgeFailure{Class: "call", Err: fmt.Errorf("claude -p: %v %s", runErr, judgeClip(stderr+" "+res.text(), 300))}
-	case runErr != nil:
-		return "", "", &judgeFailure{Class: "call", Err: fmt.Errorf("claude -p: %v after a result of %d bytes %s", runErr, len(res.text()), judgeClip(stderr, 300))}
+		return "", "", &judgeFailure{Class: "call", Err: fmt.Errorf("claude -p: %v %s", runErr, judgeClip(said, 300))}
 	}
-	if ans, _ := judgeAnswerOf(res.text()); ans == nil && res.StopReason == "max_tokens" {
-		return "", "", &judgeFailure{Class: "truncated", Err: errors.New("the answer stopped at the output-token limit")}
+	// A success result counts whatever the exit after it: the answer is
+	// whole, and judgeCases checks it.
+	if len(judgeAnswersOf(res.text())) == 0 {
+		switch res.StopReason {
+		case "max_tokens":
+			return "", "", &judgeFailure{Class: "truncated", Err: errors.New("the answer stopped at the output-token limit")}
+		case "refusal":
+			return "", "", &judgeFailure{Class: "declined", Err: errors.New("the model declined to answer")}
+		}
 	}
 	return res.text(), answeredBy(res.ModelUsage, model), nil
 }
+
+// judgeModelUnknownRx is the CLI's and the route's words for a model id
+// they do not know.
+var judgeModelUnknownRx = regexp.MustCompile(`(?i)unrecognized_model|model identifier is invalid|model\W.{0,60}not found|not_found_error`)
 
 // answeredBy is the model the CLI says answered: modelUsage's one key that
 // is not a small helper model, else the name asked for.
@@ -535,13 +558,30 @@ func judgeCases(ctx context.Context, model string, cases []judgeCase) ([]judgeVe
 	if err != nil {
 		return nil, err
 	}
-	ans, class := judgeAnswerOf(text)
-	if ans == nil {
-		return nil, &judgeFailure{Class: class, Err: errors.New("no JSON answer in it")}
+	answers := judgeAnswersOf(text)
+	if len(answers) == 0 {
+		return nil, &judgeFailure{Class: judgeNoAnswerClass(text), Err: errors.New("no JSON answer in it")}
 	}
+	// The first answer that holds three valid words for every case counts:
+	// an example the model wrote before its answer is passed over.
+	var first error
+	for _, ans := range answers {
+		out, err := judgeVerdictsOf(ans, cases, by)
+		if err == nil {
+			return out, nil
+		}
+		if first == nil {
+			first = err
+		}
+	}
+	return nil, first
+}
+
+// judgeVerdictsOf is an answer's verdicts, one for every case, or the shape
+// failure. The error names the line, never the model's words.
+func judgeVerdictsOf(ans *judgeAnswer, cases []judgeCase, by string) ([]judgeVerdict, error) {
 	got := map[int]judgeVerdict{}
 	for _, l := range ans.Lines {
-		// The error names the line, never the model's words.
 		if l.I < 1 || l.I > len(cases) {
 			return nil, &judgeFailure{Class: "shape", Err: fmt.Errorf("a line numbered %d of %d cases", l.I, len(cases))}
 		}
@@ -569,24 +609,37 @@ type judgeAnswer struct {
 	} `json:"lines"`
 }
 
-// judgeAnswerOf is the first JSON object in the text that decodes as an
-// answer with its lines key, whatever prose or code fence is around it.
-// With none it is nil and why: empty, truncated (an object cut off), other
-// (JSON that is no answer), prose (no JSON object).
-func judgeAnswerOf(text string) (*judgeAnswer, string) {
+// judgeAnswersOf is the JSON objects in the text that decode as an answer
+// with its lines key, in order, whatever prose or code fence is around them.
+func judgeAnswersOf(text string) []*judgeAnswer {
+	var out []*judgeAnswer
+	for i := strings.IndexByte(text, '{'); i >= 0; {
+		var ans judgeAnswer
+		if json.NewDecoder(strings.NewReader(text[i:])).Decode(&ans) == nil && ans.Lines != nil {
+			out = append(out, &ans)
+		}
+		j := strings.IndexByte(text[i+1:], '{')
+		if j < 0 {
+			break
+		}
+		i += 1 + j
+	}
+	return out
+}
+
+// judgeNoAnswerClass is why a text holds no answer: empty, truncated (an
+// object cut off), other (JSON that is no answer), prose (no JSON object).
+func judgeNoAnswerClass(text string) string {
 	if strings.TrimSpace(text) == "" {
-		return nil, "empty"
+		return "empty"
 	}
 	class := "prose"
 	for i := strings.IndexByte(text, '{'); i >= 0; {
-		var ans judgeAnswer
-		var te *json.UnmarshalTypeError
-		switch err := json.NewDecoder(strings.NewReader(text[i:])).Decode(&ans); {
-		case err == nil && ans.Lines != nil:
-			return &ans, ""
+		var v any
+		switch err := json.NewDecoder(strings.NewReader(text[i:])).Decode(&v); {
 		case errors.Is(err, io.ErrUnexpectedEOF):
 			class = "truncated" // a cut-off object outranks a whole one inside it
-		case (err == nil || errors.As(err, &te)) && class == "prose":
+		case err == nil && class == "prose":
 			class = "other"
 		}
 		j := strings.IndexByte(text[i+1:], '{')
@@ -595,7 +648,7 @@ func judgeAnswerOf(text string) (*judgeAnswer, string) {
 		}
 		i += 1 + j
 	}
-	return nil, class
+	return class
 }
 
 func judgeClip(s string, n int) string {
@@ -904,7 +957,9 @@ func factDescription(s *store.Store, rel string) string {
 // is left of the day's cap; the rest wait for a later pass. Each verdict
 // carries its line's draw probability, and the pass logs its own entry. A
 // refusal of the route (a rate limit) ends the pass, the lines wait,
-// and a later pass tries again; it never falls back to another route.
+// and a later pass tries again; it never falls back to another route. A
+// failure that says nothing about the lines (judgeFailClass) ends it too
+// and holds them, up to judgeHeldTries; any other failure counts a try.
 func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int, error) {
 	if !deliveryOn("JUDGE", true) || !deliveryLogOn() {
 		return 0, nil
