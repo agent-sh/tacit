@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -48,7 +49,12 @@ func Prepare(cmd *exec.Cmd) {
 	cmd.Cancel = func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		kill := exec.CommandContext(ctx, "taskkill.exe", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F")
+		// By its full path: PATH may lack System32, or hold another taskkill.
+		taskkill := "taskkill.exe"
+		if root := os.Getenv("SystemRoot"); root != "" {
+			taskkill = filepath.Join(root, "System32", "taskkill.exe")
+		}
+		kill := exec.CommandContext(ctx, taskkill, "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F")
 		kill.SysProcAttr = &windows.SysProcAttr{HideWindow: true}
 		kill.WaitDelay = time.Second
 		if err := kill.Run(); err == nil {

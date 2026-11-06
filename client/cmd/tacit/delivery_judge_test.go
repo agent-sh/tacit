@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/agent-sh/tacit/client/internal/platform"
 )
 
 // The judge's environment keeps what a process needs and the Bedrock
@@ -646,7 +648,8 @@ var realJudgeCall = judgeCall
 // judgeFakeCLI is this test binary run as the judge's `claude` (a link to
 // it, or a copy, named claude: see newFakeJudgeCLI). It keeps the prompt it
 // reads; with a child file it starts a child of its own that holds its
-// stdout and stderr and sleeps (a wrapper's CLI); it waits the
+// stdout and stderr and sleeps (a wrapper's CLI), its pid in child.pid; it
+// waits the
 // milliseconds in its sleep file, prints the stdout file (stdout.N on its
 // Nth call, when there is one) and the stderr file beside it, and exits
 // with the code in its exit file. The judge's environment passes no test
@@ -674,7 +677,9 @@ func judgeFakeCLI() {
 		child := exec.Command(exe)
 		child.Env = append(os.Environ(), "TACIT_FAKE_CLI_CHILD=1")
 		child.Stdout, child.Stderr = os.Stdout, os.Stderr
-		child.Start()
+		if child.Start() == nil {
+			os.WriteFile(filepath.Join(dir, "child.pid"), []byte(strconv.Itoa(child.Process.Pid)), 0o600)
+		}
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, "sleep")); err == nil {
 		ms, _ := strconv.Atoi(strings.TrimSpace(string(b)))
@@ -718,12 +723,7 @@ func newFakeJudgeCLI(t *testing.T) (dir string, answer func(stdout, stderr strin
 			t.Fatal(err)
 		}
 	}
-	path := dir
-	if runtime.GOOS == "windows" {
-		// The deadline's tree kill is taskkill.exe, found on this PATH.
-		path += string(os.PathListSeparator) + filepath.Join(os.Getenv("SystemRoot"), "System32")
-	}
-	t.Setenv("PATH", path)
+	t.Setenv("PATH", dir)
 	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "1")
 	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "test")
 	t.Setenv("AWS_PROFILE", "")
@@ -790,6 +790,19 @@ func TestJudgeAnswerAroundProse(t *testing.T) {
 	v, err = judgeCases(context.Background(), "m", []judgeCase{{Block: "b", Fact: "f"}})
 	if err != nil || len(v) != 1 || v[0].Relevant != "no" {
 		t.Fatalf("after an example: %+v %v", v, err)
+	}
+	// Two answers that disagree are no answer; a repeat is one.
+	two := func(second string) {
+		judgeCall = func(ctx context.Context, model, prompt string) (string, string, error) {
+			return `{"lines":[{"i":1,"relevant":"yes","confused":"no","novel":"no"}]} On second thought: {"lines":[{"i":1,"relevant":"` + second + `","confused":"no","novel":"no"}]}`, model, nil
+		}
+		v, err = judgeCases(context.Background(), "m", []judgeCase{{Block: "b", Fact: "f"}})
+	}
+	if two("no"); err == nil {
+		t.Fatalf("two answers that disagree: %+v", v)
+	}
+	if two("yes"); err != nil || len(v) != 1 {
+		t.Fatalf("a repeated answer: %+v %v", v, err)
 	}
 }
 
@@ -881,6 +894,11 @@ func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 		{name: "other", stdout: result(`{"lines":"`+mark+`"}`, "end_turn"), want: "other", tries: 1},
 		{name: "call", stdout: `{"type":"result","is_error":true,"api_error_status":400,"result":"API Error: 400 prompt is too long"}`, exit: 1, want: "call", tries: 1},
 		{name: "exit after an answer", stdout: result(`{"lines":[{"i":1,"relevant":"yes","confused":"no","novel":"no"},{"i":2,"relevant":"no","confused":"no","novel":"no"}]}`+"\nNo rate limit or overload here.", "end_turn"), exit: 1, want: "labelled"},
+		{name: "exit after an answer, the route's words on stderr", stdout: good, stderr: "API Error: 529 overloaded", exit: 1, want: "labelled"},
+		{name: "exit after an answer, a model's words on stderr", stdout: good, stderr: "helper model claude-haiku not found", exit: 1, want: "labelled"},
+		{name: "a cut-off result", stdout: `{"type":"result","is_error":false,"result":"{\"lines\":[{\"i\":1,\"relevant\":\"no rate limit here ` + mark, exit: 1, want: "no-output", held: 1},
+		{name: "a result with no text", stdout: `{"type":"result","subtype":"success","is_error":false}`, want: "no-output", held: 1},
+		{name: "server error", stdout: `{"type":"result","is_error":true,"api_error_status":503,"result":"API Error: 503 temporary capacity issue"}`, exit: 1, want: "server", held: 1},
 		{name: "refused on stderr", stderr: "API Error: 429 Too many requests", exit: 1, want: "refused"},
 		{name: "refused on stdout", stdout: "API Error: 429 Too many requests\n", exit: 1, want: "refused"},
 		{name: "labelled", stdout: good, want: "labelled"},
@@ -912,6 +930,17 @@ func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 			// its pipes too: the pass does not wait the child's 20 s.
 			if c.sleep > 0 && time.Since(start) > 12*time.Second {
 				t.Fatalf("the deadline took %s", time.Since(start))
+			}
+			if c.child {
+				b, _ := os.ReadFile(filepath.Join(dir, "child.pid"))
+				pid, _ := strconv.Atoi(string(b))
+				gone := false
+				for end := time.Now().Add(5 * time.Second); !gone && time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+					gone = !platform.Alive(pid)
+				}
+				if pid == 0 || !gone {
+					t.Fatalf("the CLI's child %d outlived the deadline", pid)
+				}
 			}
 			passes := rawJudgePasses(t, f.state)
 			if len(passes) != 1 {
