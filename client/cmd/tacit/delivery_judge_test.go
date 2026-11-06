@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -632,5 +635,201 @@ func TestJudgeLabelTheLogKeepsRefusing(t *testing.T) {
 	}
 	if len(failed) != 2 || len(lost) != 2 {
 		t.Fatalf("failed %v, lost %v", failed, lost)
+	}
+}
+
+// realJudgeCall is the judge's call as built, before any test stands in
+// for it.
+var realJudgeCall = judgeCall
+
+// judgeFakeCLI is this test binary run as the judge's `claude` (a copy of
+// it named claude, see newFakeJudgeCLI): it keeps the prompt it reads,
+// prints the stdout and stderr files beside it and exits with the code in
+// its exit file. The judge's environment passes no test variable, so the
+// name tells.
+func judgeFakeCLI() {
+	if strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") != "claude" {
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		os.Exit(3)
+	}
+	dir := filepath.Dir(exe)
+	prompt, _ := io.ReadAll(os.Stdin)
+	os.WriteFile(filepath.Join(dir, "prompt"), prompt, 0o600)
+	out, _ := os.ReadFile(filepath.Join(dir, "stdout"))
+	os.Stdout.Write(out)
+	errb, _ := os.ReadFile(filepath.Join(dir, "stderr"))
+	os.Stderr.Write(errb)
+	code := 0
+	if b, err := os.ReadFile(filepath.Join(dir, "exit")); err == nil {
+		code, _ = strconv.Atoi(strings.TrimSpace(string(b)))
+	}
+	os.Exit(code)
+}
+
+// newFakeJudgeCLI puts a claude that answers as told first on PATH, with
+// a bearer route for the judge, and returns how to tell it what to print.
+func newFakeJudgeCLI(t *testing.T) (dir string, answer func(stdout, stderr string, exit int)) {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir = t.TempDir()
+	name := "claude"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	b, err := os.ReadFile(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), b, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "test")
+	t.Setenv("AWS_PROFILE", "")
+	return dir, func(stdout, stderr string, exit int) {
+		os.WriteFile(filepath.Join(dir, "stdout"), []byte(stdout), 0o600)
+		os.WriteFile(filepath.Join(dir, "stderr"), []byte(stderr), 0o600)
+		os.WriteFile(filepath.Join(dir, "exit"), []byte(strconv.Itoa(exit)), 0o600)
+	}
+}
+
+// The call reads the CLI's output once it has run: what it printed is the
+// answer, and a throttle it printed on stderr is the route's refusal.
+func TestJudgeCallReadsTheAnswer(t *testing.T) {
+	t.Setenv("TACIT_STATE_DIR", t.TempDir())
+	dir, answer := newFakeJudgeCLI(t)
+	answer(`{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn","result":"{\"lines\":[]}","modelUsage":{"claude-x":{}}}`+"\n", "", 0)
+	text, by, err := realJudgeCall(context.Background(), "m", "the cases")
+	if err != nil || text != `{"lines":[]}` || by != "claude-x" {
+		t.Fatalf("%q %q %v", text, by, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "prompt")); string(b) != "the cases" {
+		t.Fatalf("the CLI read %q", b)
+	}
+	answer("", "API Error: 429 Too many requests", 1)
+	if _, _, err := realJudgeCall(context.Background(), "m", "the cases"); !errors.Is(err, errJudgeRefused) {
+		t.Fatalf("a throttle on stderr: %v", err)
+	}
+}
+
+// The CLI's result is read in the forms it prints: its one object, an
+// array of events whose last result counts, a result line after other
+// output.
+func TestJudgeOutcomeForms(t *testing.T) {
+	res := `{"type":"result","subtype":"success","is_error":false,"result":"A","modelUsage":{"claude-x":{}}}`
+	for _, out := range []string{
+		res + "\n",
+		`[{"type":"system","subtype":"init"},{"type":"assistant","message":{"content":[]}},` + res + `]`,
+		"a notice printed first\n" + res + "\n",
+		`{"type":"result","is_error":false,"result":"A","api_error_status":"none","modelUsage":{"claude-x":{}}}`,
+	} {
+		text, by, err := judgeOutcome([]byte(out), "", nil, "m")
+		if err != nil || text != "A" || by != "claude-x" {
+			t.Errorf("%s: %q %q %v", out, text, by, err)
+		}
+	}
+}
+
+// An answer is the JSON in it, whatever prose or code fence is around it,
+// braces in the prose too.
+func TestJudgeAnswerAroundProse(t *testing.T) {
+	call := judgeCall
+	t.Cleanup(func() { judgeCall = call })
+	judgeCall = func(ctx context.Context, model, prompt string) (string, string, error) {
+		return "Here is {my} answer:\n```json\n" + `{"lines":[{"i":1,"relevant":"yes","confused":"no","novel":"unsure"}]}` + "\n```\nDone {ok}.", model, nil
+	}
+	v, err := judgeCases(context.Background(), "m", []judgeCase{{Block: "b", Fact: "f"}})
+	if err != nil || len(v) != 1 || v[0].Relevant != "yes" || v[0].Novel != "unsure" {
+		t.Fatalf("%+v %v", v, err)
+	}
+}
+
+// rawJudgePasses is the judge-pass entries of the log as written.
+func rawJudgePasses(t *testing.T, state string) []map[string]any {
+	t.Helper()
+	files, _ := filepath.Glob(filepath.Join(state, "delivery", "*.jsonl"))
+	var out []map[string]any
+	for _, p := range files {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+			var e struct {
+				Hook string         `json:"hook"`
+				Pass map[string]any `json:"judge_pass"`
+			}
+			if json.Unmarshal([]byte(l), &e) == nil && e.Hook == "judge-pass" {
+				out = append(out, e.Pass)
+			}
+		}
+	}
+	return out
+}
+
+// A pass whose call gives no labels says why in its entry (answer_error),
+// as a class and never the answer's text; a refusal of the route has none,
+// and an answer that reads labels every line.
+func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
+	const mark = "XYZZY-ANSWER-TEXT"
+	result := func(text, stop string) string {
+		b, _ := json.Marshal(map[string]any{"type": "result", "subtype": "success", "is_error": false, "stop_reason": stop, "result": text, "modelUsage": map[string]any{"claude-x": map[string]any{}}})
+		return string(b)
+	}
+	for _, c := range []struct {
+		name, stdout, stderr string
+		exit                 int
+		want                 string // the class; "refused", "labelled"
+	}{
+		{"no output", "", "", 0, "no-output"},
+		{"empty", result("", "end_turn"), "", 0, "empty"},
+		{"prose", result("I cannot judge these lines. "+mark, "end_turn"), "", 0, "prose"},
+		{"cut off", result(`{"lines":[{"i":1,"relevant":"yes","why":"`+mark, "end_turn"), "", 0, "truncated"},
+		{"output-token limit", result("", "max_tokens"), "", 0, "truncated"},
+		{"shape", result(`{"lines":[{"i":1,"relevant":"perhaps","confused":"no","novel":"no","why":"`+mark+`"}]}`, "end_turn"), "", 0, "shape"},
+		{"other", result(`{"lines":"`+mark+`"}`, "end_turn"), "", 0, "other"},
+		{"call", `{"type":"result","is_error":true,"api_error_status":400,"result":"API Error: 400 ` + mark + `"}`, "", 1, "call"},
+		{"refused", "", "API Error: 429 Too many requests", 1, "refused"},
+		{"labelled", result(`{"lines":[{"i":1,"relevant":"yes","confused":"no","novel":"no"},{"i":2,"relevant":"no","confused":"no","novel":"no"}]}`, "end_turn"), "", 0, "labelled"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newJudgeFixture(t, 1)
+			_, answer := newFakeJudgeCLI(t)
+			judgeCall = realJudgeCall
+			answer(c.stdout, c.stderr, c.exit)
+			n, err := deliveryJudgePass(context.Background(), nil, f.now)
+			passes := rawJudgePasses(t, f.state)
+			if len(passes) != 1 {
+				t.Fatalf("passes %v", passes)
+			}
+			p := passes[0]
+			switch c.want {
+			case "labelled":
+				if err != nil || n != 2 || p["answer_error"] != nil {
+					t.Fatalf("%d %v %v", n, err, p)
+				}
+			case "refused":
+				if !errors.Is(err, errJudgeRefused) || p["refused"] != true || p["answer_error"] != nil {
+					t.Fatalf("%v %v", err, p)
+				}
+			default:
+				if err == nil || n != 0 || p["answer_error"] != c.want {
+					t.Fatalf("%d %v %v", n, err, p)
+				}
+			}
+			files, _ := filepath.Glob(filepath.Join(f.state, "delivery", "*"))
+			for _, fn := range files {
+				if b, _ := os.ReadFile(fn); strings.Contains(string(b), mark) {
+					t.Fatalf("%s holds the answer's text", fn)
+				}
+			}
+		})
 	}
 }

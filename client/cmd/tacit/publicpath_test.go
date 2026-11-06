@@ -24,6 +24,7 @@ import (
 // TestMain lets git run this test binary as `tacit credential <harness>`:
 // a clone's credential helper is the running binary (store.helperExe).
 func TestMain(m *testing.M) {
+	judgeFakeCLI() // run as the judge's claude, it exits here
 	if os.Getenv("TACIT_TEST_MAIN") == "1" {
 		main()
 		os.Exit(0)
