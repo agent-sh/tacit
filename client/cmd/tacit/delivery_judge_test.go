@@ -775,8 +775,10 @@ func rawJudgePasses(t *testing.T, state string) []map[string]any {
 }
 
 // A pass whose call gives no labels says why in its entry (answer_error),
-// as a class and never the answer's text; a refusal of the route has none,
-// and an answer that reads labels every line.
+// as a class and never the answer's text. A call that could not start or
+// printed no result says nothing about the lines and, like a refusal (which
+// has no class), counts no try; the others count one. An answer that reads
+// labels every line.
 func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 	const mark = "XYZZY-ANSWER-TEXT"
 	result := func(text, stop string) string {
@@ -786,24 +788,33 @@ func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 	for _, c := range []struct {
 		name, stdout, stderr string
 		exit                 int
+		localSettings        bool
 		want                 string // the class; "refused", "labelled"
+		tries                int    // each waiting line's tries after the pass
 	}{
-		{"no output", "", "", 0, "no-output"},
-		{"empty", result("", "end_turn"), "", 0, "empty"},
-		{"prose", result("I cannot judge these lines. "+mark, "end_turn"), "", 0, "prose"},
-		{"cut off", result(`{"lines":[{"i":1,"relevant":"yes","why":"`+mark, "end_turn"), "", 0, "truncated"},
-		{"output-token limit", result("", "max_tokens"), "", 0, "truncated"},
-		{"shape", result(`{"lines":[{"i":1,"relevant":"perhaps","confused":"no","novel":"no","why":"`+mark+`"}]}`, "end_turn"), "", 0, "shape"},
-		{"other", result(`{"lines":"`+mark+`"}`, "end_turn"), "", 0, "other"},
-		{"call", `{"type":"result","is_error":true,"api_error_status":400,"result":"API Error: 400 ` + mark + `"}`, "", 1, "call"},
-		{"refused", "", "API Error: 429 Too many requests", 1, "refused"},
-		{"labelled", result(`{"lines":[{"i":1,"relevant":"yes","confused":"no","novel":"no"},{"i":2,"relevant":"no","confused":"no","novel":"no"}]}`, "end_turn"), "", 0, "labelled"},
+		{name: "no output", want: "no-output"},
+		{name: "setup", localSettings: true, stdout: result(`{"lines":[]}`, "end_turn"), want: "setup"},
+		{name: "empty", stdout: result("", "end_turn"), want: "empty", tries: 1},
+		{name: "prose", stdout: result("I cannot judge these lines. "+mark, "end_turn"), want: "prose", tries: 1},
+		{name: "prose with a brace", stdout: result("I cannot judge {these} lines. "+mark, "end_turn"), want: "prose", tries: 1},
+		{name: "cut off", stdout: result(`{"lines":[{"i":1,"relevant":"yes","confused":"no","novel":"no"},{"i":2,"relevant":"`+mark, "end_turn"), want: "truncated", tries: 1},
+		{name: "cut off after a brace", stdout: result(`Here is {my} answer: {"lines":[{"i":1,"relevant":"`+mark, "end_turn"), want: "truncated", tries: 1},
+		{name: "output-token limit", stdout: result("", "max_tokens"), want: "truncated", tries: 1},
+		{name: "shape", stdout: result(`{"lines":[{"i":1,"relevant":"`+mark+`","confused":"no","novel":"no"}]}`, "end_turn"), want: "shape", tries: 1},
+		{name: "other", stdout: result(`{"lines":"`+mark+`"}`, "end_turn"), want: "other", tries: 1},
+		{name: "call", stdout: `{"type":"result","is_error":true,"api_error_status":400,"result":"API Error: 400 ` + mark + `"}`, exit: 1, want: "call", tries: 1},
+		{name: "refused on stderr", stderr: "API Error: 429 Too many requests", exit: 1, want: "refused"},
+		{name: "refused on stdout", stdout: "API Error: 429 Too many requests\n", exit: 1, want: "refused"},
+		{name: "labelled", stdout: result(`{"lines":[{"i":1,"relevant":"yes","confused":"no","novel":"no"},{"i":2,"relevant":"no","confused":"no","novel":"no"}]}`, "end_turn"), want: "labelled"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newJudgeFixture(t, 1)
 			_, answer := newFakeJudgeCLI(t)
 			judgeCall = realJudgeCall
 			answer(c.stdout, c.stderr, c.exit)
+			if c.localSettings {
+				os.MkdirAll(filepath.Join(deliveryLogDir(), "judge-cwd", ".claude"), 0o700)
+			}
 			n, err := deliveryJudgePass(context.Background(), nil, f.now)
 			passes := rawJudgePasses(t, f.state)
 			if len(passes) != 1 {
@@ -822,6 +833,12 @@ func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 			default:
 				if err == nil || n != 0 || p["answer_error"] != c.want {
 					t.Fatalf("%d %v %v", n, err, p)
+				}
+			}
+			if c.want != "labelled" {
+				st := readJudgeState(f.now.UTC().Format("2006-01-02"))
+				if len(st.Pending) != 2 || st.Pending[0].Tries != c.tries || st.Pending[1].Tries != c.tries {
+					t.Fatalf("waiting %+v, want %d tries each", st.Pending, c.tries)
 				}
 			}
 			files, _ := filepath.Glob(filepath.Join(f.state, "delivery", "*"))

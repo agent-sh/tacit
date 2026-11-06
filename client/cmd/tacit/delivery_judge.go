@@ -94,9 +94,9 @@ type judgePassLog struct {
 	Unread  []string `json:"unread,omitempty"`
 	Failed  []string `json:"failed,omitempty"`
 	Refused bool     `json:"refused,omitempty"`
-	// AnswerError is why a call that failed for another reason than the
-	// route's gave no labels, as a class and never its text: the
-	// judgeAnswerError classes, or call (the call itself failed).
+	// AnswerError is why a call that failed for another reason than a
+	// refusal of the route gave no labels: a judgeFailure class, never the
+	// answer's text.
 	AnswerError string `json:"answer_error,omitempty"`
 	// Model and Prompt are the judge this pass asked (the model as asked;
 	// each label carries the one that answered) and its prompt digest.
@@ -295,16 +295,16 @@ var judgeCall = func(ctx context.Context, model, prompt string) (string, string,
 	// even with no session kept, so a new one a call would pile up.
 	dir := filepath.Join(deliveryLogDir(), "judge-cwd")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", "", err
+		return "", "", &judgeFailure{Class: "setup", Err: err}
 	}
 	// Local settings are read from here: a .claude left in it could set a
 	// route, so the call refuses to run over one.
 	if _, err := os.Lstat(filepath.Join(dir, ".claude")); err == nil {
-		return "", "", fmt.Errorf("%s holds a .claude directory; the judge does not run over it", dir)
+		return "", "", &judgeFailure{Class: "setup", Err: fmt.Errorf("%s holds a .claude directory; the judge does not run over it", dir)}
 	}
 	cmd, err := judgeCommand(ctx, model, dir)
 	if err != nil {
-		return "", "", err
+		return "", "", &judgeFailure{Class: "setup", Err: err}
 	}
 	cmd.Stdin = strings.NewReader(prompt)
 	var out, errb bytes.Buffer
@@ -315,50 +315,61 @@ var judgeCall = func(ctx context.Context, model, prompt string) (string, string,
 	return judgeOutcome(out.Bytes(), errb.String(), runErr, model)
 }
 
-// judgeAnswerError is a call that ran and gave no answer the judge can
-// read. Class is the reason the pass's entry logs (answer_error), never
-// the text: no-output (the CLI printed no result), empty, truncated, prose
-// (no JSON object in it), shape (JSON without three valid words for every
-// case), other.
-type judgeAnswerError struct {
+// judgeFailure is a call that gave no labels for another reason than a
+// refusal of the route. Class is the reason the pass's entry logs
+// (answer_error), never the text. Two say nothing about the lines and,
+// like a refusal, end the pass without counting against their tries:
+// setup (the call could not start) and no-output (the CLI printed no
+// result). The others count: call (the CLI ran and failed), empty,
+// truncated, prose (no JSON object), shape (JSON without three valid
+// words for every case), other (JSON that is no answer).
+type judgeFailure struct {
 	Class string
 	Err   error
 }
 
-func (e *judgeAnswerError) Error() string {
-	return fmt.Sprintf("the judge's answer could not be read (%s): %v", e.Class, e.Err)
+func (e *judgeFailure) Error() string {
+	return fmt.Sprintf("the judge's call gave no labels (%s): %v", e.Class, e.Err)
 }
 
-func (e *judgeAnswerError) Unwrap() error { return e.Err }
+func (e *judgeFailure) Unwrap() error { return e.Err }
 
-// judgeFailClass is the answer_error a failed call logs: its answer's
-// class, call for any other failure but the route's, nothing for a refusal.
-func judgeFailClass(err error) string {
-	var ae *judgeAnswerError
+// judgeFailClass is a failed call's class ("" for a refusal) and whether
+// its lines are held: the failure says nothing about them, so it does not
+// count against their tries.
+func judgeFailClass(err error) (class string, held bool) {
+	var f *judgeFailure
 	switch {
-	case errors.As(err, &ae):
-		return ae.Class
 	case errors.Is(err, errJudgeRefused):
-		return ""
+		return "", true
+	case errors.As(err, &f):
+		return f.Class, f.Class == "setup" || f.Class == "no-output"
 	}
-	return "call"
+	return "call", false
 }
 
 // judgeCLIResult is the result object `claude -p --output-format json`
 // prints.
 type judgeCLIResult struct {
 	Type           string                     `json:"type"`
-	Result         string                     `json:"result"`
+	Result         *string                    `json:"result"`
 	IsError        bool                       `json:"is_error"`
 	APIErrorStatus int                        `json:"api_error_status"`
 	StopReason     string                     `json:"stop_reason"`
 	ModelUsage     map[string]json.RawMessage `json:"modelUsage"`
 }
 
+func (r judgeCLIResult) text() string {
+	if r.Result == nil {
+		return ""
+	}
+	return *r.Result
+}
+
 // judgeResultOf finds the CLI's result in its output: the one object it
-// prints, the last result event of an array of events (its verbose shape),
-// or the last line that is a result object (other output printed before
-// it).
+// prints (typed result, or untyped with a result key), the last result
+// event of an array of events (its verbose shape), or the last line that
+// is a result object (other output printed before it).
 func judgeResultOf(out []byte) (judgeCLIResult, bool) {
 	t := bytes.TrimSpace(out)
 	if len(t) > 0 && t[0] == '[' {
@@ -372,7 +383,7 @@ func judgeResultOf(out []byte) (judgeCLIResult, bool) {
 			return judgeCLIResult{}, false
 		}
 	}
-	if r, ok := judgeResultObject(t); ok && (r.Type == "" || r.Type == "result") {
+	if r, ok := judgeResultObject(t); ok && (r.Type == "result" || r.Type == "" && r.Result != nil) {
 		return r, true
 	}
 	lines := bytes.Split(t, []byte("\n"))
@@ -399,29 +410,33 @@ func judgeResultObject(b []byte) (judgeCLIResult, bool) {
 
 // judgeOutcome reads a judge call's answer: its text and the model that
 // answered, errJudgeRefused for an error of the route (the CLI's HTTP
-// status when it gives one, else routeRefusal's words), a judgeAnswerError
-// for a call that printed no result or was cut off, or the error.
+// status when it gives one, else routeRefusal's words), or a judgeFailure.
 func judgeOutcome(out []byte, stderr string, runErr error, model string) (string, string, error) {
 	res, found := judgeResultOf(out)
+	// What the CLI said: its result, or all it printed when that holds none.
+	said := res.text()
+	if !found {
+		said = string(out)
+	}
 	if runErr != nil || res.IsError {
 		// A status decides alone; the words only when there is none.
 		switch res.APIErrorStatus {
 		case 401, 403, 429, 529:
 			return "", "", errJudgeRefused
 		case 0:
-			if routeRefusal(stderr + " " + res.Result) {
+			if routeRefusal(stderr + " " + said) {
 				return "", "", errJudgeRefused
 			}
 		}
-		return "", "", fmt.Errorf("claude -p: %v %s", runErr, judgeClip(stderr+" "+res.Result, 300))
+		return "", "", &judgeFailure{Class: "call", Err: fmt.Errorf("claude -p: %v %s", runErr, judgeClip(stderr+" "+said, 300))}
 	}
 	if !found {
-		return "", "", &judgeAnswerError{Class: "no-output", Err: fmt.Errorf("claude -p printed no result (%d bytes on stdout)", len(out))}
+		return "", "", &judgeFailure{Class: "no-output", Err: fmt.Errorf("claude -p printed no result (%d bytes on stdout)", len(out))}
 	}
-	if res.StopReason == "max_tokens" && judgeAnswerOf(res.Result) == nil {
-		return "", "", &judgeAnswerError{Class: "truncated", Err: errors.New("the answer stopped at the output-token limit")}
+	if ans, _ := judgeAnswerOf(res.text()); ans == nil && res.StopReason == "max_tokens" {
+		return "", "", &judgeFailure{Class: "truncated", Err: errors.New("the answer stopped at the output-token limit")}
 	}
-	return res.Result, answeredBy(res.ModelUsage, model), nil
+	return res.text(), answeredBy(res.ModelUsage, model), nil
 }
 
 // answeredBy is the model the CLI says answered: modelUsage's one key that
@@ -493,20 +508,24 @@ func judgeCases(ctx context.Context, model string, cases []judgeCase) ([]judgeVe
 	if err != nil {
 		return nil, err
 	}
-	ans := judgeAnswerOf(text)
+	ans, class := judgeAnswerOf(text)
 	if ans == nil {
-		return nil, &judgeAnswerError{Class: judgeAnswerClass(text), Err: errors.New("no JSON answer in it")}
+		return nil, &judgeFailure{Class: class, Err: errors.New("no JSON answer in it")}
 	}
 	got := map[int]judgeVerdict{}
 	for _, l := range ans.Lines {
-		if l.I < 1 || l.I > len(cases) || !answerWord[l.Relevant] || !answerWord[l.Confused] || !answerWord[l.Novel] {
-			return nil, &judgeAnswerError{Class: "shape", Err: fmt.Errorf("an invalid line: %+v", l)}
+		// The error names the line, never the model's words.
+		if l.I < 1 || l.I > len(cases) {
+			return nil, &judgeFailure{Class: "shape", Err: fmt.Errorf("a line numbered %d of %d cases", l.I, len(cases))}
+		}
+		if !answerWord[l.Relevant] || !answerWord[l.Confused] || !answerWord[l.Novel] {
+			return nil, &judgeFailure{Class: "shape", Err: fmt.Errorf("line %d has a word other than yes, no or unsure", l.I)}
 		}
 		c := cases[l.I-1]
 		got[l.I] = judgeVerdict{Block: c.Block, Fact: c.Fact, Relevant: l.Relevant, Confused: l.Confused, Novel: l.Novel, Model: by, Prompt: judgePromptID}
 	}
 	if len(got) != len(cases) {
-		return nil, &judgeAnswerError{Class: "shape", Err: fmt.Errorf("it answers %d of %d lines", len(got), len(cases))}
+		return nil, &judgeFailure{Class: "shape", Err: fmt.Errorf("it answers %d of %d lines", len(got), len(cases))}
 	}
 	out := make([]judgeVerdict, 0, len(got))
 	for i := 1; i <= len(cases); i++ {
@@ -524,13 +543,24 @@ type judgeAnswer struct {
 }
 
 // judgeAnswerOf is the first JSON object in the text that decodes as an
-// answer with its lines key, whatever prose or code fence is around it, or
-// nil.
-func judgeAnswerOf(text string) *judgeAnswer {
+// answer with its lines key, whatever prose or code fence is around it.
+// With none it is nil and why: empty, truncated (an object cut off), other
+// (JSON that is no answer), prose (no JSON object).
+func judgeAnswerOf(text string) (*judgeAnswer, string) {
+	if strings.TrimSpace(text) == "" {
+		return nil, "empty"
+	}
+	class := "prose"
 	for i := strings.IndexByte(text, '{'); i >= 0; {
 		var ans judgeAnswer
-		if json.NewDecoder(strings.NewReader(text[i:])).Decode(&ans) == nil && ans.Lines != nil {
-			return &ans
+		var te *json.UnmarshalTypeError
+		switch err := json.NewDecoder(strings.NewReader(text[i:])).Decode(&ans); {
+		case err == nil && ans.Lines != nil:
+			return &ans, ""
+		case errors.Is(err, io.ErrUnexpectedEOF):
+			class = "truncated" // a cut-off object outranks a whole one inside it
+		case (err == nil || errors.As(err, &te)) && class == "prose":
+			class = "other"
 		}
 		j := strings.IndexByte(text[i+1:], '{')
 		if j < 0 {
@@ -538,50 +568,7 @@ func judgeAnswerOf(text string) *judgeAnswer {
 		}
 		i += 1 + j
 	}
-	return nil
-}
-
-// judgeAnswerClass is why a text holds no answer: empty, prose (no JSON
-// object), truncated (its first object never closes), other.
-func judgeAnswerClass(text string) string {
-	t := strings.TrimSpace(text)
-	i := strings.IndexByte(t, '{')
-	switch {
-	case t == "":
-		return "empty"
-	case i < 0:
-		return "prose"
-	case !jsonCloses(t[i:]):
-		return "truncated"
-	}
-	return "other"
-}
-
-// jsonCloses reports whether the object s starts with closes: its braces
-// and brackets, outside strings, come back to none open.
-func jsonCloses(s string) bool {
-	depth, inStr, esc := 0, false, false
-	for _, c := range []byte(s) {
-		switch {
-		case esc:
-			esc = false
-		case inStr:
-			if c == '\\' {
-				esc = true
-			} else if c == '"' {
-				inStr = false
-			}
-		case c == '"':
-			inStr = true
-		case c == '{' || c == '[':
-			depth++
-		case c == '}' || c == ']':
-			if depth--; depth == 0 {
-				return true
-			}
-		}
-	}
-	return false
+	return nil, class
 }
 
 func judgeClip(s string, n int) string {
@@ -968,10 +955,10 @@ func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int,
 			var verdicts []judgeVerdict
 			verdicts, err = judgeCases(ctx, model, cases[i:j])
 			if err != nil {
-				pass.Refused = errors.Is(err, errJudgeRefused)
-				pass.AnswerError = judgeFailClass(err)
+				class, held := judgeFailClass(err)
+				pass.Refused, pass.AnswerError = errors.Is(err, errJudgeRefused), class
 				for _, m := range moments[i:j] {
-					if !pass.Refused {
+					if !held {
 						m.Tries++
 					}
 					if m.Tries >= judgeTries {
