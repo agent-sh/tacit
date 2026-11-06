@@ -718,7 +718,12 @@ func newFakeJudgeCLI(t *testing.T) (dir string, answer func(stdout, stderr strin
 			t.Fatal(err)
 		}
 	}
-	t.Setenv("PATH", dir)
+	path := dir
+	if runtime.GOOS == "windows" {
+		// The deadline's tree kill is taskkill.exe, found on this PATH.
+		path += string(os.PathListSeparator) + filepath.Join(os.Getenv("SystemRoot"), "System32")
+	}
+	t.Setenv("PATH", path)
 	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "1")
 	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "test")
 	t.Setenv("AWS_PROFILE", "")
