@@ -16,8 +16,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/agent-sh/tacit/client/internal/platform"
 )
 
 // The judge's environment keeps what a process needs and the Bedrock
@@ -647,26 +645,28 @@ var realJudgeCall = judgeCall
 
 // judgeFakeCLI is this test binary run as the judge's `claude` (a link to
 // it, or a copy, named claude: see newFakeJudgeCLI). It keeps the prompt it
-// reads; with a child file it starts a child of its own that holds its
-// stdout and stderr and sleeps (a wrapper's CLI), its pid in child.pid; it
-// waits the
-// milliseconds in its sleep file, prints the stdout file (stdout.N on its
-// Nth call, when there is one) and the stderr file beside it, and exits
-// with the code in its exit file. The judge's environment passes no test
+// reads. With a child file it starts a child of its own that holds its
+// stdout and stderr (a wrapper's CLI) and writes child.survived if it is
+// still alive 5 s later. It waits the milliseconds in its sleep file (after
+// printing, with a late file), prints the stdout file (stdout.N on its Nth
+// call, when there is one) and the stderr file beside it, and exits with
+// the code in its exit file. The judge's environment passes no test
 // variable, so the name tells.
 func judgeFakeCLI() {
 	if strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") != "claude" {
 		return
-	}
-	if os.Getenv("TACIT_FAKE_CLI_CHILD") != "" {
-		time.Sleep(20 * time.Second)
-		os.Exit(0)
 	}
 	exe, err := os.Executable()
 	if err != nil {
 		os.Exit(3)
 	}
 	dir := filepath.Dir(exe)
+	if os.Getenv("TACIT_FAKE_CLI_CHILD") != "" {
+		time.Sleep(5 * time.Second)
+		os.WriteFile(filepath.Join(dir, "child.survived"), nil, 0o600)
+		time.Sleep(15 * time.Second)
+		os.Exit(0)
+	}
 	prompt, _ := io.ReadAll(os.Stdin)
 	os.WriteFile(filepath.Join(dir, "prompt"), prompt, 0o600)
 	b, _ := os.ReadFile(filepath.Join(dir, "calls"))
@@ -677,13 +677,17 @@ func judgeFakeCLI() {
 		child := exec.Command(exe)
 		child.Env = append(os.Environ(), "TACIT_FAKE_CLI_CHILD=1")
 		child.Stdout, child.Stderr = os.Stdout, os.Stderr
-		if child.Start() == nil {
-			os.WriteFile(filepath.Join(dir, "child.pid"), []byte(strconv.Itoa(child.Process.Pid)), 0o600)
+		child.Start()
+	}
+	wait := func() {
+		if b, err := os.ReadFile(filepath.Join(dir, "sleep")); err == nil {
+			ms, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+			time.Sleep(time.Duration(ms) * time.Millisecond)
 		}
 	}
-	if b, err := os.ReadFile(filepath.Join(dir, "sleep")); err == nil {
-		ms, _ := strconv.Atoi(strings.TrimSpace(string(b)))
-		time.Sleep(time.Duration(ms) * time.Millisecond)
+	_, late := os.Stat(filepath.Join(dir, "late"))
+	if late != nil {
+		wait()
 	}
 	out, err := os.ReadFile(filepath.Join(dir, "stdout."+strconv.Itoa(n)))
 	if err != nil {
@@ -692,6 +696,9 @@ func judgeFakeCLI() {
 	os.Stdout.Write(out)
 	errb, _ := os.ReadFile(filepath.Join(dir, "stderr"))
 	os.Stderr.Write(errb)
+	if late == nil {
+		wait()
+	}
 	code := 0
 	if b, err := os.ReadFile(filepath.Join(dir, "exit")); err == nil {
 		code, _ = strconv.Atoi(strings.TrimSpace(string(b)))
@@ -804,6 +811,13 @@ func TestJudgeAnswerAroundProse(t *testing.T) {
 	if two("yes"); err != nil || len(v) != 1 {
 		t.Fatalf("a repeated answer: %+v %v", v, err)
 	}
+	// A line answered twice in one answer is no answer.
+	judgeCall = func(ctx context.Context, model, prompt string) (string, string, error) {
+		return `{"lines":[{"i":1,"relevant":"yes","confused":"no","novel":"no"},{"i":1,"relevant":"no","confused":"yes","novel":"yes"}]}`, model, nil
+	}
+	if v, err = judgeCases(context.Background(), "m", []judgeCase{{Block: "b", Fact: "f"}}); err == nil {
+		t.Fatalf("a line answered twice: %+v", v)
+	}
 }
 
 // rawPending is the judge state's waiting lines as written, a missing
@@ -873,6 +887,7 @@ func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 		noCLI                bool          // no claude on PATH
 		sleep                time.Duration // the CLI's wait, past the pass's deadline when set
 		child                bool          // the CLI's child holds its pipes past the deadline
+		late                 bool          // the CLI waits after printing
 		want                 string        // the class; "refused", "labelled"
 		tries, held          int           // each waiting line's after the pass
 	}{
@@ -882,6 +897,13 @@ func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 		{name: "no claude", noCLI: true, want: "setup", held: 1},
 		{name: "deadline", sleep: 30 * time.Second, stdout: good, want: "timeout", held: 1},
 		{name: "deadline over a wrapper", sleep: 30 * time.Second, child: true, stdout: good, want: "timeout", held: 1},
+		{name: "deadline after an answer", sleep: 30 * time.Second, late: true, stdout: good, want: "labelled"},
+		{name: "an empty result and a throttle", stdout: result("", "end_turn"), stderr: "API Error: 429 Too many requests", exit: 1, want: "refused"},
+		{name: "a notice and a cut-off result", stdout: "a notice\n" + `{"type":"result","is_error":false,"result":"{\"lines\":[{\"i\":1,\"relevant\":\"the rate limit of this ` + mark, exit: 1, want: "no-output", held: 1},
+		{name: "connection error", stderr: "API Error: Connection error.", exit: 1, want: "server", held: 1},
+		{name: "server error with no status", stdout: `{"type":"result","is_error":true,"result":"API Error: 500 Internal server error"}`, exit: 1, want: "server", held: 1},
+		{name: "a model Bedrock serves through a profile", stdout: `{"type":"result","is_error":true,"api_error_status":400,"result":"API Error: 400 Invocation of model ID m with on-demand throughput isn't supported. Retry your request with the ID or ARN of an inference profile that contains this model."}`, exit: 1, want: "setup", held: 1},
+		{name: "a request error that names a model", stdout: `{"type":"result","is_error":true,"api_error_status":400,"result":"API Error: 400 the model's tool_use id was not found"}`, exit: 1, want: "call", tries: 1},
 		{name: "unknown model", stdout: `{"type":"result","subtype":"success","is_error":true,"api_error_status":400,"result":"API Error (m): 400 The provided model identifier is invalid.. Run --model to pick a different model."}`, stderr: "[claude-code:unrecognized_model] {}", exit: 1, want: "setup", held: 1},
 		{name: "declined", stdout: result("I can't help with that. "+mark, "refusal"), want: "declined", tries: 1},
 		{name: "empty", stdout: result("", "end_turn"), want: "empty", tries: 1},
@@ -924,6 +946,9 @@ func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 			if c.child {
 				os.WriteFile(filepath.Join(dir, "child"), nil, 0o600)
 			}
+			if c.late {
+				os.WriteFile(filepath.Join(dir, "late"), nil, 0o600)
+			}
 			start := time.Now()
 			n, err := deliveryJudgePass(ctx, nil, f.now)
 			// The deadline ends the call's whole tree, a child that holds
@@ -932,14 +957,11 @@ func TestJudgePassNamesWhyAnAnswerFailed(t *testing.T) {
 				t.Fatalf("the deadline took %s", time.Since(start))
 			}
 			if c.child {
-				b, _ := os.ReadFile(filepath.Join(dir, "child.pid"))
-				pid, _ := strconv.Atoi(string(b))
-				gone := false
-				for end := time.Now().Add(5 * time.Second); !gone && time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
-					gone = !platform.Alive(pid)
-				}
-				if pid == 0 || !gone {
-					t.Fatalf("the CLI's child %d outlived the deadline", pid)
+				// The child marks itself 5 s in, if the deadline's kill (at 2 s)
+				// left it alive.
+				time.Sleep(time.Until(start.Add(7 * time.Second)))
+				if _, err := os.Stat(filepath.Join(dir, "child.survived")); err == nil {
+					t.Fatal("the CLI's child outlived the deadline")
 				}
 			}
 			passes := rawJudgePasses(t, f.state)
