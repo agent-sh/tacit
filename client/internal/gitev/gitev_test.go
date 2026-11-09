@@ -394,9 +394,14 @@ func TestCacheSkipsRepoQueries(t *testing.T) {
 	}
 	second := f.g.Runs() - first
 	// Two store-history reads, and the two reads that name HEAD in each of the
-	// two repos; nothing else.
-	if second != 6 || first <= 20 {
-		t.Errorf("second build ran %d git commands (want 6) after %d on the first", second, first)
+	// two repos; nothing else. A git before 2.44 has no GIT_NO_LAZY_FETCH, so
+	// each repo is also asked whether it is a partial clone.
+	want := int64(6)
+	if !f.g.noLazyFetch(context.Background()) {
+		want += 2
+	}
+	if second != want || first <= 20 {
+		t.Errorf("second build ran %d git commands (want %d) after %d on the first", second, want, first)
 	}
 	if strings.Join(lines(t1), "\n") != strings.Join(lines(t2), "\n") {
 		t.Errorf("cached timeline differs:\n%s\n---\n%s", strings.Join(lines(t1), "\n"), strings.Join(lines(t2), "\n"))
