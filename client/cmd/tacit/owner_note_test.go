@@ -234,7 +234,8 @@ func TestOwnerNoteFailsClosedWithoutRedaction(t *testing.T) {
 
 // A note is its record in the decision log: the same words sent twice in one
 // second are two notes, and one record read by its finding and by each of its
-// facts is one.
+// facts is one. The third record is an answer on another finding with the same
+// words and second: a note on fact a, whose two facts are the same, read once.
 func TestOwnerNotesOncePerRecord(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "review"), 0o755); err != nil {
