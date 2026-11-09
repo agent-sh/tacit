@@ -263,6 +263,19 @@ class Population(unittest.TestCase):
         moments, _ = off.moments_of(entries + [silent, quiet, later, new], ("old", "p"))
         self.assertIn("silent", {m["id"] for m in moments})
         self.assertNotIn("later", {m["id"] for m in moments})
+        # The same when the other model left no label at all in the log.
+        bare = [e for e in entries if e.get("hook") != "judge"]
+        moments, _ = off.moments_of(bare + [silent, quiet, later, new], ("new", "p"))
+        self.assertEqual({m["id"] for m in moments} & {"silent", "later"}, {"later"})
+        # A pass logs the model as asked: a name the judge's model answered
+        # to, and nothing else did, is the judge's.
+        asked = {"id": "w3", "ts": "2026-11-01T18:00:00Z", "hook": "judge-pass",
+                 "judge_pass": {"waiting": 0, "model": "alias", "prompt": "p", "answered": ["new"], "from": "2026-11-01T15:30:00Z", "to": "2026-11-01T17:30:00Z"}}
+        mute = dict(prompt, id="mute", ts="2026-11-01T19:00:00Z")
+        still = {"id": "w4", "ts": "2026-11-01T20:00:00Z", "hook": "judge-pass",
+                 "judge_pass": {"waiting": 0, "model": "alias", "prompt": "p", "from": "2026-11-01T17:30:00Z", "to": "2026-11-01T19:30:00Z"}}
+        moments, _ = off.moments_of(bare + [silent, quiet, later, new, asked, mute, still], ("new", "p"))
+        self.assertEqual({m["id"] for m in moments} & {"silent", "later", "mute"}, {"later", "mute"})
 
     def test_cross_fitting(self):
         # Sessions of one half hold only useful labels, the other only

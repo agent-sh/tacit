@@ -31,7 +31,7 @@ guess. Intervals are 95% bootstraps over sessions. The population is the
 moments in the pools of the chosen judge's passes (each pass logs its pool's
 window; a window is the judge's when its moments' labels all are, or with
 none, when its pass asked the judge's prompt, no other model answered and
-the pass did not run another judge's model),
+the model it asked is the judge's),
 up to its last pass that left no drawn line waiting, less a pass's whole
 window when it could not read a drawn line, and less the moments with no
 transcript it could read when the pool was built; blocks that showed nothing
@@ -122,8 +122,15 @@ def moments_of(entries, judge=None):
 
     # A window is the chosen judge's when the labels of its moments are all
     # the judge's; with none, when its pass asked with the judge's prompt, no
-    # other model answered it, and it did not run another judge's model (a
-    # pass whose every call failed logs its model and no answer).
+    # other model answered it, and the model it asked is the judge's (a pass
+    # whose every call failed logs the model it asked and no answer). A pass
+    # logs the model as asked and a label the one that answered, so an asked
+    # name is the judge's when it is the judge's model, or when every answer
+    # the log holds to that name came from the judge's model.
+    answers = collections.defaultdict(set)
+    for _, jp in passes:
+        if jp.get("model"):
+            answers[jp["model"]].update(jp.get("answered") or [])
     owners = collections.defaultdict(set)
     for j in found:
         k = window_of(when.get(j.get("block")))
@@ -136,7 +143,8 @@ def moments_of(entries, judge=None):
             return True
         if owners[k]:
             return owners[k] == {judge}
-        if jp.get("model") != judge[0] and jp.get("model") in {m for m, _ in judges}:
+        asked = jp.get("model")
+        if asked and asked != judge[0] and answers[asked] != {judge[0]}:
             return False
         return jp.get("prompt") in (None, "", judge[1]) and all(m == judge[0] for m in jp.get("answered") or [])
 
