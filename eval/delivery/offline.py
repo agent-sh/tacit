@@ -30,7 +30,8 @@ support is the share of pi on lines the logging policy could deliver
 guess. Intervals are 95% bootstraps over sessions. The population is the
 moments in the pools of the chosen judge's passes (each pass logs its pool's
 window; a window is the judge's when its moments' labels all are, or with
-none, when its pass asked the judge's prompt and no other model answered),
+none, when its pass asked the judge's prompt, no other model answered and
+the pass did not run another judge's model),
 up to its last pass that left no drawn line waiting, less a pass's whole
 window when it could not read a drawn line, and less the moments with no
 transcript it could read when the pool was built; blocks that showed nothing
@@ -120,8 +121,9 @@ def moments_of(entries, judge=None):
         return next((k for k, (lo, hi, _) in enumerate(windows) if t is not None and lo < t <= hi), None)
 
     # A window is the chosen judge's when the labels of its moments are all
-    # the judge's; with none, when its pass asked with the judge's prompt and
-    # no other model answered it.
+    # the judge's; with none, when its pass asked with the judge's prompt, no
+    # other model answered it, and it did not run another judge's model (a
+    # pass whose every call failed logs its model and no answer).
     owners = collections.defaultdict(set)
     for j in found:
         k = window_of(when.get(j.get("block")))
@@ -134,6 +136,8 @@ def moments_of(entries, judge=None):
             return True
         if owners[k]:
             return owners[k] == {judge}
+        if jp.get("model") != judge[0] and jp.get("model") in {m for m, _ in judges}:
+            return False
         return jp.get("prompt") in (None, "", judge[1]) and all(m == judge[0] for m in jp.get("answered") or [])
 
     keep = [k for k in range(len(windows)) if mine(k)]
@@ -389,7 +393,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--log", required=True, help="the delivery log directory (or one day's file)")
     ap.add_argument("--policy", action="append", help="policies to evaluate (default: all built in)")
-    ap.add_argument("--judge", help="the judge whose labels count, as 'MODEL PROMPT-DIGEST' (since step 5's route amendment, the Bedrock judge, whose relevant labels passed and useful labels did not: its useful and net values move nothing); required when the log holds more than one")
+    ap.add_argument("--judge", help="the judge whose labels count, as 'MODEL PROMPT-DIGEST' (the pair step 5's latest amendment names, whose relevant labels passed and useful labels did not: its useful and net values move nothing); required when the log holds more than one")
     ap.add_argument("--boot", type=int, default=500, help="bootstrap samples")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()

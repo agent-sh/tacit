@@ -46,7 +46,7 @@ func main() {
 	printTemplate := flag.Bool("print-template", false, "print the built-in rulings prompt template and exit")
 	retry := flag.Bool("retry", false, "send an answer refused for its envelope back once, as the curator does")
 	runner := flag.String("runner", "claude", "runner, when TACIT_JUDGE_RUNNER is unset")
-	model := flag.String("model", "claude-fable-5-2", "model, when TACIT_JUDGE_MODEL is unset")
+	model := flag.String("model", "claude-opus-5-5", "model, when TACIT_JUDGE_MODEL is unset")
 	effort := flag.String("effort", "medium", "effort, when TACIT_JUDGE_EFFORT is unset")
 	flag.Parse()
 	if *printTemplate {

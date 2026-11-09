@@ -242,6 +242,28 @@ class Population(unittest.TestCase):
         self.assertEqual(info["judge"], "old p")
         self.assertNotIn("later", {m["id"] for m in moments})
 
+    def test_a_silent_pass_of_another_judge(self):
+        # A pass of another judge's model that no model answered (every call
+        # failed) left its window without labels: the window is not the
+        # chosen judge's, whose population would hold moments it never read.
+        entries, _ = world(sessions=2, per=1)
+        entries = [e for e in entries if e.get("hook") != "judge-pass"]
+        for e in entries:
+            if e.get("hook") == "judge":
+                e["judge"]["model"] = "old"
+        prompt = next(e for e in entries if e.get("hook") == "prompt")
+        silent = dict(prompt, id="silent", ts="2026-11-01T13:00:00Z")
+        quiet = {"id": "w1", "ts": "2026-11-01T14:00:00Z", "hook": "judge-pass",
+                 "judge_pass": {"waiting": 0, "model": "old", "prompt": "p", "from": "2026-11-01T11:30:00Z", "to": "2026-11-01T13:30:00Z"}}
+        later = dict(prompt, id="later", ts="2026-11-01T15:00:00Z")
+        new = {"id": "w2", "ts": "2026-11-01T16:00:00Z", "hook": "judge-pass",
+               "judge_pass": {"waiting": 0, "model": "new", "prompt": "p", "answered": ["new"], "from": "2026-11-01T13:30:00Z", "to": "2026-11-01T15:30:00Z"}}
+        moments, _ = off.moments_of(entries + [silent, quiet, later, new], ("new", "p"))
+        self.assertEqual({m["id"] for m in moments}, {"later"})
+        moments, _ = off.moments_of(entries + [silent, quiet, later, new], ("old", "p"))
+        self.assertIn("silent", {m["id"] for m in moments})
+        self.assertNotIn("later", {m["id"] for m in moments})
+
     def test_cross_fitting(self):
         # Sessions of one half hold only useful labels, the other only
         # useless ones: each session's lines are predicted from the other half.
