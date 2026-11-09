@@ -24,10 +24,12 @@ import (
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
-// ownerNote is a note the owner left on a finding without answering it.
+// ownerNote is a note the owner left on a finding without answering it. rec
+// is its record's line in the decision log: what makes two notes one.
 type ownerNote struct {
 	At   string `json:"at"`
 	Text string `json:"text"`
+	rec  int
 }
 
 // maxNote bounds a note: a remark, not a document.
@@ -47,12 +49,12 @@ func (rs *reviewServer) ownerNotes() notesIndex {
 	if err != nil {
 		return ix
 	}
-	for _, l := range strings.Split(string(b), "\n") {
+	for i, l := range strings.Split(string(b), "\n") {
 		var d decision
 		if json.Unmarshal([]byte(l), &d) != nil || d.ID == "" || d.By != "" || d.Comment == "" || d.Action == "reopen" {
 			continue
 		}
-		n := ownerNote{At: d.At, Text: d.Comment}
+		n := ownerNote{At: d.At, Text: d.Comment, rec: i}
 		if d.Action == "note" {
 			ix.byID[d.ID] = append(ix.byID[d.ID], n)
 		}
@@ -66,14 +68,15 @@ func (rs *reviewServer) ownerNotes() notesIndex {
 }
 
 // For is every note on a finding: its own and those on any of its facts,
-// once each, oldest first.
+// once each, oldest first. A note is its record: the same words sent twice
+// are two notes, the same second too (the time has no finer part).
 func (ix notesIndex) For(id string, facts ...string) []ownerNote {
 	var out []ownerNote
-	seen := map[string]bool{}
+	seen := map[int]bool{}
 	add := func(ns []ownerNote) {
 		for _, n := range ns {
-			if k := n.At + "\x00" + n.Text; !seen[k] {
-				seen[k] = true
+			if !seen[n.rec] {
+				seen[n.rec] = true
 				out = append(out, n)
 			}
 		}

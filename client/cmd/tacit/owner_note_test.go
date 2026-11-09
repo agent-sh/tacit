@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/agent-sh/tacit/client/internal/store"
 )
 
 func needRedaction(t *testing.T) {
@@ -227,6 +229,28 @@ func TestOwnerNoteFailsClosedWithoutRedaction(t *testing.T) {
 	}
 	if now := git(t, rs.s.Dir, "rev-parse", "HEAD"); now != head || git(t, rs.s.Dir, "status", "--porcelain", "--untracked-files=all") != "" {
 		t.Fatal("a note without redaction wrote something")
+	}
+}
+
+// A note is its record in the decision log: the same words sent twice in one
+// second are two notes, and one record read by its finding and by each of its
+// facts is one.
+func TestOwnerNotesOncePerRecord(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "review"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec := `{"id":"f1","action":"note","a":"a","b":"b","at":"2026-11-01T10:00:00Z","comment":"still true"}` + "\n"
+	other := `{"id":"f2","action":"current","a":"a","b":"a","at":"2026-11-01T10:00:00Z","comment":"still true"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "review", "decisions.jsonl"), []byte(rec+rec+other), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rs := &reviewServer{s: &store.Store{Dir: dir}}
+	if got := rs.ownerNotes().For("f1", "a", "b"); len(got) != 3 {
+		t.Fatalf("two notes on the finding and one on its fact, read %d: %+v", len(got), got)
+	}
+	if got := rs.ownerNotes().For("f1", "b"); len(got) != 2 {
+		t.Fatalf("two notes in one second, read %d: %+v", len(got), got)
 	}
 }
 
