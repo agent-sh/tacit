@@ -86,7 +86,7 @@ func TestJudgeCommand(t *testing.T) {
 	for _, k := range []string{"AWS_BEARER_TOKEN_BEDROCK", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "TACIT_DELIVERY_JUDGE_MODEL"} {
 		t.Setenv(k, "")
 	}
-	if judgeModel() != "global.anthropic.claude-opus-5-5" {
+	if judgeModel() != "global.anthropic.claude-fable-5-2" {
 		t.Fatalf("default model %q", judgeModel())
 	}
 	cmd, err := judgeCommand(context.Background(), judgeModel(), t.TempDir())
@@ -102,7 +102,7 @@ func TestJudgeCommand(t *testing.T) {
 		}
 	}
 	args := strings.Join(cmd.Args, " ")
-	for _, want := range []string{"claude -p", "--model global.anthropic.claude-opus-5-5", "--tools  ", "--setting-sources local", "--strict-mcp-config", "--no-session-persistence"} {
+	for _, want := range []string{"claude -p", "--model global.anthropic.claude-fable-5-2", "--tools  ", "--setting-sources local", "--strict-mcp-config", "--no-session-persistence"} {
 		if !strings.Contains(args, want) {
 			t.Errorf("args %q lack %q", args, want)
 		}

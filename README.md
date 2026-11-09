@@ -173,7 +173,7 @@ Every YAML option is listed here:
 | (environment only) | `TACIT_DELIVERY_MARK_RATE` | Share of prompt blocks that ask the agent to mark which lines helped (`tacit_mark`); default `0.05`, `0` for none (SPEC.md, Self-marks) |
 | (environment only) | `TACIT_DELIVERY_JUDGE` | `on` (default): at the end of a full dream run, a model judges a sample of the delivered lines with hindsight (relevant, confused, novel) through `claude -p` on the dreamer's Bedrock route, skipped where there is none; `off` for none (SPEC.md, The dreamer's judge) |
 | (environment only) | `TACIT_DELIVERY_JUDGE_DAILY` | Lines judged a day at most; default `36` |
-| (environment only) | `TACIT_DELIVERY_JUDGE_MODEL` | The judge's model for `claude -p`; default `global.anthropic.claude-opus-5-5` |
+| (environment only) | `TACIT_DELIVERY_JUDGE_MODEL` | The judge's model for `claude -p`; default `global.anthropic.claude-fable-5-2` |
 | `verify_roots` | `TACIT_VERIFY_ROOTS` | Extra permitted source directories; YAML list, `PATH` separator in environment; every directory must exist |
 | `runner` | `TACIT_RUNNER` | Default CLI for all model jobs; `claude` |
 | `runners` | `TACIT_<ROLE>_RUNNER` | Per-role CLI overrides |

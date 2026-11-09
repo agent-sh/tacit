@@ -540,7 +540,7 @@ func judgeModel() string {
 	if m := strings.TrimSpace(os.Getenv("TACIT_DELIVERY_JUDGE_MODEL")); m != "" {
 		return m
 	}
-	return "global.anthropic.claude-opus-5-5"
+	return "global.anthropic.claude-fable-5-2"
 }
 
 const judgePrompt = `You judge, with hindsight, lines a memory tool gave a coding agent. For each case you get where the line came (the owner's prompt, or a tool call about to run), the request it answered, the line, and what the session did next.
