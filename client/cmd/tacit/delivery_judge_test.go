@@ -51,6 +51,106 @@ func TestJudgeEnvBedrockRoute(t *testing.T) {
 	}
 }
 
+// judgeNoLoopback clears the loopback route's names, so a test of the other
+// routes reads the same on a machine whose own environment holds that route.
+func judgeNoLoopback(t *testing.T) {
+	t.Helper()
+	t.Setenv("CLAUDE_CODE_SKIP_BEDROCK_AUTH", "")
+	t.Setenv("ANTHROPIC_BEDROCK_BASE_URL", "")
+}
+
+// The loopback route: a Bedrock endpoint on this machine's loopback with the
+// auth skipped is a route with no credential in the environment. The judge
+// keeps the route's two names and drops every credential, so the endpoint is
+// sent none. An endpoint anywhere else, or a loopback one without the skipped
+// auth, is not that route.
+func TestJudgeEnvLoopbackRoute(t *testing.T) {
+	base := []string{"PATH=/bin", "HOME=/h", "AWS_REGION=x", "CLAUDE_CODE_USE_BEDROCK=1", "CLAUDE_CODE_SKIP_BEDROCK_AUTH=1"}
+	env, err := judgeEnv(append(slices.Clone(base), "ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:9/n", "AWS_BEARER_TOKEN_BEDROCK=t", "AWS_PROFILE=p",
+		"AWS_ACCESS_KEY_ID=a", "AWS_SECRET_ACCESS_KEY=s", "AWS_SESSION_TOKEN=s", "ANTHROPIC_BASE_URL=https://gw", "HTTPS_PROXY=http://proxy", "AWS_ENDPOINT_URL=https://gw"))
+	if err != nil || strings.Join(env, " ") != "PATH=/bin HOME=/h AWS_REGION=x CLAUDE_CODE_USE_BEDROCK=1 ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:9/n CLAUDE_CODE_SKIP_BEDROCK_AUTH=1" {
+		t.Fatalf("kept: %v %v", env, err)
+	}
+	for _, u := range []string{"http://localhost:1", "http://LOCALHOST/x", "http://[::1]:1/x", "https://127.9.9.9"} {
+		env, err := judgeEnv(append(slices.Clone(base), "ANTHROPIC_BEDROCK_BASE_URL="+u))
+		if err != nil || !slices.Contains(env, "ANTHROPIC_BEDROCK_BASE_URL="+u) {
+			t.Fatalf("%s is loopback: %v %v", u, env, err)
+		}
+	}
+	// Not this machine, or not a plain http address of it: no route without
+	// credentials, and with them the call goes to Bedrock itself and the
+	// endpoint never reaches it.
+	for _, u := range []string{"", "https://gw", "http://127.0.0.1.gw.example", "http://localhost.gw.example", "http://user:pw@127.0.0.1", "ftp://127.0.0.1", "127.0.0.1:1", "http://0.0.0.0:1", "http://10.0.0.1", "http://[::2]"} {
+		e := append(slices.Clone(base), "ANTHROPIC_BEDROCK_BASE_URL="+u)
+		if _, err := judgeEnv(e); !errors.Is(err, errJudgeNoRoute) {
+			t.Fatalf("%q is no route: %v", u, err)
+		}
+		env, err := judgeEnv(append(e, "AWS_BEARER_TOKEN_BEDROCK=t"))
+		if err != nil || strings.Join(env, " ") != "PATH=/bin HOME=/h AWS_REGION=x CLAUDE_CODE_USE_BEDROCK=1 AWS_BEARER_TOKEN_BEDROCK=t" {
+			t.Fatalf("%q with a token: %v %v", u, env, err)
+		}
+	}
+	// A loopback endpoint whose auth is not skipped would be sent the token:
+	// it is not the route, and never reaches the call.
+	noSkip := []string{"PATH=/bin", "CLAUDE_CODE_USE_BEDROCK=1", "ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:9"}
+	if _, err := judgeEnv(noSkip); !errors.Is(err, errJudgeNoRoute) {
+		t.Fatalf("no skipped auth: %v", err)
+	}
+	for _, skip := range []string{"CLAUDE_CODE_SKIP_BEDROCK_AUTH=0", "CLAUDE_CODE_SKIP_BEDROCK_AUTH="} {
+		env, err := judgeEnv(append(slices.Clone(noSkip), skip, "AWS_BEARER_TOKEN_BEDROCK=t"))
+		if err != nil || strings.Join(env, " ") != "PATH=/bin CLAUDE_CODE_USE_BEDROCK=1 AWS_BEARER_TOKEN_BEDROCK=t" {
+			t.Fatalf("%s: %v %v", skip, env, err)
+		}
+	}
+	// The switch is still needed.
+	if _, err := judgeEnv([]string{"PATH=/bin", "CLAUDE_CODE_SKIP_BEDROCK_AUTH=1", "ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:9"}); !errors.Is(err, errJudgeNoRoute) {
+		t.Fatalf("no switch: %v", err)
+	}
+}
+
+// On the loopback route the pass runs: lines are drawn and sent, nothing is
+// skipped, and the call holds the endpoint, no credential and no AWS config.
+func TestJudgePassOnTheLoopbackRoute(t *testing.T) {
+	f := newJudgeFixture(t, 2)
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	t.Setenv("CLAUDE_CODE_SKIP_BEDROCK_AUTH", "1")
+	t.Setenv("ANTHROPIC_BEDROCK_BASE_URL", "http://127.0.0.1:9/n")
+	n, err := deliveryJudgePass(context.Background(), nil, f.now)
+	if err != nil || n == 0 || len(f.sent) == 0 {
+		t.Fatalf("judged %d, %v, sent %d", n, err, len(f.sent))
+	}
+	for _, e := range readDeliveryLog(t, f.state) {
+		if e.Hook == "judge-skip" {
+			t.Fatalf("skipped on the loopback route: %+v", e)
+		}
+	}
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "t")
+	cmd, err := judgeCommand(context.Background(), judgeModel(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(cmd.Env, "ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:9/n") || !slices.Contains(cmd.Env, "CLAUDE_CODE_SKIP_BEDROCK_AUTH=1") {
+		t.Fatalf("the route did not reach the call: %v", cmd.Env)
+	}
+	config := false
+	for _, kv := range cmd.Env {
+		k, v, _ := strings.Cut(kv, "=")
+		if judgeEnvCredential.MatchString(k) {
+			t.Fatalf("a credential reached the loopback call: %s", k)
+		}
+		if k == "AWS_CONFIG_FILE" {
+			b, err := os.ReadFile(v)
+			config = err == nil && len(b) == 0
+		}
+	}
+	if !config {
+		t.Fatalf("the call reads an AWS config: %v", cmd.Env)
+	}
+}
+
 // With no Bedrock route the pass draws nothing, sends nothing and logs why.
 func TestJudgePassWithoutARoute(t *testing.T) {
 	f := newJudgeFixture(t, 2)
@@ -82,6 +182,7 @@ func TestJudgeCommand(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("ANTHROPIC_BASE_URL", "https://gw")
 	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+	judgeNoLoopback(t)
 	t.Setenv("AWS_PROFILE", "p")
 	for _, k := range []string{"AWS_BEARER_TOKEN_BEDROCK", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "TACIT_DELIVERY_JUDGE_MODEL"} {
 		t.Setenv(k, "")
@@ -129,6 +230,7 @@ func newJudgeFixture(t *testing.T, n int) *judgeFixture {
 	t.Setenv("TACIT_STATE_DIR", f.state)
 	t.Setenv("TACIT_DELIVERY_JUDGE", "on")
 	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+	judgeNoLoopback(t)
 	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "test")
 	f.tr = filepath.Join(home, ".claude", "projects", "-demo", "s1.jsonl")
 	os.MkdirAll(filepath.Dir(f.tr), 0o755)
@@ -495,6 +597,7 @@ func TestJudgeCommandAWSConfig(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("TACIT_STATE_DIR", t.TempDir())
 	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+	judgeNoLoopback(t)
 	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "t")
 	t.Setenv("AWS_PROFILE", "")
 	cmd, err := judgeCommand(context.Background(), "m", t.TempDir())
@@ -735,6 +838,7 @@ func newFakeJudgeCLI(t *testing.T) (dir string, answer func(stdout, stderr strin
 	}
 	t.Setenv("PATH", dir)
 	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+	judgeNoLoopback(t)
 	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "test")
 	t.Setenv("AWS_PROFILE", "")
 	return dir, func(stdout, stderr string, exit int) {

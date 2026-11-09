@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,7 +36,9 @@ import (
 // was novel (not already in the context, nor found by the agent on its own a
 // moment later). Its labels are judge entries of the private delivery log.
 // The call runs on the dreamer's Bedrock route and on no other (judgeRoute,
-// judgeEnv); where there is none the pass is skipped and says so. Its labels
+// judgeEnv): Bedrock itself with a token or AWS credentials, or a Bedrock
+// gateway on this machine's loopback that holds them. Where there is neither
+// the pass is skipped and says so. Its labels
 // move no score until its agreement with the hand grades clears the rule
 // written before it was measured.
 
@@ -151,7 +155,8 @@ type judgeCase struct {
 // route's (the switch, the bearer token or AWS credentials, the region, the
 // Bedrock model names). Nothing else passes: no gateway (ANTHROPIC_BASE_URL,
 // an API key or token, a custom header), no other Claude config directory,
-// no plugin directories, no other provider's switch.
+// no plugin directories, no other provider's switch. The loopback route's
+// two names are not in it: judgeEnv adds them itself, and only there.
 // The match ignores case: Windows spells them as it likes (Path, SystemRoot).
 var judgeEnvKeep = regexp.MustCompile(`(?i)^(PATH|HOME|USER|LOGNAME|SHELL|TERM|TZ|TMPDIR|TEMP|TMP|LANG|LC_[A-Z]+|XDG_RUNTIME_DIR|USERPROFILE|APPDATA|LOCALAPPDATA|HOMEDRIVE|HOMEPATH|SYSTEMROOT|COMSPEC|PATHEXT|WINDIR` +
 	`|CLAUDE_CODE_USE_BEDROCK|AWS_BEARER_TOKEN_BEDROCK|AWS_REGION|AWS_DEFAULT_REGION|AWS_PROFILE|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|ANTHROPIC_DEFAULT_[A-Z]+_MODEL|ANTHROPIC_DEFAULT_MODEL|ANTHROPIC_SMALL_FAST_MODEL)$`)
@@ -160,10 +165,12 @@ var judgeEnvKeep = regexp.MustCompile(`(?i)^(PATH|HOME|USER|LOGNAME|SHELL|TERM|T
 // keep list says: an endpoint or proxy (a custom Bedrock endpoint among
 // them, which would get the token), a gateway's key or token, a header, a
 // config or plugin directory, a skipped auth. judgeEnvOtherRoute is another
-// provider's switch.
+// provider's switch. judgeEnvCredential is a credential the loopback route
+// drops, so its endpoint is sent none.
 var (
 	judgeEnvRefuse     = regexp.MustCompile(`(?i)(BASE_URL|ENDPOINT|PROXY|AUTH_TOKEN|API_KEY|CUSTOM_HEADERS|CONFIG_DIR|PLUGIN|SKIP_.*_AUTH)`)
 	judgeEnvOtherRoute = regexp.MustCompile(`(?i)^CLAUDE_CODE_USE_`)
+	judgeEnvCredential = regexp.MustCompile(`(?i)^(AWS_BEARER_TOKEN_BEDROCK|AWS_PROFILE|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)$`)
 )
 
 func judgeEnvRefused(k string) bool {
@@ -175,33 +182,79 @@ func judgeEnvRefused(k string) bool {
 // and no case leaves it.
 var errJudgeNoRoute = errors.New("no Bedrock route here; the judge is skipped")
 
-// judgeRoute reports whether env holds the Bedrock route the judge runs on:
-// the switch on, and a bearer token or AWS credentials.
-func judgeRoute(env []string) error {
+// The loopback route's two names: a Bedrock endpoint on this machine and the
+// switch that sends it no credentials.
+const (
+	judgeLoopbackURL  = "ANTHROPIC_BEDROCK_BASE_URL"
+	judgeLoopbackSkip = "CLAUDE_CODE_SKIP_BEDROCK_AUTH"
+)
+
+func judgeSwitchOn(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// judgeLoopbackHost reports whether raw is an http or https URL whose host
+// is this machine's loopback: `localhost`, or an address of 127.0.0.0/8 or
+// ::1 written as one. Any other name is not, whatever it resolves to.
+func judgeLoopbackHost(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.User != nil {
+		return false
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// judgeRoute reports the Bedrock route env holds, the one the judge runs on:
+// the switch on, and either a bearer token or AWS credentials (Bedrock
+// itself), or the loopback route: a Bedrock endpoint on this machine's
+// loopback with the auth skipped, as a dreamer has whose machine keeps the
+// token in a local service and out of every environment. loopback says which.
+// An endpoint anywhere else is not that route, skipped auth or not: the call
+// then needs the credentials, and the endpoint never reaches it.
+func judgeRoute(env []string) (loopback bool, err error) {
 	got := map[string]string{}
 	for _, kv := range env {
 		k, v, _ := strings.Cut(kv, "=")
 		got[k] = strings.TrimSpace(v)
 	}
-	switch strings.ToLower(got["CLAUDE_CODE_USE_BEDROCK"]) {
-	case "1", "true", "yes", "on":
-	default:
-		return errJudgeNoRoute
+	if !judgeSwitchOn(got["CLAUDE_CODE_USE_BEDROCK"]) {
+		return false, errJudgeNoRoute
+	}
+	if judgeSwitchOn(got[judgeLoopbackSkip]) && judgeLoopbackHost(got[judgeLoopbackURL]) {
+		return true, nil
 	}
 	if got["AWS_BEARER_TOKEN_BEDROCK"] == "" && got["AWS_PROFILE"] == "" && (got["AWS_ACCESS_KEY_ID"] == "" || got["AWS_SECRET_ACCESS_KEY"] == "") {
-		return errJudgeNoRoute
+		return false, errJudgeNoRoute
 	}
-	return nil
+	return false, nil
 }
 
 // judgeEnv is env reduced to judgeEnvKeep: the Bedrock route and what a
 // process needs, and an error if the route is not there or a name
-// judgeEnvRefuse names is left.
+// judgeEnvRefuse names is left. On the loopback route it holds no
+// credential, and the route's two names with the endpoint as env has it.
 func judgeEnv(env []string) ([]string, error) {
+	loopback, err := judgeRoute(env)
+	if err != nil {
+		return nil, err
+	}
 	var out []string
+	endpoint := ""
 	for _, kv := range env {
-		k, _, _ := strings.Cut(kv, "=")
-		if judgeEnvKeep.MatchString(k) {
+		k, v, _ := strings.Cut(kv, "=")
+		if k == judgeLoopbackURL {
+			endpoint = strings.TrimSpace(v)
+		}
+		if judgeEnvKeep.MatchString(k) && !(loopback && judgeEnvCredential.MatchString(k)) {
 			out = append(out, kv)
 		}
 	}
@@ -211,8 +264,8 @@ func judgeEnv(env []string) ([]string, error) {
 			return nil, fmt.Errorf("a gateway variable is left in the judge's environment: %s", k)
 		}
 	}
-	if err := judgeRoute(out); err != nil {
-		return nil, err
+	if loopback {
+		out = append(out, judgeLoopbackURL+"="+endpoint, judgeLoopbackSkip+"=1")
 	}
 	return out, nil
 }
@@ -227,9 +280,9 @@ func judgeCommand(ctx context.Context, model, dir string) (*exec.Cmd, error) {
 		return nil, err
 	}
 	// The AWS SDK also reads an endpoint from its config files, which no
-	// environment check sees: on the bearer or key route the call reads none
-	// (empty files of its own); on a profile route a config with an
-	// endpoint_url refuses the call.
+	// environment check sees: on the bearer, key or loopback route the call
+	// reads none (empty files of its own); on a profile route a config with
+	// an endpoint_url refuses the call.
 	if !envHas(env, "AWS_PROFILE") {
 		empty := filepath.Join(deliveryLogDir(), "judge-aws-empty")
 		if err := os.MkdirAll(deliveryLogDir(), 0o700); err != nil {
@@ -1010,7 +1063,7 @@ func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int,
 	}
 	// No Bedrock route (a machine whose dreamer runs through another
 	// gateway): nothing is drawn, nothing is sent, and the log says why.
-	if err := judgeRoute(os.Environ()); err != nil {
+	if _, err := judgeRoute(os.Environ()); err != nil {
 		e := &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: "judge-skip", Reason: "no Bedrock route"}
 		e.ID = logID(e)
 		_ = appendLogEntry(e, time.Now())
