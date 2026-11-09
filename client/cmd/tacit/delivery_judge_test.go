@@ -71,7 +71,7 @@ func TestJudgeEnvLoopbackRoute(t *testing.T) {
 	if err != nil || strings.Join(env, " ") != "PATH=/bin HOME=/h AWS_REGION=x CLAUDE_CODE_USE_BEDROCK=1 ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:9/n CLAUDE_CODE_SKIP_BEDROCK_AUTH=1" {
 		t.Fatalf("kept: %v %v", env, err)
 	}
-	for _, u := range []string{"http://localhost:1", "http://LOCALHOST/x", "http://[::1]:1/x", "https://127.9.9.9"} {
+	for _, u := range []string{"http://127.0.0.1", "http://[::1]:1/x", "https://127.9.9.9", "HTTP://127.0.0.1:1", "http://[0:0:0:0:0:0:0:1]"} {
 		env, err := judgeEnv(append(slices.Clone(base), "ANTHROPIC_BEDROCK_BASE_URL="+u))
 		if err != nil || !slices.Contains(env, "ANTHROPIC_BEDROCK_BASE_URL="+u) {
 			t.Fatalf("%s is loopback: %v %v", u, env, err)
@@ -80,7 +80,12 @@ func TestJudgeEnvLoopbackRoute(t *testing.T) {
 	// Not this machine, or not a plain http address of it: no route without
 	// credentials, and with them the call goes to Bedrock itself and the
 	// endpoint never reaches it.
-	for _, u := range []string{"", "https://gw", "http://127.0.0.1.gw.example", "http://localhost.gw.example", "http://user:pw@127.0.0.1", "ftp://127.0.0.1", "127.0.0.1:1", "http://0.0.0.0:1", "http://10.0.0.1", "http://[::2]"} {
+	// Among them: names (`localhost` too), other spellings of the address,
+	// and forms another URL reader takes for another host.
+	for _, u := range []string{"", "https://gw", "http://127.0.0.1.gw.example", "http://localhost.gw.example", "http://user:pw@127.0.0.1", "http://@127.0.0.1", "ftp://127.0.0.1", "127.0.0.1:1",
+		"http://0.0.0.0:1", "http://10.0.0.1", "http://[::2]", "http://[::]", "http://localhost:1", "http://LOCALHOST", "http://localhost.", "http://127.0.0.1.",
+		"http://[::ffff:127.0.0.1]", "http://[::ffff:7f00:1]", "http://[::1%25lo]", "http://2130706433", "http://0x7f.1", "http://0177.0.0.1", "http://127.1",
+		`http://gw.example\@127.0.0.1`, `http:\\gw.example\@127.0.0.1`, "http:/127.0.0.1", "http://gw.example#@127.0.0.1", "http://gw.example?@127.0.0.1", "http://127.0.0.1:1 http://gw"} {
 		e := append(slices.Clone(base), "ANTHROPIC_BEDROCK_BASE_URL="+u)
 		if _, err := judgeEnv(e); !errors.Is(err, errJudgeNoRoute) {
 			t.Fatalf("%q is no route: %v", u, err)
@@ -102,6 +107,30 @@ func TestJudgeEnvLoopbackRoute(t *testing.T) {
 			t.Fatalf("%s: %v %v", skip, env, err)
 		}
 	}
+	// A route name set twice to two values is not the route, whichever is last.
+	for _, e := range [][]string{
+		{"ANTHROPIC_BEDROCK_BASE_URL=https://gw", "ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:9"},
+		{"ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:9", "ANTHROPIC_BEDROCK_BASE_URL=https://gw"},
+		{"ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:9", "CLAUDE_CODE_SKIP_BEDROCK_AUTH=0"},
+	} {
+		if _, err := judgeEnv(append(slices.Clone(base), e...)); !errors.Is(err, errJudgeNoRoute) {
+			t.Fatalf("%v is no route: %v", e, err)
+		}
+	}
+	// The same value twice is one value.
+	if env, err := judgeEnv(append(slices.Clone(base), "ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:9", "ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:9")); err != nil ||
+		strings.Join(env, " ") != "PATH=/bin HOME=/h AWS_REGION=x CLAUDE_CODE_USE_BEDROCK=1 ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:9 CLAUDE_CODE_SKIP_BEDROCK_AUTH=1" {
+		t.Fatalf("set twice to one value: %v %v", env, err)
+	}
+	// A name the refuse list names is refused before the route is asked, as
+	// on the other routes.
+	old := judgeEnvKeep
+	t.Cleanup(func() { judgeEnvKeep = old })
+	judgeEnvKeep = regexp.MustCompile(`^(PATH|HTTPS_PROXY|CLAUDE_CODE_USE_BEDROCK)$`)
+	if _, err := judgeEnv(append(slices.Clone(base), "ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:9", "HTTPS_PROXY=http://proxy")); err == nil || errors.Is(err, errJudgeNoRoute) {
+		t.Fatalf("a proxy was passed on the loopback route: %v", err)
+	}
+	judgeEnvKeep = old
 	// The switch is still needed.
 	if _, err := judgeEnv([]string{"PATH=/bin", "CLAUDE_CODE_SKIP_BEDROCK_AUTH=1", "ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:9"}); !errors.Is(err, errJudgeNoRoute) {
 		t.Fatalf("no switch: %v", err)

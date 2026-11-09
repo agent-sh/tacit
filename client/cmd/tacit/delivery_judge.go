@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
-	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -198,19 +198,20 @@ func judgeSwitchOn(v string) bool {
 }
 
 // judgeLoopbackHost reports whether raw is an http or https URL whose host
-// is this machine's loopback: `localhost`, or an address of 127.0.0.0/8 or
-// ::1 written as one. Any other name is not, whatever it resolves to.
+// is this machine's loopback, written as an address: one of 127.0.0.0/8 in
+// dotted form, or ::1. No name is, `localhost` included, whatever it resolves
+// to (a resolver decides that, not this check), nor an IPv4-mapped form, an
+// address with a zone, or a URL with a user part.
 func judgeLoopbackHost(raw string) bool {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.User != nil {
 		return false
 	}
-	host := u.Hostname()
-	if strings.EqualFold(host, "localhost") {
-		return true
+	addr, err := netip.ParseAddr(u.Hostname())
+	if err != nil {
+		return false
 	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return addr.Is4() && addr.IsLoopback() || addr == netip.IPv6Loopback()
 }
 
 // judgeRoute reports the Bedrock route env holds, the one the judge runs on:
@@ -222,14 +223,21 @@ func judgeLoopbackHost(raw string) bool {
 // then needs the credentials, and the endpoint never reaches it.
 func judgeRoute(env []string) (loopback bool, err error) {
 	got := map[string]string{}
+	twice := false
 	for _, kv := range env {
 		k, v, _ := strings.Cut(kv, "=")
-		got[k] = strings.TrimSpace(v)
+		v = strings.TrimSpace(v)
+		// A route name set twice to two values is read differently by
+		// different readers: it is not the loopback route.
+		if old, ok := got[k]; ok && old != v && (k == judgeLoopbackURL || k == judgeLoopbackSkip) {
+			twice = true
+		}
+		got[k] = v
 	}
 	if !judgeSwitchOn(got["CLAUDE_CODE_USE_BEDROCK"]) {
 		return false, errJudgeNoRoute
 	}
-	if judgeSwitchOn(got[judgeLoopbackSkip]) && judgeLoopbackHost(got[judgeLoopbackURL]) {
+	if !twice && judgeSwitchOn(got[judgeLoopbackSkip]) && judgeLoopbackHost(got[judgeLoopbackURL]) {
 		return true, nil
 	}
 	if got["AWS_BEARER_TOKEN_BEDROCK"] == "" && got["AWS_PROFILE"] == "" && (got["AWS_ACCESS_KEY_ID"] == "" || got["AWS_SECRET_ACCESS_KEY"] == "") {
@@ -241,33 +249,40 @@ func judgeRoute(env []string) (loopback bool, err error) {
 // judgeEnv is env reduced to judgeEnvKeep: the Bedrock route and what a
 // process needs, and an error if the route is not there or a name
 // judgeEnvRefuse names is left. On the loopback route it holds no
-// credential, and the route's two names with the endpoint as env has it.
+// credential, and the route's two names with the endpoint as env has it,
+// less the spaces around it.
 func judgeEnv(env []string) ([]string, error) {
-	loopback, err := judgeRoute(env)
-	if err != nil {
-		return nil, err
-	}
-	var out []string
+	var kept []string
 	endpoint := ""
 	for _, kv := range env {
 		k, v, _ := strings.Cut(kv, "=")
 		if k == judgeLoopbackURL {
 			endpoint = strings.TrimSpace(v)
 		}
-		if judgeEnvKeep.MatchString(k) && !(loopback && judgeEnvCredential.MatchString(k)) {
-			out = append(out, kv)
+		if judgeEnvKeep.MatchString(k) {
+			kept = append(kept, kv)
 		}
 	}
-	for _, kv := range out {
+	for _, kv := range kept {
 		k, _, _ := strings.Cut(kv, "=")
 		if judgeEnvRefused(k) {
 			return nil, fmt.Errorf("a gateway variable is left in the judge's environment: %s", k)
 		}
 	}
-	if loopback {
-		out = append(out, judgeLoopbackURL+"="+endpoint, judgeLoopbackSkip+"=1")
+	loopback, err := judgeRoute(env)
+	if err != nil {
+		return nil, err
 	}
-	return out, nil
+	if !loopback {
+		return kept, nil
+	}
+	var out []string
+	for _, kv := range kept {
+		if k, _, _ := strings.Cut(kv, "="); !judgeEnvCredential.MatchString(k) {
+			out = append(out, kv)
+		}
+	}
+	return append(out, judgeLoopbackURL+"="+endpoint, judgeLoopbackSkip+"=1"), nil
 }
 
 // judgeCommand is the judge's `claude -p` call: the Bedrock route of
