@@ -1,13 +1,13 @@
 Tacit keeps memory for coding agents in Markdown and git. Use a local store or share one across machines.
 
-This release fixes the dreamer's judge, which has recorded no label since v0.9.32 (#157).
+This release lets the dreamer's judge run on a machine that reaches Bedrock through a local service, and makes Fable 5.2 its default model.
 
-- **The judge reads its answer.** The call read the CLI's output before the CLI had run, so every answer was empty and every pass failed with `the judge's answer is no JSON: unexpected end of JSON input`. After three such passes a batch of drawn lines was given up. The call now runs first and its output is read after.
-- **Refusals are seen again.** A throttle the CLI printed on stderr was missed for the same reason, so a rate limit counted against the drawn lines' tries. It ends the pass without counting again. Refusal words are read from the CLI's own text, never from the model's answer.
-- **Failures that are not the lines' hold them.** A call that cannot start (no `claude` on `PATH`, a model the route does not know), one the pass's deadline ends, or one whose CLI prints no result counts no try. Such a line is given up after 12 held calls, two days of dream runs. The deadline now ends the CLI's whole process tree.
-- **More answer forms.** The CLI's result is found in its one JSON object, in the last result event of an array of events, or in the last result line after other output. A success result counts whatever the CLI's exit after it. The answer is the first JSON object with a `lines` key that has three valid words for every case, whatever prose, code fence or example is around it.
-- **Why a call gave no labels.** A `judge-pass` entry now carries `answer_error`, a class and never the answer's text: `setup`, `timeout`, `no-output`, `call`, `declined`, `empty`, `truncated`, `prose`, `shape` or `other`. The next failure of this kind shows in the delivery log.
+- **The loopback route (#161).** The judge ran only where its environment held a bearer token or AWS credentials. A machine that keeps the token in a local service, and points Claude Code at that service's loopback endpoint with the auth skipped, ran the dreamer but skipped the judge with `no Bedrock route here`. That is now a route of its own: `CLAUDE_CODE_SKIP_BEDROCK_AUTH` on, and `ANTHROPIC_BEDROCK_BASE_URL` an `http` or `https` address of 127.0.0.0/8 or `::1`. The host is written as an address; no name counts, `localhost` included. On this route the judge drops every credential, so the endpoint is sent none. An endpoint anywhere else is refused as before.
+- **Fable 5.2 is the default judge.** The judge's model defaults to `global.anthropic.claude-fable-5-2`. A changed model is a new judge, so it was measured under the rule before the default changed (eval/DELIVERY.md). A `TACIT_DELIVERY_JUDGE_MODEL` setting that names this model can be removed.
+- **The same note twice (#162).** A finding's notes were made one by their time and text, so the same words sent twice within a second showed as one note. A note is now its record in the decision log.
+- **The offline eval reads one judge.** With two judges under one prompt, a pass that logged no label was counted for both. It now counts only for the judge whose model the pass asked.
+- **Tests on an older git (#160).** One test counted git commands as a git from 2.44 runs them and failed on an older one.
 
-Upgrading: install the new binary on the machine that runs the dreamer's judge. No index, store format or protocol change; the server needs no deploy.
+Upgrading: install the new binary on every machine that runs the dreamer. No index, store format or protocol change; the server needs no deploy.
 
 Builds for Linux, macOS and Windows on amd64 and arm64 include the CLI, the browser app and a compatible scrump redactor. Git 2.29+ is required. [Setup and platform validation](https://github.com/agent-sh/tacit/blob/main/docs/portable.md).
