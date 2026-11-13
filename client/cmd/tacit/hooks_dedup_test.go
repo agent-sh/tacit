@@ -131,6 +131,7 @@ func TestDedupTierAndDerivedExemption(t *testing.T) {
 func TestDedupFilesGlobAndTilde(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	sub := filepath.Join(home, "rules")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
