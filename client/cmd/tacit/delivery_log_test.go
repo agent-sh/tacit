@@ -65,6 +65,7 @@ func candOf(e logEntry, name string) *logCand {
 // entry of its own. The log is mode 0600 in a 0700 directory, and with the setting off
 // nothing is written.
 func TestDeliveryLogRecordsEachBlockAndWhatItLeftOut(t *testing.T) {
+	t.Setenv("TACIT_DELIVERY_PUSH_COMMANDS", "on")
 	_, cwd := repoFirstRig(t,
 		fact.Meta{Name: "pool-lock-order", Description: "Take the shard lock before the slot lock in the scheduler pool", Type: "past_mistake", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Paths: []string{"src/scheduler/pool.go"}}},
 		fact.Meta{Name: "scheduler-shard-locks", Description: "The scheduler pool keeps one shard lock per tenant and a slot lock per job", Type: "design_decision", Scope: "projects/widget"},
@@ -681,6 +682,7 @@ func TestTitlesOnlyWhereMeasured(t *testing.T) {
 // A shell command's push is titled, as measured; an edit's keeps whole
 // lines. The forms say so.
 func TestPushTitlesForCommandsOnly(t *testing.T) {
+	t.Setenv("TACIT_DELIVERY_PUSH_COMMANDS", "on")
 	_, cwd := repoFirstRig(t,
 		fact.Meta{Name: "lint-before-push", Description: "Run the linter with the strict profile", Type: "user_standard", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Commands: []string{"make lint"}}},
 		fact.Meta{Name: "worker-no-globals", Description: "Worker state lives in the pool, never in package globals", Type: "design_decision", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Paths: []string{"src/scheduler/**"}}},

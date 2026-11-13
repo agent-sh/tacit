@@ -199,6 +199,7 @@ func TestSessionStartInAWorkspaceIsAllItsRepos(t *testing.T) {
 // repository's path facts, not the other's), and matches a shell command
 // run from the workspace root against all of them.
 func TestWorkspacePromptAndToolPush(t *testing.T) {
+	t.Setenv("TACIT_DELIVERY_PUSH_COMMANDS", "on")
 	_, ws := workspaceRig(t, wsFixture...)
 	t.Setenv("TACIT_DELIVERY_REPO_START", "off")
 	if out := hookOut(t, promptPayload(ws, "s1", "Add retries to the private message delivery transport"), "prompt"); !strings.Contains(out, "gadget-transport-retries") {

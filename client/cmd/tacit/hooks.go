@@ -293,6 +293,14 @@ func runHook(args []string) int {
 		kept := withoutClaims(strong)
 		logDropped(strong, kept, "withheld")
 		strong = kept
+		// A fact whose words the session's instruction files already hold
+		// (this repository's AGENTS.md, the configured dedup files) is not
+		// delivered again (hooks_dedup.go).
+		var drepos []repoid.Repo
+		if r, ok := sessionRepo(in.Cwd); ok {
+			drepos = append(drepos, r)
+		}
+		strong = withoutDuplicates(strong, loadDedupCorpus(append(drepos, ws...)))
 		remember(in.SessionID, strong)
 		if out := hookBlock(strong, "# tacit: facts matching this request", titlesNote); out != "" {
 			fmt.Print(out + markAsk(strong))

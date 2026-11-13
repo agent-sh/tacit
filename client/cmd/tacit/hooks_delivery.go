@@ -113,6 +113,11 @@ func deliveryFloat(key string, def float64) float64 {
 	return def
 }
 
+// deliveryString reads a string delivery setting: TACIT_DELIVERY_<key>.
+func deliveryString(key string) string {
+	return strings.TrimSpace(os.Getenv("TACIT_DELIVERY_" + key))
+}
+
 // instruction is the one line that says what tacit holds and when to ask
 // it. Generic on purpose: no list of actions, so it reads the same in any
 // repo and any store. It rides in the SessionStart title and in the MCP

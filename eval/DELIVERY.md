@@ -245,3 +245,19 @@ The rule, written before any real data:
   - DR's net difference from the logged policy, counted over supported lines only, falls within the 95% intervals of both IPS's and SNIPS's net differences, so the model agrees with them where they can see; otherwise the read is flagged and promotes nothing;
   - the 95% interval of DR's net difference from the logged policy is above zero.
 - **One judge.** Labels and passes from one judge only (its model and prompt digest): the one that passed step 5.
+
+## Pushes keyed on a command (2026-11-13)
+
+The bare-program rule above left the noise that two-word commands still carry (`git diff`, `gh pr`, `make`, `cd` into a checkout): a fact keyed on a command fires on every call of it, and most of what those lines added was already carried elsewhere — the machine's rulebook, the harness's memory, the repository's own instructions. On the graded pushes of a real store, across every judge's labels, the command-keyed meta lines (the `via: meta` push lines) were graded relevant about one line in eight, noise about seven in ten, and the useful ones (relevant and new) about one in seventy; the prompt block's ranked lines, for comparison, were graded relevant about two in five. The offline policy estimate over the same judged population (the IPS/DR harness of "Scoring each delivery", both judges separately) moves its net value from clearly negative to about zero when every command-keyed push line is dropped, while dropping the ranked prompt lines instead moves nothing — the push, not the prompt, was the cost.
+
+The rule now: a tool call's command-keyed facts are off by default (`delivery.push_commands`, `TACIT_DELIVERY_PUSH_COMMANDS=on` restores them whole, bare-program tie and all); a path the call writes still pushes as before, and the prompt's metadata line still names commands by the prompt's words.
+
+Limits, as measured: the labels sit under the offline rule's promotion bar, so this is the graded-label trade stated above (some useful lines are lost with the noise), not a promoted live comparison; a store whose command-keyed rules are mostly new to its sessions should turn the switch back on and measure again.
+
+## Duplicates (2026-11-13)
+
+Most of what the graded prompt and push lines added was not new: the reader already carried the rule, in the machine's shared instruction files or the harness's memory. Word coverage of those files separates the graded lines sharply: at a wide share of a fact's name and description words (75 in 100), most of its name's (60 in 100), and four matched words at least, the lines the matcher holds were on the graded set almost all noise or already-known — not one graded useful line (relevant and new) was held — while every wider coverage began to hold lines graded useful too. Wording changes nothing, which plain word coverage keeps where a phrase match would not: a rule restated in other words is held as well as one copied.
+
+The rule now (`delivery.dedup`, on; `delivery.dedup_files`): the prompt block and the tool push hold back a fact of tiers 0 and 1 whose words the session's instruction files cover that widely — each repository of the session's `AGENTS.md`, plus the configured files (a machine's rulebook, a harness's memory), which a store's operator names because tacit cannot know them. Derived facts are never held; SessionStart keeps its block. The offline estimate over the judged population adds nothing on its own (the push switch above carries the gain), and the matcher's guard rails are the measurement's: the wide share and the name share keep facts the files only talk around.
+
+Not done here: the same dedup against a session's transcript (a fact the conversation already quoted), which needs the transcript read on the prompt path and was not measured; and a curated `restates` link between a fact and an instruction file, which would be exact where word coverage is wide.

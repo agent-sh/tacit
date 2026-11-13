@@ -186,6 +186,15 @@ func preTool(s *store.Store, in hookInput) {
 		}
 		home, _ := os.UserHomeDir()
 		hits = metaSelect(all, repoNames(sit), rel, command, "", in.Cwd+" "+home, seen, deliveryInt("META_CEILING", metaCeiling))
+		// A command-keyed push fires on every call of a program, and of the
+		// graded ones most were noise (eval/DELIVERY.md, "Pushes keyed on a
+		// command"): off by default, on with delivery.push_commands. A path
+		// the call writes is specific evidence and always pushes.
+		if !deliveryOn("PUSH_COMMANDS", false) {
+			kept := coversAnyPath(hits, rel)
+			logDropped(hits, kept, "push_commands")
+			hits = kept
+		}
 		logChose(hits, "meta")
 	}
 	var lines, pushed []string
@@ -198,6 +207,7 @@ func preTool(s *store.Store, in hookInput) {
 	kept := withoutClaims(hits)
 	logDropped(hits, kept, "withheld")
 	hits = kept
+	hits = withoutDuplicates(hits, loadDedupCorpus(pushDedupRepos(repo, inRepo, ws)))
 	if ctx.Err() != nil || (len(hits) == 0 && len(pushed) == 0) {
 		return
 	}

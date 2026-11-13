@@ -57,6 +57,9 @@ type Delivery struct {
 	PromptAction   string   `yaml:"prompt_action"`   // TACIT_DELIVERY_PROMPT_ACTION
 	Instruction    string   `yaml:"instruction"`     // TACIT_DELIVERY_INSTRUCTION
 	ToolPush       string   `yaml:"tool_push"`       // TACIT_DELIVERY_TOOL_PUSH
+	PushCommands   string   `yaml:"push_commands"`   // TACIT_DELIVERY_PUSH_COMMANDS: command-keyed pushes, off by default (eval/DELIVERY.md, "Pushes keyed on a command")
+	Dedup          string   `yaml:"dedup"`           // TACIT_DELIVERY_DEDUP: hold facts the instruction files already hold, on by default
+	DedupFiles     string   `yaml:"dedup_files"`     // TACIT_DELIVERY_DEDUP_FILES: colon-separated instruction files a session already carries, beyond its repositories' AGENTS.md
 	TreePointer    string   `yaml:"tree_pointer"`    // TACIT_DELIVERY_TREE_POINTER
 	StartCeiling   *int     `yaml:"start_ceiling"`   // TACIT_DELIVERY_START_CEILING
 	PromptCeiling  *int     `yaml:"prompt_ceiling"`  // TACIT_DELIVERY_PROMPT_CEILING

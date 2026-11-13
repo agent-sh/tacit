@@ -130,6 +130,7 @@ func TestPreToolPushesAnAreaOutsideARepoOncePerSession(t *testing.T) {
 // In a repository an edit's own match still comes first, and the area's
 // facts follow when the same call is an area's.
 func TestPreToolRepoMatchRanksAboveTheArea(t *testing.T) {
+	t.Setenv("TACIT_DELIVERY_PUSH_COMMANDS", "on")
 	r, cwd, _ := areaRig(t)
 	writeFact(t, r.clone, fact.Meta{Name: "gadget-tix-rule", Description: "In gadget run tix with the gadget queue", Type: "user_standard", Scope: "projects/gadget", AppliesTo: fact.AppliesTo{Commands: []string{"tix update"}}}, "x\n")
 	writeRecordFile(t, r.clone, &record.Record{Folder: "projects/gadget", Kind: record.KindRepo, Name: "gadget", Description: "gadget", Status: record.StatusActive})

@@ -173,10 +173,15 @@ func TestPreToolHookPushesTheMatchingFactOnce(t *testing.T) {
 	if again := hookOut(t, edit, "pre-tool"); again != "" {
 		t.Fatalf("pushed twice in one session: %q", again)
 	}
-	if got := ctxOf(hookOut(t, toolPayload(cwd, "s1", "Bash", map[string]any{"command": "cd src && make lint"}), "pre-tool")); !strings.Contains(got, "lint-before-push") {
-		t.Fatalf("bash:\n%s", got)
+	if got := ctxOf(hookOut(t, toolPayload(cwd, "s1", "Bash", map[string]any{"command": "cd src && make lint"}), "pre-tool")); got != "" {
+		t.Fatalf("a command-keyed push by default:\n%s", got)
 	}
-	if out := hookOut(t, toolPayload(cwd, "s1", "Bash", map[string]any{"command": "ls -la"}), "pre-tool"); out != "" {
+	t.Setenv("TACIT_DELIVERY_PUSH_COMMANDS", "on")
+	if got := ctxOf(hookOut(t, toolPayload(cwd, "s5", "Bash", map[string]any{"command": "cd src && make lint"}), "pre-tool")); !strings.Contains(got, "lint-before-push") {
+		t.Fatalf("bash with commands on:\n%s", got)
+	}
+	t.Setenv("TACIT_DELIVERY_PUSH_COMMANDS", "")
+	if out := hookOut(t, toolPayload(cwd, "s6", "Bash", map[string]any{"command": "ls -la"}), "pre-tool"); out != "" {
 		t.Fatalf("an unmatched command: %q", out)
 	}
 	patch := "*** Begin Patch\n*** Update File: src/scheduler/pool.go\n@@\n-a\n+b\n*** End Patch\n"
@@ -285,7 +290,8 @@ func TestCommandMatchThroughARunner(t *testing.T) {
 // heredoc does not count). A longer command, or a script's path or file
 // name, matches as before. Of the pushes keyed on a bare program in real
 // sessions, few were useful (eval/DELIVERY.md, "Pushes keyed on a bare
-// program").
+// program"); command-keyed pushes themselves are off unless
+// delivery.push_commands is on.
 func TestPreToolBareProgramNeedsASecondWord(t *testing.T) {
 	r, cwd := repoFirstRig(t,
 		fact.Meta{Name: "ssh-gpubox-batchmode", Description: "Reach the widget gpubox in projects from home with ssh and BatchMode; a password prompt hangs the agent", Type: "past_mistake", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Commands: []string{"ssh"}}},
@@ -295,6 +301,7 @@ func TestPreToolBareProgramNeedsASecondWord(t *testing.T) {
 		fact.Meta{Name: "rsync-long-note", Description: "Copies amber basil cedar dune ember fable garnet harbor ivory jasper kettle lantern meadow nectar orchid pebble quartz raven saffron timber umber velvet willow yarrow zephyr reach the mirrorbox", Type: "past_mistake", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Commands: []string{"rsync"}}},
 	)
 	t.Setenv("TACIT_DELIVERY_REPO_START", "off")
+	t.Setenv("TACIT_DELIVERY_PUSH_COMMANDS", "on")
 	home := filepath.Join(r.root, "home")
 	// A worktree whose folder is not named for the repository.
 	wt := filepath.Join(r.root, "wt-x")
