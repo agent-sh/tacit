@@ -300,7 +300,8 @@ func runHook(args []string) int {
 		if r, ok := sessionRepo(in.Cwd); ok {
 			drepos = append(drepos, r)
 		}
-		strong = withoutDuplicates(strong, loadDedupCorpus(append(drepos, ws...)))
+		corpus := &lazyDedupCorpus{repos: append(drepos, ws...)}
+		strong = withoutDuplicates(strong, corpus.get)
 		remember(in.SessionID, strong)
 		if out := hookBlock(strong, "# tacit: facts matching this request", titlesNote); out != "" {
 			fmt.Print(out + markAsk(strong))

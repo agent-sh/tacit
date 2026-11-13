@@ -82,4 +82,68 @@ func TestDedupMatcherThresholds(t *testing.T) {
 	if (dedupCorpus{}).holdsFact(held) || (dedupCorpus{"every": true}).holdsFact(held) {
 		t.Fatal("an empty corpus held a fact")
 	}
+	// Literal hyphenated identifier in the corpus satisfies the name share.
+	lit := dedupCorpus{"widget-signoff": true, "every": true, "commit": true, "carries": true, "signed-off-by": true, "trailer": true}
+	if !lit.holdsFact(held) {
+		t.Fatal("a corpus naming the hyphenated fact literally did not hold it")
+	}
+	// Exact threshold boundaries: 0.75 total, 0.60 name, at least 4 matched words.
+	threeWords := search.Hit{Name: "widget", Description: "commit trailer"}
+	if c.holdsFact(threeWords) {
+		t.Fatal("three matched words should stay below dedupMinHit")
+	}
+	// Name: 3 of 5 matched (0.60); total: 6 of 8 matched (0.75).
+	exact := search.Hit{Name: "alpha-bravo-charlie-delta-echo", Description: "foxtrot golf hotel"}
+	b := dedupCorpus{"alpha": true, "bravo": true, "charlie": true, "foxtrot": true, "golf": true, "hotel": true}
+	if !b.holdsFact(exact) {
+		t.Fatal("exact 0.75 total and 0.60 name boundary should hold")
+	}
+	// 2 of 4 name words (0.50 < 0.60) with 5 of 6 total (0.83) must stay.
+	lowName := search.Hit{Name: "alpha-bravo-delta-echo", Description: "foxtrot golf hotel"}
+	if b.holdsFact(lowName) {
+		t.Fatal("below 0.60 name share should stay")
+	}
+}
+
+// Only tier 0 and 1 non-derived facts are held; tier-2 and derived facts
+// stay even under full corpus coverage, and lazy loading skips corpus I/O
+// when no hit is eligible.
+func TestDedupTierAndDerivedExemption(t *testing.T) {
+	loads := 0
+	load := func() dedupCorpus {
+		loads++
+		return dedupCorpus{"alpha": true, "bravo": true, "charlie": true, "delta": true, "echo": true}
+	}
+	derived := search.Hit{Name: "alpha-bravo", Description: "charlie delta echo", Type: "user_standard", Scope: "derived/alpha"}
+	tier2 := search.Hit{Name: "alpha-bravo", Description: "charlie delta echo", Type: "history", Scope: "projects/widget"}
+	got := withoutDuplicates([]search.Hit{derived, tier2}, load)
+	if len(got) != 2 || loads != 0 {
+		t.Fatalf("expected both ineligible hits kept and 0 loads, got %d hits, %d loads", len(got), loads)
+	}
+	tier0 := search.Hit{Name: "alpha-bravo", Description: "charlie delta echo", Type: "user_standard", Scope: "projects/widget"}
+	got = withoutDuplicates([]search.Hit{tier0, tier2, derived}, load)
+	if len(got) != 2 || loads != 1 || got[0].Name != "alpha-bravo" || got[1].Scope != "derived/alpha" {
+		t.Fatalf("expected tier-0 held and tier-2/derived kept (loads=%d): %+v", loads, got)
+	}
+}
+
+// loadDedupCorpus expands ~/ globs, skips ~user paths, and ignores missing files.
+func TestDedupFilesGlobAndTilde(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sub := filepath.Join(home, "rules")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "one.md"), []byte("alpha bravo charlie delta"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TACIT_DELIVERY_DEDUP", "")
+	t.Setenv("TACIT_DELIVERY_DEDUP_FILES", "~/rules/*.md:~/rules/*.md:~otheruser/nope.md:~/missing.md")
+	c := loadDedupCorpus(nil)
+	for _, w := range []string{"alpha", "bravo", "charlie", "delta"} {
+		if !c[w] {
+			t.Fatalf("missing expected word %q from ~/ glob corpus: %v", w, c)
+		}
+	}
 }

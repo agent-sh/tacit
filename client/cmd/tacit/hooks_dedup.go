@@ -81,8 +81,11 @@ func loadDedupCorpus(repos []repoid.Repo) dedupCorpus {
 			// A leading ~ is the home directory under either separator;
 			// a ~user path is not this home and reads empty.
 			if g == "~" || strings.HasPrefix(g, "~/") || strings.HasPrefix(g, "~\\") {
-				home, _ := os.UserHomeDir()
-				g = filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(g, "~"), "/"))
+				home, err := os.UserHomeDir()
+				if err != nil || home == "" {
+					continue
+				}
+				g = filepath.Join(home, strings.TrimLeft(g[1:], `/\`))
 			}
 			if strings.HasPrefix(g, "~") {
 				continue
@@ -94,7 +97,13 @@ func loadDedupCorpus(repos []repoid.Repo) dedupCorpus {
 			}
 		}
 	}
+	seen := map[string]bool{}
 	for _, p := range paths {
+		p = filepath.Clean(p)
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
 		b, err := os.ReadFile(p)
 		if err != nil {
 			continue
@@ -106,6 +115,22 @@ func loadDedupCorpus(repos []repoid.Repo) dedupCorpus {
 	return c
 }
 
+// lazyDedupCorpus loads the dedup corpus at most once per hook call and only
+// when a candidate fact can actually be held.
+type lazyDedupCorpus struct {
+	repos  []repoid.Repo
+	loaded bool
+	corpus dedupCorpus
+}
+
+func (l *lazyDedupCorpus) get() dedupCorpus {
+	if !l.loaded {
+		l.corpus = loadDedupCorpus(l.repos)
+		l.loaded = true
+	}
+	return l.corpus
+}
+
 // holdsFact reports whether the corpus covers the fact as a duplicate: the
 // shares of dedupWordCov of its name and description words and dedupNameCov
 // of its name's, with dedupMinHit words matched at least (a fact the corpus
@@ -115,29 +140,48 @@ func (c dedupCorpus) holdsFact(h search.Hit) bool {
 		return false
 	}
 	name := dedupWords(strings.ReplaceAll(h.Name, "-", " "))
-	all := append(append([]string{}, name...), dedupWords(h.Description)...)
-	if len(all) < dedupMinHit || len(name) == 0 {
+	desc := dedupWords(h.Description)
+	total := len(name) + len(desc)
+	if total < dedupMinHit || len(name) == 0 {
 		return false
 	}
+	// A corpus file that literally cites the hyphenated fact name holds its
+	// name words even though dedupWords keeps hyphenated tokens whole.
+	nameHeld := c[strings.ToLower(h.Name)]
 	hit, nhit := 0, 0
-	for _, w := range all {
+	for _, w := range name {
+		if nameHeld || c[w] {
+			hit++
+			nhit++
+		}
+	}
+	for _, w := range desc {
 		if c[w] {
 			hit++
 		}
 	}
-	for _, w := range name {
-		if c[w] {
-			nhit++
-		}
-	}
-	return hit >= dedupMinHit && float64(hit)/float64(len(all)) >= dedupWordCov && float64(nhit)/float64(len(name)) >= dedupNameCov
+	return hit >= dedupMinHit && float64(hit)/float64(total) >= dedupWordCov && float64(nhit)/float64(len(name)) >= dedupNameCov
 }
 
 // withoutDuplicates is hits less the facts the corpus already holds, logged
 // as held by the dedup gate. Only a rule, standard, decision or past mistake
 // is held (tier 0 or 1: what an instruction file restates), never a derived
 // fact, which restates nothing.
-func withoutDuplicates(hits []search.Hit, c dedupCorpus) []search.Hit {
+func withoutDuplicates(hits []search.Hit, load func() dedupCorpus) []search.Hit {
+	if len(hits) == 0 || !deliveryOn("DEDUP", true) {
+		return hits
+	}
+	eligible := false
+	for _, h := range hits {
+		if tier(h) <= 1 && !isDerived(h) {
+			eligible = true
+			break
+		}
+	}
+	if !eligible {
+		return hits
+	}
+	c := load()
 	if len(c) == 0 {
 		return hits
 	}

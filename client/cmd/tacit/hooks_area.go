@@ -90,7 +90,7 @@ func areaHits(facts []search.Hit, command string, seen map[string]bool, limit in
 // line pointing at the area in the tree. pushed are the areas it printed.
 // An area whose facts the dedup corpus holds entirely is not pushed at all
 // (not marked, no line): the session carries its rules already.
-func areaPush(ctx context.Context, ix *search.Index, recs map[string]*record.Record, toolName, command string, seen map[string]bool, corpus dedupCorpus) (hits []search.Hit, lines []string, pushed []string) {
+func areaPush(ctx context.Context, ix *search.Index, recs map[string]*record.Record, toolName, command string, seen map[string]bool, loadCorpus func() dedupCorpus) (hits []search.Hit, lines []string, pushed []string) {
 	limit := deliveryInt("AREA_CEILING", areaCeiling)
 	for _, f := range matchedAreas(recs, toolName, command) {
 		if seen[areaSeen(f)] || ctx.Err() != nil {
@@ -100,7 +100,7 @@ func areaPush(ctx context.Context, ix *search.Index, recs map[string]*record.Rec
 		if err != nil {
 			continue
 		}
-		hs := withoutDuplicates(areaHits(facts, command, withSeen(seen, hits), limit), corpus)
+		hs := withoutDuplicates(areaHits(facts, command, withSeen(seen, hits), limit), loadCorpus)
 		if len(hs) == 0 {
 			continue
 		}
