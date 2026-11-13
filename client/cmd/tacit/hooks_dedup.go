@@ -78,9 +78,14 @@ func loadDedupCorpus(repos []repoid.Repo) dedupCorpus {
 			if g == "" {
 				continue
 			}
-			if strings.HasPrefix(g, "~"+string(filepath.Separator)) {
+			// A leading ~ is the home directory under either separator;
+			// a ~user path is not this home and reads empty.
+			if g == "~" || strings.HasPrefix(g, "~/") || strings.HasPrefix(g, "~\\") {
 				home, _ := os.UserHomeDir()
-				g = filepath.Join(home, g[2:])
+				g = filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(g, "~"), "/"))
+			}
+			if strings.HasPrefix(g, "~") {
+				continue
 			}
 			if ms, err := filepath.Glob(g); err == nil {
 				paths = append(paths, ms...)
@@ -103,8 +108,8 @@ func loadDedupCorpus(repos []repoid.Repo) dedupCorpus {
 
 // holdsFact reports whether the corpus covers the fact as a duplicate: the
 // shares of dedupWordCov of its name and description words and dedupNameCov
-// of its name's, with dedupMinHit words matched at least. A fact with fewer
-// words than the minimum is never held.
+// of its name's, with dedupMinHit words matched at least (a fact the corpus
+// only talks around, or covers with fewer words, stays).
 func (c dedupCorpus) holdsFact(h search.Hit) bool {
 	if len(c) == 0 {
 		return false
@@ -114,31 +119,31 @@ func (c dedupCorpus) holdsFact(h search.Hit) bool {
 	if len(all) < dedupMinHit || len(name) == 0 {
 		return false
 	}
-	hit := 0
+	hit, nhit := 0, 0
 	for _, w := range all {
 		if c[w] {
 			hit++
 		}
 	}
-	nhit := 0
 	for _, w := range name {
 		if c[w] {
 			nhit++
 		}
 	}
-	return float64(hit)/float64(len(all)) >= dedupWordCov && float64(nhit)/float64(len(name)) >= dedupNameCov
+	return hit >= dedupMinHit && float64(hit)/float64(len(all)) >= dedupWordCov && float64(nhit)/float64(len(name)) >= dedupNameCov
 }
 
 // withoutDuplicates is hits less the facts the corpus already holds, logged
-// as held by the dedup gate. Derived facts (generated maps, hot files) are
-// never held: they are not rules restated anywhere.
+// as held by the dedup gate. Only a rule, standard, decision or past mistake
+// is held (tier 0 or 1: what an instruction file restates), never a derived
+// fact, which restates nothing.
 func withoutDuplicates(hits []search.Hit, c dedupCorpus) []search.Hit {
 	if len(c) == 0 {
 		return hits
 	}
 	out := hits[:0:0]
 	for _, h := range hits {
-		if !isDerived(h) && c.holdsFact(h) {
+		if tier(h) <= 1 && !isDerived(h) && c.holdsFact(h) {
 			continue
 		}
 		out = append(out, h)

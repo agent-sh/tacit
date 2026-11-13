@@ -390,22 +390,28 @@ func TestMemoryMDSetting(t *testing.T) {
 }
 
 func TestDeliverySettingsBecomeEnvironment(t *testing.T) {
-	for _, k := range []string{"TACIT_DELIVERY_TOOL_PUSH", "TACIT_DELIVERY_START_CEILING", "TACIT_DELIVERY_PROMPT_RELATIVE", "TACIT_DELIVERY_REPO_START"} {
+	for _, k := range []string{"TACIT_DELIVERY_TOOL_PUSH", "TACIT_DELIVERY_START_CEILING", "TACIT_DELIVERY_PROMPT_RELATIVE", "TACIT_DELIVERY_REPO_START", "TACIT_DELIVERY_PUSH_COMMANDS", "TACIT_DELIVERY_DEDUP", "TACIT_DELIVERY_DEDUP_FILES"} {
 		t.Setenv(k, "")
 		os.Unsetenv(k)
 	}
 	p := filepath.Join(t.TempDir(), "config.yaml")
-	os.WriteFile(p, []byte("delivery:\n  tool_push: off\n  start_ceiling: 4\n  prompt_relative: 0.5\n"), 0o644)
+	os.WriteFile(p, []byte("delivery:\n  tool_push: off\n  start_ceiling: 4\n  prompt_relative: 0.5\n  push_commands: on\n  dedup: off\n  dedup_files: /Keep/Case.md\n"), 0o644)
 	if err := Load(p, true); err != nil {
 		t.Fatal(err)
 	}
 	if os.Getenv("TACIT_DELIVERY_TOOL_PUSH") != "off" || os.Getenv("TACIT_DELIVERY_START_CEILING") != "4" || os.Getenv("TACIT_DELIVERY_PROMPT_RELATIVE") != "0.5" {
 		t.Fatalf("env: %q %q %q", os.Getenv("TACIT_DELIVERY_TOOL_PUSH"), os.Getenv("TACIT_DELIVERY_START_CEILING"), os.Getenv("TACIT_DELIVERY_PROMPT_RELATIVE"))
 	}
+	if os.Getenv("TACIT_DELIVERY_PUSH_COMMANDS") != "on" || os.Getenv("TACIT_DELIVERY_DEDUP") != "off" {
+		t.Fatalf("new switches: %q %q", os.Getenv("TACIT_DELIVERY_PUSH_COMMANDS"), os.Getenv("TACIT_DELIVERY_DEDUP"))
+	}
+	if os.Getenv("TACIT_DELIVERY_DEDUP_FILES") != "/Keep/Case.md" {
+		t.Fatalf("dedup_files keeps its case: %q", os.Getenv("TACIT_DELIVERY_DEDUP_FILES"))
+	}
 	if _, set := os.LookupEnv("TACIT_DELIVERY_REPO_START"); set {
 		t.Fatal("an unset switch was set")
 	}
-	for _, bad := range []string{"delivery:\n  tool_push: maybe\n", "delivery:\n  start_ceiling: 0\n", "delivery:\n  prompt_relative: 2\n"} {
+	for _, bad := range []string{"delivery:\n  tool_push: maybe\n", "delivery:\n  start_ceiling: 0\n", "delivery:\n  prompt_relative: 2\n", "delivery:\n  push_commands: maybe\n", "delivery:\n  dedup: later\n"} {
 		os.WriteFile(p, []byte(bad), 0o644)
 		if err := Load(p, true); err == nil {
 			t.Fatalf("accepted %q", bad)

@@ -218,7 +218,7 @@ func Load(path string, required bool) error {
 	default:
 		return fmt.Errorf("memory_md must be on or off")
 	}
-	for key, v := range map[string]string{"repo_start": c.Delivery.RepoStart, "repo_aliases": c.Delivery.RepoAliases, "prompt_metadata": c.Delivery.PromptMetadata, "prompt_action": c.Delivery.PromptAction, "instruction": c.Delivery.Instruction, "tool_push": c.Delivery.ToolPush, "tree_pointer": c.Delivery.TreePointer, "log": c.Delivery.Log, "titles": c.Delivery.Titles} {
+	for key, v := range map[string]string{"repo_start": c.Delivery.RepoStart, "repo_aliases": c.Delivery.RepoAliases, "prompt_metadata": c.Delivery.PromptMetadata, "prompt_action": c.Delivery.PromptAction, "instruction": c.Delivery.Instruction, "tool_push": c.Delivery.ToolPush, "push_commands": c.Delivery.PushCommands, "dedup": c.Delivery.Dedup, "tree_pointer": c.Delivery.TreePointer, "log": c.Delivery.Log, "titles": c.Delivery.Titles} {
 		switch strings.ToLower(v) {
 		case "", "on", "off", "true", "false":
 		default:
@@ -273,9 +273,11 @@ func Load(path string, required bool) error {
 			return fmt.Errorf("utility timeout must be positive and no more than 2s")
 		}
 	}
-	for key, v := range map[string]string{"REPO_START": c.Delivery.RepoStart, "REPO_ALIASES": c.Delivery.RepoAliases, "PROMPT_METADATA": c.Delivery.PromptMetadata, "PROMPT_ACTION": c.Delivery.PromptAction, "INSTRUCTION": c.Delivery.Instruction, "TOOL_PUSH": c.Delivery.ToolPush, "TREE_POINTER": c.Delivery.TreePointer, "LOG": c.Delivery.Log, "TITLES": c.Delivery.Titles} {
+	for key, v := range map[string]string{"REPO_START": c.Delivery.RepoStart, "REPO_ALIASES": c.Delivery.RepoAliases, "PROMPT_METADATA": c.Delivery.PromptMetadata, "PROMPT_ACTION": c.Delivery.PromptAction, "INSTRUCTION": c.Delivery.Instruction, "TOOL_PUSH": c.Delivery.ToolPush, "PUSH_COMMANDS": c.Delivery.PushCommands, "DEDUP": c.Delivery.Dedup, "TREE_POINTER": c.Delivery.TreePointer, "LOG": c.Delivery.Log, "TITLES": c.Delivery.Titles} {
 		values["TACIT_DELIVERY_"+key] = strings.ToLower(v)
 	}
+	// dedup_files holds paths, not switches: it keeps its case.
+	values["TACIT_DELIVERY_DEDUP_FILES"] = c.Delivery.DedupFiles
 	for key, v := range map[string]*int{"START_CEILING": c.Delivery.StartCeiling, "PROMPT_CEILING": c.Delivery.PromptCeiling, "META_CEILING": c.Delivery.MetaCeiling, "LOG_DAYS": c.Delivery.LogDays} {
 		if v != nil {
 			values["TACIT_DELIVERY_"+key] = strconv.Itoa(*v)

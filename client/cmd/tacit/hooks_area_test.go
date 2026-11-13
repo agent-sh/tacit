@@ -230,3 +230,26 @@ func TestAreaToolPatternsMatchMCPToolsOnly(t *testing.T) {
 		t.Fatalf("an MCP tool:\n%s", got)
 	}
 }
+
+// An area push every fact of which the dedup corpus holds prints nothing
+// and does not mark the area pushed: with the corpus gone the next call
+// delivers the area as though it had never fired (hooks_dedup.go).
+func TestAreaPushHeldByDedupPrintsNothingAndDoesNotMark(t *testing.T) {
+	_, cwd, _ := areaRig(t)
+	agents := filepath.Join(cwd, "AGENTS.md")
+	restate := "# widget\n\nEvery ticket comment cites the code review it rests on. A sev2 ticket pages the on-call within five minutes. Resolving with the wrong resolver group bounced a ticket for a day. Run the ticket CLI with --dry-run first.\nTickets cite sev2 pages resolver mistake cli dry run.\n"
+	if err := os.WriteFile(agents, []byte(restate), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TACIT_DELIVERY_REPO_START", "off")
+	call := toolPayload(cwd, "a1", "Bash", map[string]any{"command": "tix update 7"})
+	if got := preToolContext(t, hookOut(t, call, "pre-tool")); got != "" {
+		t.Fatalf("an area the instructions already carry pushed:\n%s", got)
+	}
+	os.Remove(agents)
+	next := toolPayload(cwd, "a2", "Bash", map[string]any{"command": "tix update 7"})
+	got := preToolContext(t, hookOut(t, next, "pre-tool"))
+	if !strings.Contains(got, "tickets-cli-dry-run") || !strings.Contains(got, "# more on") {
+		t.Fatalf("the held area was marked pushed:\n%s", got)
+	}
+}

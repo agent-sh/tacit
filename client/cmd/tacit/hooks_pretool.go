@@ -172,6 +172,10 @@ func preTool(s *store.Store, in hookInput) {
 	recs := hookRecords(ctx, ix)
 	pendingHeld(ctx, ix, in) // after a compaction: what its summary holds is in the context
 	seen := delivered(in.SessionID)
+	// The dedup corpus of this call: the repositories' AGENTS.md and the
+	// configured files, whose words the session already carries
+	// (hooks_dedup.go).
+	corpus := loadDedupCorpus(pushDedupRepos(repo, inRepo, ws))
 	beginLog("push", in, strings.TrimSpace(command+" "+strings.Join(rel, " ")), repoNames(sit), ix)
 	if dlog != nil {
 		dlog.Tool = in.ToolName
@@ -195,19 +199,19 @@ func preTool(s *store.Store, in hookInput) {
 			logDropped(hits, kept, "push_commands")
 			hits = kept
 		}
+		hits = withoutDuplicates(hits, corpus)
 		logChose(hits, "meta")
 	}
 	var lines, pushed []string
 	if areas && len(recs) > 0 {
 		var ah []search.Hit
-		ah, lines, pushed = areaPush(ctx, ix, recs, in.ToolName, command, withSeen(seen, hits))
+		ah, lines, pushed = areaPush(ctx, ix, recs, in.ToolName, command, withSeen(seen, hits), corpus)
 		logChose(ah, "area")
 		hits = append(hits, ah...)
 	}
 	kept := withoutClaims(hits)
 	logDropped(hits, kept, "withheld")
 	hits = kept
-	hits = withoutDuplicates(hits, loadDedupCorpus(pushDedupRepos(repo, inRepo, ws)))
 	if ctx.Err() != nil || (len(hits) == 0 && len(pushed) == 0) {
 		return
 	}
