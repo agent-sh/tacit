@@ -39,6 +39,10 @@ type curatorState struct {
 	// the curator's answer for a batch of just that note was malformed or
 	// invalid. A note held here maxNoteFailures times is set aside.
 	Failed map[string]int `json:"failed,omitempty"`
+	// QuickFailed holds notes that failed alone in a quick run. They wait for
+	// the full run, which owns failure strikes; the quick run must not buy the
+	// same invalid answer again every ten minutes.
+	QuickFailed map[string]bool `json:"quick_failed,omitempty"`
 	// DeferredRepo holds the notes whose scope names a repository no
 	// catalog knows yet: note -> the date it was first held back
 	// (deferUnknownRepos).
@@ -293,7 +297,8 @@ func runCurate(args []string) int {
 	env := curateEnv(s.Dir, false) // the metadata checks: this machine's checkouts, the store's folders and writers
 	statementsOK := statementsWrite(s.Dir)
 	var pending []*fact.Fact
-	heldBack := 0 // notes that failed alone maxNoteFailures times
+	heldBack := 0  // notes that failed alone maxNoteFailures times
+	quickHeld := 0 // notes waiting for the full run after a lone quick failure
 	noteByName := map[string]*fact.Fact{}
 	for _, f := range facts {
 		if f.InInbox() {
@@ -304,6 +309,10 @@ func runCurate(args []string) int {
 		if f.InInbox() && !curatedOrigins[f.Meta.Name] && cst.Empty[f.Meta.Name] == "" && cst.Restated[f.Meta.Name] == "" && !disowningNote(f) {
 			if cst.Failed[f.Meta.Name] >= maxNoteFailures {
 				heldBack++
+				continue
+			}
+			if *quick && cst.QuickFailed[f.Meta.Name] {
+				quickHeld++
 				continue
 			}
 			pending = append(pending, f)
@@ -388,7 +397,7 @@ func runCurate(args []string) int {
 	// A fact of the split that only restates a curated fact (or one an earlier
 	// batch of this run wrote) is not written a second time (no model).
 	absorber := curate.NewAbsorber(curated)
-	rep := curate.Report{At: time.Now().Format(time.RFC3339), Notes: len(pending), Restated: len(restated), DeferredOwner: deferredOwner, DeferredRepo: deferredRepo, Quick: *quick, ReviewRefused: reviewRefused, NotesForReviewer: reviewWaiting}
+	rep := curate.Report{At: time.Now().Format(time.RFC3339), Notes: len(pending), Restated: len(restated), DeferredOwner: deferredOwner, DeferredRepo: deferredRepo, Quick: *quick, QuickHeld: quickHeld, ReviewRefused: reviewRefused, NotesForReviewer: reviewWaiting}
 	rep.ModelCalls = &modelrun.Trace{}
 	ctx = modelrun.WithTrace(ctx, rep.ModelCalls)
 	// A failed run's paid answers, and the job's backoff (runguard.go): a
@@ -844,6 +853,7 @@ func runCurate(args []string) int {
 			break
 		}
 		for _, n := range batch {
+			delete(cst.QuickFailed, n.Meta.Name)
 			if !produced[n.Meta.Name] {
 				markDone(cst, n.Meta.Name, absorbed)
 			}
@@ -872,11 +882,19 @@ func runCurate(args []string) int {
 	}
 	cache.save()
 
-	if valid > 0 && !*quick {
-		// Only the full run counts a strike: the quick one comes every 10
-		// minutes and would set a note aside within the hour.
+	if valid > 0 && len(failedAlone) > 0 {
+		// A lone invalid answer is note-specific once another batch passed.
+		// Hold it out of every later quick run; only the full run retries it
+		// and counts a strike. Otherwise the 10-minute job buys the same
+		// refusal for hours before the next full run can set the note aside.
+		if cst.QuickFailed == nil {
+			cst.QuickFailed = map[string]bool{}
+		}
 		for _, n := range failedAlone {
-			cst.Failed[n]++
+			cst.QuickFailed[n] = true
+			if !*quick {
+				cst.Failed[n]++
+			}
 		}
 	} else if valid == 0 && (len(failedAlone) > 0 || rep.BatchSplits >= systemicSplits) {
 		fmt.Fprintf(os.Stderr, "curate: no batch got a valid answer; nothing counted against the notes (check the model and runner)\n")
@@ -1060,6 +1078,7 @@ var curateUpkeep = func(ctx context.Context, s *store.Store, host string, dry bo
 // entries only restated curated facts (note -> the fact, like a restated
 // note), else empty.
 func markDone(cst *curatorState, note string, absorbed map[string]string) {
+	delete(cst.QuickFailed, note)
 	if by := absorbed[note]; by != "" {
 		cst.Restated[note] = by
 		return

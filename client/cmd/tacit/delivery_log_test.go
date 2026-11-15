@@ -55,6 +55,20 @@ func candOf(e logEntry, name string) *logCand {
 	return nil
 }
 
+func TestDeliveryLogRecordsHookLatency(t *testing.T) {
+	t.Cleanup(func() { dlog, logPending = nil, nil })
+	dlog = &logEntry{V: deliveryLogVersion, Hook: "prompt", started: time.Now().Add(-1500 * time.Millisecond)}
+	e := dlog
+	endLog(nil)
+	if e.ElapsedMS < 1000 {
+		t.Fatalf("elapsed_ms = %d, want the hook's elapsed time", e.ElapsedMS)
+	}
+	data, err := json.Marshal(e)
+	if err != nil || !strings.Contains(string(data), `"elapsed_ms":`) {
+		t.Fatalf("latency missing from the receipt: %s, %v", data, err)
+	}
+}
+
 // Each hook block is one entry of the private log: the request, the
 // session's repositories and its terms, every candidate with its score,
 // rank, share of the best, tier, provenance and age, what chose the lines

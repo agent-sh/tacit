@@ -1009,7 +1009,7 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 	var coverage []string
 	selectCoverage := ""
 	if sit.PromptRelevance {
-		var rare, titleCoverage, phrases []string
+		var rare, titleCoverage, rareTitleCoverage, phrases []string
 		// Anchor on the most discriminating query term that the summary index
 		// actually knows, and on every known term that is rare outright
 		// (anchorRareDF): the rarest term of a request is often an incidental
@@ -1049,6 +1049,7 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 			}
 			if summaryDF > 0 && summaryDF <= anchorRareDF && summaryDF*100 <= corpus*anchorRarePct {
 				rareAnchors = append(rareAnchors, expr)
+				rareTitleCoverage = append(rareTitleCoverage, titleCoverage[i])
 			}
 			if SpecificIdentifier(term) {
 				var df int
@@ -1069,7 +1070,15 @@ func (ix *Index) Query(ctx context.Context, sit Situation, limit int, includeInb
 		}
 		gate := "(" + strings.Join(coverage, " + ") + ") >= 2"
 		if len(anchors) > 0 {
-			coherent := "(" + strings.Join(anchors, " + ") + ") >= 1 OR (" + strings.Join(titleCoverage, " + ") + ") >= 2"
+			coherent := "(" + strings.Join(anchors, " + ") + ") >= 1"
+			// Two common words in a name are not a subject: long automated
+			// requests otherwise match every note named with words such as
+			// "company" and "title". Keep the title escape hatch only when
+			// one of those title words is rare in this corpus. The rarest-term
+			// anchor and exact-phrase routes are unchanged.
+			if len(rareTitleCoverage) > 0 {
+				coherent += " OR ((" + strings.Join(titleCoverage, " + ") + ") >= 2 AND (" + strings.Join(rareTitleCoverage, " + ") + ") >= 1)"
+			}
 			if len(phrases) > 0 {
 				coherent += " OR " + strings.Join(phrases, " OR ")
 			}

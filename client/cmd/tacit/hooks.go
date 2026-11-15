@@ -224,6 +224,9 @@ func runHook(args []string) int {
 		kept := withoutClaims(hits)
 		logDropped(hits, kept, "withheld")
 		hits = kept
+		deduped := withoutNearDuplicates(hits)
+		logDropped(hits, deduped, "near_duplicate")
+		hits = deduped
 		mcp := slices.Contains(args[1:], "--mcp")
 		if restart != restartFresh {
 			fmt.Print(restartBlock(ctx, ix, s, in, sit, recs, hits, restart, mcp))
@@ -499,8 +502,10 @@ func promptHitsWith(ctx context.Context, ix *search.Index, sit search.Situation,
 		logChose(action, "action")
 		out = append(out, action...)
 	}
-	kept := withoutEchoes(out, p)
-	logDropped(out, kept, "echo")
+	echoed := withoutEchoes(out, p)
+	logDropped(out, echoed, "echo")
+	kept := withoutNearDuplicates(echoed)
+	logDropped(echoed, kept, "near_duplicate")
 	return kept, nil
 }
 

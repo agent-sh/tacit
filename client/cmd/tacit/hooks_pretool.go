@@ -212,6 +212,9 @@ func preTool(s *store.Store, in hookInput) {
 	kept := withoutClaims(hits)
 	logDropped(hits, kept, "withheld")
 	hits = kept
+	deduped := withoutNearDuplicates(hits)
+	logDropped(hits, deduped, "near_duplicate")
+	hits = deduped
 	if ctx.Err() != nil || (len(hits) == 0 && len(pushed) == 0) {
 		return
 	}

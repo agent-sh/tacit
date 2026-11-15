@@ -288,3 +288,50 @@ func TestPromptShortRequestHasNoRuleSlotInTheHook(t *testing.T) {
 		}
 	}
 }
+
+// Common words in a fact's name are not a subject match. Three phrasings of
+// the same automated request must not pull an unrelated editorial note just
+// because both texts mention a company and a title. The request's rare term
+// still reaches the fact that actually belongs to it.
+func TestPromptRelevanceCommonTitleWordsAreNotAnAnchor(t *testing.T) {
+	var specs []fact.Meta
+	for i := 0; i < 120; i++ {
+		specs = append(specs, fact.Meta{Name: fmt.Sprintf("common-%d", i), Description: "keep company and title research for a candidate; selected names, labels and external or internal flags may drop"})
+	}
+	specs = append(specs,
+		fact.Meta{Name: "briefing-title-company", Description: "A daily briefing keeps research notes about companies and titles for editorial profiles"},
+		fact.Meta{Name: "quartz-scheduler-candidates", Description: "The quartz scheduler persists candidate ordering in var/state/scheduler.json; restart the dispatcher after changing it"},
+	)
+	ix := relevanceIndex(t, specs)
+	for _, prompt := range []string{
+		"Research quartz scheduler candidates and sort by company, title and location; drop duplicates",
+		"Keep the selected candidate names for the quartz scheduler; compare company with title and drop external labels",
+		"Research the quartz scheduler role; record company and title for every candidate",
+	} {
+		got, err := promptHits(context.Background(), ix, search.Situation{}, prompt, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		names := names(got)
+		if strings.Contains(names, "briefing-title-company") || !strings.Contains(names, "quartz-scheduler-candidates") {
+			t.Errorf("%q: got %s", prompt, names)
+		}
+	}
+}
+
+// Two notes that only restate one another occupy one line of a delivery
+// bundle. A note with a different error code is an update, not a copy.
+func TestPromptBlockSuppressesNearDuplicateBundle(t *testing.T) {
+	ix := relevanceIndex(t, []fact.Meta{
+		{Name: "runner-resume-transient-errors", Scope: "machines/host-a", Description: "On host-a, the job runner resume repeats the last message after transient API errors 401, 429 or 529, which loops the failure; strip the queued continuation and send it manually"},
+		{Name: "runner-transient-error-continue", Scope: "machines/host-a", Description: "On host-a, job runner resume repeats the last message after transient API errors 401, 429 or 529, which loops the failure; strip any appended continuation and send it manually"},
+		{Name: "runner-resume-server-error", Scope: "machines/host-a", Description: "On host-a, the job runner resume repeats the last message after transient API error 500, which loops the failure; strip the queued continuation and send it manually"},
+	})
+	got, err := promptHits(context.Background(), ix, search.Situation{Host: "host-a"}, "job runner resume transient API errors 401 429 529 500", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names(got) != "runner-resume-server-error,runner-resume-transient-errors" && names(got) != "runner-resume-transient-errors,runner-resume-server-error" {
+		t.Fatalf("got %s: want one transient-error note and the distinct server-error note", names(got))
+	}
+}

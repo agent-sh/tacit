@@ -58,13 +58,14 @@ const (
 
 // logEntry is one hook block.
 type logEntry struct {
-	V       int      `json:"v"`
-	ID      string   `json:"id"`
-	TS      string   `json:"ts"`
-	Hook    string   `json:"hook"` // start, resume, compact, summary, prompt, push, nav
-	Session string   `json:"session,omitempty"`
-	Cwd     string   `json:"cwd,omitempty"`
-	Repos   []string `json:"repos,omitempty"`
+	V         int      `json:"v"`
+	ID        string   `json:"id"`
+	TS        string   `json:"ts"`
+	ElapsedMS int64    `json:"elapsed_ms,omitempty"`
+	Hook      string   `json:"hook"` // start, resume, compact, summary, prompt, push, nav
+	Session   string   `json:"session,omitempty"`
+	Cwd       string   `json:"cwd,omitempty"`
+	Repos     []string `json:"repos,omitempty"`
 	// Tool is a push's tool. Terms are the query terms of what the block
 	// answered (the prompt, the summary's query, the repositories' names, or
 	// the tool call's command and files)
@@ -115,9 +116,10 @@ type logEntry struct {
 	full  string
 	words map[string]bool
 	// titled: hookBlock printed the block's agents' notes as titles.
-	titled bool
-	ix     *search.Index
-	req    string
+	titled  bool
+	ix      *search.Index
+	req     string
+	started time.Time
 }
 
 // logCand is one candidate of a block, delivered or not.
@@ -215,8 +217,9 @@ func beginLog(hook string, in hookInput, request string, repos []string, ix *sea
 	if !deliveryLogOn() {
 		return
 	}
-	dlog = &logEntry{V: deliveryLogVersion, TS: time.Now().UTC().Format(time.RFC3339Nano), Hook: hook, Session: in.SessionID, Policy: "gates",
-		Cwd: in.Cwd, Repos: repos, Transcript: transcriptSize(in.TranscriptPath), TranscriptPath: in.TranscriptPath}
+	now := time.Now()
+	dlog = &logEntry{V: deliveryLogVersion, TS: now.UTC().Format(time.RFC3339Nano), Hook: hook, Session: in.SessionID, Policy: "gates",
+		Cwd: in.Cwd, Repos: repos, Transcript: transcriptSize(in.TranscriptPath), TranscriptPath: in.TranscriptPath, started: now}
 	if hook == "prompt" || hook == "summary" {
 		dlog.full = request // the echo filter runs on these only
 	}
@@ -441,6 +444,9 @@ func endLog(printed []search.Hit) {
 	e.PNothing = 0
 	if e.Nothing {
 		e.PNothing = 1
+	}
+	if !e.started.IsZero() {
+		e.ElapsedMS = time.Since(e.started).Milliseconds()
 	}
 	logPending = append(logPending, e)
 }

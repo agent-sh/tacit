@@ -225,7 +225,7 @@ func TestQuickCurateHonoursTheIntervalAndDefersOwnerNotesQuietly(t *testing.T) {
 // full run: the quick run, every 10 minutes, would otherwise set it aside
 // within the hour.
 func TestQuickCurateCountsNoStrike(t *testing.T) {
-	home, _ := quickHome(t)
+	home, prompts := quickHome(t)
 	countSteps(t)
 	quickAdd(t, home, "bad-note", "observed", "The dingo fixture driver uses port 7799")
 	statePath := filepath.Join(platform.StateDir(home), "curator.json")
@@ -235,6 +235,13 @@ func TestQuickCurateCountsNoStrike(t *testing.T) {
 	}
 	if _, ok := findFact(filepath.Join(home, "store"), "fresh-note-fact"); !ok {
 		t.Fatal("the note beside the failing one was not curated (no valid batch: nothing would count)")
+	}
+	before := len(prompts())
+	if code := runCurate([]string{"--quick", "--min-interval", "1ns"}); code != 0 || len(prompts()) != before {
+		t.Fatalf("a lone quick failure was retried: exit %d, %d new prompt(s)", code, len(prompts())-before)
+	}
+	if cst := loadCuratorState(statePath); !cst.QuickFailed["bad-note"] {
+		t.Fatalf("the quick failure was not held for the full run: %+v", cst.QuickFailed)
 	}
 	runCurate(nil)
 	if cst := loadCuratorState(statePath); cst.Failed["bad-note"] != 1 {
