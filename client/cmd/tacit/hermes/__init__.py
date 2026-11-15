@@ -142,8 +142,9 @@ class TacitProvider(MemoryProvider):
         if not query or is_trivial_prompt(query):
             return ""
         with self._lock:
-            payload = {"session_id": self._session, "cwd": self._cwd, "prompt": query}
-            if self._context == "primary" and self._session_id:
+            payload = {"session_id": self._session, "cwd": self._cwd, "prompt": query,
+                       "agent_context": self._context}
+            if self._session_id:
                 payload["hermes_session_id"] = self._session_id
         block = _scan(_run(["hook", "prompt"], payload, _PROMPT_WAIT))
         self._last_count = sum(1 for line in block.splitlines() if line.startswith("- "))

@@ -16,6 +16,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/agent-sh/tacit/client/internal/hermes"
+	"github.com/agent-sh/tacit/client/internal/hermes/hermestest"
 )
 
 // The judge's environment keeps what a process needs and the Bedrock
@@ -1202,4 +1205,43 @@ func TestJudgeHeldInALaterBatch(t *testing.T) {
 	if len(w) != 1 || w[0]["held"] != float64(1) || w[0]["tries"] != float64(0) {
 		t.Fatalf("waiting %v", w)
 	}
+}
+
+func TestJudgeReadsHermesMoments(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("TACIT_STATE_DIR", filepath.Join(home, "state"))
+	dbPath := filepath.Join(home, ".hermes", "state.db")
+	os.MkdirAll(filepath.Dir(dbPath), 0o700)
+	t.Setenv("TACIT_HERMES_DB", dbPath)
+	h := hermestest.Create(t, dbPath, hermestest.Session{ID: "automated-session", Source: "cron", StartedAt: 1})
+	h.Add(
+		hermestest.Message{ID: 10, Session: "automated-session", Role: "user", Content: "Inspect the amber queue failure.", Timestamp: 2},
+		hermestest.Message{ID: 11, Session: "automated-session", Role: "assistant", Content: "I will inspect the queue.", Timestamp: 3},
+		hermestest.Message{ID: 12, Session: "automated-session", Role: "assistant", ToolCalls: `[{"id":"call-1","function":{"name":"terminal","arguments":"{\"command\":\"queue status\"}"}}]`, Timestamp: 4},
+		hermestest.Message{ID: 13, Session: "automated-session", Role: "tool", ToolCallID: "call-1", ToolName: "terminal", Content: "queue healthy", Timestamp: 5},
+	)
+	now := time.Now()
+	writeLogEntry(&logEntry{V: 1, ID: "00000000000000b1", TS: now.Add(-2 * time.Hour).UTC().Format(time.RFC3339Nano),
+		Hook: "prompt", Session: "automated-session", HermesSession: "automated-session", Transcript: 10,
+		Cands: []logCand{{Name: "amber-note", Delivered: true}}}, now)
+	pool, unread, _, _ := judgePool(context.Background(), now, now.Add(-3*time.Hour))
+	if len(unread) != 0 || len(pool) != 1 || pool[0].Transcript != hermes.Key(dbPath, "automated-session") || pool[0].Offset != 10 {
+		t.Fatalf("pool %+v, unread %v", pool, unread)
+	}
+	redact := judgeRedactTexts
+	t.Cleanup(func() { judgeRedactTexts = redact })
+	judgeRedactTexts = func(_ context.Context, texts []string) ([]string, error) { return texts, nil }
+	c, ok := momentOf(context.Background(), nil, pool[0])
+	if !ok || !strings.Contains(c.Request, "Inspect the amber queue failure") || len(c.Next) == 0 || !strings.Contains(c.Next[0], "I will inspect the queue") {
+		t.Fatalf("case %+v, ok %v", c, ok)
+	}
+
+	t.Cleanup(func() { dlog = nil })
+	beginLog("prompt", hookInput{SessionID: "automated-session", HermesSession: "automated-session"}, "queue status", nil, nil)
+	if dlog == nil || dlog.Transcript != 13 || dlog.HermesSession != "automated-session" {
+		t.Fatalf("Hermes delivery boundary %+v", dlog)
+	}
+	dlog = nil
 }

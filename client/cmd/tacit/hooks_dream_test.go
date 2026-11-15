@@ -66,9 +66,10 @@ func TestPreCompactHookStartsTheDreamAndReturns(t *testing.T) {
 // The Hermes provider's on_pre_compress runs `tacit hook pre-compact` with
 // the session's Hermes id (the dreamer reads the session from state.db by
 // it), adds nothing to the summary prompt, follows a session switch, and
-// does nothing in a subagent or cron context; its prefetch passes the id to
-// `tacit hook prompt` (the window trigger), except in a subagent. The provider is the installed
-// file, run by python3 against stand-ins for Hermes' modules.
+// does nothing in a subagent or cron context; its prefetch passes the id and
+// agent context to `tacit hook prompt` in primary and automated sessions. The
+// provider is the installed file, run by python3 against stand-ins for
+// Hermes' modules.
 func TestHermesPreCompressRunsThePreCompactHook(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell stand-in")
@@ -118,7 +119,8 @@ assert p.on_pre_compress([]) == ""
 		t.Fatalf("driver: %v\n%s", err, out)
 	}
 	b, _ := os.ReadFile(calls)
-	var pre, prompt []string
+	var pre []string
+	var prompt []hookInput
 	for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
 		args, stdin, _ := strings.Cut(l, "|")
 		if args != "hook pre-compact" && args != "hook prompt" {
@@ -129,7 +131,7 @@ assert p.on_pre_compress([]) == ""
 			t.Fatalf("payload %q: %v", stdin, err)
 		}
 		if args == "hook prompt" {
-			prompt = append(prompt, in.HermesSession)
+			prompt = append(prompt, in)
 		} else {
 			pre = append(pre, in.HermesSession)
 		}
@@ -137,9 +139,9 @@ assert p.on_pre_compress([]) == ""
 	if strings.Join(pre, ",") != "20261020_abc,20261020_def" {
 		t.Fatalf("pre-compact calls for %v; all calls:\n%s", pre, b)
 	}
-	// prefetch passes the Hermes id too (the window trigger), a subagent none.
-	if strings.Join(prompt, ",") != "20261020_abc," {
-		t.Fatalf("prompt calls for %q; all calls:\n%s", prompt, b)
+	if len(prompt) != 2 || prompt[0].HermesSession != "20261020_abc" || prompt[0].AgentContext != "primary" ||
+		prompt[1].HermesSession != "20261020_sub" || prompt[1].AgentContext != "subagent" {
+		t.Fatalf("prompt calls for %+v; all calls:\n%s", prompt, b)
 	}
 }
 

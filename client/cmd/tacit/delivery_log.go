@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/hermes"
 	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
@@ -74,11 +75,12 @@ type logEntry struct {
 	Tool   string   `json:"tool,omitempty"`
 	Terms  []string `json:"terms,omitempty"`
 	NTerms int      `json:"n_terms"`
-	// Transcript is the transcript's size in bytes when the hook ran: the
-	// turn's place in the session, and where what came after it begins
-	// (-1: none to read).
+	// Transcript is the transcript's size in bytes when the hook ran, or a
+	// Hermes session's last message id: the turn's place in the session, and
+	// where what came after it begins (-1: none to read).
 	Transcript     int64  `json:"transcript"`
 	TranscriptPath string `json:"transcript_path,omitempty"`
+	HermesSession  string `json:"hermes_session_id,omitempty"`
 	// Floor and Relative are the prompt selection's floor and share of the
 	// best it ran with.
 	Floor    float64 `json:"floor,omitempty"`
@@ -211,6 +213,30 @@ var dlog *logEntry
 // deliveryLogOn: the log is on unless the delivery section turns it off.
 func deliveryLogOn() bool { return deliveryOn("LOG", true) }
 
+// hermesLogOffset is the session's current last message id. It gives the
+// sampled judge the same before/after boundary a transcript byte offset gives
+// it for the file-backed harnesses. Any read failure fails open for delivery
+// and leaves the moment unreadable to the judge.
+func hermesLogOffset(session string) int64 {
+	home, _ := os.UserHomeDir()
+	path := hermes.DefaultDB(home)
+	if path == "" {
+		return -1
+	}
+	db, err := hermes.Open(path)
+	if err != nil {
+		return -1
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	id, err := db.LastID(ctx, session)
+	if err != nil {
+		return -1
+	}
+	return id
+}
+
 // beginLog opens an entry for a block of hook, writing the one before it.
 func beginLog(hook string, in hookInput, request string, repos []string, ix *search.Index) {
 	endLog(nil)
@@ -219,7 +245,11 @@ func beginLog(hook string, in hookInput, request string, repos []string, ix *sea
 	}
 	now := time.Now()
 	dlog = &logEntry{V: deliveryLogVersion, TS: now.UTC().Format(time.RFC3339Nano), Hook: hook, Session: in.SessionID, Policy: "gates",
-		Cwd: in.Cwd, Repos: repos, Transcript: transcriptSize(in.TranscriptPath), TranscriptPath: in.TranscriptPath, started: now}
+		Cwd: in.Cwd, Repos: repos, Transcript: transcriptSize(in.TranscriptPath), TranscriptPath: in.TranscriptPath,
+		HermesSession: in.HermesSession, started: now}
+	if in.TranscriptPath == "" && in.HermesSession != "" && (hook == "prompt" || hook == "push") {
+		dlog.Transcript = hermesLogOffset(in.HermesSession)
+	}
 	if hook == "prompt" || hook == "summary" {
 		dlog.full = request // the echo filter runs on these only
 	}

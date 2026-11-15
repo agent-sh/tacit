@@ -24,6 +24,7 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/events"
+	"github.com/agent-sh/tacit/client/internal/hermes"
 	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
@@ -815,19 +816,61 @@ func writeJudgeState(st judgeState) error {
 // prompt or push block whose moment is after the last pass's (through) and
 // at least judgeAge old, within judgeDays, with a transcript to read. Each
 // line enters exactly one draw.
-func judgePool(now time.Time, through time.Time) (out []judgeMoment, unread []string, from, cutoff time.Time) {
+func judgePool(ctx context.Context, now time.Time, through time.Time) (out []judgeMoment, unread []string, from, cutoff time.Time) {
 	cutoff, floor := now.Add(-judgeAge), now.AddDate(0, 0, -judgeDays)
 	if through.Before(floor) {
 		through = floor
 	}
 	home, _ := os.UserHomeDir()
 	opened := map[string]bool{}
+	var hdb *hermes.DB
+	var hsessions map[string]hermes.Session
+	hermesChecked := false
+	defer func() {
+		if hdb != nil {
+			hdb.Close()
+		}
+	}()
 	for _, e := range readJudgeDays(through) {
 		t, err := time.Parse(time.RFC3339Nano, e.TS)
-		if err != nil || !t.After(through) || t.After(cutoff) || e.TranscriptPath == "" || e.Transcript < 0 {
+		if err != nil || !t.After(through) || t.After(cutoff) || e.Transcript < 0 {
 			continue
 		}
 		if e.Hook != "prompt" && e.Hook != "push" {
+			continue
+		}
+		if e.TranscriptPath == "" {
+			if e.HermesSession == "" {
+				continue
+			}
+			if !hermesChecked {
+				hermesChecked = true
+				hsessions = map[string]hermes.Session{}
+				if path := hermes.DefaultDB(home); path != "" {
+					if db, err := hermes.Open(path); err == nil {
+						hdb = db
+						if sessions, err := db.Sessions(ctx); err == nil {
+							for _, s := range sessions {
+								hsessions[s.ID] = s
+							}
+						}
+					}
+				}
+			}
+			if hdb == nil {
+				unread = append(unread, e.ID)
+				continue
+			}
+			if _, ok := hsessions[e.HermesSession]; !ok {
+				unread = append(unread, e.ID)
+				continue
+			}
+			for _, c := range e.Cands {
+				if c.Delivered {
+					out = append(out, judgeMoment{Block: e.ID, Fact: c.Name, Hook: e.Hook, Tool: e.Tool,
+						Transcript: hermes.Key(hdb.Path, e.HermesSession), Offset: e.Transcript, FactPath: c.Path})
+				}
+			}
 			continue
 		}
 		// A moment whose transcript cannot be read now has no chance of a
@@ -935,6 +978,9 @@ var judgeHookWords = map[string]string{"prompt": "the owner's prompt", "push": "
 // redacted before it is clipped; ok is false when the transcript cannot be
 // read or redaction fails, and nothing is sent.
 func momentOf(ctx context.Context, s *store.Store, m judgeMoment) (judgeCase, bool) {
+	if _, _, ok := hermes.ParseKey(m.Transcript); ok {
+		return hermesMomentOf(ctx, s, m)
+	}
 	home, _ := os.UserHomeDir()
 	format, ok := transcriptFormat(home, m.Transcript)
 	if !ok || judgeHookWords[m.Hook] == "" {
@@ -965,6 +1011,66 @@ func momentOf(ctx context.Context, s *store.Store, m judgeMoment) (judgeCase, bo
 	if err != nil && !errors.Is(err, stop) {
 		return judgeCase{}, false
 	}
+	return judgeCaseFromEvents(ctx, s, m, owner, last, after)
+}
+
+// hermesMomentOf is momentOf for a session in Hermes's message store. The
+// moment's offset is a message id rather than a byte offset; the events reader
+// applies the same gateway-frame, tool-call and compaction handling as the
+// dreamer.
+func hermesMomentOf(ctx context.Context, s *store.Store, m judgeMoment) (judgeCase, bool) {
+	path, sid, ok := hermes.ParseKey(m.Transcript)
+	if !ok || judgeHookWords[m.Hook] == "" {
+		return judgeCase{}, false
+	}
+	db, err := hermes.Open(path)
+	if err != nil {
+		return judgeCase{}, false
+	}
+	defer db.Close()
+	sessions, err := db.Sessions(ctx)
+	if err != nil {
+		return judgeCase{}, false
+	}
+	var session hermes.Session
+	found := false
+	for _, candidate := range sessions {
+		if candidate.ID == sid {
+			session, found = candidate, true
+			break
+		}
+	}
+	if !found {
+		return judgeCase{}, false
+	}
+	var owner, last *events.Event
+	var after []events.Event
+	stop := errors.New("enough")
+	_, err = events.ReadHermes(ctx, db, session, 0, func(ev events.Event) error {
+		if ev.Kind == events.KindHarnessText {
+			return nil
+		}
+		if ev.Offset < m.Offset {
+			ev := ev
+			last = &ev
+			if judgeOwnerTurn(ev) {
+				owner = &ev
+			}
+			return nil
+		}
+		after = append(after, ev)
+		if len(after) > judgeAfter {
+			return stop
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, stop) {
+		return judgeCase{}, false
+	}
+	return judgeCaseFromEvents(ctx, s, m, owner, last, after)
+}
+
+func judgeCaseFromEvents(ctx context.Context, s *store.Store, m judgeMoment, owner, last *events.Event, after []events.Event) (judgeCase, bool) {
 	const pre = 4 * judgeTextLen // clipped to this before redaction, to judgeTextLen after
 	var req []string
 	switch m.Hook {
@@ -1086,7 +1192,7 @@ func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int,
 	}
 	st := readJudgeState(now.UTC().Format("2006-01-02"))
 	through, _ := time.Parse(time.RFC3339Nano, st.Through)
-	pool, unreadBlocks, poolFrom, poolTo := judgePool(now, through)
+	pool, unreadBlocks, poolFrom, poolTo := judgePool(ctx, now, through)
 	daily := deliveryInt("JUDGE_DAILY", judgeDaily)
 	pass := judgePassLog{Pool: len(pool), UnreadBlocks: unreadBlocks,
 		From: poolFrom.UTC().Format(time.RFC3339Nano), To: poolTo.UTC().Format(time.RFC3339Nano)}

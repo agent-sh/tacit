@@ -84,6 +84,10 @@ type hookInput struct {
 	// (on_pre_compress) and prompt (prefetch, for windowDream): Hermes has
 	// no transcript file.
 	HermesSession string `json:"hermes_session_id"`
+	// AgentContext is Hermes's primary, cron or subagent context. Automation
+	// outside a repository searches the actionable end of its prompt, not the
+	// repeated instructions a scheduler puts before it.
+	AgentContext string `json:"agent_context,omitempty"`
 	// ToolName and ToolInput are PreToolUse's: the tool about to run and
 	// its arguments.
 	ToolName  string          `json:"tool_name"`
@@ -287,9 +291,13 @@ func runHook(args []string) int {
 				sit = narrowTo(sit, r)
 			}
 		}
-		sit = withPromptScopes(withOrgs(withRecordAliases(sit, recs), recs), recs, p)
+		query := queryForPrompt(in, sit, len(ws), p)
+		sit = withPromptScopes(withOrgs(withRecordAliases(sit, recs), recs), recs, query)
 		beginLog("prompt", in, p, repoNames(sit), ix)
-		strong, err := promptHits(ctx, ix, sit, p, delivered(in.SessionID))
+		if dlog != nil {
+			dlog.req = query // the receipt's terms describe the search, not its wrapper
+		}
+		strong, err := promptHits(ctx, ix, sit, query, delivered(in.SessionID))
 		if err != nil {
 			return 0
 		}
@@ -423,6 +431,26 @@ var (
 // mention either one alone still get facts. Measured basis: eval/DELIVERY.md.
 func selfContained(p string) bool {
 	return literalWord.MatchString(p) && textOp.MatchString(p)
+}
+
+// automationTail is how much of a repo-less automated prompt can be its
+// actionable request. Schedulers repeat a long instruction preamble; leaving
+// it in the query lets its shared words outrank the task at the end.
+const automationTail = 600
+
+func automationQuery(p string) string {
+	r := []rune(strings.TrimSpace(p))
+	if len(r) > automationTail {
+		r = r[len(r)-automationTail:]
+	}
+	return strings.TrimSpace(string(r))
+}
+
+func queryForPrompt(in hookInput, sit search.Situation, workspaces int, p string) string {
+	if in.AgentContext != "" && in.AgentContext != "primary" && sit.Repo == "" && workspaces == 0 {
+		return automationQuery(p)
+	}
+	return p
 }
 
 // promptHits is the UserPromptSubmit block for prompt p. The curated facts
