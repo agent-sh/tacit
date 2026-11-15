@@ -139,6 +139,9 @@ class Population(unittest.TestCase):
         early = dict(moment, id="early", ts="2026-10-29T10:00:00Z")  # more than 2 days before the pass
         late = dict(moment, id="late", ts="2026-11-01T11:45:00Z")  # less than 30 minutes before it
         bare = dict(moment, id="bare", transcript_path="")
+        hermes = dict(moment, id="hermes", transcript_path="", hermes_session_id="h1", transcript=42)
+        hermes_no_boundary = dict(moment, id="hermes-no-boundary", transcript_path="", hermes_session_id="h2")
+        hermes_no_boundary.pop("transcript")
         unreadable = dict(moment, id="unreadable")
         empty = {k: v for k, v in moment.items() if k != "cands"}
         empty["id"] = "empty"  # a block that showed nothing
@@ -147,11 +150,12 @@ class Population(unittest.TestCase):
         entries = [e for e in entries if e.get("hook") != "judge-pass"]
         pass1 = {"id": "pass1", "ts": "2026-11-01T12:00:00Z", "hook": "judge-pass",
                  "judge_pass": {"pool": 1, "waiting": 0, "prompt": "p", "drawn": 10, "failed": [moment["id"] + "/f0"], "unread_blocks": ["unreadable"]}}
-        moments, info = off.moments_of(entries + [early, late, bare, unreadable, empty, after, waiting, pass1])
+        moments, info = off.moments_of(entries + [early, late, bare, hermes, hermes_no_boundary, unreadable, empty, after, waiting, pass1])
         ids = {m["id"] for m in moments}
-        self.assertFalse(ids & {"early", "late", "bare", "unreadable", "after"}, ids)
+        self.assertFalse(ids & {"early", "late", "bare", "hermes-no-boundary", "unreadable", "after"}, ids)
+        self.assertIn("hermes", ids)
         self.assertIn("empty", ids)
-        self.assertEqual(info["left_out"]["no transcript to read"], 2)
+        self.assertEqual(info["left_out"]["no transcript to read"], 3)
         self.assertEqual(info["failed_share"], 0.1)
         # The drawn line whose calls kept failing stays a candidate (a policy
         # ranks it), and counts in no sum.

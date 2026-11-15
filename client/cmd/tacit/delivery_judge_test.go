@@ -1217,17 +1217,21 @@ func TestJudgeReadsHermesMoments(t *testing.T) {
 	t.Setenv("TACIT_HERMES_DB", dbPath)
 	h := hermestest.Create(t, dbPath, hermestest.Session{ID: "automated-session", Source: "cron", StartedAt: 1})
 	h.Add(
-		hermestest.Message{ID: 10, Session: "automated-session", Role: "user", Content: "Inspect the amber queue failure.", Timestamp: 2},
-		hermestest.Message{ID: 11, Session: "automated-session", Role: "assistant", Content: "I will inspect the queue.", Timestamp: 3},
-		hermestest.Message{ID: 12, Session: "automated-session", Role: "assistant", ToolCalls: `[{"id":"call-1","function":{"name":"terminal","arguments":"{\"command\":\"queue status\"}"}}]`, Timestamp: 4},
-		hermestest.Message{ID: 13, Session: "automated-session", Role: "tool", ToolCallID: "call-1", ToolName: "terminal", Content: "queue healthy", Timestamp: 5},
+		hermestest.Message{ID: 8, Session: "automated-session", Role: "user", Content: "Handle the previous request.", Timestamp: 1},
+		hermestest.Message{ID: 9, Session: "automated-session", Role: "assistant", Content: "The previous answer is complete.", Timestamp: 2},
+		hermestest.Message{ID: 10, Session: "automated-session", Role: "user", Content: "Inspect the amber queue failure.", Timestamp: 3},
+		hermestest.Message{ID: 11, Session: "automated-session", Role: "assistant", Content: "I will inspect the queue.", Timestamp: 4},
+		hermestest.Message{ID: 12, Session: "automated-session", Role: "assistant", ToolCalls: `[{"id":"call-1","function":{"name":"terminal","arguments":"{\"command\":\"queue status\"}"}}]`, Timestamp: 5},
+		hermestest.Message{ID: 13, Session: "automated-session", Role: "tool", ToolCallID: "call-1", ToolName: "terminal", Content: "queue healthy", Timestamp: 6},
 	)
 	now := time.Now()
+	// The hook ran when the previous assistant reply was the last stored row.
+	// The current prompt arrived after that boundary and must be the request.
 	writeLogEntry(&logEntry{V: 1, ID: "00000000000000b1", TS: now.Add(-2 * time.Hour).UTC().Format(time.RFC3339Nano),
-		Hook: "prompt", Session: "automated-session", HermesSession: "automated-session", Transcript: 10,
+		Hook: "prompt", Session: "automated-session", HermesSession: "automated-session", Transcript: 9,
 		Cands: []logCand{{Name: "amber-note", Delivered: true}}}, now)
 	pool, unread, _, _ := judgePool(context.Background(), now, now.Add(-3*time.Hour))
-	if len(unread) != 0 || len(pool) != 1 || pool[0].Transcript != hermes.Key(dbPath, "automated-session") || pool[0].Offset != 10 {
+	if len(unread) != 0 || len(pool) != 1 || pool[0].Transcript != hermes.Key(dbPath, "automated-session") || pool[0].Offset != 9 {
 		t.Fatalf("pool %+v, unread %v", pool, unread)
 	}
 	redact := judgeRedactTexts

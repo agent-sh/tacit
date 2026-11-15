@@ -1050,7 +1050,9 @@ func hermesMomentOf(ctx context.Context, s *store.Store, m judgeMoment) (judgeCa
 		if ev.Kind == events.KindHarnessText {
 			return nil
 		}
-		if ev.Offset < m.Offset {
+		// LastID names the last event that already existed when the hook ran.
+		// It belongs before the delivery; only later rows are hindsight.
+		if ev.Offset <= m.Offset {
 			ev := ev
 			last = &ev
 			if judgeOwnerTurn(ev) {

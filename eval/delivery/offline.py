@@ -183,7 +183,9 @@ def moments_of(entries, judge=None):
         if k not in kept:
             left["window dropped (an unread drawn line)" if k in dropped else "outside the judge's pools"] += 1
             continue
-        if not e.get("transcript_path") or (e.get("transcript") or 0) < 0 or e["id"] in unread_blocks:
+        has_file = bool(e.get("transcript_path"))
+        has_hermes = bool(e.get("hermes_session_id")) and e.get("transcript") is not None
+        if (not has_file and not has_hermes) or (e.get("transcript") or 0) < 0 or e["id"] in unread_blocks:
             left["no transcript to read"] += 1
             continue
         cands = []
