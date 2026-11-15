@@ -228,7 +228,8 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		}
 	}
 	var pending []*fact.Fact
-	heldBack := 0
+	heldBack := 0                 // notes that failed alone maxNoteFailures times
+	quickHeld := 0                // notes waiting for the full run after a lone quick failure
 	env := curateEnv(s.Dir, true) // the metadata checks: this machine, the store and the layer's folders
 	noteByName := map[string]*fact.Fact{}
 	for _, f := range notes {
@@ -238,6 +239,10 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		}
 		if cst.Failed[f.Meta.Name] >= maxNoteFailures {
 			heldBack++
+			continue
+		}
+		if o.quick && cst.QuickFailed[f.Meta.Name] {
+			quickHeld++
 			continue
 		}
 		pending = append(pending, f)
@@ -300,7 +305,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		pending = kept
 	}
 	absorber := curate.NewAbsorber(known)
-	rep := curate.Report{At: time.Now().Format(time.RFC3339), Notes: len(pending), Restated: len(restated), DeferredOwner: deferredOwner, DeferredRepo: deferredRepo, Quick: o.quick, Local: true}
+	rep := curate.Report{At: time.Now().Format(time.RFC3339), Notes: len(pending), Restated: len(restated), DeferredOwner: deferredOwner, DeferredRepo: deferredRepo, Quick: o.quick, QuickHeld: quickHeld, Local: true}
 	rep.ModelCalls = &modelrun.Trace{}
 	ctx = modelrun.WithTrace(ctx, rep.ModelCalls)
 	// A failed run's paid answers, and the job's backoff (runguard.go): the
@@ -649,6 +654,7 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 			break
 		}
 		for _, nn := range batch {
+			delete(cst.QuickFailed, nn.Meta.Name)
 			if !produced[nn.Meta.Name] {
 				markDone(cst, nn.Meta.Name, absorbed)
 			}
@@ -672,9 +678,18 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		}
 	}
 	cache.save()
-	if valid > 0 && !o.quick {
+	if valid > 0 && len(failedAlone) > 0 {
+		// A lone invalid answer is note-specific once another batch passed.
+		// Hold it out of every later quick run; only the full run retries it
+		// and counts a strike.
+		if cst.QuickFailed == nil {
+			cst.QuickFailed = map[string]bool{}
+		}
 		for _, n := range failedAlone {
-			cst.Failed[n]++
+			cst.QuickFailed[n] = true
+			if !o.quick {
+				cst.Failed[n]++
+			}
 		}
 	} else if valid == 0 && (len(failedAlone) > 0 || rep.BatchSplits >= systemicSplits) {
 		fmt.Fprintf(os.Stderr, "curate: no batch got a valid answer; nothing counted against the notes (check the model and runner)\n")

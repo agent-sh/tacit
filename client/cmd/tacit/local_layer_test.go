@@ -878,3 +878,67 @@ esac
 		t.Fatalf("a content refusal backed the route off: %s", b)
 	}
 }
+
+// A local note that fails alone while another batch passes is held out of
+// every later quick run: only the full run retries it and counts its strike.
+func TestLocalQuickCurateHoldsALoneFailure(t *testing.T) {
+	r := newLocalRig(t)
+	host := store.ShortHost()
+	notes := []*fact.Fact{
+		dream.ToFact(dream.Extracted{Description: "The kiwi fixture dashboard listens on port 7792 on this machine", Type: "machine_fact", Kind: "observed"}, "", host, "s9"),
+		dream.ToFact(dream.Extracted{Description: "PLANTED-REFUSE the incident notes for the kiwi host", Type: "machine_fact", Kind: "observed"}, "", host, "s9"),
+	}
+	if _, err := persistLocalDreamWindow(r.s, notes, nil); err != nil {
+		t.Fatal(err)
+	}
+	fake := filepath.Join(r.root, "fake-refusing-cli")
+	os.WriteFile(fake, []byte(`#!/bin/sh
+in=$(cat)
+printf '%s\n\036\n' "$in" >> "$FIXTURE_PROMPTS"
+case "$in" in
+*PLANTED-REFUSE*) printf '%s\n' '{"is_error":true,"result":"API Error: Opus 5.5'"'"'s safeguards flagged this session (https://www.anthropic.com/legal/aup). Try rephrasing the request in a new session or change your model."}'; exit 1 ;;
+*"OWNER RULINGS already extracted"*) printf '%s\n' '{"result":"[]","total_cost_usd":0.01}' ;;
+*) printf '%s\n' "$FIXTURE_SPLIT" ;;
+esac
+`), 0o700)
+	t.Setenv("TACIT_CLAUDE_COMMAND", fake)
+	r.split(map[string]any{"origin": notes[0].Meta.Name, "name": "kiwi-dashboard-port", "description": "The kiwi fixture dashboard listens on port 7792 on this machine", "type": "machine_fact", "scope": "user", "kind": "observed", "body": "Port 7792.", "applies_to": map[string]any{}})
+	r.judge()
+	state := func() curatorState {
+		t.Helper()
+		var cst curatorState
+		b, _ := os.ReadFile(filepath.Join(platform.StateDir(r.home), localCuratorState))
+		if json.Unmarshal(b, &cst) != nil {
+			t.Fatalf("state: %s", b)
+		}
+		return cst
+	}
+	if code := runCurateLocal(r.s, localCurate{maxBatches: 2, budget: quickBudget}); code != 1 {
+		t.Fatalf("full local curate exit %d, want 1 for the refused note", code)
+	}
+	if cst := state(); !cst.QuickFailed[notes[1].Meta.Name] || cst.Failed[notes[1].Meta.Name] != 1 {
+		t.Fatalf("the lone failure was not held and counted once: %+v", cst)
+	}
+	r.untouched()
+	prompts := r.promptCount()
+	if code := runCurateLocal(r.s, localCurate{quick: true, maxBatches: 2, budget: quickBudget, minInterval: 0}); code != 0 {
+		t.Fatalf("quick local curate exit %d", code)
+	}
+	if got := r.promptCount(); got != prompts {
+		t.Fatalf("the quick run asked %d prompt(s) for a held note", got-prompts)
+	}
+	// A fresh note gives the next full run a valid batch, so the held note's
+	// lone refusal is note-specific and counts its strike.
+	fresh := dream.ToFact(dream.Extracted{Description: "The kiwi fixture health endpoint listens on port 7793 on this machine", Type: "machine_fact", Kind: "observed"}, "", host, "s10")
+	if _, err := persistLocalDreamWindow(r.s, []*fact.Fact{fresh}, nil); err != nil {
+		t.Fatal(err)
+	}
+	r.split(map[string]any{"origin": fresh.Meta.Name, "name": "kiwi-health-port", "description": "The kiwi fixture health endpoint listens on port 7793 on this machine", "type": "machine_fact", "scope": "user", "kind": "observed", "body": "Port 7793.", "applies_to": map[string]any{}})
+	if code := runCurateLocal(r.s, localCurate{maxBatches: 2, budget: quickBudget}); code != 1 {
+		t.Fatalf("second full local curate exit %d, want 1 for the refused note", code)
+	}
+	if cst := state(); cst.Failed[notes[1].Meta.Name] != 2 {
+		t.Fatalf("the full run did not retry the held note: %+v", cst)
+	}
+	r.untouched()
+}

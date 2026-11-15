@@ -29,6 +29,13 @@ func withoutNearDuplicates(hits []search.Hit) []search.Hit {
 			// presence is enough to activate the curator's owner guard.
 			source.OwnerWords = "verified owner words"
 		}
+		if h.Type == fact.StatementType && !h.Inbox {
+			// A statement's owner quote lives in its body, which a Hit does
+			// not carry: two statements can share a description and still
+			// say different things. The local index marks no statement as
+			// words, so the type is the protection here.
+			source.OwnerWords = "owner statement"
+		}
 		facts = append(facts, &fact.Fact{Path: h.Path, Body: h.Name + " " + h.Description, Meta: fact.Meta{
 			Name: h.Name, Description: h.Description, Type: h.Type, Scope: h.Scope,
 			AppliesTo: h.Applies, Source: source, Created: h.Created, ConflictsWith: h.Conflicts,

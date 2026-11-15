@@ -45,6 +45,13 @@ func TestWithoutNearDuplicatesKeepsDistinctAndProtectedFacts(t *testing.T) {
 	if got := names(withoutNearDuplicates([]search.Hit{numberedA, numberedB})); got != "widget-rule-1,widget-rule-2" {
 		t.Errorf("numbers carried only by the names still distinguish facts: %s", got)
 	}
+
+	statementA := search.Hit{Path: "user/said-one.md", Name: "said-one", Scope: "user", Type: "statement", Description: "The owner said how the review queue is run in this project"}
+	statementB := statementA
+	statementB.Path, statementB.Name = "user/said-two.md", "said-two"
+	if got := names(withoutNearDuplicates([]search.Hit{statementA, statementB})); got != "said-one,said-two" {
+		t.Errorf("statements with different quotes stay: %s", got)
+	}
 }
 
 func TestWithoutNearDuplicatesCollapsesAWholeRestatementCluster(t *testing.T) {
