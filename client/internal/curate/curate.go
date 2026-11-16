@@ -441,6 +441,8 @@ type Report struct {
 	CheckRefused     int             `json:"check_refused,omitempty"`      // decisions a check refuted (sent back once with the check's output)
 	InvalidEntries   []string        `json:"invalid_entries,omitempty"`    // why split and rulings answers failed validation: "split: entry N: field: rule", never the entry's text
 	Retries          int             `json:"validation_retries,omitempty"` // answers refused by the checks and sent back to the model once (curate.SplitChecked)
+	Repaired         int             `json:"repaired,omitempty"`           // fixes code made to split and rulings entries before the checks (curate.Repair), so they were not sent back
+	RepairedEntries  []string        `json:"repaired_entries,omitempty"`   // each fix: "split: entry N: field: what code did", never the entry's text
 	ReviewRefused    int             `json:"review_refused,omitempty"`     // agents' notes the reviewer judged wrong (or the owner said no to): not curated
 	NotesForReviewer int             `json:"reviewer_waiting,omitempty"`   // agents' notes waiting for the reviewer's verdict
 	// BackedOff is a run that paid for no batch: earlier runs failed and the

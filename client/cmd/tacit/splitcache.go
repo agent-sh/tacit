@@ -196,15 +196,17 @@ func (c *splitCache) save() {
 }
 
 // cachedSplitFor is the batch's cached split answer when the cache has one
-// for every note and the checks still pass it; an answer they refuse is
+// for every note and the checks still pass it once repaired (entryRepair,
+// as a new answer is); an answer they refuse is
 // dropped, and the batch is split again. rulingsCached says the rulings
 // pass's answer is cached too (its entries still face their check).
-func cachedSplitFor(c *splitCache, batch []*fact.Fact, check curate.Check) (entries, rulings []curate.Entry, rulingsCached, ok bool) {
+func cachedSplitFor(c *splitCache, batch []*fact.Fact, repair curate.Repair, check curate.Check) (entries, rulings []curate.Entry, rulingsCached, ok bool) {
 	if !c.has(batch) {
 		return nil, nil, false, false
 	}
 	entries, rulings, rulingsCached = c.split(batch)
-	if check != nil && len(check(entries)) > 0 {
+	entries, _, err := curate.RepairEntries(entries, repair, check)
+	if err != nil {
 		c.drop(batch)
 		return nil, nil, false, false
 	}

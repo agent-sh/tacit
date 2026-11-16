@@ -34,7 +34,7 @@ func TestSplitCheckedSendsARefusalBackOnce(t *testing.T) {
 		answers = answers[1:]
 		return a, 0.01, nil
 	}
-	entries, cost, first, err := SplitChecked(context.Background(), run, "m", "SPLIT THESE", scopeCheck, false)
+	entries, cost, _, first, err := SplitChecked(context.Background(), run, "m", "SPLIT THESE", nil, scopeCheck, false)
 	if err != nil || len(entries) != 1 || entries[0].Scope != "projects/widget" {
 		t.Fatalf("entries %v err %v", entries, err)
 	}
@@ -58,7 +58,7 @@ func TestSplitCheckedSendsARefusalBackOnce(t *testing.T) {
 func TestSplitCheckedGivesUpAfterOneRetry(t *testing.T) {
 	calls := 0
 	run := func(context.Context, string, string) (string, float64, error) { calls++; return badAnswer, 0, nil }
-	_, _, first, err := SplitChecked(context.Background(), run, "m", "p", scopeCheck, false)
+	_, _, _, first, err := SplitChecked(context.Background(), run, "m", "p", nil, scopeCheck, false)
 	if calls != 2 || first == nil || !errors.Is(err, modelrun.ErrInvalidResult) || len(Problems(err)) != 1 {
 		t.Fatalf("calls %d first %v err %v", calls, first, err)
 	}
@@ -69,7 +69,7 @@ func TestSplitCheckedGivesUpAfterOneRetry(t *testing.T) {
 		for _, whole := range []bool{false, true} {
 			calls = 0
 			run = func(context.Context, string, string) (string, float64, error) { calls++; return answer, 0, nil }
-			_, _, first, err := SplitChecked(context.Background(), run, "m", "p", scopeCheck, whole)
+			_, _, _, first, err := SplitChecked(context.Background(), run, "m", "p", nil, scopeCheck, whole)
 			want := map[bool]int{false: 1, true: 2}[whole]
 			if !errors.Is(err, modelrun.ErrInvalidResult) || WholeRefusal(err) == "" || (first != nil) != whole || calls != want {
 				t.Fatalf("%q, whole %v: first %v, err %v, %d call(s)", answer, whole, first, err, calls)
@@ -84,7 +84,7 @@ func TestSplitCheckedGivesUpAfterOneRetry(t *testing.T) {
 			calls++
 			return "", 0, rerr
 		}
-		if _, _, first, err := SplitChecked(context.Background(), run, "m", "p", scopeCheck, true); err == nil || first != nil || calls != 1 {
+		if _, _, _, first, err := SplitChecked(context.Background(), run, "m", "p", nil, scopeCheck, true); err == nil || first != nil || calls != 1 {
 			t.Fatalf("runner error %v: %v %v %d", rerr, first, err, calls)
 		}
 	}
@@ -105,7 +105,7 @@ func TestSplitCheckedSendsBackAnAnswerThatIsNoArray(t *testing.T) {
 		answers = answers[1:]
 		return a, 0.01, nil
 	}
-	entries, cost, first, err := SplitChecked(context.Background(), run, "m", "RULINGS OF THESE", scopeCheck, true)
+	entries, cost, _, first, err := SplitChecked(context.Background(), run, "m", "RULINGS OF THESE", nil, scopeCheck, true)
 	if err != nil || len(entries) != 0 || !errors.Is(first, modelrun.ErrInvalidResult) || len(prompts) != 2 || cost != 0.02 {
 		t.Fatalf("entries %v err %v first %v, %d prompts, cost %v", entries, err, first, len(prompts), cost)
 	}
@@ -125,5 +125,49 @@ func TestSplitPromptListsTheModelTypes(t *testing.T) {
 	}
 	if strings.Contains(SplitPrompt, "  - hot_spot:") {
 		t.Error("split prompt offers hot_spot")
+	}
+}
+
+// A fault Repair fixes costs no second call: the answer is repaired, then
+// checked, and taken.
+func TestSplitCheckedRepairsBeforeSendingBack(t *testing.T) {
+	calls := 0
+	run := func(context.Context, string, string) (string, float64, error) { calls++; return badAnswer, 0.01, nil }
+	fix := func(es []Entry, keep []bool) []Repaired {
+		var out []Repaired
+		for i := range es {
+			if es[i].Scope != "projects/widget" {
+				es[i].Scope = "projects/widget"
+				out = append(out, Repaired{Entry: i + 1, Field: "scope", Action: "made the note's own project"})
+			}
+		}
+		return out
+	}
+	entries, cost, repaired, first, err := SplitChecked(context.Background(), run, "m", "p", fix, scopeCheck, false)
+	if err != nil || first != nil || calls != 1 || cost != 0.01 || len(entries) != 1 || entries[0].Scope != "projects/widget" {
+		t.Fatalf("entries %v err %v first %v, %d calls", entries, err, first, calls)
+	}
+	if len(repaired) != 1 || repaired[0].String() != "entry 1: scope: made the note's own project" {
+		t.Errorf("repaired = %v", repaired)
+	}
+}
+
+// An entry Repair drops is not written and not checked; a problem left on a
+// later entry names it as the answer numbers it, so the retry prompt points
+// at the entry the model wrote.
+func TestRepairDropKeepsTheAnswersNumbering(t *testing.T) {
+	two := "[" + strings.Trim(goodAnswer, "[]") + "," + strings.Trim(badAnswer, "[]") + "]"
+	drop := func(es []Entry, keep []bool) []Repaired {
+		keep[0] = false
+		return []Repaired{{Entry: 1, Field: "entry", Action: "dropped"}}
+	}
+	_, repaired, err := RepairAndCheck(two, drop, scopeCheck)
+	ps := Problems(err)
+	if len(ps) != 1 || ps[0].Entry != 2 || len(repaired) != 1 {
+		t.Fatalf("problems %v repaired %v err %v", ps, repaired, err)
+	}
+	entries, _, err := RepairAndCheck(goodAnswer+"", drop, scopeCheck)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("a dropped entry was kept: %v %v", entries, err)
 	}
 }

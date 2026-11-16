@@ -202,7 +202,7 @@ func TestSplitCacheKeepsAnswersPerNote(t *testing.T) {
 	}
 	// An answer the checks refuse now is dropped.
 	refuse := func([]curate.Entry) []curate.Problem { return []curate.Problem{{Entry: 1, Field: "scope", Rule: "x"}} }
-	if _, _, _, ok := cachedSplitFor(c, []*fact.Fact{a}, refuse); ok || c.has([]*fact.Fact{a}) {
+	if _, _, _, ok := cachedSplitFor(c, []*fact.Fact{a}, nil, refuse); ok || c.has([]*fact.Fact{a}) {
 		t.Fatal("a refused cached answer was used or kept")
 	}
 	// Old answers expire.

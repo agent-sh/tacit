@@ -414,12 +414,14 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 		// answer goes back to the model once with the problems. A split a
 		// failed run paid for is taken from the cache.
 		check := entryCheck(env, host, batch, noteByName, where, noOwnerCorpus)
-		entries, cachedRulings, rulingsCached, fromCache := cachedSplitFor(cache, batch, check)
+		repair := entryRepair(env, host, batch, noteByName, where, noOwnerCorpus, false)
+		rrepair := entryRepair(env, host, batch, noteByName, where, noOwnerCorpus, true)
+		entries, cachedRulings, rulingsCached, fromCache := cachedSplitFor(cache, batch, repair, check)
 		if fromCache {
 			rep.SplitsReused++
 		} else {
 			var err error
-			entries, err = splitChecked(ctx, &rep, "split", curate.RunCLI, o.model, splitPrompt(env, host, batch), check)
+			entries, err = splitChecked(ctx, &rep, "split", curate.RunCLI, o.model, splitPrompt(env, host, batch), repair, check)
 			if err != nil {
 				if splittable(err) {
 					logInvalid(&rep, "split", err)
@@ -459,11 +461,15 @@ func runCurateLocal(s *store.Store, o localCurate) int {
 				return check(us)
 			}
 			var recoveredEntries []curate.Entry
-			if rulingsCached && len(rcheck(cachedRulings)) == 0 {
-				recoveredEntries = cachedRulings
-			} else {
+			cachedOK := false
+			if rulingsCached {
+				if es, _, err := curate.RepairEntries(cachedRulings, rrepair, rcheck); err == nil {
+					recoveredEntries, cachedOK = es, true
+				}
+			}
+			if !cachedOK {
 				var rerr error
-				recoveredEntries, rerr = splitChecked(ctx, &rep, "rulings", curate.JudgeCLI, curate.JudgeModel, fmt.Sprintf(curate.RulingsPrompt, strings.Join(rulings, "\n"), curate.Render(batch)), rcheck)
+				recoveredEntries, rerr = splitChecked(ctx, &rep, "rulings", curate.JudgeCLI, curate.JudgeModel, fmt.Sprintf(curate.RulingsPrompt, strings.Join(rulings, "\n"), curate.Render(batch)), rrepair, rcheck)
 				if rerr != nil && splittable(rerr) {
 					// Only a malformed or refused answer is split: a runner error
 					// says nothing about the notes.
