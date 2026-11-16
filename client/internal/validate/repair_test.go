@@ -56,6 +56,9 @@ func TestStripOwnerLabels(t *testing.T) {
 		"Builds run in CI. Owner ruling: no local release builds.": "Builds run in CI. No local release builds.",
 		`"Owner rule: rebase, never merge"`:                        `"Rebase, never merge"`,
 		"Owner ruling:\n- keep the cap":                            "- keep the cap",
+		"Owner ruling:\nowner rule: never push to main":            "Never push to main",
+		"Owner ruling: owner rule: never push":                     "Never push",
+		"Owner ruling:":                                            "",
 	} {
 		got := StripOwnerLabels(in)
 		if got != want {

@@ -149,6 +149,26 @@ func TestRulingsRepairDropsUnverifiedClaims(t *testing.T) {
 	}
 }
 
+// A cut that would empty a required field is no repair: the entry is not
+// accepted with an empty description, it goes back to the model.
+func TestEntryRepairKeepsRequiredFields(t *testing.T) {
+	env, _ := repairEnv(t)
+	note := &fact.Fact{Meta: fact.Meta{Name: "n1", Scope: "projects/widget", Type: "unclassified", Source: fact.Source{Harness: "dreamer", Kind: "observed"}}, Body: "notes about widget\n"}
+	batch := []*fact.Fact{note}
+	byName := map[string]*fact.Fact{"n1": note}
+	e := entryFor("Owner ruling:", "projects/widget", nil)
+	e.Body = "Owner ruling: never push to main"
+	entries := []curate.Entry{e}
+	check := entryCheck(env, "box", batch, byName, nil, false)
+	kept, _, err := curate.RepairEntries(entries, entryRepair(env, "box", batch, byName, nil, false, false), check)
+	if kept != nil || len(curate.Problems(err)) != 1 {
+		t.Fatalf("an entry the cut leaves without a description passed: kept %v err %v", kept, err)
+	}
+	if strings.TrimSpace(entries[0].Description) == "" {
+		t.Errorf("the description was emptied: %q", entries[0].Description)
+	}
+}
+
 func strs(xs []any) []string {
 	var out []string
 	for _, x := range xs {

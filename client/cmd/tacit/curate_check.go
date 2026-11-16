@@ -166,7 +166,10 @@ func entryRepair(env validate.Env, host string, batch []*fact.Fact, noteByName m
 			s.Description, s.Body = validate.StripOwnerLabels(e.Description), validate.StripOwnerLabels(e.Body)
 			sf := curate.ToFact(s, host, map[string]bool{})
 			env.RedirectFact(sf)
-			if (s.Description != e.Description || s.Body != e.Body) && !claimsUnverified(sf, s, noteByName[e.Origin], where, noOwnerCorpus) {
+			// A cut that empties a required field is no repair: the entry is
+			// left to the drop or the send-back below.
+			emptied := strings.TrimSpace(s.Description) == "" || strings.TrimSpace(s.Body) == ""
+			if !emptied && (s.Description != e.Description || s.Body != e.Body) && !claimsUnverified(sf, s, noteByName[e.Origin], where, noOwnerCorpus) {
 				e.Description, e.Body = s.Description, s.Body
 				fixed("description", "cut a label claiming the owner's authority")
 				continue

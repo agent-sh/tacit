@@ -107,17 +107,29 @@ func StripOwnerLabels(s string) string {
 	}
 	var b strings.Builder
 	last := 0
+	// The rune after a cut label is capitalized when the next kept text is
+	// written, never by moving the cursor: a label that follows right after
+	// ("Owner ruling:\nowner rule: ...") must still start where it matched.
+	capNext := false
+	write := func(seg string) {
+		if capNext && seg != "" {
+			if r, size := utf8.DecodeRuneInString(seg); unicode.IsLower(r) {
+				b.WriteRune(unicode.ToUpper(r))
+				seg = seg[size:]
+			}
+			capNext = false
+		}
+		b.WriteString(seg)
+	}
 	for _, m := range ms {
-		if !labelStartRx.MatchString(s[:m[0]]) {
+		// A label right after one just cut opens the same sentence.
+		if m[0] < last || !(capNext && m[0] == last) && !labelStartRx.MatchString(s[:m[0]]) {
 			continue
 		}
-		b.WriteString(s[last:m[0]])
+		write(s[last:m[0]])
 		last = m[1]
-		if r, size := utf8.DecodeRuneInString(s[last:]); size > 0 && unicode.IsLower(r) {
-			b.WriteRune(unicode.ToUpper(r))
-			last += size
-		}
+		capNext = true
 	}
-	b.WriteString(s[last:])
+	write(s[last:])
 	return b.String()
 }
