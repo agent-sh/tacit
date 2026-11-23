@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,14 @@ import (
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/search"
 )
+
+// askEveryTurn makes the Stop hook ask on every turn that owed lines, for
+// the tests of what an ask holds.
+func askEveryTurn(t *testing.T) {
+	old := stopAskEvery
+	stopAskEvery = 1
+	t.Cleanup(func() { stopAskEvery = old })
+}
 
 func stopPayload(cwd, session string, active bool) string {
 	b, _ := json.Marshal(map[string]any{"session_id": session, "cwd": cwd, "hook_event_name": "Stop", "stop_hook_active": active})
@@ -48,6 +57,7 @@ var askID = func(reason string) string {
 // format a mark always had (helped, not_helped) plus wrong, and in the
 // outcomes under the session's repository.
 func TestStopAsksOnceForTheTurnsMarks(t *testing.T) {
+	askEveryTurn(t)
 	r, cwd := repoFirstRig(t,
 		fact.Meta{Name: "scheduler-shard-locks", Description: "The scheduler pool keeps one shard lock per tenant and a slot lock per job", Type: "design_decision", Scope: "projects/widget", AppliesTo: widgetRepo},
 		fact.Meta{Name: "slot-lock-order", Description: "Take the shard lock before the slot lock in the scheduler pool, never the other way", Type: "past_mistake", Scope: "projects/widget", AppliesTo: widgetRepo},
@@ -282,10 +292,10 @@ func TestOutcomesDemoteStopAndPromote(t *testing.T) {
 	}
 }
 
-// A session is asked on its first turn given facts and then on every
-// tenth such turn; the turns between drop their owed lines unasked, and a
-// turn given nothing does not count.
-func TestStopAsksEveryTenthTurnGivenFacts(t *testing.T) {
+// About one turn in ten that owed lines is asked, each turn drawn on its
+// own rather than mostly a session's first; the turns between drop their
+// owed lines unasked, and a turn given nothing does not count.
+func TestStopAsksAboutOneTurnInTen(t *testing.T) {
 	_, cwd := repoFirstRig(t,
 		fact.Meta{Name: "slot-lock-order", Description: "Take the shard lock before the slot lock in the scheduler pool, never the other way", Type: "past_mistake", Scope: "projects/widget", AppliesTo: widgetRepo},
 	)
@@ -293,20 +303,35 @@ func TestStopAsksEveryTenthTurnGivenFacts(t *testing.T) {
 	start, _ := json.Marshal(map[string]any{"session_id": "s2", "cwd": cwd, "source": "startup"})
 	hookOut(t, string(start), "session-start", "--mcp")
 	takeOwed("s2")
-	var asked []int
-	for turn := 1; turn <= 12; turn++ {
+	const turns = 300
+	asked, firsts := 0, 0
+	for turn := 0; turn < turns; turn++ {
 		if out := hookOut(t, stopPayload(cwd, "s2", false), "stop", "--mcp"); out != "" {
 			t.Fatalf("turn %d given nothing was asked: %q", turn, out)
 		}
 		owe("s2", []string{"slot-lock-order"})
 		if stopReason(t, hookOut(t, stopPayload(cwd, "s2", false), "stop", "--mcp")) != "" {
-			asked = append(asked, turn)
+			asked++
 		}
 		if _, err := os.Stat(owedFile("s2")); err == nil {
 			t.Fatalf("turn %d kept its owed lines", turn)
 		}
 	}
-	if len(asked) != 2 || asked[0] != 1 || asked[1] != 11 {
-		t.Fatalf("asked on turns %v, want [1 11]", asked)
+	// 300 draws at one in ten: 30 expected, outside 12..48 is a broken draw.
+	if asked < 12 || asked > 48 {
+		t.Fatalf("asked %d of %d turns, want about one in ten", asked, turns)
+	}
+	if turnCount("s2") != turns {
+		t.Fatalf("counted %d turns, want %d", turnCount("s2"), turns)
+	}
+	// The first turn is not always the one asked: across sessions it is
+	// asked about as often as any other turn.
+	for i := 0; i < 1000; i++ {
+		if stopAsked(fmt.Sprintf("session-%d", i), 0) {
+			firsts++
+		}
+	}
+	if firsts < 60 || firsts > 140 {
+		t.Fatalf("first turns asked in %d of 1000 sessions, want about 100", firsts)
 	}
 }

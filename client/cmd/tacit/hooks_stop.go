@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"slices"
 	"strings"
@@ -10,7 +11,7 @@ import (
 )
 
 // The Stop hook (SPEC.md, "Marks"): a session that was given facts is
-// asked to mark them, on its first such turn and every tenth after. When
+// asked to mark them on about one turn in ten that was given some. When
 // the session's hooks printed facts since its last Stop (the owed lines),
 // the first Stop of an asked turn is blocked once with a short
 // instruction: the facts' names and the one call that marks them, each as
@@ -103,32 +104,56 @@ const stopAskTitle = "tacit asks for one mark before you stop"
 // stopAskCap bounds the facts one ask lists (the log's candidate cap).
 const stopAskCap = logCandCap
 
-// stopAskEvery spaces the asks: a session is asked on its first turn that
-// was given facts, then on every stopAskEvery-th such turn. Asking on every
-// such turn cost the agent a call nearly every turn; one in ten still gives
-// marks from every session. The turns between drop their owed lines unasked,
-// chosen by count, not by what they were given.
-const stopAskEvery = 10
+// stopAskEvery spaces the asks: about one turn in stopAskEvery that owed
+// lines is asked. Asking on every such turn cost the agent a call nearly
+// every turn. Each turn is drawn on its own (stopAsked), so the turns asked
+// are a sample of all of them, not mostly a session's first.
+var stopAskEvery uint32 = 10 // a var so a test can ask on every turn
 
-// askTurn counts the session's turns that owed lines, in <session>.turns,
-// and says whether this one is asked.
-func askTurn(id string) bool {
-	p := sessionFile(id)
-	if p == "" {
-		return true
+// turnsFile counts the session's turns that owed lines.
+func turnsFile(id string) string {
+	if p := sessionFile(id); p != "" {
+		return p + ".turns"
 	}
-	p += ".turns"
+	return ""
+}
+
+// turnCount is the session's count of turns that owed lines; 0 when there
+// is none or it cannot be read.
+func turnCount(id string) int {
 	n := 0
-	if b, err := os.ReadFile(p); err == nil {
+	if b, err := os.ReadFile(turnsFile(id)); err == nil {
 		fmt.Sscanf(strings.TrimSpace(string(b)), "%d", &n)
 	}
-	os.WriteFile(p, []byte(fmt.Sprintf("%d\n", n+1)), 0o600)
-	return n%stopAskEvery == 0
+	return n
+}
+
+// setTurnCount replaces the count through a rename, so a reader never sees
+// the file half written.
+func setTurnCount(id string, n int) {
+	p := turnsFile(id)
+	if p == "" {
+		return
+	}
+	tmp := p + ".tmp"
+	if os.WriteFile(tmp, []byte(fmt.Sprintf("%d\n", n)), 0o600) == nil {
+		os.Rename(tmp, p)
+	}
+}
+
+// stopAsked draws whether the session's n-th turn that owed lines is asked:
+// a hash of the session and n, so the draw is fixed for a turn (a retry
+// after an ask that could not be logged draws the same) and independent of
+// what the turn was given.
+func stopAsked(id string, n int) bool {
+	h := fnv.New32a()
+	fmt.Fprintf(h, "%s\x00%d", id, n)
+	return h.Sum32()%stopAskEvery == 0
 }
 
 // stopHook is `tacit hook stop`. It prints nothing (the stop goes on) but
 // for a session with owed lines on the first Stop of an asked turn
-// (askTurn), where it prints the block decision with the ask as its reason.
+// (stopAsked), where it prints the block decision with the ask as its reason.
 func stopHook(in hookInput) {
 	if in.StopHookActive || in.SessionID == "" || !deliveryLogOn() {
 		return
@@ -138,7 +163,12 @@ func stopHook(in hookInput) {
 		return
 	}
 	owed := takeOwed(in.SessionID)
-	if len(owed) == 0 || !askTurn(in.SessionID) {
+	if len(owed) == 0 {
+		return
+	}
+	n := turnCount(in.SessionID)
+	if !stopAsked(in.SessionID, n) {
+		setTurnCount(in.SessionID, n+1)
 		return
 	}
 	if len(owed) > stopAskCap {
@@ -157,8 +187,9 @@ func stopHook(in hookInput) {
 	}
 	e.ID = logID(e)
 	if appendLogEntry(e, now) != nil {
-		return // no ask to name: the stop goes on
+		return // no ask to name: the stop goes on, and the next turn draws this one's count again
 	}
+	setTurnCount(in.SessionID, n+1)
 	out, _ := json.Marshal(map[string]any{"decision": "block", "reason": stopAsk(e.ID, names, hookMCP)})
 	fmt.Println(string(out))
 }
