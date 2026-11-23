@@ -106,7 +106,7 @@ func preTool(s *store.Store, in hookInput) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), toolDeadline)
 	defer cancel()
-	t := loadDenyTable(ctx, s, time.Now())
+	t := loadDenyTable(time.Now())
 	if t == nil || len(t.Facts) == 0 {
 		return
 	}
@@ -124,7 +124,11 @@ func preTool(s *store.Store, in hookInput) {
 		names[i] = f.Name
 		hits[i] = search.Hit{Name: f.Name, Scope: f.Scope, Type: f.Type, Created: f.Created}
 	}
-	addDenied(in.SessionID, names)
+	lines := append([]string(nil), names...)
+	for _, f := range fs {
+		lines = append(lines, denyKeyLine(f.Key))
+	}
+	addDenied(in.SessionID, lines)
 	beginLog("deny", in, command, sc.repos, nil)
 	if dlog != nil {
 		dlog.Tool = in.ToolName

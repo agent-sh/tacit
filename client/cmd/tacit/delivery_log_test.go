@@ -111,11 +111,10 @@ func TestDeliveryLogRecordsEachBlockAndWhatItLeftOut(t *testing.T) {
 			navs = append(navs, e)
 		}
 	}
-	// The tool calls: make lint is denied (a standard keyed to it); ls, the
-	// two MCP calls and the shell's search log no entry of their own but
-	// their nav steps.
-	if len(prompts) != 2 || len(denies) != 1 || len(navs) != 4 {
-		t.Fatalf("entries: %d prompt, %d deny, %d nav, want 2, 1, 4: %+v", len(prompts), len(denies), len(navs), log)
+	// The tool calls log no entry of their own but their nav steps: no
+	// fact forbids make lint or ls (Command rules).
+	if len(prompts) != 2 || len(denies) != 0 || len(navs) != 4 {
+		t.Fatalf("entries: %d prompt, %d deny, %d nav, want 2, 0, 4: %+v", len(prompts), len(denies), len(navs), log)
 	}
 	first := prompts[0]
 	if first.V != deliveryLogVersion || first.ID == "" || first.Session != "s1" || !subset(first.Terms, "scheduler", "pool", "shard", "lock", "slot") || first.NTerms != 7 || first.Floor != promptFloor || first.Relative != promptRelative ||
@@ -130,9 +129,6 @@ func TestDeliveryLogRecordsEachBlockAndWhatItLeftOut(t *testing.T) {
 	again := candOf(prompts[1], "scheduler-shard-locks")
 	if again == nil || again.Delivered || again.Dropped != "seen" || again.P != 0 || !prompts[1].Nothing || prompts[1].PNothing != 1 {
 		t.Fatalf("the line the session had: %+v, nothing %v %v", again, prompts[1].Nothing, prompts[1].PNothing)
-	}
-	if p := candOf(denies[0], "lint-before-push"); p == nil || !p.Delivered || p.Via != "deny" || p.P != 1 || denies[0].Tool != "Bash" || denies[0].NTerms != 2 || denies[0].Nothing {
-		t.Fatalf("the deny: %+v", denies[0])
 	}
 	want := []logNav{
 		{Tool: "fact", Names: []string{"scheduler-shard-locks"}, Levels: -1},
@@ -180,7 +176,7 @@ func TestDeliveryLogRecordsEachBlockAndWhatItLeftOut(t *testing.T) {
 			t.Fatalf("the search's indexed terms: %+v", e.Nav)
 		}
 	}
-	if kinds["prompt"] != 1 || kinds["deny"] != 1 || kinds["push"] != 0 || kinds["nav"] != 3 {
+	if kinds["prompt"] != 1 || kinds["deny"] != 0 || kinds["push"] != 0 || kinds["nav"] != 3 {
 		t.Fatalf("entries: %v", kinds)
 	}
 

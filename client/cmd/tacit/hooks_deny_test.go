@@ -48,6 +48,9 @@ func TestDenyMatcherIsPrecise(t *testing.T) {
 		{"gh pr merge", "ghx pr merge 12", false},
 		{"gh pr merge", "gh pr", false},
 		{"gh pr merge", "rg 'gh pr merge' docs > out.txt", false},
+		{"gh pr merge", "x=\"$(gh pr merge 3)\"", true},
+		{"gh pr merge", "claude-ctrl send \"$(list --json | python3 -c \"\nimport sys\ngh pr merge 1\")\"", false},
+		{"import", "claude-ctrl send \"$(list --json | python3 -c \"\nimport json,sys\nprint(1)\")\"", false},
 		{"git push", "git pushx", false},
 		{"cargo test", "cargo build --tests", false},
 		{"systemctl --user restart", "systemctl restart x", false},
@@ -65,25 +68,40 @@ func TestDenyMatcherIsPrecise(t *testing.T) {
 	}
 }
 
-// A key many facts share is no situation: the table keeps only the keys at
-// most denyKeyShare facts carry, of rules, standards and past mistakes.
-func TestDenyTableKeepsSpecificKeysOfRulesAndMistakes(t *testing.T) {
-	mk := func(name, typ, cmd string, ruling bool) search.Hit {
-		return search.Hit{Name: name, Type: typ, Scope: "user", Ruling: ruling, Description: name + " text", Applies: fact.AppliesTo{Commands: []string{cmd}}}
+// A command denies only through a fact that forbids it as a whole: a rule,
+// standard or past mistake whose name or description puts a negation right
+// before the key's words and ends the clause after them. A mistake about
+// how or when a command fails, a key of one word, a reference and a
+// decision deny nothing.
+func TestDenyTableKeepsForbiddenCommands(t *testing.T) {
+	mk := func(name, typ, desc, cmd string, ruling bool) search.Hit {
+		return search.Hit{Name: name, Type: typ, Scope: "user", Ruling: ruling, Description: desc, Applies: fact.AppliesTo{Commands: []string{cmd}}}
 	}
 	all := []search.Hit{
-		mk("a", "past_mistake", "git push", false), mk("b", "past_mistake", "git push", false), mk("c", "past_mistake", "git push", false),
-		mk("d", "past_mistake", "make deploy-prod", false),
-		mk("e", "reference", "make release", false),
-		mk("f", "user_preference", "gh release create", true),
-		mk("g", "design_decision", "kubectl apply", false),
+		mk("a", "past_mistake", "Never `gh pr merge`: land by a fast-forward push", "gh pr merge", false),
+		mk("b", "user_standard", "Do not git push --force; open a PR", "git push --force", false),
+		mk("b2", "user_standard", "Do not git push --force to a shared branch", "git push --force", false),
+		mk("no-sed-for-jsx-edits", "past_mistake", "sed breaks JSX", "sed", false),
+		mk("no-sed-i-for-jsx", "past_mistake", "Use the editor", "sed -i", false),
+		mk("c", "past_mistake", "sort needs LC_ALL=C before comm", "sort", false),
+		mk("d", "past_mistake", "`git rev-parse --short A B` fails: it takes one revision", "git rev-parse --short", false),
+		mk("no-make-release", "past_mistake", "The release target publishes", "make release", false),
+		mk("e", "reference", "Never make deploy by hand", "make deploy", false),
+		mk("f", "user_preference", "Use the release script instead of gh release create", "gh release create", true),
+		mk("g", "design_decision", "Never kubectl apply by hand", "kubectl apply", false),
+		mk("h", "past_mistake", "A rule says never to retry; then npm publish ran", "npm publish", false),
+		mk("i", "past_mistake", "Never pipe `git remote -v`, `git branch` through head", "git remote -v", false),
+		mk("j", "past_mistake", "It needs `go mod download all`, not plain `go mod download`; test it", "go mod download", false),
+		mk("sparks-avoid-hf-download", "past_mistake", "Fetch with the resumable script", "hf download", false),
+		mk("never-npm-publish", "past_mistake", "CI publishes", "npm publish", false),
+		mk("k", "user_standard", "Do not run `cargo publish`.", "cargo publish", false),
 	}
 	tab := denyTableOf(all, time.Now())
 	var names []string
 	for _, f := range tab.Facts {
 		names = append(names, f.Name)
 	}
-	if strings.Join(names, ",") != "d,f" {
+	if strings.Join(names, ",") != "a,b,no-make-release,f,never-npm-publish,k" {
 		t.Fatalf("table: %v", names)
 	}
 }
@@ -136,8 +154,10 @@ func preToolDeny(t *testing.T, out string) string {
 // stopped, and no hook delivers context before a tool any more.
 func TestPreToolDeniesAKeyedCommandOnce(t *testing.T) {
 	_, cwd := repoFirstRig(t,
-		fact.Meta{Name: "deploy-needs-tag", Description: "Tag the release before make deploy-prod: the deploy reads the tag", Type: "past_mistake", Scope: "projects/widget",
+		fact.Meta{Name: "deploy-needs-tag", Description: "Never run `make deploy-prod`: CI deploys once the release is tagged", Type: "past_mistake", Scope: "projects/widget",
 			AppliesTo: fact.AppliesTo{Commands: []string{"make deploy-prod"}, Paths: []string{"deploy/**"}}},
+		fact.Meta{Name: "deploy-prod-from-ci", Description: "Do not make deploy-prod; CI deploys from main", Type: "user_standard", Scope: "user", Created: "2020-01-01",
+			AppliesTo: fact.AppliesTo{Commands: []string{"make deploy-prod"}}},
 	)
 	state := filepath.Join(t.TempDir(), "state")
 	t.Setenv("TACIT_STATE_DIR", state)
@@ -145,11 +165,14 @@ func TestPreToolDeniesAKeyedCommandOnce(t *testing.T) {
 		return hookOut(t, toolPayload(cwd, session, "Bash", map[string]any{"command": cmd}), "pre-tool", "--mcp")
 	}
 	reason := preToolDeny(t, bash("s1", "make deploy-prod"))
-	if !strings.Contains(reason, "deploy-needs-tag") || !strings.Contains(reason, "Tag the release") || !strings.Contains(reason, "run it again unchanged") {
+	if !strings.Contains(reason, "deploy-needs-tag") || !strings.Contains(reason, "CI deploys once the release is tagged") || !strings.Contains(reason, "run it again unchanged") {
 		t.Fatalf("deny: %q", reason)
 	}
+	if strings.Contains(reason, "deploy-prod-from-ci") {
+		t.Fatalf("two facts for one key: %q", reason)
+	}
 	if out := bash("s1", "make deploy-prod"); out != "" {
-		t.Fatalf("the retry was stopped: %q", out)
+		t.Fatalf("the retry was stopped (by the key's other fact?): %q", out)
 	}
 	if out := bash("s1", "echo make deploy-prod"); out != "" {
 		t.Fatalf("an argument: %q", out)

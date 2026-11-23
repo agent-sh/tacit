@@ -49,6 +49,11 @@ func TestMain(m *testing.M) {
 	if d, err := os.MkdirTemp("", "no-off"); err == nil {
 		offHome = func() (string, error) { return d, nil }
 	}
+	startDenyBuild = func() {
+		if s, err := store.Default(); err == nil {
+			writeDenyTable(s)
+		}
+	}
 	store.Redact = canaryRedact
 	// The suite's sessions are a person's (sessionKind): its transcripts are
 	// under the temporary directory, which may be under the user's cache

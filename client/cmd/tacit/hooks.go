@@ -185,6 +185,10 @@ func runHook(args []string) int {
 		buildIndexForHooks(s)
 		return 0
 	}
+	if args[0] == "deny-table" {
+		writeDenyTable(s)
+		return 0
+	}
 	if args[0] == "stop" {
 		stopHook(in)
 		return 0
