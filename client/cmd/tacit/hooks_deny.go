@@ -123,7 +123,9 @@ var textToken = regexp.MustCompile("[a-z0-9][a-z0-9'._/=+:-]*[a-z0-9]|[a-z0-9]|-
 func quoteToken(t string) bool { return t == "`" || t == `"` }
 
 // boundary: a token that ends a clause.
-func boundary(t string) bool { return strings.ContainsAny(t, ";:,!?().") && len(strings.TrimSpace(t)) == 1 }
+func boundary(t string) bool {
+	return strings.ContainsAny(t, ";:,!?().") && len(strings.TrimSpace(t)) == 1
+}
 
 // fillers may stand between a negation and the command it forbids ("do
 // not run X", "never use X"); any other word makes the command an object of
