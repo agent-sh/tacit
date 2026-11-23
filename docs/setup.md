@@ -109,6 +109,15 @@ systemctl --user daemon-reload
 systemctl --user enable --now tacit-follow.service tacit-dream.timer
 ```
 
+The dreamer's timer waits 20 minutes after the user manager started, then one run every 4 hours, counted from the start of the previous run (`OnUnitActiveSec=` names the unit's activation, not its end). A timer started by hand in a session that has been up longer runs at once. After an upgrade, run `tacit install dream` again so an earlier release's timer is replaced, then restart the timer and check that it shows a next run. A timer that is `active (elapsed)` with no `NEXT` stays that way until its service has run once in the session: start its service once with `systemctl --user start --no-block tacit-dream.service` (a oneshot's start waits for the run to finish; `--no-block` does not).
+
+```sh
+tacit install dream
+systemctl --user daemon-reload
+systemctl --user restart tacit-dream.timer
+systemctl --user list-timers --all
+```
+
 The curator and verifier need the curator key enrolled as well as a normal writer key. Complete [ruling-proof initialization](#initialize-ruling-proof) before enabling the daily job:
 
 ```sh

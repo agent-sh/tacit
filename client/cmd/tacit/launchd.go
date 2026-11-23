@@ -316,14 +316,18 @@ Type=oneshot
 `
 }
 
-// dreamTimer runs the dreamer every 4 hours.
+// dreamTimer runs the dreamer every 4 hours. Its first run waits 20 minutes
+// from when the user manager started; Persistent= is left out, as the timer
+// says.
 const dreamTimer = `[Unit]
 Description=tacit dreamer every 4 hours
 
 [Timer]
-OnBootSec=20min
+# No Persistent on a monotonic timer: with Persistent=true (stamp file) this timer came back
+# 'elapsed' with no next elapse after a user manager restart (systemd 259). OnStartupSec keeps the
+# first run a fixed delay after the session starts instead of after the machine boots.
+OnStartupSec=20min
 OnUnitActiveSec=4h
-Persistent=true
 
 [Install]
 WantedBy=timers.target
