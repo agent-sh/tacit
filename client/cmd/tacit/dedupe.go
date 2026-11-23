@@ -31,20 +31,23 @@ func runDedupe(args []string) int {
 	dry := fs.Bool("dry-run", false, "print the clusters and the copies it would retire, write nothing (no sync)")
 	out := fs.String("json", "", "also write the clusters to this file as JSON lines")
 	namesOnly := fs.Bool("names", false, "raise the names two live curated files hold, and retire no copy")
+	near := fs.Bool("near", false, "near-copies: the curator's model says which facts of a folder state the same rule or fact in other words")
+	model := fs.String("model", curate.DefaultModel, "with --near: the judging model")
+	jobs := fs.Int("jobs", 4, "with --near: model calls at once")
+	maxClusters := fs.Int("max-clusters", 0, "with --near: ask about at most this many new clusters (0: all)")
+	list := fs.Bool("list", false, "with --near: print the candidate clusters and stop (no model, no write)")
 	fs.Parse(args)
+	if *near {
+		return runDedupeNear(*dry, nearOpts{model: *model, jobs: *jobs, maxClusters: *maxClusters, list: *list}, *out)
+	}
 	// The names alone: no copy is planned, and no chain is repointed.
 	plan, files := dedupePlan, dedupeFiles
 	if *namesOnly {
 		plan = func(string) ([]curate.Copies, error) { return nil, nil }
 		files = func(string, []curate.Copies, time.Time) (map[string][]byte, string, error) { return nil, "", nil }
 	}
-	s, err := store.Default()
-	if err != nil || !s.Exists() {
-		fmt.Fprintln(os.Stderr, "dedupe: no store")
-		return 2
-	}
-	// Before any work: a machine that cannot write as curator does nothing.
-	if !*dry && refuseWriter(context.Background(), s, "curator", "dedupe") {
+	s, err := storeForDedupe(*dry)
+	if err != nil {
 		return 2
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -113,6 +116,20 @@ func runDedupe(args []string) int {
 	return writeDedupeJSON(*out, cs)
 }
 
+// storeForDedupe is the store, and for a real run a refusal before any
+// work on a machine that cannot write as curator.
+func storeForDedupe(dry bool) (*store.Store, error) {
+	s, err := store.Default()
+	if err != nil || !s.Exists() {
+		fmt.Fprintln(os.Stderr, "dedupe: no store")
+		return nil, fmt.Errorf("no store")
+	}
+	if !dry && refuseWriter(context.Background(), s, "curator", "dedupe") {
+		return nil, fmt.Errorf("not a curator")
+	}
+	return s, nil
+}
+
 // notRetiring drops the name pairs one of whose files this run retires as a
 // copy: the name is then held once.
 func notRetiring(pairs [][2]*fact.Fact, cs []curate.Copies) [][2]*fact.Fact {
@@ -170,6 +187,13 @@ func dedupePlan(dir string) ([]curate.Copies, error) {
 	if err != nil {
 		return nil, err
 	}
+	return curate.Duplicates(facts, dedupeGuard(dir)), nil
+}
+
+// dedupeGuard is what the store at dir says about its facts: the ones a
+// standing decision of the owner keeps, the pairs the owner answered, and
+// code's checks of the facts' dry references.
+func dedupeGuard(dir string) curate.DedupeGuard {
 	dl, _ := os.ReadFile(filepath.Join(dir, filepath.FromSlash(ledger.DecisionsPath)))
 	g := curate.DedupeGuard{Kept: map[string]bool{}}
 	for name := range ledger.Endorsements(dl) {
@@ -185,9 +209,8 @@ func dedupePlan(dir string) ([]curate.Copies, error) {
 	g.Answered = func(a, b string) bool { return answered[[2]string{a, b}] }
 	ch := storeChecker(context.Background(), dir, false)
 	g.Refuted = refuter(context.Background(), ch)
-	cs := curate.Duplicates(facts, g)
 	_ = ch.Forge.Save()
-	return cs, nil
+	return g
 }
 
 // dedupeFiles is each copy with superseded_by the fact kept and updated

@@ -208,3 +208,50 @@ func TestCurateAbsorbsAcrossBatchesOfOneRun(t *testing.T) {
 		t.Fatalf("n2 not absorbed by the first batch's fact: %v", state.Restated)
 	}
 }
+
+// tacit dedupe --near: the dry run asks the model about the candidate
+// cluster and keeps its answer; the real run reads the answer back (the
+// model is not asked again) and retires the copy into the fact kept in one
+// curator commit; the fact of another subject stays.
+func TestDedupeNearRetiresNearCopiesFromTheModelsAnswer(t *testing.T) {
+	r := newRig(t, rigOpts{})
+	const ws = "machines/host-a"
+	writeFact(t, r.clone, fact.Meta{Name: "farm-never-leave-nodes-idle", Description: "On render farm work never leave the nodes idle; the farm is the costliest resource", Type: "machine_fact", Scope: ws, Created: "2026-10-05"}, "Start the next job at once.\n")
+	writeFact(t, r.clone, fact.Meta{Name: "keep-farm-nodes-busy", Description: "Never leave render farm nodes idle: start the next render job at once", Type: "machine_fact", Scope: ws, Created: "2026-10-01"}, "The farm costs the most.\n")
+	writeFact(t, r.clone, fact.Meta{Name: "farm-billing-portal", Description: "The render farm billing portal shows the monthly invoice per node", Type: "machine_fact", Scope: ws, Created: "2026-10-02"}, "x\n")
+	r.commitIndex(r.clone, "near fixture")
+	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("TACIT_STORE", r.clone)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	calls := 0
+	old := nearRun
+	t.Cleanup(func() { nearRun = old })
+	nearRun = func(ctx context.Context, model, prompt string) (string, float64, error) {
+		calls++
+		return `{"groups": [{"group": 1, "same": [[1, 2]]}]}`, 0, nil
+	}
+	head := r.serverHead()
+	if code := runDedupe([]string{"--near", "--dry-run"}); code != 0 || r.serverHead() != head || calls != 1 {
+		t.Fatalf("dry run exited %d, moved the server or asked %d times", code, calls)
+	}
+	nearRun = func(ctx context.Context, model, prompt string) (string, float64, error) {
+		t.Fatal("the model was asked again")
+		return "", 0, nil
+	}
+	if code := runDedupe([]string{"--near"}); code != 0 {
+		t.Fatalf("dedupe --near exited %d", code)
+	}
+	for rel, want := range map[string]string{
+		// Both written the same day: the first by name is kept.
+		ws + "/farm-never-leave-nodes-idle.md": "",
+		ws + "/keep-farm-nodes-busy.md":        "farm-never-leave-nodes-idle",
+		ws + "/farm-billing-portal.md":         "",
+	} {
+		if got := supersededOnServer(t, r, rel); got != want {
+			t.Errorf("%s: superseded_by %q, want %q", rel, got, want)
+		}
+	}
+	r.assertClean("after dedupe --near")
+}
