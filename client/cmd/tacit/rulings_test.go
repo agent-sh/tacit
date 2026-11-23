@@ -953,3 +953,45 @@ func TestRulingsAuditFindsTheQuoteOfAClaim(t *testing.T) {
 		t.Errorf("an unbacked claim changed: %+v", s)
 	}
 }
+
+// One-time words in the audit: a claim quoting a go-ahead holds the owner's
+// words, never their ruling; a claim quoting an instruction of the task in
+// the user scope is not made a ruling either, while their ruling of the
+// same words (kind user already) stays theirs: the one-time step puts it to
+// them instead.
+func TestRulingsAuditOneTimeWords(t *testing.T) {
+	r, _ := rulingsRig(t)
+	w := func(name, scope, kind, quote string) {
+		src := fact.Source{Kind: kind}
+		if kind == "user" {
+			src.OwnerQuote, src.OwnerQuoteFrom = quote, "claude:words"
+		}
+		writeFact(t, r.clone, fact.Meta{Name: name, Description: "The owner decided: " + quote, Type: "user_standard", Scope: scope, Source: src}, "Owner 2026-10-01: \""+quote+"\".\n") // privacy-lint: allow (synthetic attribution)
+	}
+	goAhead := "go on with it, publish it once done"
+	task := "you can close the stale pull requests of the shop"
+	w("claim-go-ahead", "projects/x", "observed", goAhead)
+	w("claim-task-user", "user", "observed", task)
+	w("ruling-task-user", "user", "user", task)
+	r.commitIndex(r.clone, "one-time claims")
+	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
+	b := ownerwords.NewBuilder()
+	b.Add("transcript", "claude:words", goAhead+". "+task)
+	rep, err := rulingsApply(ctxMinute(t), r.s, b.Build(), false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]rulingVerdict{}
+	for _, v := range rep.Verdicts {
+		got[v.Name] = v
+	}
+	if v := got["claim-go-ahead"]; v.Outcome != ruledShort || !v.OneTime {
+		t.Errorf("go-ahead: %+v", v)
+	}
+	if v := got["claim-task-user"]; v.Outcome != ruledShort || !v.OneTime {
+		t.Errorf("task claim in the user scope: %+v", v)
+	}
+	if v := got["ruling-task-user"]; v.Outcome != ruledQuote {
+		t.Errorf("their ruling of task words: %+v", v)
+	}
+}

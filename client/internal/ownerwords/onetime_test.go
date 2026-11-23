@@ -12,13 +12,19 @@ func TestOneTime(t *testing.T) {
 		{"both can go", OneTimeClear},
 		{"merge it, then ship", OneTimeClear},
 		{"yes do it", OneTimeClear},
-		// A list of chores.
+		// A list of chores with a reminder for the moment.
 		{"send the invoice, already called the bank. remind me at 5 to renew the domain. no need to reply to the newsletter", OneTimeClear},
-		{"archive the older clone, delete the backup copy", OneTimeClear},
+		// A list of chores alone reads like standing imperatives: an
+		// instruction of the task at most.
+		{"archive the older clone, delete the backup copy", OneTimeTask},
+		{"write new tools in go, run gofmt on them", OneTimeTask},
+		{"check the load, check free memory first", OneTimeTask},
 		// Words tied to the moment.
 		{"have the draft ready by today at 6", OneTimeClear},
 		// A condition stands, even with a day in it.
 		{"remind me every morning to check the queue", NotOneTime},
+		{"remind me each morning to check the queue", NotOneTime},
+		{"remind me daily to stretch", NotOneTime},
 		// An instruction inside the task: one-time, but it may hold later.
 		{"first we fix the parser then we try the new lexer", OneTimeTask},
 		{"you can close the stale ones", OneTimeTask},

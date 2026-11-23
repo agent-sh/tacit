@@ -22,7 +22,7 @@ func TestOneTimeRetiresChoresAndAsksAboutTaskWords(t *testing.T) {
 	chores := "send the invoice, already called the bank. remind me at 5 to renew the domain"
 	writeFact(t, r.clone, fact.Meta{Name: "chores-decision", Description: "Clearing items from the morning list: the invoice, the bank and the domain", Type: "design_decision", Scope: "user", Source: ownerSource(chores)},
 		"You decided (2026-10-24): \""+chores+"\"\n")
-	goAhead := "continue the export work, publish it once done"
+	goAhead := "go on with it, publish it once done"
 	writeFact(t, r.clone, fact.Meta{Name: "release-when-done", Description: "Continue the export work and publish it once it is done", Type: "user_standard", Scope: "projects/storefront", Source: ownerSource(goAhead)},
 		"You decided (2026-10-25): \""+goAhead+"\"\n")
 	task := "you can close the stale pull requests, they are not needed"

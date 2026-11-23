@@ -12,13 +12,13 @@ type Shape int
 
 const (
 	NotOneTime Shape = iota
-	// OneTimeTask is InTask's shape and nothing stronger: an instruction of
-	// the task at hand, which may be meant to hold later too.
+	// OneTimeTask is InTask's shape, or a list of chores ("archive the older
+	// clone, delete the backup copy"), and nothing stronger: an instruction
+	// of the task at hand, which may be meant to hold later too.
 	OneTimeTask
-	// OneTimeClear is an approval to go on ("continue, release when done",
-	// "all can be removed"), a list of chores ("drop the draft. remind me at
-	// noon to pay the bill. run updates"), or words tied to this moment
-	// ("today", "remind me", "right now").
+	// OneTimeClear is an approval to go on ("go on, publish it once done",
+	// "both can go") or words tied to the moment ("remind me", "tonight",
+	// "by today").
 	OneTimeClear
 )
 
@@ -41,7 +41,7 @@ func OneTime(quote string) Shape {
 		return NotOneTime
 	}
 	for i, w := range ws {
-		if generalWords[w] || (w == "not" && i > 0 && ws[i-1] == "do") {
+		if generalWords[w] || frequencyWords[w] || (w == "not" && i > 0 && ws[i-1] == "do") {
 			return NotOneTime
 		}
 	}
@@ -51,10 +51,13 @@ func OneTime(quote string) Shape {
 			return OneTimeClear
 		}
 	}
-	if approval(ws) || choreList(quote) {
+	if approval(ws) {
 		return OneTimeClear
 	}
-	if InTask(quote) {
+	// A list of chores reads like a list of standing imperatives ("write new
+	// tools in go, run gofmt on them"), so it is no more than an instruction
+	// of the task: asked about in the user scope, kept in a project.
+	if choreList(quote) || InTask(quote) {
 		return OneTimeTask
 	}
 	return NotOneTime
@@ -65,9 +68,14 @@ func OneTime(quote string) Shape {
 var doneRe = regexp.MustCompile(` (when|once) (you are |youre |its |it is |we are |were |all is |all are )?(done|finished|ready|complete) `)
 
 // momentPhrases tie words to the moment they were said.
-// "today" alone is not one: "hebrew today can get political" means
-// nowadays; "this time" is often a past one ("we had no ac at this time").
-var momentPhrases = []string{"remind me", "today at", "by today", "until today", "untill today", "tonight", "tomorrow", "at noon", "this morning", "this evening", "this afternoon", "for this session", "for this task"}
+// "today" alone is not one: "that color today reads as an error" means
+// nowadays; "this time" is often a past one ("the cooling was off at this
+// time"). "until today" never gets here ("until" generalizes).
+var momentPhrases = []string{"remind me", "today at", "by today", "untill today", "tonight", "tomorrow", "at noon", "this morning", "this evening", "this afternoon", "for this session", "for this task"}
+
+// frequencyWords make words that would be tied to the moment a standing
+// rule: "remind me each morning", "run it daily".
+var frequencyWords = wordSet("each daily weekly nightly monthly hourly usually regularly")
 
 // approval is a short go-ahead: every word an approval, a filler or a
 // pointer to the thing at hand ("continue", "go ahead", "yes do it", "all

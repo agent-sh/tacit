@@ -177,7 +177,7 @@ func TestOneOffRulingIsAStatement(t *testing.T) {
 // go-ahead said twice is still a go-ahead, never a standing rule.
 func TestOneTimeRulingIsAStatementInAnySessions(t *testing.T) {
 	where := func(q, session string) (string, string) { return "claude:s1", "h1" }
-	words := "continue the export work, publish it once done"
+	words := "go on with it, publish it once done"
 	n := note("n1", "claude", "The owner said \""+words+"\".")
 	e := Entry{Kind: "user", OwnerQuote: words, Description: "The export work goes on and is published once done",
 		Body: "Publish the export work once it is done.", Context: "the export work", Name: "f", Scope: "projects/storefront", Type: "user_standard", Origin: "n1"}

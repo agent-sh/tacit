@@ -452,7 +452,7 @@ func (a *rulingAuditor) decide(f *fact.Fact) rulingVerdict {
 	}
 	if disowned {
 		v.Outcome, v.DisownedBy = ruledDisowned, dis.note
-	} else if p := a.findQuote(f); p.quote != "" && !p.short && ownerwords.MintsRuling(p.quote, f.Meta.Scope) {
+	} else if p := a.findQuote(f); p.quote != "" && !p.short && mintsHere(f, p.quote) {
 		v.Quote, v.From, v.Near, v.turnHash, v.said = p.quote, p.at.from, p.at.near, p.at.turnHash, a.saidOn(p)
 		src.OwnerQuote, src.OwnerQuoteFrom = strings.Join(strings.Fields(p.quote), " "), p.at.from
 		src.Endorsed = end.ID
@@ -476,6 +476,22 @@ func (a *rulingAuditor) decide(f *fact.Fact) rulingVerdict {
 	}
 	v.src = src
 	return v
+}
+
+// mintsHere reports whether the audit keeps (or makes) f a ruling on quote
+// (SPEC.md, Rulings, One-time words): never on words that hold for the
+// moment only; on an instruction of the task at hand in the user or system
+// scope, only a fact that is their ruling already, which the one-time step
+// puts to the owner instead (their "still true" keeps it), never a fact the
+// audit or the promotion before the assessment would make one.
+func mintsHere(f *fact.Fact, quote string) bool {
+	switch ownerwords.OneTime(quote) {
+	case ownerwords.OneTimeClear:
+		return false
+	case ownerwords.OneTimeTask:
+		return f.Meta.Source.Kind == "user" || ownerwords.MintsRuling(quote, f.Meta.Scope)
+	}
+	return true
 }
 
 // rulingsReport is one audit.
