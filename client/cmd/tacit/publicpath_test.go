@@ -43,9 +43,10 @@ func TestMain(m *testing.M) {
 	// commits neither need scrump nor pay its start, about half a second each;
 	// the tests of the mask set the real one (store_mask_test.go).
 	// A real off file on the machine (SPEC.md, "Off switch") must not stop
-	// the suite: both of its places point at an empty directory.
+	// the suite: no XDG_CONFIG_HOME (the job units' goldens carry none), and
+	// the home path under an empty directory.
+	os.Unsetenv("XDG_CONFIG_HOME")
 	if d, err := os.MkdirTemp("", "no-off"); err == nil {
-		os.Setenv("XDG_CONFIG_HOME", d)
 		offHome = func() (string, error) { return d, nil }
 	}
 	store.Redact = canaryRedact
