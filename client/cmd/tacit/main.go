@@ -70,6 +70,7 @@ func usage() {
   tacit links [--dry-run] [--restore]   dead [[links]] in curated facts -> rewritten to the one live fact that clearly answers to them, else plain text; an owner ruling gets a LINK? line in review/<date>.md instead (no model; a step of curate, after results); --restore puts back the links to what a fact replaced that runs before v0.9.17 unwrapped (read from the step's commits), and nothing else
   tacit dedupe [--dry-run] [--names] [--json FILE]   curated facts that only restate another curated fact of their scope -> superseded_by the fact kept (rulings first; no model; rulings and facts with the owner's words are never retired); a name two live curated files hold -> a finding about the two files in review/<date>-names.md, for the owner or an agent to mark; --names: those alone, no copy retired
   tacit dedupe --near [--dry-run] [--list] [--model M] [--jobs N] [--max-clusters N]   facts of one folder that state the same rule or fact in other words (the curator's model reads candidate clusters code finds; code keeps the fact with the owner's words, then the earliest) -> superseded_by the fact kept; answers are kept in the state directory, so a dry run pays and the real run reads them back
+  tacit expire [--dry-run] [--json FILE]   facts naming a path gone from this machine (retired) or moved per the projects registry (in-place note), and facts of a folder the registry marks dead or archived (retired); the owner's facts get a question instead; no model
   tacit rulings one-time [--dry-run] [--json FILE]   rulings, promoted facts and statements whose words are one-time words (a go-ahead, a list of chores, words tied to the moment) -> retired; an instruction of the task in the user or system scope -> a question for the owner; no model
   tacit stale [--dry-run] [--max N] [--fact NAME] [--as-of T] [--json] [-v]   curated facts whose subject changed in git after their date -> stale? findings in review/<date>.md (no model; flags, never retires)
   tacit rulings audit [--dry-run] [--strict] [--recheck] [--digests DIR] [--digests-only] [--sample N] [--seed N] [--json FILE]   keep a ruling only with the owner's own words as evidence (a verified quote, their decision, written by them); the rest -> source.kind observed (no model)
@@ -220,6 +221,8 @@ func main() {
 		os.Exit(runLinks(os.Args[2:]))
 	case "dedupe":
 		os.Exit(runDedupe(os.Args[2:]))
+	case "expire":
+		os.Exit(runExpire(os.Args[2:]))
 	case "stale":
 		os.Exit(runStale(os.Args[2:]))
 	case "resolve":

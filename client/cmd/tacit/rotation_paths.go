@@ -51,6 +51,11 @@ type goneProbe struct {
 	host, home string
 	elsewhere  *regexp.Regexp // a fact that says it is about one of the store's other machines
 	memo       map[*fact.Fact][]string
+	// writer also reads the facts this machine wrote (source.host) in a
+	// project, area, topic or the user scope, whose ~ is this machine's:
+	// the expiry's reach (SPEC.md, Staleness check, Expiry). The rotation
+	// reads this machine's facts only.
+	writer bool
 }
 
 // newGoneProbe is the probe for host, whose home is home. machines are the
@@ -121,6 +126,16 @@ func thisMachine(f *fact.Fact, host string) bool {
 	return false
 }
 
+// writtenHere reports a fact host wrote outside any machine's folder: in a
+// project, area, topic or org folder or the user scope.
+func writtenHere(f *fact.Fact, host string) bool {
+	if host == "" || !strings.EqualFold(f.Meta.Source.Host, host) {
+		return false
+	}
+	s := f.Meta.Scope
+	return s == "user" || strings.HasPrefix(s, "projects/") || strings.HasPrefix(s, "areas/") || strings.HasPrefix(s, "topics/") || strings.HasPrefix(s, "orgs/")
+}
+
 // paths are the paths f names in its description that do not exist under
 // home: none for another machine's fact or a fact of no machine. The
 // description, not the body: a body's paths are often context, examples or
@@ -135,7 +150,7 @@ func (g *goneProbe) paths(f *fact.Fact) []string {
 }
 
 func (g *goneProbe) find(f *fact.Fact) []string {
-	if g.home == "" || !thisMachine(f, g.host) {
+	if g.home == "" || !(thisMachine(f, g.host) || g.writer && writtenHere(f, g.host)) {
 		return nil
 	}
 	text := goneIe.ReplaceAllString(goneEg.ReplaceAllString(f.Meta.Description, "eg"), "ie")

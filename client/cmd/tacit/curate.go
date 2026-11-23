@@ -134,6 +134,7 @@ func runCurate(args []string) int {
 	since := fs.String("since", "", "with --recheck-conflicts: first creation day, YYYY-MM-DD")
 	until := fs.String("until", "", "with --recheck-conflicts: last creation day, YYYY-MM-DD (default: no end)")
 	limit := fs.Int("limit", 0, "with --recheck-conflicts: check only the first N facts (trial runs)")
+	rulingsOnly := fs.Bool("rulings", false, "with --recheck-conflicts: check only the owner's rulings made in those days, each against the closest older fact (a newer ruling that an older fact contradicts goes to the verifier)")
 	retrySetAside := fs.Bool("retry-set-aside", false, "try again the notes set aside after failing alone (curator.json \"failed\")")
 	quick := fs.Bool("quick", false, "only the notes added in the last 24 hours: split, rulings check, conflict judge, index, push; no derive, results, links or staleness step")
 	minInterval := fs.Duration("min-interval", 30*time.Minute, "with --quick: do nothing within this long of the last quick run")
@@ -247,7 +248,7 @@ func runCurate(args []string) int {
 		return 1
 	}
 	if *recheck {
-		return recheckConflicts(ctx, s, host, *since, *until, *limit, *dry)
+		return recheckConflicts(ctx, s, host, *since, *until, *limit, *rulingsOnly, *dry)
 	}
 	cst := loadCuratorState(filepath.Join(stateDir, "curator.json"))
 	if *retrySetAside {

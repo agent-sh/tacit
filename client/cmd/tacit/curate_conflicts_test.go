@@ -124,7 +124,7 @@ func TestRecheckConflictsPairsTodaysFactsWithOlderOnes(t *testing.T) {
 	defer func() { judgeRun = old }()
 
 	out := captureStdout(t, func() {
-		if code := recheckConflicts(context.Background(), s, "host-a", "2026-10-11", "2026-10-11", 0, true); code != 0 {
+		if code := recheckConflicts(context.Background(), s, "host-a", "2026-10-11", "2026-10-11", 0, false, true); code != 0 {
 			t.Fatalf("exit %d", code)
 		}
 	})
@@ -150,6 +150,39 @@ func TestRecheckConflictsPairsTodaysFactsWithOlderOnes(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(s.Dir, "review")); err == nil {
 		t.Fatal("dry run wrote review/")
+	}
+}
+
+// --recheck-conflicts --rulings pairs only the owner's rulings of those
+// days with the closest older fact, a ruling with no origin (a statement
+// step's promotion) among them: a newer ruling an older fact contradicts
+// goes to the review, and from there to the verifier.
+func TestRecheckConflictsRulingsOnly(t *testing.T) {
+	s := conflictFixture(t, func(clone string) {
+		curatedFact(t, clone, "old-quokka", "quokka scheduler zebra listens on port 7781 behind the lantern proxy", "2026-10-01", "n0")
+		f := curatedFact(t, clone, "rule-quokka", "quokka scheduler zebra must listen on port 7790 behind the lantern proxy", "2026-10-11", "")
+		f.Meta.Source.Kind = "user"
+		b, _ := f.Encode()
+		os.WriteFile(filepath.Join(clone, f.Path), b, 0o644)
+		curatedFact(t, clone, "today-quokka", "quokka scheduler zebra now runs on port 7790 behind the lantern proxy", "2026-10-11", "n1")
+	})
+	var prompts []string
+	old := judgeRun
+	judgeRun = func(ctx context.Context, model, prompt string) (string, float64, error) {
+		prompts = append(prompts, prompt)
+		return `["contradicts"]`, 0.01, nil
+	}
+	defer func() { judgeRun = old }()
+	out := captureStdout(t, func() {
+		if code := recheckConflicts(context.Background(), s, "host-a", "2026-10-11", "2026-10-11", 0, true, true); code != 0 {
+			t.Fatalf("exit %d", code)
+		}
+	})
+	if len(prompts) != 1 || !strings.Contains(prompts[0], "NEW (rule-quokka)") || strings.Contains(prompts[0], "NEW (today-quokka)") || !strings.Contains(prompts[0], "EXISTING (old-quokka)") {
+		t.Fatalf("prompts: %v", prompts)
+	}
+	if !strings.Contains(out, "[[rule-quokka]]") {
+		t.Fatalf("output:\n%s", out)
 	}
 }
 

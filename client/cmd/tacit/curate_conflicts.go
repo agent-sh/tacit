@@ -356,7 +356,7 @@ func judgeVerdicts(ctx context.Context, pairs []curate.Pair, rep *curate.Report)
 // superseded_by on a fact the judge and supersedeRoute retire. The store
 // must be synced; dry prints and writes nothing. limit > 0 checks only the
 // first limit facts (trial runs).
-func recheckConflicts(ctx context.Context, s *store.Store, host, since, until string, limit int, dry bool) int {
+func recheckConflicts(ctx context.Context, s *store.Store, host, since, until string, limit int, rulingsOnly, dry bool) int {
 	if !rePlainDay(since) || (until != "" && !rePlainDay(until)) {
 		fmt.Fprintln(os.Stderr, "curate: --since and --until take YYYY-MM-DD")
 		return 2
@@ -373,7 +373,12 @@ func recheckConflicts(ctx context.Context, s *store.Store, host, since, until st
 			continue
 		}
 		created[f.Meta.Name], origin[f.Meta.Name] = f.Meta.Created, f.Meta.Origin
-		if f.Meta.Origin == "" || f.Meta.Source.Harness != "curator" || f.Meta.SupersededBy != "" || f.Meta.Retired != "" {
+		if f.Meta.Source.Harness != "curator" || f.Meta.SupersededBy != "" || f.Meta.Retired != "" {
+			continue
+		}
+		// The rulings alone: every one the curator wrote, a statement step's
+		// promotion (no origin) among them.
+		if rulingsOnly && !fact.IsRuling(f) || !rulingsOnly && f.Meta.Origin == "" {
 			continue
 		}
 		if f.Meta.Created < since || (until != "" && f.Meta.Created > until) {
