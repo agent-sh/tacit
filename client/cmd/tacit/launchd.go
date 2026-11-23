@@ -150,14 +150,17 @@ func (p *plist) raw(k, value string) {
 func (p *plist) String() string { return p.b.String() + "</dict>\n</plist>\n" }
 
 // jobEnv is the environment of a background job: PATH, and TACIT_STORE when
-// a store other than the default was chosen at install time.
+// a store other than the default was chosen at install time; the settings
+// file and XDG_CONFIG_HOME (where the off switch is) when set then.
 func jobEnv(path, storeEnv string) []string {
 	kv := []string{"PATH", path}
 	if storeEnv != "" {
 		kv = append(kv, "TACIT_STORE", storeEnv)
 	}
-	if cfg := os.Getenv("TACIT_SETTINGS"); cfg != "" {
-		kv = append(kv, "TACIT_SETTINGS", cfg)
+	for _, key := range []string{"TACIT_SETTINGS", "XDG_CONFIG_HOME"} {
+		if v := os.Getenv(key); v != "" {
+			kv = append(kv, key, v)
+		}
 	}
 	for _, key := range localJobEnvKeys() {
 		if v := os.Getenv(key); v != "" {
@@ -168,10 +171,11 @@ func jobEnv(path, storeEnv string) []string {
 }
 
 // jobEnvKeys are the variables a systemd unit or a Windows task carries from
-// install time: the store and the settings file, and with the local layer on
-// the layer and its overlay (localJobEnvKeys).
+// install time: the store, the settings file, XDG_CONFIG_HOME (the off
+// switch's directory, SPEC.md "Off switch"), and with the local layer on the
+// layer and its overlay (localJobEnvKeys).
 func jobEnvKeys() []string {
-	return append([]string{"TACIT_STORE", "TACIT_SETTINGS"}, localJobEnvKeys()...)
+	return append([]string{"TACIT_STORE", "TACIT_SETTINGS", "XDG_CONFIG_HOME"}, localJobEnvKeys()...)
 }
 
 // localJobEnvKeys: a job installed with the local layer on runs in the local

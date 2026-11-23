@@ -109,3 +109,22 @@ func TestAddNeedsOnlyADescription(t *testing.T) {
 		t.Fatalf("tacit_add without name and type: %q", out)
 	}
 }
+
+// A job installed from a shell with XDG_CONFIG_HOME carries it, so the
+// launch agent or timer checks the off file where the shell's tools write
+// it.
+func TestJobsCarryTheOffSwitchDirectory(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	kv := strings.Join(jobEnv("/usr/bin", ""), "\x00")
+	if !strings.Contains(kv, "XDG_CONFIG_HOME\x00"+cfg) {
+		t.Errorf("launchd job environment lacks XDG_CONFIG_HOME: %q", kv)
+	}
+	found := false
+	for _, k := range jobEnvKeys() {
+		found = found || k == "XDG_CONFIG_HOME"
+	}
+	if !found {
+		t.Error("systemd and Windows jobs do not carry XDG_CONFIG_HOME")
+	}
+}
