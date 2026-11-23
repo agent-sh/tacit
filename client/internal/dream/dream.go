@@ -516,7 +516,7 @@ type Runner func(ctx context.Context, model, prompt string) (result string, cost
 func RunCLI(ctx context.Context, model, prompt string) (string, float64, int, error) {
 	sid := modelrun.NewSessionID()
 	_ = Exclude(sid)
-	res, err := modelrun.RunWithFallback(modelrun.WithJSONSchema(ctx, outputSchema), "dream", model, prompt, sid)
+	res, err := modelrun.RunWithFallback(modelrun.WithJSONSchema(ctx, schema()), "dream", model, prompt, sid)
 	if res.SessionID != "" {
 		_ = Exclude(res.SessionID)
 	}
@@ -1335,6 +1335,10 @@ type Meter struct {
 	// OwnerDropped is the owner's remarks the relevance gate did not write
 	// down (Gate), each with why: kept only here and in the transcript.
 	OwnerDropped []Dropped `json:"owner_remarks_dropped,omitempty"`
+	// Quiet is the run's quiet types (Quiet), QuietDropped the agent's
+	// facts of them the model still returned, not written.
+	Quiet        []string `json:"quiet_types,omitempty"`
+	QuietDropped int      `json:"quiet_dropped,omitempty"`
 	// BackedOff is a run that paid for no window: earlier runs failed on the
 	// route and its probe failed again. Probes is the route probes the run
 	// sent; their cost is in CostUSD.

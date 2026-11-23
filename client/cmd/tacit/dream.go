@@ -353,6 +353,8 @@ func runDream(args []string) (code int) {
 	}
 
 	meter := dream.Meter{At: time.Now().Format(time.RFC3339), Windows: len(windows), Local: local}
+	dream.Quiet = quietDreamTypes(s.Dir, stateDir)
+	meter.Quiet = dream.QuietList()
 	heldChars := dreamHeldChars()
 	var pool *dream.HeldPool // read at the first window that is sent
 	if !agentPolicy.All() {
@@ -480,6 +482,12 @@ func runDream(args []string) (code int) {
 				if *dry {
 					fmt.Printf("- dropped, the owner's remark (%s): %q: %s %s\n", session, d.Words, d.Category, d.Reason)
 				}
+				continue
+			}
+			// A type the hooks almost never deliver is not written as an
+			// agent's fact (SPEC.md, Dreamer, Quiet types).
+			if dream.DropQuiet(x) {
+				meter.QuietDropped++
 				continue
 			}
 			f := dream.ToFact(x, w.Repo, host, session)
