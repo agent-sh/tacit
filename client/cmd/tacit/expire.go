@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -215,7 +216,7 @@ func expirePlan(facts []*fact.Fact, g *goneProbe, regs []registry, home, today s
 		if st, ok := dead[m.Scope]; ok {
 			it.Why, it.Action = "dead", expireRetire
 			it.Detail = "the registry marks " + m.Scope + " " + st
-		} else if gone := notNoted(f, g.paths(f)); len(gone) > 0 {
+		} else if gone := notNoted(f, g.paths(f)); len(gone) > 0 && pathClaim(f, g) {
 			it.Paths = gone
 			it.Why, it.Action = "moved", expireFix
 			for _, p := range gone {
@@ -252,6 +253,32 @@ func expirePlan(facts []*fact.Fact, g *goneProbe, regs []registry, home, today s
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out
+}
+
+// recordTypes record what happened: a path gone since does not make them
+// untrue (the results step never flags them either).
+var recordTypes = map[string]bool{"history": true, "past_mistake": true, "code_change": true}
+
+// expireURL is a link or a forge path: the fact is about a place elsewhere
+// too, which a gone local path does not settle.
+var expireURL = regexp.MustCompile(`(?i)https?://|\b(?:github\.com|gitlab\.com|huggingface\.co|hf\.co)/`)
+
+// pathClaim reports a fact whose gone paths are what it is about: not a
+// record of what happened, naming no place elsewhere, and naming no path
+// that is still here (a fact with one place left is partly true, the
+// rotation's model reads it).
+func pathClaim(f *fact.Fact, g *goneProbe) bool {
+	d := f.Meta.Description
+	if recordTypes[f.Meta.Type] || expireURL.MatchString(d) {
+		return false
+	}
+	for _, m := range gonePathRx.FindAllStringSubmatch(d, -1) {
+		p := strings.TrimRight(m[1], ".,;:)'\"`")
+		if len(p) >= 4 && !g.gone(p) {
+			return false
+		}
+	}
+	return true
 }
 
 // notNoted are the gone paths an in-place note of f does not already

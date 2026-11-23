@@ -154,14 +154,21 @@ func TestExpireMovesAndDeadFoldersHoldOnlyWhereTheyMust(t *testing.T) {
 	quoted := mf("quoted-dir", "The job dir is ~/.cache/job-b", fact.Source{OwnerQuote: "the job dir is that cache dir", OwnerQuoteFrom: "claude:s1"})
 	st := mf("said-dir", "The job dir is ~/.cache/job-c", fact.Source{OwnerWords: "the job dir", OwnerWordsFrom: "claude:s1"})
 	st.Meta.Type = fact.StatementType
-	facts := []*fact.Fact{endorsed, quoted, st}
+	// A gone path does not settle a record of what happened, a fact about a
+	// place elsewhere too, or a fact that names a path still here.
+	record := mf("job-dir-record", "The nightly job wrote its report to ~/.cache/job-d", fact.Source{})
+	record.Meta.Type = "history"
+	elsewhere := mf("job-dir-mirror", "The job report is mirrored from ~/.cache/job-e to https://example.org/reports", fact.Source{})
+	partly := mf("job-dirs-two", "Job inputs are in ~/projects/apps and outputs in ~/.cache/job-f", fact.Source{})
+	facts := []*fact.Fact{endorsed, quoted, st, record, elsewhere, partly}
 	g := newGoneProbe("host-a", home, machineNames(facts))
 	for _, it := range expirePlan(facts, g, regs, home, "2026-11-20", nil) {
 		if it.Action != expireAsk {
 			t.Errorf("%s: %s, want a question or nothing", it.Name, it.Action)
 		}
-		if it.Name == "said-dir" {
-			t.Error("a statement is an item")
+		switch it.Name {
+		case "said-dir", "job-dir-record", "job-dir-mirror", "job-dirs-two":
+			t.Errorf("%s is an item: %+v", it.Name, it)
 		}
 	}
 }
