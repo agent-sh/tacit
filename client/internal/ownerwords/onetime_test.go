@@ -25,6 +25,7 @@ func TestOneTime(t *testing.T) {
 		{"remind me every morning to check the queue", NotOneTime},
 		{"remind me each morning to check the queue", NotOneTime},
 		{"remind me daily to stretch", NotOneTime},
+		{"remind me on Mondays to check the queue", NotOneTime},
 		// An instruction inside the task: one-time, but it may hold later.
 		{"first we fix the parser then we try the new lexer", OneTimeTask},
 		{"you can close the stale ones", OneTimeTask},

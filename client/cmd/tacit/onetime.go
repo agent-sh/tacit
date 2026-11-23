@@ -52,7 +52,7 @@ const (
 // not write in the app that is their ruling, a fact the statements step
 // made, or a statement, whose words are one-time words. asked are the facts
 // a onetime question already names, which are not asked again.
-func oneTimePlan(facts []*fact.Fact, log []statement.Entry, asked map[string]bool) []oneTimeItem {
+func oneTimePlan(facts []*fact.Fact, log []statement.Entry, asked, kept map[string]bool) []oneTimeItem {
 	promoted := map[string]bool{}
 	for _, e := range log {
 		if e.Kind == statement.LogPromoted && e.Fact != "" {
@@ -80,7 +80,7 @@ func oneTimePlan(facts []*fact.Fact, log []statement.Entry, asked map[string]boo
 		if it.Words == "" {
 			it.Words = m.Source.OwnerWords
 		}
-		if it.Words == "" || m.Source.Endorsed != "" && f.EndorsedBacked {
+		if it.Words == "" || m.Source.Endorsed != "" && f.EndorsedBacked || kept[m.Name] {
 			continue // no words to read, or a fact the owner kept themself
 		}
 		switch ownerwords.OneTime(it.Words) {
@@ -143,7 +143,7 @@ func oneTimeFiles(dir string, items []oneTimeItem, today string) (map[string][]b
 		case oneTimeAsk:
 			questions = append(questions, checkLine(it.Name, it.Scope, outcomeOneTime, today),
 				"  The curator reads these words as an instruction of the task at hand, not a rule for every session: \""+oneLine(it.Words)+"\"",
-				"  Still true keeps it as your rule; outdated retires it.")
+				"  Still true keeps it as it is; outdated retires it.")
 		}
 	}
 	if len(logLines) > 0 {
@@ -189,7 +189,14 @@ func runOneTime(args []string) int {
 			return nil, err
 		}
 		b, _ := os.ReadFile(filepath.Join(s.Dir, filepath.FromSlash(ledger.StatementsPath)))
-		return oneTimePlan(facts, statement.ReadLog(b), oneTimeAsked(s.Dir)), nil
+		// The owner's keeps stand in the decision log before an audit
+		// writes them into a fact's source.
+		dl, _ := os.ReadFile(filepath.Join(s.Dir, filepath.FromSlash(ledger.DecisionsPath)))
+		kept := map[string]bool{}
+		for name := range ledger.Endorsements(dl) {
+			kept[name] = true
+		}
+		return oneTimePlan(facts, statement.ReadLog(b), oneTimeAsked(s.Dir), kept), nil
 	}
 	var items []oneTimeItem
 	if *dry {

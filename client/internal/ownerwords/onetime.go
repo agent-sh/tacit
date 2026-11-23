@@ -74,8 +74,8 @@ var doneRe = regexp.MustCompile(` (when|once) (you are |youre |its |it is |we ar
 var momentPhrases = []string{"remind me", "today at", "by today", "untill today", "tonight", "tomorrow", "at noon", "this morning", "this evening", "this afternoon", "for this session", "for this task"}
 
 // frequencyWords make words that would be tied to the moment a standing
-// rule: "remind me each morning", "run it daily".
-var frequencyWords = wordSet("each daily weekly nightly monthly hourly usually regularly")
+// rule: "remind me each morning", "run it daily", "remind me on mondays".
+var frequencyWords = wordSet("each daily weekly nightly monthly hourly yearly usually regularly mondays tuesdays wednesdays thursdays fridays saturdays sundays weekdays weekends mornings evenings afternoons nights")
 
 // approval is a short go-ahead: every word an approval, a filler or a
 // pointer to the thing at hand ("continue", "go ahead", "yes do it", "all
