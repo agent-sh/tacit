@@ -36,10 +36,18 @@ func TestExpireRetiresGoneFixesMovedAndAsksTheOwner(t *testing.T) {
 	rule := mf(ms, "keep-runner", "Run the nightly job with ~/.cache/task-w/job.sh only")
 	rule.Audited, rule.QuoteBacked = true, true
 	rule.Meta.Source.Kind, rule.Meta.Source.OwnerQuote, rule.Meta.Source.OwnerQuoteFrom = "user", "run the nightly job with that script only", "claude:s1"
+	// Project facts: one whose note this machine wrote, one whose note
+	// another machine wrote (the curator's own host is on both).
 	project := mf("projects/widget", "widget-fixture-dir", "Widget test fixtures are in ~/.cache/widget-fixtures")
-	facts := []*fact.Fact{moved, gone, here, other, said, dead, rule, project}
+	project.Meta.Origin = "note-here"
+	elsewhere := mf("projects/widget", "widget-cache-there", "Widget build cache is ~/.cache/widget-build")
+	elsewhere.Meta.Origin = "note-there"
+	note := func(host, name string) *fact.Fact {
+		return &fact.Fact{Path: "inbox/dreamer@" + host + "/" + name + ".md", Meta: fact.Meta{Name: name, Scope: "projects/widget", Type: "machine_fact", Description: "x", Source: fact.Source{Harness: "dreamer", Host: host, Kind: "observed"}}, Body: "x\n"}
+	}
+	facts := []*fact.Fact{moved, gone, here, other, said, dead, rule, project, elsewhere, note("host-a", "note-here"), note("host-b", "note-there")}
 	g := newGoneProbe("host-a", home, machineNames(facts))
-	g.writer = true
+	g.writer = noteHosts(facts)
 	items := expirePlan(facts, g, regs, home, "2026-11-20", nil)
 	got := map[string]string{}
 	for _, it := range items {
@@ -62,7 +70,7 @@ func TestExpireRetiresGoneFixesMovedAndAsksTheOwner(t *testing.T) {
 	}
 	// The writes: the note, the retirements, the question.
 	dir := t.TempDir()
-	for _, f := range facts {
+	for _, f := range facts[:9] {
 		b, err := f.Encode()
 		if err != nil {
 			t.Fatal(err)
@@ -135,6 +143,11 @@ func TestExpireMovesAndDeadFoldersHoldOnlyWhereTheyMust(t *testing.T) {
 	}
 	if _, ok := moved(regs, filepath.Join(projects, "gizmo", "src")); ok {
 		t.Error("a move whose old place is still there")
+	}
+	// A missing category with no entry of its name: the next part names
+	// the entry the path moved to.
+	if np, ok := moved(regs, filepath.Join(projects, "old", "widget")); !ok || np != filepath.Join(projects, "apps", "widget") {
+		t.Errorf("a move under a gone category: %q %v", np, ok)
 	}
 	if np, ok := moved(regs, filepath.Join(projects, "widget", "x")); ok {
 		t.Errorf("a move to a path that is not there: %s", np)

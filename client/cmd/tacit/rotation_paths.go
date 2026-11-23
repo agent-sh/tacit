@@ -51,11 +51,13 @@ type goneProbe struct {
 	host, home string
 	elsewhere  *regexp.Regexp // a fact that says it is about one of the store's other machines
 	memo       map[*fact.Fact][]string
-	// writer also reads the facts this machine wrote (source.host) in a
-	// project, area, topic or the user scope, whose ~ is this machine's:
-	// the expiry's reach (SPEC.md, Staleness check, Expiry). The rotation
-	// reads this machine's facts only.
-	writer bool
+	// writer also reads the facts whose note this machine wrote, in a
+	// project, area, topic, org or the user scope, whose ~ is this
+	// machine's: the expiry's reach (SPEC.md, Staleness check, Expiry).
+	// writer says where a fact's note was written (its origin's host; ""
+	// when it cannot tell). Nil for the rotation, which reads this machine's
+	// facts only.
+	writer func(*fact.Fact) string
 }
 
 // newGoneProbe is the probe for host, whose home is home. machines are the
@@ -126,11 +128,22 @@ func thisMachine(f *fact.Fact, host string) bool {
 	return false
 }
 
-// writtenHere reports a fact host wrote outside any machine's folder: in a
-// project, area, topic or org folder or the user scope.
-func writtenHere(f *fact.Fact, host string) bool {
-	if host == "" || !strings.EqualFold(f.Meta.Source.Host, host) {
+// writtenHere reports a fact whose note host wrote (writer: the note's
+// host), outside any machine's folder: in a project, area, topic or org
+// folder or the user scope, and tied to no other machine (applies_to.hosts,
+// when it names any, names host).
+func writtenHere(f *fact.Fact, host, writer string) bool {
+	if host == "" || !strings.EqualFold(writer, host) {
 		return false
+	}
+	if hs := f.Meta.AppliesTo.Hosts; len(hs) > 0 {
+		named := false
+		for _, h := range hs {
+			named = named || strings.EqualFold(h, host)
+		}
+		if !named {
+			return false
+		}
 	}
 	s := f.Meta.Scope
 	return s == "user" || strings.HasPrefix(s, "projects/") || strings.HasPrefix(s, "areas/") || strings.HasPrefix(s, "topics/") || strings.HasPrefix(s, "orgs/")
@@ -150,7 +163,7 @@ func (g *goneProbe) paths(f *fact.Fact) []string {
 }
 
 func (g *goneProbe) find(f *fact.Fact) []string {
-	if g.home == "" || !(thisMachine(f, g.host) || g.writer && writtenHere(f, g.host)) {
+	if g.home == "" || !(thisMachine(f, g.host) || g.writer != nil && writtenHere(f, g.host, g.writer(f))) {
 		return nil
 	}
 	text := goneIe.ReplaceAllString(goneEg.ReplaceAllString(f.Meta.Description, "eg"), "ie")

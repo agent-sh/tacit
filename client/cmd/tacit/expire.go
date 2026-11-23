@@ -126,6 +126,7 @@ func moved(regs []registry, full string) (newPath string, ok bool) {
 			if _, err := os.Stat(old); err == nil {
 				continue // the old place is there: no move at this prefix
 			}
+			before := len(found)
 			for k := range r.entries {
 				if k[strings.LastIndex(k, "/")+1:] != parts[i-1] {
 					continue
@@ -135,7 +136,9 @@ func moved(regs []registry, full string) (newPath string, ok bool) {
 					found = append(found, np)
 				}
 			}
-			break
+			if len(found) > before {
+				break // the shortest prefix that moved decides
+			}
 		}
 	}
 	if len(found) != 1 {
@@ -306,6 +309,29 @@ func notNoted(f *fact.Fact, gone []string) []string {
 	return out
 }
 
+// noteHosts says where a curated fact's note was written: the host of the
+// inbox note its origin names (inbox/<harness>@<host>/...), a curated
+// fact's own source.host being the curator's; a fact no harness but the
+// curator wrote keeps its own host. "" when the note is not in the store.
+func noteHosts(facts []*fact.Fact) func(*fact.Fact) string {
+	byNote := map[string]string{}
+	for _, f := range facts {
+		if !f.InInbox() {
+			continue
+		}
+		dir := strings.SplitN(strings.TrimPrefix(f.Path, "inbox/"), "/", 2)[0]
+		if _, h, ok := strings.Cut(dir, "@"); ok {
+			byNote[f.Meta.Name] = h
+		}
+	}
+	return func(f *fact.Fact) string {
+		if f.Meta.Source.Harness != "curator" {
+			return f.Meta.Source.Host
+		}
+		return byNote[f.Meta.Origin]
+	}
+}
+
 // expireAsked are the facts a stale check? question names.
 func expireAsked(dir string) map[string]bool {
 	out := map[string]bool{}
@@ -410,7 +436,7 @@ func runExpire(args []string) int {
 			return nil, err
 		}
 		g := newGoneProbe(host, home, machineNames(facts))
-		g.writer = true
+		g.writer = noteHosts(facts)
 		return expirePlan(facts, g, regs, home, today(), expireAsked(s.Dir)), nil
 	}
 	var items []expireItem
