@@ -42,6 +42,12 @@ func TestMain(m *testing.M) {
 	// masks only the canary digest.RedactionReady checks, so the suite's
 	// commits neither need scrump nor pay its start, about half a second each;
 	// the tests of the mask set the real one (store_mask_test.go).
+	// A real off file on the machine (SPEC.md, "Off switch") must not stop
+	// the suite: both of its places point at an empty directory.
+	if d, err := os.MkdirTemp("", "no-off"); err == nil {
+		os.Setenv("XDG_CONFIG_HOME", d)
+		offHome = func() (string, error) { return d, nil }
+	}
 	store.Redact = canaryRedact
 	// A test that reads the delivery log back must not lose its line to a
 	// loaded machine; TestDeliveryLogWriteIsBounded checks the real bound.

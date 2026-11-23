@@ -53,7 +53,7 @@ func runsJob(home, goos string, timers, plists []string) string {
 	}
 	wants := filepath.Join(systemdUserDir(home), "timers.target.wants")
 	for _, t := range timers {
-		if _, err := os.Lstat(filepath.Join(wants, t)); err == nil {
+		if _, err := os.Stat(filepath.Join(wants, t)); err == nil { // a link to a timer file that is gone starts nothing
 			return t
 		}
 	}

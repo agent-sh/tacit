@@ -21,11 +21,19 @@ import (
 // since a job a timer or launch agent starts may not carry the variable a
 // shell sets, and every process must see the same switch.
 func offPaths() []string {
+	return offPathsFrom()
+}
+
+// offHome is the home the second path is under; the tests point it away
+// from the machine's own, so a real off file does not stop the suite.
+var offHome = os.UserHomeDir
+
+func offPathsFrom() []string {
 	var out []string
 	if cfg := os.Getenv("XDG_CONFIG_HOME"); cfg != "" {
 		out = append(out, filepath.Join(cfg, "tacit", "off"))
 	}
-	if home, err := os.UserHomeDir(); err == nil {
+	if home, err := offHome(); err == nil {
 		if p := filepath.Join(home, ".config", "tacit", "off"); len(out) == 0 || out[0] != p {
 			out = append(out, p)
 		}

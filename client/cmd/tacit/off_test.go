@@ -76,7 +76,9 @@ func TestOffSwitch(t *testing.T) {
 	}
 	// A job a timer starts without XDG_CONFIG_HOME still sees the file a
 	// shell with it wrote, and the other way round: both paths count.
-	home := os.Getenv("HOME")
+	home := t.TempDir()
+	defer func(h func() (string, error)) { offHome = h }(offHome)
+	offHome = func() (string, error) { return home, nil }
 	dflt := filepath.Join(home, ".config", "tacit", "off")
 	if err := os.MkdirAll(filepath.Dir(dflt), 0o700); err != nil {
 		t.Fatal(err)
