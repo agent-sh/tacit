@@ -97,6 +97,9 @@ func TestDenyTableKeepsForbiddenCommands(t *testing.T) {
 		mk("k", "user_standard", "Do not run `cargo publish`.", "cargo publish", false),
 	}
 	tab := denyTableOf(all, time.Now())
+	if o := only("In gadget, never git push --force; ask"); o != "gadget" {
+		t.Fatalf("only: %q", o)
+	}
 	var names []string
 	for _, f := range tab.Facts {
 		names = append(names, f.Name)
@@ -123,6 +126,8 @@ func TestDenyScopeFits(t *testing.T) {
 		{denyFact{Scope: "machines/box2"}, false},
 		{denyFact{Scope: "user", Hosts: []string{"box2"}}, false},
 		{denyFact{Scope: "orgs/acme"}, false},
+		{denyFact{Scope: "user", Only: "gadget"}, false},
+		{denyFact{Scope: "user", Only: "widget"}, true},
 	} {
 		if got := sc.fits(c.f); got != c.want {
 			t.Errorf("%+v: got %v", c.f, got)

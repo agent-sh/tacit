@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -60,7 +61,13 @@ type denyFact struct {
 	Type    string   `json:"type"`
 	Text    string   `json:"text"`
 	Created string   `json:"created,omitempty"`
+	// Only is the repository the description starts by naming ("In widget,
+	// ..."): the fact is that repository's, whatever its scope says.
+	Only string `json:"only,omitempty"`
 }
+
+// onlyIn reads the repository a description starts by naming.
+var onlyIn = regexp.MustCompile(`(?i)^in ([a-z0-9][a-z0-9._-]*)[,:]`)
 
 // denyTable is the specific keys' facts, built from the index.
 type denyTable struct {
@@ -107,10 +114,17 @@ func denyTableOf(all []search.Hit, now time.Time) *denyTable {
 				continue
 			}
 			t.Facts = append(t.Facts, denyFact{Key: k, Name: h.Name, Scope: h.Scope, Repos: h.Applies.Repos, Hosts: h.Applies.Hosts,
-				Type: h.Type, Text: denyText(h), Created: h.Created})
+				Type: h.Type, Text: denyText(h), Created: h.Created, Only: only(h.Description)})
 		}
 	}
 	return t
+}
+
+func only(desc string) string {
+	if m := onlyIn.FindStringSubmatch(strings.TrimSpace(desc)); m != nil {
+		return strings.ToLower(m[1])
+	}
+	return ""
 }
 
 // negations are the words that, right before a command in a fact's text,
@@ -605,6 +619,9 @@ type denyScope struct {
 // fits: the fact is this session's: tied to its repository, or of no
 // project and no other machine.
 func (sc denyScope) fits(f denyFact) bool {
+	if f.Only != "" && !slices.Contains(sc.repos, f.Only) {
+		return false
+	}
 	if len(f.Hosts) > 0 {
 		ok := false
 		for _, h := range f.Hosts {
