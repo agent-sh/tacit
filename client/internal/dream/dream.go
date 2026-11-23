@@ -516,7 +516,7 @@ type Runner func(ctx context.Context, model, prompt string) (result string, cost
 func RunCLI(ctx context.Context, model, prompt string) (string, float64, int, error) {
 	sid := modelrun.NewSessionID()
 	_ = Exclude(sid)
-	res, err := modelrun.RunWithFallback(modelrun.WithJSONSchema(ctx, schema()), "dream", model, prompt, sid)
+	res, err := modelrun.RunWithFallback(modelrun.WithJSONSchema(ctx, quietOf(ctx).schema()), "dream", model, prompt, sid)
 	if res.SessionID != "" {
 		_ = Exclude(res.SessionID)
 	}

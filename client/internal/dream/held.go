@@ -159,11 +159,15 @@ const heldSection = `ALREADY HELD: tacit already has these facts for this reposi
 `
 
 // PromptFor is the dreamer's prompt for a window of repo on host: Prompt,
-// with the facts already held (Held) before the digest and the quiet types
-// out of its list (Quiet). With neither it is Prompt as before, byte for
-// byte.
-func PromptFor(repo, host string, held []string, lines []string) string {
-	prompt := withOffered(Prompt)
+// with the facts already held (Held) before the digest and the run's quiet
+// types out of its list (Quiet). With neither it is Prompt as before, byte
+// for byte.
+func PromptFor(repo, host string, held []string, lines []string, quiet ...Quiet) string {
+	var q Quiet
+	if len(quiet) > 0 {
+		q = quiet[0]
+	}
+	prompt := q.prompt()
 	p := fmt.Sprintf(prompt, repo, host, strings.Join(lines, "\n"))
 	if len(held) == 0 {
 		return p

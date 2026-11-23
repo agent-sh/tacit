@@ -1,6 +1,7 @@
 package dream
 
 import (
+	"context"
 	"sort"
 	"strings"
 )
@@ -11,31 +12,29 @@ import (
 // of them; the owner's words (kind user or statement) are written whatever
 // their type. Facts of these types already in the store stay, searchable.
 
-// dreamTypes are the types the dreamer may write, in the prompt's order.
-var dreamTypes = []string{"user_standard", "machine_fact", "past_mistake", "design_decision", "structure", "history"}
+// Types are the types the dreamer may write, in the prompt's order.
+var Types = []string{"user_standard", "machine_fact", "past_mistake", "design_decision", "structure", "history"}
 
-// typeList is the prompt's and the schema's list of types.
-const typeList = "user_standard|machine_fact|past_mistake|design_decision|structure|history"
+// typeList is the prompt's list of types.
+var typeList = strings.Join(Types, "|")
 
-// Quiet is the run's quiet types; empty for none (the prompt as before).
-var Quiet = map[string]bool{}
-
-// Offered are the dreamer's types less the quiet ones.
-func Offered() []string {
-	var out []string
-	for _, t := range dreamTypes {
-		if !Quiet[t] {
-			out = append(out, t)
-		}
+// schemaEnum is the output schema's enum of types.
+var schemaEnum = func() string {
+	var qs []string
+	for _, t := range Types {
+		qs = append(qs, `"`+t+`"`)
 	}
-	return out
-}
+	return `"enum":[` + strings.Join(qs, ",") + `]`
+}()
 
-// QuietList is the quiet types, sorted.
-func QuietList() []string {
+// Quiet is a set of quiet types; nil or empty for none.
+type Quiet map[string]bool
+
+// List is the quiet types among Types, sorted.
+func (q Quiet) List() []string {
 	var out []string
-	for t, ok := range Quiet {
-		if ok {
+	for _, t := range Types {
+		if q[t] {
 			out = append(out, t)
 		}
 	}
@@ -43,15 +42,26 @@ func QuietList() []string {
 	return out
 }
 
-// withOffered is the prompt with the quiet types out of its list of types,
-// and one line that says what to do with such a fact.
-func withOffered(prompt string) string {
-	q := QuietList()
-	if len(q) == 0 {
-		return prompt
+// offered are the dreamer's types less the quiet ones.
+func (q Quiet) offered() []string {
+	var out []string
+	for _, t := range Types {
+		if !q[t] {
+			out = append(out, t)
+		}
 	}
-	p := strings.Replace(prompt, typeList, strings.Join(Offered(), "|"), 1)
-	note := "Write no fact whose only type would be " + strings.Join(q, " or ") + ": such facts are almost never needed by later sessions. The owner's words (kind user or statement) are always written, with the type that fits best.\n"
+	return out
+}
+
+// prompt is Prompt with the quiet types out of its list of types, and one
+// line that says what to do with such a fact; Prompt itself with none.
+func (q Quiet) prompt() string {
+	ql := q.List()
+	if len(ql) == 0 {
+		return Prompt
+	}
+	p := strings.Replace(Prompt, typeList, strings.Join(q.offered(), "|"), 1)
+	note := "Write no fact whose only type would be " + strings.Join(ql, " or ") + ": such facts are almost never needed by later sessions. The owner's words (kind user or statement) are always written, with the type that fits best.\n"
 	if i := strings.Index(p, "Output ONLY a JSON array"); i >= 0 {
 		return p[:i] + note + p[i:]
 	}
@@ -59,20 +69,32 @@ func withOffered(prompt string) string {
 }
 
 // schema is the output schema with the quiet types out of its enum.
-func schema() string {
-	if len(QuietList()) == 0 {
+func (q Quiet) schema() string {
+	if len(q.List()) == 0 {
 		return outputSchema
 	}
-	old := `"enum":["user_standard","machine_fact","past_mistake","design_decision","structure","history"]`
 	var qs []string
-	for _, t := range Offered() {
+	for _, t := range q.offered() {
 		qs = append(qs, `"`+t+`"`)
 	}
-	return strings.Replace(outputSchema, old, `"enum":[`+strings.Join(qs, ",")+`]`, 1)
+	return strings.Replace(outputSchema, schemaEnum, `"enum":[`+strings.Join(qs, ",")+`]`, 1)
 }
 
-// DropQuiet reports an extraction the run does not write: an agent's
-// fact of a quiet type.
-func DropQuiet(x Extracted) bool {
-	return Quiet[x.Type] && x.Kind != "user" && x.Kind != kindStatement
+// Drops reports an extraction the run does not write: an agent's fact of
+// a quiet type.
+func (q Quiet) Drops(x Extracted) bool {
+	return q[x.Type] && x.Kind != "user" && x.Kind != kindStatement
+}
+
+type quietKey struct{}
+
+// WithQuiet is ctx carrying the run's quiet types, which RunCLI's schema
+// leaves out.
+func WithQuiet(ctx context.Context, q Quiet) context.Context {
+	return context.WithValue(ctx, quietKey{}, q)
+}
+
+func quietOf(ctx context.Context) Quiet {
+	q, _ := ctx.Value(quietKey{}).(Quiet)
+	return q
 }

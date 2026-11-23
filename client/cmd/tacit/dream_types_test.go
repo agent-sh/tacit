@@ -11,9 +11,12 @@ import (
 )
 
 // The quiet types come from the delivery log: a type whose delivered lines
-// per live fact are under half the median type's is quiet, among the types
-// a measurement may quiet (never the owner's standards or the failures);
-// with under a week of log, none is; TACIT_DREAM_QUIET=off turns it off.
+// per live fact are under half the median of the dreamer's types is quiet,
+// among the types a measurement may quiet (structure and history; never the
+// owner's standards, the failures, machine facts or decisions, however
+// rarely delivered); a type the dreamer does not write moves no median;
+// this machine's own notes are not counted; with under a week of log, none
+// is quiet; TACIT_DREAM_QUIET=off turns it off.
 func TestQuietDreamTypesFromTheDeliveryLog(t *testing.T) {
 	store := t.TempDir()
 	write := func(typ string, n int) {
@@ -27,8 +30,10 @@ func TestQuietDreamTypesFromTheDeliveryLog(t *testing.T) {
 	}
 	write("machine_fact", 60)
 	write("past_mistake", 60)
+	write("design_decision", 60)
 	write("structure", 60)
 	write("history", 60)
+	write("reference", 60)
 	state := t.TempDir()
 	logDir := filepath.Join(state, "delivery")
 	os.MkdirAll(logDir, 0o700)
@@ -39,9 +44,21 @@ func TestQuietDreamTypesFromTheDeliveryLog(t *testing.T) {
 		}
 		return `{"v":1,"hook":"prompt","cands":[` + strings.Join(cs, ",") + `]}` + "\n"
 	}
+	local := func(typ string, n int) string {
+		var cs []string
+		for i := 0; i < n; i++ {
+			cs = append(cs, `{"name":"x","type":"`+typ+`","local":true,"delivered":true}`)
+		}
+		return `{"v":1,"hook":"prompt","cands":[` + strings.Join(cs, ",") + `]}` + "\n"
+	}
 	day := func(i int) string { return filepath.Join(logDir, fmt.Sprintf("2026-11-%02d.jsonl", i+1)) }
 	for i := 0; i < 6; i++ {
-		os.WriteFile(day(i), []byte(line("machine_fact", 10)+line("past_mistake", 12)+line("structure", 2)+line("history", 9)), 0o600)
+		// Per day: machine facts and past mistakes 10 and 12 (the median),
+		// decisions 1 (low, but never quiet), structure 2 (quiet), history 9
+		// with 50 more of this machine's own notes (not counted: still not
+		// quiet), and a type the dreamer does not write at 0, which would
+		// pull the median down if it counted.
+		os.WriteFile(day(i), []byte(line("machine_fact", 10)+line("past_mistake", 12)+line("design_decision", 1)+line("structure", 2)+line("history", 9)+local("structure", 50)), 0o600)
 	}
 	t.Setenv("TACIT_DREAM_QUIET", "")
 	if q := quietDreamTypes(store, state); len(q) != 0 {
@@ -53,6 +70,10 @@ func TestQuietDreamTypesFromTheDeliveryLog(t *testing.T) {
 	if len(q) != 1 || !q["structure"] {
 		t.Fatalf("quiet = %v, want structure", q)
 	}
+	// Read again the same day: the kept measurement, for this store only.
+	if q := quietDreamTypes(store, state); len(q) != 1 || !q["structure"] {
+		t.Fatalf("kept: %v", q)
+	}
 	if _, err := os.Stat(filepath.Join(state, "dream-types.json")); err != nil {
 		t.Fatal("the measurement was not kept")
 	}
@@ -60,7 +81,7 @@ func TestQuietDreamTypesFromTheDeliveryLog(t *testing.T) {
 	if q := quietDreamTypes(store, state); len(q) != 0 {
 		t.Fatalf("off: %v", q)
 	}
-	t.Setenv("TACIT_DREAM_QUIET", "history,past_mistake")
+	t.Setenv("TACIT_DREAM_QUIET", "history,past_mistake,machine_fact")
 	if q := quietDreamTypes(store, state); len(q) != 1 || !q["history"] {
 		t.Fatalf("a list: %v", q)
 	}
