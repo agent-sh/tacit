@@ -9,9 +9,10 @@ import (
 	"time"
 )
 
-// The Stop hook (SPEC.md, "Marks"): a turn that was given facts does not
-// end silently. When the session's hooks printed facts since its last ask
-// (the owed lines), the first Stop of the turn is blocked once with a short
+// The Stop hook (SPEC.md, "Marks"): a session that was given facts is
+// asked to mark them, on its first such turn and every tenth after. When
+// the session's hooks printed facts since its last Stop (the owed lines),
+// the first Stop of an asked turn is blocked once with a short
 // instruction: the facts' names and the one call that marks them, each as
 // used, not relevant or wrong. The turn's second Stop (stop_hook_active) is
 // never blocked, so the hook cannot loop, and an agent that does not mark
@@ -102,9 +103,32 @@ const stopAskTitle = "tacit asks for one mark before you stop"
 // stopAskCap bounds the facts one ask lists (the log's candidate cap).
 const stopAskCap = logCandCap
 
+// stopAskEvery spaces the asks: a session is asked on its first turn that
+// was given facts, then on every stopAskEvery-th such turn. Asking on every
+// such turn cost the agent a call nearly every turn; one in ten still gives
+// marks from every session. The turns between drop their owed lines unasked,
+// chosen by count, not by what they were given.
+const stopAskEvery = 10
+
+// askTurn counts the session's turns that owed lines, in <session>.turns,
+// and says whether this one is asked.
+func askTurn(id string) bool {
+	p := sessionFile(id)
+	if p == "" {
+		return true
+	}
+	p += ".turns"
+	n := 0
+	if b, err := os.ReadFile(p); err == nil {
+		fmt.Sscanf(strings.TrimSpace(string(b)), "%d", &n)
+	}
+	os.WriteFile(p, []byte(fmt.Sprintf("%d\n", n+1)), 0o600)
+	return n%stopAskEvery == 0
+}
+
 // stopHook is `tacit hook stop`. It prints nothing (the stop goes on) but
-// for a session with owed lines on the turn's first Stop, where it prints
-// the block decision with the ask as its reason.
+// for a session with owed lines on the first Stop of an asked turn
+// (askTurn), where it prints the block decision with the ask as its reason.
 func stopHook(in hookInput) {
 	if in.StopHookActive || in.SessionID == "" || !deliveryLogOn() {
 		return
@@ -114,7 +138,7 @@ func stopHook(in hookInput) {
 		return
 	}
 	owed := takeOwed(in.SessionID)
-	if len(owed) == 0 {
+	if len(owed) == 0 || !askTurn(in.SessionID) {
 		return
 	}
 	if len(owed) > stopAskCap {

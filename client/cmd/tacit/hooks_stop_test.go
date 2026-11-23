@@ -281,3 +281,32 @@ func TestOutcomesDemoteStopAndPromote(t *testing.T) {
 		t.Fatal("a verdict after the summary")
 	}
 }
+
+// A session is asked on its first turn given facts and then on every
+// tenth such turn; the turns between drop their owed lines unasked, and a
+// turn given nothing does not count.
+func TestStopAsksEveryTenthTurnGivenFacts(t *testing.T) {
+	_, cwd := repoFirstRig(t,
+		fact.Meta{Name: "slot-lock-order", Description: "Take the shard lock before the slot lock in the scheduler pool, never the other way", Type: "past_mistake", Scope: "projects/widget", AppliesTo: widgetRepo},
+	)
+	t.Setenv("TACIT_STATE_DIR", filepath.Join(t.TempDir(), "state"))
+	start, _ := json.Marshal(map[string]any{"session_id": "s2", "cwd": cwd, "source": "startup"})
+	hookOut(t, string(start), "session-start", "--mcp")
+	takeOwed("s2")
+	var asked []int
+	for turn := 1; turn <= 12; turn++ {
+		if out := hookOut(t, stopPayload(cwd, "s2", false), "stop", "--mcp"); out != "" {
+			t.Fatalf("turn %d given nothing was asked: %q", turn, out)
+		}
+		owe("s2", []string{"slot-lock-order"})
+		if stopReason(t, hookOut(t, stopPayload(cwd, "s2", false), "stop", "--mcp")) != "" {
+			asked = append(asked, turn)
+		}
+		if _, err := os.Stat(owedFile("s2")); err == nil {
+			t.Fatalf("turn %d kept its owed lines", turn)
+		}
+	}
+	if len(asked) != 2 || asked[0] != 1 || asked[1] != 11 {
+		t.Fatalf("asked on turns %v, want [1 11]", asked)
+	}
+}
