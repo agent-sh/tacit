@@ -199,13 +199,17 @@ func dedupePlan(dir string) ([]curate.Copies, error) {
 	if err != nil {
 		return nil, err
 	}
-	return curate.Duplicates(facts, dedupeGuard(dir)), nil
+	g, save := dedupeGuard(dir)
+	cs := curate.Duplicates(facts, g)
+	save()
+	return cs, nil
 }
 
 // dedupeGuard is what the store at dir says about its facts: the ones a
 // standing decision of the owner keeps, the pairs the owner answered, and
-// code's checks of the facts' dry references.
-func dedupeGuard(dir string) curate.DedupeGuard {
+// code's checks of the facts' dry references. save keeps the forge's
+// answers the checks fetched; call it once the guard has been used.
+func dedupeGuard(dir string) (curate.DedupeGuard, func()) {
 	dl, _ := os.ReadFile(filepath.Join(dir, filepath.FromSlash(ledger.DecisionsPath)))
 	g := curate.DedupeGuard{Kept: map[string]bool{}}
 	for name := range ledger.Endorsements(dl) {
@@ -221,8 +225,7 @@ func dedupeGuard(dir string) curate.DedupeGuard {
 	g.Answered = func(a, b string) bool { return answered[[2]string{a, b}] }
 	ch := storeChecker(context.Background(), dir, false)
 	g.Refuted = refuter(context.Background(), ch)
-	_ = ch.Forge.Save()
-	return g
+	return g, func() { _ = ch.Forge.Save() }
 }
 
 // dedupeFiles is each copy with superseded_by the fact kept and updated

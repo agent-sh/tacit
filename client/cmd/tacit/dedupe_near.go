@@ -185,8 +185,10 @@ func nearPlan(dir string, st nearState) ([]curate.Copies, int, error) {
 			unanswered++
 		}
 	}
-	g := dedupeGuard(dir)
-	return curate.NearCopies(cs, st.Answers, g), unanswered, nil
+	g, save := dedupeGuard(dir)
+	copies := curate.NearCopies(cs, st.Answers, g)
+	save()
+	return copies, unanswered, nil
 }
 
 // runDedupeNear is `tacit dedupe --near`.

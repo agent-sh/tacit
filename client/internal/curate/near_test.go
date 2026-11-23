@@ -3,6 +3,7 @@ package curate
 import (
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
@@ -71,6 +72,23 @@ func TestNearCopiesKeepTheOwnersWordsThenTheEarliest(t *testing.T) {
 	v, _ = ParseNear(answer, cs)
 	if got := NearCopies(cs, v, DedupeGuard{}); len(got) != 0 {
 		t.Fatalf("the owner's facts were retired: %v", copiesOf(got))
+	}
+	// A copy the prompt showed only in part is retired only when its whole
+	// text adds nothing specific: a path past the clip keeps it.
+	long := cf(ws, "keep-farm-nodes-busy", "2026-10-01", "Never leave render farm nodes idle: start the next render job at once")
+	long.Body = strings.Repeat("Start the next render job at once. ", 12) + "The queue file is /srv/farm/queue.txt.\n"
+	facts[0] = cf(ws, "farm-never-leave-nodes-idle", "2026-10-05", "On render farm work never leave the nodes idle; the farm is the costliest resource")
+	facts[1] = long
+	facts[2] = cf(ws, "farm-nodes-idle-rule", "2026-10-09", "Render farm nodes never sit idle between render jobs")
+	cs = NearCandidates(facts)
+	v, _ = ParseNear(answer, cs)
+	got = copiesOf(NearCopies(cs, v, DedupeGuard{}))
+	for _, xs := range got {
+		for _, x := range xs {
+			if x == "keep-farm-nodes-busy" {
+				t.Fatalf("a copy read in part with a path past the clip was retired: %v", got)
+			}
+		}
 	}
 	// No verdict, no copy; an answer naming a fact the group lacks is refused.
 	if got := NearCopies(cs, nil, DedupeGuard{}); len(got) != 0 {

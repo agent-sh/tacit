@@ -68,7 +68,28 @@ func nearStems(f *fact.Fact) map[string]bool {
 // same thing.
 func nearLine(f *fact.Fact) string {
 	body := strings.Join(strings.Fields(f.Body), " ")
-	return fmt.Sprintf("[%s, %s] %s: %s | %s", f.Meta.Type, f.Meta.Created, f.Meta.Name, ClipLine(f.Meta.Description, 200), ClipLine(body, 360))
+	return fmt.Sprintf("[%s, %s] %s: %s | %s", f.Meta.Type, f.Meta.Created, f.Meta.Name, ClipLine(f.Meta.Description, nearDescRunes), ClipLine(body, nearBodyRunes))
+}
+
+// What the prompt shows of a fact's description and body.
+const (
+	nearDescRunes = 200
+	nearBodyRunes = 360
+)
+
+// clipped reports a fact the prompt shows only in part.
+func clipped(f *fact.Fact) bool {
+	return len([]rune(f.Meta.Description)) > nearDescRunes || len([]rune(strings.Join(strings.Fields(f.Body), " "))) > nearBodyRunes
+}
+
+// coveredPastTheClip reports a copy whose whole text says nothing specific
+// the kept fact lacks: no specific token (a number, a path, a dotted name, a
+// code span) and no name with @ or _ that the kept fact does not hold, the
+// description rule's guards (restatesFact). A copy the model read in part is
+// retired only so: what it did not read must not add anything.
+func coveredPastTheClip(x, kept *fact.Fact) bool {
+	e, o := newStatement(x, false, true), newStatement(kept, false, true)
+	return !addsSpecific(e.spec, o.spec) && subset(e.idents, o.idents)
 }
 
 // NearCandidates are the clusters of facts that may say the same thing: in
@@ -302,7 +323,9 @@ func ownerTier(f *fact.Fact) int {
 // the owner (their ruling, a fact they wrote, their words, a quote or an
 // endorsement: ownerTier), one kept in a decision of theirs or marked
 // conflicting, one whose pair with the kept fact they answered, and one
-// whose checked references hold where the kept fact's are refuted. So only
+// whose checked references hold where the kept fact's are refuted; and a
+// fact the prompt showed only in part whose whole text holds something
+// specific the kept fact lacks (coveredPastTheClip). So only
 // agents' facts are retired, into the fact that holds most of the owner.
 // A cluster with no verdict is left alone.
 func NearCopies(cs []NearCluster, verdicts map[string][][]int, g DedupeGuard) []Copies {
@@ -326,7 +349,7 @@ func NearCopies(cs []NearCluster, verdicts map[string][][]int, g DedupeGuard) []
 			kept := fs[0]
 			cp := Copies{Kept: kept}
 			for _, x := range fs[1:] {
-				if ownerTier(x) > 0 || g.Kept[x.Meta.Name] || len(x.Meta.ConflictsWith) > 0 ||
+				if ownerTier(x) > 0 || g.Kept[x.Meta.Name] || len(x.Meta.ConflictsWith) > 0 || (clipped(x) && !coveredPastTheClip(x, kept)) ||
 					(g.Answered != nil && g.Answered(x.Meta.Name, kept.Meta.Name)) || (g.Refuted != nil && g.Refuted(kept, x)) {
 					continue
 				}
