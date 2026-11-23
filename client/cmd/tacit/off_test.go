@@ -74,6 +74,25 @@ func TestOffSwitch(t *testing.T) {
 	if _, off := tacitOff(); off {
 		t.Fatal("still off without the file")
 	}
+	// A job a timer starts without XDG_CONFIG_HOME still sees the file a
+	// shell with it wrote, and the other way round: both paths count.
+	home := os.Getenv("HOME")
+	dflt := filepath.Join(home, ".config", "tacit", "off")
+	if err := os.MkdirAll(filepath.Dir(dflt), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(dflt, []byte("default path"), 0o600)
+	if r, off := tacitOff(); !off || r != "default path" {
+		t.Errorf("~/.config/tacit/off with XDG_CONFIG_HOME elsewhere: %q %v", r, off)
+	}
+	os.Remove(dflt)
+	setOff(t, "xdg path")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	if _, off := tacitOff(); off {
+		t.Error("no XDG_CONFIG_HOME: the default path alone counts")
+	}
+	t.Setenv("XDG_CONFIG_HOME", filepath.Dir(filepath.Dir(p)))
+	os.Remove(p)
 	if out := callTool(t, "tacit_fact", map[string]any{"name": "widget-signoff"}); strings.Contains(out, "tacit is off") {
 		t.Fatalf("on again: %s", out)
 	}

@@ -184,8 +184,8 @@ func doctorChecks(models bool, role string) ([]doctorCheck, bool) {
 			add(j.name, status, detail)
 		}
 	}
-	if reason, off := tacitOff(); off {
-		add("off switch", "warn", offLine(reason)+": every hook, job and MCP tool does nothing; remove the file to turn tacit on")
+	if reason, path, off := offState(); off {
+		add("off switch", "warn", offLine(reason, path)+": every hook, job and MCP tool does nothing; remove the file to turn tacit on")
 	}
 	if s, err := store.Default(); err == nil && s.Exists() {
 		for _, c := range doctorKeyChecks(func(writer string) error {
