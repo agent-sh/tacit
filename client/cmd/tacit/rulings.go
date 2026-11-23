@@ -63,9 +63,10 @@ type rulingVerdict struct {
 	From       string   `json:"from,omitempty"`
 	Endorsed   string   `json:"endorsed,omitempty"`
 	DisownedBy string   `json:"disowned_by,omitempty"`
-	Near       bool     `json:"near,omitempty"`    // their words with a typo the fact corrected
-	Tried      []string `json:"tried,omitempty"`   // the quoted phrases checked, when none proved it
-	Unclean    []string `json:"unclean,omitempty"` // phrases of theirs found only in a question or after a negation
+	Near       bool     `json:"near,omitempty"`     // their words with a typo the fact corrected
+	Tried      []string `json:"tried,omitempty"`    // the quoted phrases checked, when none proved it
+	Unclean    []string `json:"unclean,omitempty"`  // phrases of theirs found only in a question or after a negation
+	OneTime    bool     `json:"one_time,omitempty"` // their words prove the rule but are one-time words (ownerwords.MintsRuling): recorded as words
 	src        fact.Source
 	turnHash   string
 	said       string // the day of their turn that holds the words, when it records one
@@ -451,7 +452,7 @@ func (a *rulingAuditor) decide(f *fact.Fact) rulingVerdict {
 	}
 	if disowned {
 		v.Outcome, v.DisownedBy = ruledDisowned, dis.note
-	} else if p := a.findQuote(f); p.quote != "" && !p.short {
+	} else if p := a.findQuote(f); p.quote != "" && !p.short && ownerwords.MintsRuling(p.quote, f.Meta.Scope) {
 		v.Quote, v.From, v.Near, v.turnHash, v.said = p.quote, p.at.from, p.at.near, p.at.turnHash, a.saidOn(p)
 		src.OwnerQuote, src.OwnerQuoteFrom = strings.Join(strings.Fields(p.quote), " "), p.at.from
 		src.Endorsed = end.ID
@@ -460,9 +461,11 @@ func (a *rulingAuditor) decide(f *fact.Fact) rulingVerdict {
 		v.Endorsed = end.ID
 		src.Endorsed = end.ID
 		return keep(ruledEndorsed)
-	} else if p.short {
-		// Their words, too few to prove the rule: an observation that carries
+	} else if p.quote != "" {
+		// Their words, too few to prove the rule, or one-time words that are
+		// never a ruling (ownerwords.MintsRuling): an observation that carries
 		// them as evidence (ledger-backed), asked about only on a real conflict.
+		v.OneTime = !p.short
 		v.Outcome, v.Quote, v.From, v.Near, v.Tried, v.Unclean, v.turnHash, v.said = ruledShort, p.quote, p.at.from, p.at.near, p.tried, p.unclean, p.at.turnHash, a.saidOn(p)
 		src.OwnerWords, src.OwnerWordsFrom = strings.Join(strings.Fields(p.quote), " "), p.at.from
 	} else {
@@ -608,8 +611,11 @@ func runRulings(args []string) int {
 	if len(args) > 0 && args[0] == "one-offs" {
 		return runOneOffs(args[1:])
 	}
+	if len(args) > 0 && args[0] == "one-time" {
+		return runOneTime(args[1:])
+	}
 	if len(args) == 0 || args[0] != "audit" {
-		fmt.Fprintln(os.Stderr, "usage: tacit rulings audit [--dry-run] [--strict] [--recheck] [--digests DIR] [--digests-only] [--sample N] [--seed N] [--json FILE]\n       tacit rulings one-offs [--dry-run] [--json FILE] [--verdicts FILE] [--found FILE] [--no-gate] [--batch N] [--jobs N] [--sample N] [--env-file F]")
+		fmt.Fprintln(os.Stderr, "usage: tacit rulings audit [--dry-run] [--strict] [--recheck] [--digests DIR] [--digests-only] [--sample N] [--seed N] [--json FILE]\n       tacit rulings one-offs [--dry-run] [--json FILE] [--verdicts FILE] [--found FILE] [--no-gate] [--batch N] [--jobs N] [--sample N] [--env-file F]\n       tacit rulings one-time [--dry-run] [--json FILE]")
 		return 2
 	}
 	fs := flag.NewFlagSet("rulings audit", flag.ExitOnError)

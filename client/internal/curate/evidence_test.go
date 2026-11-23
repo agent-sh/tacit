@@ -173,6 +173,25 @@ func TestOneOffRulingIsAStatement(t *testing.T) {
 	}
 }
 
+// One-time words are their statement however many sessions hold them: a
+// go-ahead said twice is still a go-ahead, never a standing rule.
+func TestOneTimeRulingIsAStatementInAnySessions(t *testing.T) {
+	where := func(q, session string) (string, string) { return "claude:s1", "h1" }
+	words := "continue the export work, publish it once done"
+	n := note("n1", "claude", "The owner said \""+words+"\".")
+	e := Entry{Kind: "user", OwnerQuote: words, Description: "The export work goes on and is published once done",
+		Body: "Publish the export work once it is done.", Context: "the export work", Name: "f", Scope: "projects/storefront", Type: "user_standard", Origin: "n1"}
+	f := ToFact(e, "host-a", map[string]bool{})
+	f.Meta.Created = "2026-09-21"
+	q, ruling := ApplyEvidence(f, e, n, where)
+	if !ruling {
+		t.Fatal("not a ruling to start with")
+	}
+	if _, ok := OneOff(f, e, q, []string{"claude:s1", "codex:s2"}, nil, true); !ok || f.Meta.Type != fact.StatementType || f.Meta.Source.Kind != "observed" || f.Meta.Source.OwnerWords == "" {
+		t.Fatalf("a go-ahead said in two sessions stayed a rule: %+v", f.Meta)
+	}
+}
+
 // A statement is dated by the owner's turn (SaidOn), never by the day the
 // dreamer read the session or the curator wrote the fact; the words line
 // records that day. With no turn time (or one after the write, which is no

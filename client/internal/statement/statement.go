@@ -74,6 +74,10 @@ const (
 	// words (their words line's said, or their turn's time); Why says from
 	// what day to what, and by which source.
 	LogRedated = "redated"
+	// LogOneTime: a ruling, a promoted fact or a statement whose words are
+	// one-time words (ownerwords.OneTimeClear), retired by code: Words their
+	// words, Why the reason (SPEC.md, Rulings, "One-time words").
+	LogOneTime = "one-time"
 )
 
 // Relation is a statement's relation to an earlier item.

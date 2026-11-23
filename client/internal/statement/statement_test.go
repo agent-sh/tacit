@@ -179,3 +179,57 @@ func TestCandidatesShareWordsOrAFolder(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+// One-time words are never minted, however many sessions the model put in
+// one point with them: a list of chores is no decision, a go-ahead no
+// preference, and a check that holds makes no decision of either.
+func TestOneTimeWordsAreNotPromoted(t *testing.T) {
+	chores := func(name, from, day string) Item {
+		it := item(name, from, day)
+		it.Scope, it.Words = "user", "send the invoice. remind me at 5 to renew the domain. reply to the vendor"
+		return it
+	}
+	st := State{Statements: map[string]Item{
+		"a": chores("a", "claude:s1", "2026-10-15"),
+		"b": chores("b", "claude:s2", "2026-10-21"),
+	}, Log: []Entry{judged("a", Choice), judged("b", Choice, Relation{"a", Same})}}
+	if acts := Plan(st); len(acts) != 0 {
+		t.Fatalf("chores promoted: %v", kinds(acts))
+	}
+	goAhead := func(name, from, day string) Item {
+		it := item(name, from, day)
+		it.Words = "go on, publish it once done"
+		return it
+	}
+	st = State{Statements: map[string]Item{
+		"a": goAhead("a", "claude:s1", "2026-10-10"),
+		"b": goAhead("b", "codex:s2", "2026-10-11"),
+	}, Log: []Entry{judged("a", Instruction), judged("b", Instruction, Relation{"a", Same})}}
+	if acts := Plan(st); len(acts) != 0 {
+		t.Fatalf("go-ahead promoted: %v", kinds(acts))
+	}
+	st = State{Statements: map[string]Item{"a": goAhead("a", "claude:s1", "2026-10-10")},
+		Log:    []Entry{judged("a", Choice)},
+		Checks: map[string][]check.Result{"a": {{Verdict: check.Holds}}}}
+	if acts := Plan(st); len(acts) != 0 {
+		t.Fatalf("go-ahead promoted by a check: %v", kinds(acts))
+	}
+	// An instruction of the task at hand is minted in its project, not for
+	// every session.
+	task := func(name, from, day, scope string) Item {
+		it := item(name, from, day)
+		it.Scope, it.Words = scope, "you can close the stale ones"
+		return it
+	}
+	st = State{Statements: map[string]Item{
+		"a": task("a", "claude:s1", "2026-10-10", "user"),
+		"b": task("b", "codex:s2", "2026-10-11", "user"),
+	}, Log: []Entry{judged("a", Instruction), judged("b", Instruction, Relation{"a", Same})}}
+	if acts := Plan(st); len(acts) != 0 {
+		t.Fatalf("task instruction promoted for every session: %v", kinds(acts))
+	}
+	st.Statements["a"], st.Statements["b"] = task("a", "claude:s1", "2026-10-10", "projects/storefront"), task("b", "codex:s2", "2026-10-11", "projects/storefront")
+	if acts := Plan(st); len(acts) != 1 || acts[0].Level != LevelPreference {
+		t.Fatalf("task instruction in its project: %v", kinds(acts))
+	}
+}

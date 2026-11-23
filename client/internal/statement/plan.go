@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/agent-sh/tacit/client/internal/check"
+	"github.com/agent-sh/tacit/client/internal/ownerwords"
 )
 
 // State is what one run of the step knows.
@@ -189,8 +190,15 @@ func Plan(st State) []Action {
 			}
 			acts = append(acts, a)
 		}
+		// One-time words (an approval to go on, a list of chores, words tied
+		// to the moment; an instruction of the task at hand in the user or
+		// system scope) are never minted, however often a point like them
+		// was made: they stay what the owner said in that session
+		// (ownerwords.MintsRuling).
+		mints := ownerwords.MintsRuling(newest.Words, newest.Scope)
 		switch {
-		case prom != nil && prom.Kind == LevelPreference && says == Instruction && n >= 3:
+		case prom == nil && !mints:
+		case prom != nil && prom.Kind == LevelPreference && says == Instruction && n >= 3 && mints:
 			promote(LevelRule, BySessions, nil)
 		case prom != nil:
 			// Said again after it was decided: the statement is that point
@@ -207,6 +215,9 @@ func Plan(st State) []Action {
 			promote(LevelPreference, BySessions, nil)
 		default:
 			for i := len(live) - 1; i >= 0; i-- {
+				if !ownerwords.MintsRuling(live[i].Words, live[i].Scope) {
+					continue
+				}
 				if rs := st.Checks[live[i].Name]; Verdict(rs) == check.Holds {
 					newest = live[i]
 					promote(LevelDecision, ByCheck, agreeing(rs))

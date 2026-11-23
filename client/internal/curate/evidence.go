@@ -164,8 +164,9 @@ func ApplyStatement(f *fact.Fact, e Entry, note *fact.Fact, where Where, said Sa
 }
 
 // OneOff settles a ruling ApplyEvidence kept (SPEC.md, "One-offs"): words
-// the owner said in one session are a statement scoped to their moment,
-// never a standing rule. sessions is every session code finds the quote in, as a
+// the owner said in one session, or one-time words in any number of them
+// (ownerwords.MintsRuling), are a statement scoped to their moment, never a
+// standing rule. sessions is every session code finds the quote in, as a
 // statement of theirs (ownerwords.Corpus.SaidIn). Said in two or more, it
 // stays a ruling. Said in one (or none code can count), f becomes their
 // statement as ApplyStatement writes one: type statement, their words in
@@ -177,7 +178,9 @@ func ApplyStatement(f *fact.Fact, e Entry, note *fact.Fact, where Where, said Sa
 // that agrees) makes a decision or a rule of it. q is the ruling's quote
 // ledger line; it returns the words line and whether f was changed.
 func OneOff(f *fact.Fact, e Entry, q ledger.Quote, sessions []string, said SaidOn, statements bool) (ledger.Quote, bool) {
-	if len(sessions) >= 2 || q.Quote == "" || q.From == "" || strings.HasPrefix(q.From, "note:") {
+	// One-time words are their statement however many sessions hold them
+	// (ownerwords.MintsRuling): a go-ahead said twice is still a go-ahead.
+	if (len(sessions) >= 2 && ownerwords.MintsRuling(q.Quote, f.Meta.Scope)) || q.Quote == "" || q.From == "" || strings.HasPrefix(q.From, "note:") {
 		return q, false
 	}
 	src := &f.Meta.Source
