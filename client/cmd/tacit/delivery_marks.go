@@ -195,11 +195,11 @@ func logMark(block string, marks []markVerdict) (skipped []string, err error) {
 		case verdictWrong:
 			m.Wrong = append(m.Wrong, name)
 		}
-		in := lines[name].In
+		in, hook := lines[name].In, lines[name].Via
 		if asked.Hook != "stop" {
-			in = outcomeScope(asked.Repos)
+			in, hook = outcomeScope(asked.Repos), asked.Hook
 		}
-		outs = append(outs, outcomeLine{TS: now.UTC().Format(time.RFC3339Nano), In: in, Fact: name, Verdict: verdict[name], Src: "mark", Block: block})
+		outs = append(outs, outcomeLine{TS: now.UTC().Format(time.RFC3339Nano), In: in, Fact: name, Verdict: verdict[name], Src: "mark", Block: block, Hook: hook})
 	}
 	if len(outs) == 0 {
 		return skipped, errors.New("name at least one of the facts the ask listed, with used, not_relevant or wrong")

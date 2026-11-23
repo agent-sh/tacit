@@ -51,7 +51,15 @@ type outcomeLine struct {
 	Verdict string `json:"v"`   // used, not_relevant, wrong
 	Src     string `json:"src"` // mark, judge
 	Block   string `json:"block,omitempty"`
+	// Hook is the hook that delivered the line (start, prompt, deny, ...).
+	Hook string `json:"hook,omitempty"`
 }
+
+// standing are the hooks that give a line before its situation: a start
+// block and its returns after a compaction or a resume, and a deny. Their
+// lines are rules carried ahead of the moment, "not relevant" to most turns
+// by nature, so only a wrong verdict counts against them there.
+var standing = map[string]bool{"start": true, "compact": true, "resume": true, "deny": true}
 
 // outcomeTally is a line's count in a scope.
 type outcomeTally struct {
@@ -170,6 +178,9 @@ func tallyOutcomes(now time.Time) map[string]map[string]outcomeTally {
 		case "used":
 			t.Used++
 		case "not_relevant":
+			if standing[l.Hook] {
+				continue
+			}
 			t.Bad++
 		case "wrong":
 			t.Bad++

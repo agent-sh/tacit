@@ -81,7 +81,7 @@ func TestStopAsksOnceForTheTurnsMarks(t *testing.T) {
 	beginLog("resume", hookInput{SessionID: "s9"}, "", []string{"widget"}, nil)
 	endLog(nil)
 	owe("s9", []string{"slot-lock-order"})
-	if b, _ := os.ReadFile(owedFile("s9")); string(b) != "slot-lock-order\twidget\n" {
+	if b, _ := os.ReadFile(owedFile("s9")); string(b) != "slot-lock-order\twidget\tresume\n" {
 		t.Fatalf("owed after its entry ended: %q", b)
 	}
 	os.Remove(owedFile("s1"))
@@ -244,11 +244,15 @@ func TestOutcomesDemoteStopAndPromote(t *testing.T) {
 	add("widget", "saved", verdictNotRelevant, 3)
 	add("widget", "saved", verdictUsed, 1)
 	add("gadget", "good", verdictNotRelevant, 3)
+	for i := 0; i < 3; i++ {
+		lines = append(lines, outcomeLine{TS: now, In: "widget", Fact: "standing-rule", Verdict: verdictNotRelevant, Src: "mark", Hook: "start"})
+	}
+	lines = append(lines, outcomeLine{TS: now, In: "widget", Fact: "standing-wrong", Verdict: verdictWrong, Src: "mark", Hook: "deny"})
 	old := outcomeLine{TS: time.Now().Add(-outcomeWindow - time.Hour).UTC().Format(time.RFC3339Nano), In: "widget", Fact: "good", Verdict: verdictNotRelevant, Src: "judge"}
 	lines = append(lines, old, old, old, old)
 	recordOutcomes(lines)
 	o := outcomesFor("widget")
-	for name, want := range map[string]int{"noisy": outcomeStopped, "mixed": outcomeDemoted, "good": outcomePromoted, "saved": outcomeDemoted, "fresh": outcomeNeutral} {
+	for name, want := range map[string]int{"noisy": outcomeStopped, "mixed": outcomeDemoted, "good": outcomePromoted, "saved": outcomeDemoted, "fresh": outcomeNeutral, "standing-rule": outcomeNeutral, "standing-wrong": outcomeDemoted} {
 		if got := o.class(name); got != want {
 			t.Errorf("%s: class %d, want %d", name, got, want)
 		}

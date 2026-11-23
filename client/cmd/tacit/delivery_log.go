@@ -246,7 +246,7 @@ func hermesLogOffset(session string) int64 {
 // beginLog opens an entry for a block of hook, writing the one before it.
 func beginLog(hook string, in hookInput, request string, repos []string, ix *search.Index) {
 	endLog(nil)
-	owedScope = outcomeScope(repos) // the lines this hook prints are owed under it, after endLog too
+	owedScope, owedHook = outcomeScope(repos), hook // the lines this hook prints are owed under these, after endLog too
 	if !deliveryLogOn() {
 		return
 	}

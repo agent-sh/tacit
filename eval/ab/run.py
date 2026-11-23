@@ -212,9 +212,9 @@ def run_once(task, arm, block_path, rep):
         cmd += ["--tools", ""]  # decision tasks: one turn, no tools
     # `live`: no injected block; whatever hooks are installed in the user's
     # settings run (the shipped tacit hooks after 2026-10-08).
-    # The live arm's installed hooks would ask for self-marks into the
-    # machine's real delivery log: no asks in any arm unless it sets them.
-    env = {**os.environ, "TACIT_AB": "1", "TACIT_DELIVERY_MARK_RATE": "0"}
+    # `live` runs the installed hooks as they run for any `claude -p`: a
+    # headless run, so no blocks and no Stop ask into the real log.
+    env = {**os.environ, "TACIT_AB": "1"}
     name, hook_env = hook_arm(arm)
     state = None
     if name is not None:
@@ -228,18 +228,14 @@ def run_once(task, arm, block_path, rep):
                 "--mcp-config", json.dumps(mcp), "--strict-mcp-config"]
         if task["allowed_tools"]:
             cmd[cmd.index("--allowedTools") + 1:cmd.index("--allowedTools") + 1] = ["mcp__tacit__tacit_fact", "mcp__tacit__tacit_search", "mcp__tacit__tacit_tree"]
-        # No self-mark ask unless the arm sets one: it would add turns in the
-        # hook arms only. An arm that sets one may call the tool.
-        env.update({"TACIT_DELIVERY_MARK_RATE": "0"}, **hook_env)
-        if task["allowed_tools"] and float(env["TACIT_DELIVERY_MARK_RATE"] or 0) > 0:
-            cmd[cmd.index("--allowedTools") + 1:cmd.index("--allowedTools") + 1] = ["mcp__tacit__tacit_mark"]
+        # The hook arms measure the blocks: their `claude -p` runs count as
+        # a person's (TACIT_HEADLESS=0), with the arm's own state; their
+        # settings install no Stop hook, so no arm adds a mark turn.
+        env.update({"TACIT_HEADLESS": "0"}, **hook_env)
     elif arm not in ("bare", "live"):
         path = SCRATCH / f"{task['id']}-{arm}.md"
         settings = {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": f"cat {path}"}]}]}}
         cmd += ["--settings", json.dumps(settings)]
-    # `claude -p` is a headless run, which tacit's hooks give no blocks; the
-    # A/B measures the blocks, so every arm's run counts as a person's.
-    env["TACIT_HEADLESS"] = "0"
     t0 = time.time()
     try:
         proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=task.get("timeout", 900), env=env)

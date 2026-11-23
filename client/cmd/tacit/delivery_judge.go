@@ -871,7 +871,7 @@ func judgePool(ctx context.Context, now time.Time, through time.Time) (out []jud
 			for _, c := range e.Cands {
 				if c.Delivered {
 					out = append(out, judgeMoment{Block: e.ID, Fact: c.Name, Hook: e.Hook, Tool: e.Tool,
-						Transcript: hermes.Key(hdb.Path, e.HermesSession), Offset: e.Transcript, FactPath: c.Path})
+						Transcript: hermes.Key(hdb.Path, e.HermesSession), Offset: e.Transcript, FactPath: c.Path, In: outcomeScope(e.Repos)})
 				}
 			}
 			continue
@@ -1291,7 +1291,7 @@ func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int,
 				st.Count++ // the call was paid either way
 				if appendJudgeLabel(e, time.Now()) == nil {
 					pass.Judged++
-					recordOutcomes(labelOutcome(v, moments[i+k].In))
+					recordOutcomes(labelOutcome(v, moments[i+k].In, moments[i+k].Hook))
 					continue
 				}
 				// A label the log could not take: the line waits for a later
@@ -1408,7 +1408,7 @@ func runDeliveryJudge(args []string) int {
 
 // labelOutcome is a label's outcome: relevant yes is used, no is not
 // relevant, unsure is none.
-func labelOutcome(v judgeVerdict, in string) []outcomeLine {
+func labelOutcome(v judgeVerdict, in, hook string) []outcomeLine {
 	verdict := ""
 	switch v.Relevant {
 	case "yes":
@@ -1418,5 +1418,5 @@ func labelOutcome(v judgeVerdict, in string) []outcomeLine {
 	default:
 		return nil
 	}
-	return []outcomeLine{{TS: time.Now().UTC().Format(time.RFC3339Nano), In: in, Fact: v.Fact, Verdict: verdict, Src: "judge", Block: v.Block}}
+	return []outcomeLine{{TS: time.Now().UTC().Format(time.RFC3339Nano), In: in, Fact: v.Fact, Verdict: verdict, Src: "judge", Block: v.Block, Hook: hook}}
 }

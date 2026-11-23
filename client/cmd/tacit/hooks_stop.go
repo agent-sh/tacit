@@ -32,6 +32,11 @@ func owedFile(id string) string {
 // remember.
 var owedScope string
 
+// owedHook is the hook that printed them (start, prompt, deny, ...): a
+// line a session start or a deny gave is owed a mark like any, but its
+// "not relevant" does not count against it (delivery_outcomes.go).
+var owedHook string
+
 // owe adds printed lines to the session's owed set, under owedScope. A
 // headless session owes nothing: nobody is asked there.
 func owe(id string, names []string) {
@@ -39,7 +44,7 @@ func owe(id string, names []string) {
 	if p == "" || len(names) == 0 || !deliveryLogOn() || hookHeadless {
 		return
 	}
-	scope := owedScope
+	scope, hook := owedScope, owedHook
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
@@ -48,14 +53,14 @@ func owe(id string, names []string) {
 	var b strings.Builder
 	for _, n := range names {
 		if n != "" && !strings.ContainsAny(n, "\t\n") {
-			fmt.Fprintf(&b, "%s\t%s\n", n, scope)
+			fmt.Fprintf(&b, "%s\t%s\t%s\n", n, scope, hook)
 		}
 	}
 	f.WriteString(b.String())
 }
 
 // owedLine is one owed fact.
-type owedLine struct{ name, scope string }
+type owedLine struct{ name, scope, hook string }
 
 // takeOwed reads and clears the owed set: each name once, the first scope
 // it was printed under, in print order.
@@ -76,12 +81,16 @@ func takeOwed(id string) []owedLine {
 	var out []owedLine
 	seen := map[string]bool{}
 	for _, l := range strings.Split(string(b), "\n") {
-		name, scope, _ := strings.Cut(l, "\t")
+		f := strings.SplitN(l, "\t", 3)
+		for len(f) < 3 {
+			f = append(f, "")
+		}
+		name, scope, hook := f[0], f[1], f[2]
 		if name == "" || seen[name] {
 			continue
 		}
 		seen[name] = true
-		out = append(out, owedLine{name, scope})
+		out = append(out, owedLine{name, scope, hook})
 	}
 	return out
 }
@@ -117,7 +126,7 @@ func stopHook(in hookInput) {
 	names := make([]string, len(owed))
 	for i, o := range owed {
 		names[i] = o.name
-		e.Cands = append(e.Cands, logCand{Name: o.name, Delivered: true, P: 1, Rank: -1, In: o.scope, Via: "owed"})
+		e.Cands = append(e.Cands, logCand{Name: o.name, Delivered: true, P: 1, Rank: -1, In: o.scope, Via: o.hook})
 		if o.scope != "" && !slices.Contains(e.Repos, o.scope) {
 			e.Repos = append(e.Repos, o.scope)
 		}
