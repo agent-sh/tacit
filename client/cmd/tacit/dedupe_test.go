@@ -216,9 +216,10 @@ func TestCurateAbsorbsAcrossBatchesOfOneRun(t *testing.T) {
 func TestDedupeNearRetiresNearCopiesFromTheModelsAnswer(t *testing.T) {
 	r := newRig(t, rigOpts{})
 	const ws = "machines/host-a"
-	writeFact(t, r.clone, fact.Meta{Name: "farm-never-leave-nodes-idle", Description: "On render farm work never leave the nodes idle; the farm is the costliest resource", Type: "machine_fact", Scope: ws, Created: "2026-10-05"}, "Start the next job at once.\n")
-	writeFact(t, r.clone, fact.Meta{Name: "keep-farm-nodes-busy", Description: "Never leave render farm nodes idle: start the next render job at once", Type: "machine_fact", Scope: ws, Created: "2026-10-01"}, "The farm costs the most.\n")
-	writeFact(t, r.clone, fact.Meta{Name: "farm-billing-portal", Description: "The render farm billing portal shows the monthly invoice per node", Type: "machine_fact", Scope: ws, Created: "2026-10-02"}, "x\n")
+	// writeFact writes every fact on one day: the first by name is kept.
+	writeFact(t, r.clone, fact.Meta{Name: "farm-never-leave-nodes-idle", Description: "On render farm work never leave the nodes idle; the farm is the costliest resource", Type: "machine_fact", Scope: ws}, "Start the next job at once.\n")
+	writeFact(t, r.clone, fact.Meta{Name: "keep-farm-nodes-busy", Description: "Never leave render farm nodes idle: start the next render job at once", Type: "machine_fact", Scope: ws}, "The farm costs the most.\n")
+	writeFact(t, r.clone, fact.Meta{Name: "farm-billing-portal", Description: "The render farm billing portal shows the monthly invoice per node", Type: "machine_fact", Scope: ws}, "x\n")
 	r.commitIndex(r.clone, "near fixture")
 	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
 	home := t.TempDir()
@@ -244,7 +245,6 @@ func TestDedupeNearRetiresNearCopiesFromTheModelsAnswer(t *testing.T) {
 		t.Fatalf("dedupe --near exited %d", code)
 	}
 	for rel, want := range map[string]string{
-		// Both written the same day: the first by name is kept.
 		ws + "/farm-never-leave-nodes-idle.md": "",
 		ws + "/keep-farm-nodes-busy.md":        "farm-never-leave-nodes-idle",
 		ws + "/farm-billing-portal.md":         "",
@@ -254,4 +254,45 @@ func TestDedupeNearRetiresNearCopiesFromTheModelsAnswer(t *testing.T) {
 		}
 	}
 	r.assertClean("after dedupe --near")
+}
+
+// tacit dedupe --near when the store changed after the dry run: a fact of
+// the cluster got a condition in its body, so the answer the dry run paid
+// for is no answer for the cluster as it is now; the real run asks again,
+// and the new answer (not the same) retires nothing.
+func TestDedupeNearAsksAgainWhenAClusterChanged(t *testing.T) {
+	r := newRig(t, rigOpts{})
+	const ws = "machines/host-a"
+	writeFact(t, r.clone, fact.Meta{Name: "farm-never-leave-nodes-idle", Description: "On render farm work never leave the nodes idle; the farm is the costliest resource", Type: "machine_fact", Scope: ws}, "Start the next job at once.\n")
+	writeFact(t, r.clone, fact.Meta{Name: "keep-farm-nodes-busy", Description: "Never leave render farm nodes idle: start the next render job at once", Type: "machine_fact", Scope: ws}, "The farm costs the most.\n")
+	r.commitIndex(r.clone, "near fixture")
+	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("TACIT_STORE", r.clone)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	calls := 0
+	answer := `{"groups": [{"group": 1, "same": [[1, 2]]}]}`
+	old := nearRun
+	t.Cleanup(func() { nearRun = old })
+	nearRun = func(ctx context.Context, model, prompt string) (string, float64, error) {
+		calls++
+		return answer, 0, nil
+	}
+	if code := runDedupe([]string{"--near", "--dry-run"}); code != 0 || calls != 1 {
+		t.Fatalf("dry run exited %d, asked %d times", code, calls)
+	}
+	// Another writer adds a condition to one fact's body.
+	writeFact(t, r.clone, fact.Meta{Name: "keep-farm-nodes-busy", Description: "Never leave render farm nodes idle: start the next render job at once", Type: "machine_fact", Scope: ws}, "Only on weekdays; the farm costs the most.\n")
+	r.commitIndex(r.clone, "a condition")
+	gitIn(t, r.clone, "push", "-q", "origin", "HEAD:main")
+	answer = `{"groups": [{"group": 1, "same": []}]}`
+	if code := runDedupe([]string{"--near"}); code != 0 || calls != 2 {
+		t.Fatalf("real run exited %d, asked %d times (want the changed cluster asked again)", code, calls)
+	}
+	for _, rel := range []string{ws + "/farm-never-leave-nodes-idle.md", ws + "/keep-farm-nodes-busy.md"} {
+		if got := supersededOnServer(t, r, rel); got != "" {
+			t.Errorf("%s retired on a stale answer: %q", rel, got)
+		}
+	}
 }

@@ -2,6 +2,7 @@ package curate
 
 import (
 	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
@@ -61,6 +62,16 @@ func TestNearCopiesKeepTheOwnersWordsThenTheEarliest(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("NearCopies without a ruling = %v, want %v", got, want)
 	}
+	// The owner's facts are never retired on a model's verdict: a second
+	// ruling, and a fact with a quote of theirs that is no ruling, stay.
+	facts[0] = ruling(cf(ws, "farm-never-leave-nodes-idle", "2026-10-05", "On render farm work never leave the nodes idle; the farm is the costliest resource"), "never leave the render farm nodes idle")
+	facts[2] = ruling(cf(ws, "farm-nodes-idle-rule", "2026-10-09", "Render farm nodes never sit idle between render jobs"), "never let the render farm nodes sit idle between jobs")
+	facts[1].Meta.Source.Kind, facts[1].Meta.Source.OwnerQuote, facts[1].Meta.Source.OwnerQuoteFrom = "observed", "start the next render job at once", "claude:s2"
+	cs = NearCandidates(facts)
+	v, _ = ParseNear(answer, cs)
+	if got := NearCopies(cs, v, DedupeGuard{}); len(got) != 0 {
+		t.Fatalf("the owner's facts were retired: %v", copiesOf(got))
+	}
 	// No verdict, no copy; an answer naming a fact the group lacks is refused.
 	if got := NearCopies(cs, nil, DedupeGuard{}); len(got) != 0 {
 		t.Fatalf("copies with no verdict: %v", got)
@@ -73,4 +84,4 @@ func TestNearCopiesKeepTheOwnersWordsThenTheEarliest(t *testing.T) {
 	}
 }
 
-func itoa(n int) string { return string(rune('0' + n)) }
+func itoa(n int) string { return strconv.Itoa(n) }

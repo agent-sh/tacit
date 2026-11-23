@@ -48,8 +48,7 @@ type NearCluster struct {
 }
 
 // nearCandidate is a fact the near pass reads: live, curated, of no
-// generated type, not a system fact, a folder file or a statement's
-// judged twin.
+// generated type and not a system fact (Walk passes folder files over).
 func nearCandidate(f *fact.Fact) bool {
 	m := f.Meta
 	return live(f) && !strings.HasPrefix(m.Scope, "derived/") && m.Scope != "system" && !fact.IsResult(m.Type) && m.Type != "hot_spot"
@@ -63,10 +62,20 @@ func nearStems(f *fact.Fact) map[string]bool {
 	return out
 }
 
+// nearLine is how the prompt shows a fact: its type, day, name,
+// description and the start of its body. A cluster's key is a hash of its
+// facts' lines, so an answer stands only while the model would read the
+// same thing.
+func nearLine(f *fact.Fact) string {
+	body := strings.Join(strings.Fields(f.Body), " ")
+	return fmt.Sprintf("[%s, %s] %s: %s | %s", f.Meta.Type, f.Meta.Created, f.Meta.Name, ClipLine(f.Meta.Description, 200), ClipLine(body, 360))
+}
+
 // NearCandidates are the clusters of facts that may say the same thing: in
 // one scope, every pair that shares NearShared content stems and
-// NearOverlap of them, joined strongest pair first while a cluster stays
-// within NearMaxCluster facts. No model.
+// NearOverlap of them (a stem more than nearCommon of the scope's facts
+// hold is left out of both sides), joined strongest pair first while a
+// cluster stays within NearMaxCluster facts. No model.
 func NearCandidates(facts []*fact.Fact) []NearCluster {
 	byScope := map[string][]*fact.Fact{}
 	for _, f := range facts {
@@ -91,6 +100,16 @@ func NearCandidates(facts []*fact.Fact) []NearCluster {
 				inv[s] = append(inv[s], i)
 			}
 		}
+		// A folder's own subject is in most of its facts: such a stem joins
+		// no pair and counts on neither side.
+		for s, is := range inv {
+			if len(is) > nearCommon {
+				for _, i := range is {
+					delete(stems[i], s)
+				}
+				delete(inv, s)
+			}
+		}
 		type edge struct {
 			a, b int
 			j    float64
@@ -99,9 +118,6 @@ func NearCandidates(facts []*fact.Fact) []NearCluster {
 		for i := range fs {
 			shared := map[int]int{}
 			for s := range stems[i] {
-				if len(inv[s]) > nearCommon {
-					continue
-				}
 				for _, k := range inv[s] {
 					if k > i {
 						shared[k]++
@@ -174,7 +190,7 @@ func NearCandidates(facts []*fact.Fact) []NearCluster {
 func nearKey(fs []*fact.Fact) string {
 	h := sha256.New()
 	for _, f := range fs {
-		h.Write([]byte(f.Path + "\x00" + f.Meta.Description + "\x00"))
+		h.Write([]byte(f.Path + "\x00" + nearLine(f) + "\x00"))
 	}
 	return hex.EncodeToString(h.Sum(nil)[:8])
 }
@@ -191,8 +207,7 @@ Answer ONLY a JSON object: {"groups": [{"group": 1, "same": [[1, 2], [3, 5]]}, {
 	for i, c := range cs {
 		fmt.Fprintf(&b, "Group %d (%s):\n", i+1, c.Scope)
 		for j, f := range c.Facts {
-			body := strings.Join(strings.Fields(f.Body), " ")
-			fmt.Fprintf(&b, "  %d. [%s, %s] %s: %s | %s\n", j+1, f.Meta.Type, f.Meta.Created, f.Meta.Name, ClipLine(f.Meta.Description, 200), ClipLine(body, 360))
+			fmt.Fprintf(&b, "  %d. %s\n", j+1, nearLine(f))
 		}
 		b.WriteString("\n")
 	}
@@ -267,14 +282,15 @@ func nearRank(a, b *fact.Fact) bool {
 }
 
 // ownerTier is how much of the owner a fact holds: 3 their ruling, 2 a
-// fact they wrote, 1 their words, 0 none.
+// fact they wrote, 1 any evidence of theirs (their words, a quote, an
+// endorsement, backed or not), 0 none.
 func ownerTier(f *fact.Fact) int {
 	switch {
 	case fact.IsRuling(f):
 		return 3
 	case fact.OwnerWrote(f):
 		return 2
-	case fact.OwnerWordsOf(f) != "":
+	case fact.ClaimsEvidence(f):
 		return 1
 	}
 	return 0
@@ -282,13 +298,13 @@ func ownerTier(f *fact.Fact) int {
 
 // NearCopies turns the model's sets into copies: in each set the fact
 // ranked first (nearRank) is kept and the others are its copies, except a
-// fact that may not be retired: one the owner wrote in the app, kept in a
-// decision or marked conflicting, one whose pair with the kept fact they
-// answered, one whose checked references hold where the kept fact's are
-// refuted, and a fact that holds more of the owner than the kept one (a
-// ruling is a copy only of a ruling, their words only of a fact that holds
-// their words or is their ruling), so the fact kept keeps the owner's
-// words. A cluster with no verdict is left alone.
+// fact that may not be retired on a model's verdict: one that holds any of
+// the owner (their ruling, a fact they wrote, their words, a quote or an
+// endorsement: ownerTier), one kept in a decision of theirs or marked
+// conflicting, one whose pair with the kept fact they answered, and one
+// whose checked references hold where the kept fact's are refuted. So only
+// agents' facts are retired, into the fact that holds most of the owner.
+// A cluster with no verdict is left alone.
 func NearCopies(cs []NearCluster, verdicts map[string][][]int, g DedupeGuard) []Copies {
 	var out []Copies
 	for _, c := range cs {
@@ -310,7 +326,7 @@ func NearCopies(cs []NearCluster, verdicts map[string][][]int, g DedupeGuard) []
 			kept := fs[0]
 			cp := Copies{Kept: kept}
 			for _, x := range fs[1:] {
-				if fact.OwnerWrote(x) || g.Kept[x.Meta.Name] || len(x.Meta.ConflictsWith) > 0 || ownerTier(x) > ownerTier(kept) ||
+				if ownerTier(x) > 0 || g.Kept[x.Meta.Name] || len(x.Meta.ConflictsWith) > 0 ||
 					(g.Answered != nil && g.Answered(x.Meta.Name, kept.Meta.Name)) || (g.Refuted != nil && g.Refuted(kept, x)) {
 					continue
 				}

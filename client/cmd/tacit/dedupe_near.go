@@ -12,7 +12,10 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,14 +40,17 @@ type nearState struct {
 	Answers map[string][][]int `json:"answers"`
 }
 
-func nearStatePath() string {
+// nearStatePath is the answers' file for the store at dir: one file per
+// store, since a key hashes paths within it.
+func nearStatePath(dir string) string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(platform.StateDir(home), "dedupe-near.json")
+	h := sha256.Sum256([]byte(dir))
+	return filepath.Join(platform.StateDir(home), "dedupe-near-"+hex.EncodeToString(h[:4])+".json")
 }
 
-func readNearState() nearState {
+func readNearState(dir string) nearState {
 	st := nearState{Answers: map[string][][]int{}}
-	if b, err := os.ReadFile(nearStatePath()); err == nil {
+	if b, err := os.ReadFile(nearStatePath(dir)); err == nil {
 		_ = json.Unmarshal(b, &st)
 		if st.Answers == nil {
 			st.Answers = map[string][][]int{}
@@ -53,8 +59,8 @@ func readNearState() nearState {
 	return st
 }
 
-func writeNearState(st nearState) error {
-	p := nearStatePath()
+func writeNearState(dir string, st nearState) error {
+	p := nearStatePath(dir)
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return err
 	}
@@ -82,7 +88,7 @@ type nearOpts struct {
 // whose answer does not read is asked again cluster by cluster; a cluster
 // that fails alone stays unanswered for the next run. It returns how many
 // clusters it asked about and the errors.
-func nearAsk(ctx context.Context, cs []curate.NearCluster, o nearOpts, st *nearState) (int, []error) {
+func nearAsk(ctx context.Context, dir string, cs []curate.NearCluster, o nearOpts, st *nearState) (int, []error) {
 	var todo []curate.NearCluster
 	for _, c := range cs {
 		if _, ok := st.Answers[c.Key]; !ok {
@@ -107,16 +113,23 @@ func nearAsk(ctx context.Context, cs []curate.NearCluster, o nearOpts, st *nearS
 		for k, v := range ans {
 			st.Answers[k] = v
 		}
-		if err := writeNearState(*st); err != nil {
+		if err := writeNearState(dir, *st); err != nil {
 			errs = append(errs, err)
 		}
 	}
+	// An answer that does not read is the batch's: it is asked again
+	// cluster by cluster. A call that failed (the route, the runner) is not.
+	var errUnread = errors.New("unread")
 	ask := func(b []curate.NearCluster) (map[string][][]int, error) {
 		res, _, err := nearRun(ctx, o.model, curate.NearPrompt(b))
 		if err != nil {
 			return nil, err
 		}
-		return curate.ParseNear(res, b)
+		v, err := curate.ParseNear(res, b)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", errUnread, err)
+		}
+		return v, nil
 	}
 	for _, b := range batches {
 		wg.Add(1)
@@ -128,7 +141,7 @@ func nearAsk(ctx context.Context, cs []curate.NearCluster, o nearOpts, st *nearS
 				return
 			}
 			ans, err := ask(b)
-			if err != nil && len(b) > 1 {
+			if errors.Is(err, errUnread) && len(b) > 1 {
 				fmt.Fprintf(os.Stderr, "dedupe --near: a batch of %d: %v; asking its clusters one at a time\n", len(b), err)
 				ans, err = map[string][][]int{}, nil
 				for _, c := range b {
@@ -158,15 +171,22 @@ func nearAsk(ctx context.Context, cs []curate.NearCluster, o nearOpts, st *nearS
 }
 
 // nearPlan is the copies the answers in st make of dir's clusters, under
-// dedupe's guards. No model.
-func nearPlan(dir string, st nearState) ([]curate.Copies, []curate.NearCluster, error) {
+// dedupe's guards, and how many clusters have no answer (a cluster that
+// changed since it was asked). No model.
+func nearPlan(dir string, st nearState) ([]curate.Copies, int, error) {
 	facts, _, err := fact.Walk(dir)
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, err
 	}
 	cs := curate.NearCandidates(facts)
+	unanswered := 0
+	for _, c := range cs {
+		if _, ok := st.Answers[c.Key]; !ok {
+			unanswered++
+		}
+	}
 	g := dedupeGuard(dir)
-	return curate.NearCopies(cs, st.Answers, g), cs, nil
+	return curate.NearCopies(cs, st.Answers, g), unanswered, nil
 }
 
 // runDedupeNear is `tacit dedupe --near`.
@@ -175,7 +195,17 @@ func runDedupeNear(dry bool, o nearOpts, out string) int {
 	if err != nil {
 		return 2
 	}
-	st := readNearState()
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Hour)
+	defer cancel()
+	// A real run asks about the store as the server has it, so the answers
+	// still hold under the lock.
+	if !dry {
+		if err := s.Sync(ctx); err != nil {
+			fmt.Fprintln(os.Stderr, "dedupe --near: sync:", err)
+			return 1
+		}
+	}
+	st := readNearState(s.Dir)
 	facts, _, err := fact.Walk(s.Dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "dedupe --near:", err)
@@ -194,8 +224,7 @@ func runDedupeNear(dry bool, o nearOpts, out string) int {
 		fmt.Printf("dedupe --near: %d candidate cluster(s) of %d fact(s)\n", len(cs), n)
 		return 0
 	}
-	ctx := context.Background()
-	asked, errs := nearAsk(ctx, cs, o, &st)
+	asked, errs := nearAsk(ctx, s.Dir, cs, o, &st)
 	for _, e := range errs {
 		fmt.Fprintln(os.Stderr, "dedupe --near:", e)
 	}
@@ -207,18 +236,19 @@ func runDedupeNear(dry bool, o nearOpts, out string) int {
 	}
 	fmt.Printf("dedupe --near: %d candidate cluster(s), %d answered (%d asked now)\n", len(cs), answered, asked)
 	var copies []curate.Copies
+	unanswered := 0
 	if dry {
-		copies, _, err = nearPlan(s.Dir, st)
+		copies, unanswered, err = nearPlan(s.Dir, st)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "dedupe --near:", err)
 			return 1
 		}
 	} else {
-		wctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
-		defer cancel()
+		wctx, wcancel := context.WithTimeout(ctx, 20*time.Minute)
+		defer wcancel()
 		pushed, err := curatorWrite(wctx, s, func() (map[string][]byte, string, error) {
 			var err error
-			if copies, _, err = nearPlan(s.Dir, st); err != nil {
+			if copies, unanswered, err = nearPlan(s.Dir, st); err != nil || len(copies) == 0 {
 				return nil, "", err
 			}
 			files, msg, err := dedupeFiles(s.Dir, copies, time.Now())
@@ -234,6 +264,20 @@ func runDedupeNear(dry bool, o nearOpts, out string) int {
 		if !pushed {
 			copies = nil
 		}
+		// Answers of clusters that are no more are dropped.
+		live := map[string]bool{}
+		for _, c := range cs {
+			live[c.Key] = true
+		}
+		for k := range st.Answers {
+			if !live[k] {
+				delete(st.Answers, k)
+			}
+		}
+		_ = writeNearState(s.Dir, st)
+	}
+	if unanswered > 0 {
+		fmt.Printf("dedupe --near: %d cluster(s) have no answer for the store as it is now (changed since they were asked); the next run asks them\n", unanswered)
 	}
 	sort.SliceStable(copies, func(i, j int) bool { return copies[i].Kept.Path < copies[j].Kept.Path })
 	printDedupe(copies, dry)

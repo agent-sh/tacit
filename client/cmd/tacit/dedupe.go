@@ -38,7 +38,19 @@ func runDedupe(args []string) int {
 	list := fs.Bool("list", false, "with --near: print the candidate clusters and stop (no model, no write)")
 	fs.Parse(args)
 	if *near {
+		if *namesOnly {
+			fmt.Fprintln(os.Stderr, "dedupe: --near and --names are separate runs")
+			return 2
+		}
 		return runDedupeNear(*dry, nearOpts{model: *model, jobs: *jobs, maxClusters: *maxClusters, list: *list}, *out)
+	}
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	for _, n := range []string{"model", "jobs", "max-clusters", "list"} {
+		if set[n] {
+			fmt.Fprintf(os.Stderr, "dedupe: --%s goes with --near\n", n)
+			return 2
+		}
 	}
 	// The names alone: no copy is planned, and no chain is repointed.
 	plan, files := dedupePlan, dedupeFiles
