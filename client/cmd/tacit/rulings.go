@@ -489,7 +489,7 @@ func mintsHere(f *fact.Fact, quote string) bool {
 	case ownerwords.OneTimeClear:
 		return false
 	case ownerwords.OneTimeTask:
-		return f.Meta.Source.Kind == "user" || ownerwords.MintsRuling(quote, f.Meta.Scope)
+		return f.Meta.Source.Kind == "user" && f.Meta.Source.OwnerQuote != "" || ownerwords.MintsRuling(quote, f.Meta.Scope)
 	}
 	return true
 }
