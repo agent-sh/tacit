@@ -353,7 +353,7 @@ func runDream(args []string) (code int) {
 	}
 
 	meter := dream.Meter{At: time.Now().Format(time.RFC3339), Windows: len(windows), Local: local}
-	quiet := quietDreamTypes(s.Dir, stateDir)
+	quiet := quietDreamTypes(s.Dir, stateDir, *dry)
 	meter.Quiet = quiet.List()
 	ctx = dream.WithQuiet(ctx, quiet)
 	heldChars := dreamHeldChars()

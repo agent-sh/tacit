@@ -55,9 +55,9 @@ type quietMeasure struct {
 
 // quietDreamTypes are the types the dreamer does not write this run:
 // $TACIT_DREAM_QUIET "off" for none, a comma-separated list for those,
-// else (unset or "auto") the measurement of the delivery log, cached for
-// the day.
-func quietDreamTypes(storeDir, stateDir string) dream.Quiet {
+// else (unset or "auto") the measurement of the delivery log, kept for the
+// day (not by a dry run).
+func quietDreamTypes(storeDir, stateDir string, dry bool) dream.Quiet {
 	out := dream.Quiet{}
 	switch v := strings.TrimSpace(os.Getenv("TACIT_DREAM_QUIET")); v {
 	case "off":
@@ -84,7 +84,8 @@ func quietDreamTypes(storeDir, stateDir string) dream.Quiet {
 	}
 	m = measureQuiet(storeDir, filepath.Join(stateDir, "delivery"))
 	m.Day, m.Store = today, storeDir
-	if b, err := json.Marshal(m); err == nil {
+	// A dry run writes nothing: it measures and keeps no reading.
+	if b, err := json.Marshal(m); err == nil && !dry {
 		_ = os.WriteFile(path+".tmp", b, 0o600)
 		_ = os.Rename(path+".tmp", path)
 	}

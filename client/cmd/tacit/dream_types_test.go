@@ -61,28 +61,36 @@ func TestQuietDreamTypesFromTheDeliveryLog(t *testing.T) {
 		os.WriteFile(day(i), []byte(line("machine_fact", 10)+line("past_mistake", 12)+line("design_decision", 1)+line("structure", 2)+line("history", 9)+local("structure", 50)), 0o600)
 	}
 	t.Setenv("TACIT_DREAM_QUIET", "")
-	if q := quietDreamTypes(store, state); len(q) != 0 {
+	if q := quietDreamTypes(store, state, false); len(q) != 0 {
 		t.Fatalf("six days of log made quiet types: %v", q)
 	}
 	os.Remove(filepath.Join(state, "dream-types.json"))
 	os.WriteFile(day(6), []byte(line("structure", 0)), 0o600)
-	q := quietDreamTypes(store, state)
+	q := quietDreamTypes(store, state, false)
 	if len(q) != 1 || !q["structure"] {
 		t.Fatalf("quiet = %v, want structure", q)
 	}
 	// Read again the same day: the kept measurement, for this store only.
-	if q := quietDreamTypes(store, state); len(q) != 1 || !q["structure"] {
+	if q := quietDreamTypes(store, state, false); len(q) != 1 || !q["structure"] {
 		t.Fatalf("kept: %v", q)
 	}
 	if _, err := os.Stat(filepath.Join(state, "dream-types.json")); err != nil {
 		t.Fatal("the measurement was not kept")
 	}
+	// A dry run measures and keeps nothing.
+	os.Remove(filepath.Join(state, "dream-types.json"))
+	if q := quietDreamTypes(store, state, true); !q["structure"] {
+		t.Fatalf("dry: %v", q)
+	}
+	if _, err := os.Stat(filepath.Join(state, "dream-types.json")); err == nil {
+		t.Fatal("a dry run kept its measurement")
+	}
 	t.Setenv("TACIT_DREAM_QUIET", "off")
-	if q := quietDreamTypes(store, state); len(q) != 0 {
+	if q := quietDreamTypes(store, state, false); len(q) != 0 {
 		t.Fatalf("off: %v", q)
 	}
 	t.Setenv("TACIT_DREAM_QUIET", "history,past_mistake,machine_fact")
-	if q := quietDreamTypes(store, state); len(q) != 1 || !q["history"] {
+	if q := quietDreamTypes(store, state, false); len(q) != 1 || !q["history"] {
 		t.Fatalf("a list: %v", q)
 	}
 }

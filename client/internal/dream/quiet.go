@@ -42,43 +42,26 @@ func (q Quiet) List() []string {
 	return out
 }
 
-// offered are the dreamer's types less the quiet ones.
-func (q Quiet) offered() []string {
-	var out []string
-	for _, t := range Types {
-		if !q[t] {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
-// prompt is Prompt with the quiet types out of its list of types, and one
-// line that says what to do with such a fact; Prompt itself with none.
+// prompt is Prompt with one line that says an agent's fact of a quiet type
+// is not written; Prompt itself with none. The list of types stays whole:
+// the owner's words of any type are written.
 func (q Quiet) prompt() string {
 	ql := q.List()
 	if len(ql) == 0 {
 		return Prompt
 	}
-	p := strings.Replace(Prompt, typeList, strings.Join(q.offered(), "|"), 1)
-	note := "Write no fact whose only type would be " + strings.Join(ql, " or ") + ": such facts are almost never needed by later sessions. The owner's words (kind user or statement) are always written, with the type that fits best.\n"
+	p := Prompt
+	note := "Write no fact of kind observed whose only type would be " + strings.Join(ql, " or ") + ": such facts are almost never needed by later sessions. The owner's words (kind user or statement) are always written, with the type that fits best, " + strings.Join(ql, " or ") + " included.\n"
 	if i := strings.Index(p, "Output ONLY a JSON array"); i >= 0 {
 		return p[:i] + note + p[i:]
 	}
 	return p
 }
 
-// schema is the output schema with the quiet types out of its enum.
-func (q Quiet) schema() string {
-	if len(q.List()) == 0 {
-		return outputSchema
-	}
-	var qs []string
-	for _, t := range q.offered() {
-		qs = append(qs, `"`+t+`"`)
-	}
-	return strings.Replace(outputSchema, schemaEnum, `"enum":[`+strings.Join(qs, ",")+`]`, 1)
-}
+// schema is the output schema. It keeps every type whatever is quiet: one
+// schema holds the owner's facts and the agents', and the owner's words of
+// a quiet type are written (Drops drops only an agent's fact of one).
+func (q Quiet) schema() string { return outputSchema }
 
 // Drops reports an extraction the run does not write: an agent's fact of
 // a quiet type.
