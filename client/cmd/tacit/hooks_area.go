@@ -6,110 +6,12 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/agent-sh/tacit/client/internal/record"
 	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/tree"
 )
-
-// areaCeiling is how many of an area's facts the PreToolUse hook prints
-// the first time the session uses the area's tools. Not measured yet: no
-// replay case holds an area (eval/VALUE.md); TACIT_DELIVERY_AREA_CEILING.
-const areaCeiling = 3
-
-// areaSeen is the delivered-set line that says an area was pushed in the
-// session. A fact name is a slug, so it never collides.
-func areaSeen(folder string) string { return "area:" + folder }
-
-// matchedAreas are the areas whose tools the call's tool name matches, or
-// whose commands its shell command runs, that push (record.Pushes), in
-// folder order.
-func matchedAreas(recs map[string]*record.Record, toolName, command string) []string {
-	var out []string
-	for f, r := range recs {
-		if !r.Pushes() || strings.Count(f, "/") != 1 {
-			continue
-		}
-		hit := r.MatchesTool(toolName)
-		for _, c := range r.Commands {
-			if command != "" && commandMatch(c, command) {
-				hit = true
-			}
-		}
-		if hit {
-			out = append(out, f)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-// areaHits picks, for one area, the facts the push prints: tiers 0 and 1
-// (rulings first, then standards, then decisions and past mistakes), a
-// fact whose own applies_to.commands the call runs first, newest first
-// within each, at most limit, less what the session has seen. Its topics'
-// facts are not pushed; prompt and search reach them.
-func areaHits(facts []search.Hit, command string, seen map[string]bool, limit int) []search.Hit {
-	var keep []search.Hit
-	for _, h := range facts {
-		if tier(h) <= 1 && !h.HeldBack() && !seen[h.Name] {
-			keep = append(keep, h)
-		}
-	}
-	runs := func(h search.Hit) bool {
-		for _, c := range h.Applies.Commands {
-			if command != "" && commandMatch(c, command) {
-				return true
-			}
-		}
-		return false
-	}
-	sort.SliceStable(keep, func(i, j int) bool {
-		if a, b := runs(keep[i]), runs(keep[j]); a != b {
-			return a
-		}
-		if a, b := subRank(keep[i]), subRank(keep[j]); a != b {
-			return a < b
-		}
-		if keep[i].Created != keep[j].Created {
-			return keep[i].Created > keep[j].Created
-		}
-		return keep[i].Name < keep[j].Name
-	})
-	if len(keep) > limit {
-		keep = keep[:limit]
-	}
-	return keep
-}
-
-// areaPush is the area part of the PreToolUse block: for each matching
-// area the session has not been pushed yet, its facts (areaHits) and one
-// line pointing at the area in the tree. pushed are the areas it printed.
-// An area whose facts the dedup corpus holds entirely is not pushed at all
-// (not marked, no line): the session carries its rules already.
-func areaPush(ctx context.Context, ix *search.Index, recs map[string]*record.Record, toolName, command string, seen map[string]bool, loadCorpus func() dedupCorpus) (hits []search.Hit, lines []string, pushed []string) {
-	limit := deliveryInt("AREA_CEILING", areaCeiling)
-	for _, f := range matchedAreas(recs, toolName, command) {
-		if seen[areaSeen(f)] || ctx.Err() != nil {
-			continue
-		}
-		facts, err := ix.List(ctx, []string{f}, "", false, false)
-		if err != nil {
-			continue
-		}
-		hs := withoutDuplicates(areaHits(facts, command, withSeen(seen, hits), limit), loadCorpus)
-		if len(hs) == 0 {
-			continue
-		}
-		hits = append(hits, hs...)
-		pushed = append(pushed, f)
-		lines = append(lines, fmt.Sprintf("# more on %s: `tacit_tree %s` (%d facts)", recs[f].Name, f, len(facts)))
-	}
-	return hits, lines, pushed
-}
 
 // topicScopes are the scopes of the live topics a prompt names: the
 // topic's name or one of its aliases as a whole run of words, compared by
@@ -175,18 +77,26 @@ func repoTitle(sit search.Situation) string {
 	return sit.Repo
 }
 
-// orgStartLimit bounds the org lines of the SessionStart block: the org's
-// rules and standards come lightly, after the repository's own.
+// orgStartLimit bounds the org lines of the SessionStart block: the owner's
+// org rules come lightly, after the repository's own.
 const orgStartLimit = 2
 
-// orgStartHits are the org's rulings and standards (tier 0) for the
-// SessionStart block, newest first, at most orgStartLimit in all, none the
-// session has.
+// orgStartHits are the owner's own rules of the org (Rule: their words, not
+// an agent's standard and not a ruling in its task) for the SessionStart
+// block, newest first, at most orgStartLimit in all, none the session has,
+// none stopped by outcomes in the repository.
 func orgStartHits(ctx context.Context, ix *search.Index, sit search.Situation, have []search.Hit) []search.Hit {
-	if len(sit.Orgs) == 0 {
+	return scopeStartHits(ctx, ix, sit, sit.Orgs, have, search.Hit.Rule)
+}
+
+// scopeStartHits are the facts of these scopes that pass, for the
+// SessionStart block: newest first in subRank's order, at most
+// orgStartLimit, none the session has or outcomes stopped in its repository.
+func scopeStartHits(ctx context.Context, ix *search.Index, sit search.Situation, scopes []string, have []search.Hit, pass func(search.Hit) bool) []search.Hit {
+	if len(scopes) == 0 {
 		return nil
 	}
-	hs, err := ix.List(ctx, sit.Orgs, "", false, false)
+	hs, err := ix.List(ctx, scopes, "", false, false)
 	if err != nil {
 		return nil
 	}
@@ -196,10 +106,11 @@ func orgStartHits(ctx context.Context, ix *search.Index, sit search.Situation, h
 	}
 	var keep []search.Hit
 	for _, h := range hs {
-		if tier(h) == 0 && !h.Quiet && !h.HeldBack() && !seen[h.Name] {
+		if pass(h) && !h.Quiet && !h.HeldBack() && !seen[h.Name] {
 			keep = append(keep, h)
 		}
 	}
+	keep = outcomesFor(outcomeScope(repoNames(sit))).withoutStopped(keep)
 	sort.SliceStable(keep, func(i, j int) bool {
 		if a, b := subRank(keep[i]), subRank(keep[j]); a != b {
 			return a < b
@@ -223,9 +134,7 @@ func successorStartHits(ctx context.Context, ix *search.Index, sit search.Situat
 	if len(sit.Successors) == 0 {
 		return nil
 	}
-	s := sit
-	s.Orgs = sit.Successors
-	return orgStartHits(ctx, ix, s, have)
+	return scopeStartHits(ctx, ix, sit, sit.Successors, have, func(h search.Hit) bool { return tier(h) == 0 })
 }
 
 // withRecordAliases is the situation with the names the records give its

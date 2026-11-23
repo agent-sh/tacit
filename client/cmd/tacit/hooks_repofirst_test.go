@@ -137,63 +137,6 @@ func TestPromptBlockMatchesAppliesToPathsAndCommands(t *testing.T) {
 	}
 }
 
-// Before an edit or a shell command, the PreToolUse hook gives the one rule,
-// decision or past mistake of this repo whose applies_to names that file or
-// command, as JSON additionalContext, once per session; it reads Claude
-// Code's Edit and Bash and Codex's apply_patch, never another repo's fact,
-// and prints nothing when nothing matches or the setting is off.
-func TestPreToolHookPushesTheMatchingFactOnce(t *testing.T) {
-	_, cwd := repoFirstRig(t,
-		fact.Meta{Name: "worker-no-globals", Description: "Worker state lives in the pool, never in package globals", Type: "design_decision", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Paths: []string{"src/scheduler/**"}}},
-		fact.Meta{Name: "lint-before-push", Description: "Run the linter with the strict profile", Type: "user_standard", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Commands: []string{"make lint"}}},
-		fact.Meta{Name: "gadget-worker-note", Description: "Gadget workers are stateless", Type: "design_decision", Scope: "projects/gadget", AppliesTo: fact.AppliesTo{Paths: []string{"src/scheduler/worker.go"}}},
-		fact.Meta{Name: "worker-history", Description: "The worker was rewritten in 2025", Type: "history", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Paths: []string{"src/scheduler/worker.go"}}},
-	)
-	ctxOf := func(out string) string {
-		t.Helper()
-		if strings.TrimSpace(out) == "" {
-			return ""
-		}
-		var v struct {
-			HookSpecificOutput struct {
-				HookEventName     string `json:"hookEventName"`
-				AdditionalContext string `json:"additionalContext"`
-			} `json:"hookSpecificOutput"`
-		}
-		if err := json.Unmarshal([]byte(out), &v); err != nil || v.HookSpecificOutput.HookEventName != "PreToolUse" {
-			t.Fatalf("not PreToolUse JSON: %v %q", err, out)
-		}
-		return v.HookSpecificOutput.AdditionalContext
-	}
-	edit := toolPayload(cwd, "s1", "Edit", map[string]any{"file_path": filepath.Join(cwd, "src", "scheduler", "worker.go"), "old_string": "a", "new_string": "b"})
-	got := ctxOf(hookOut(t, edit, "pre-tool"))
-	if !strings.Contains(got, "worker-no-globals") || strings.Contains(got, "gadget-worker-note") || strings.Contains(got, "worker-history") || strings.Count(got, "\n- ") > 1 {
-		t.Fatalf("edit:\n%s", got)
-	}
-	if again := hookOut(t, edit, "pre-tool"); again != "" {
-		t.Fatalf("pushed twice in one session: %q", again)
-	}
-	if got := ctxOf(hookOut(t, toolPayload(cwd, "s1", "Bash", map[string]any{"command": "cd src && make lint"}), "pre-tool")); got != "" {
-		t.Fatalf("a command-keyed push by default:\n%s", got)
-	}
-	t.Setenv("TACIT_DELIVERY_PUSH_COMMANDS", "on")
-	if got := ctxOf(hookOut(t, toolPayload(cwd, "s5", "Bash", map[string]any{"command": "cd src && make lint"}), "pre-tool")); !strings.Contains(got, "lint-before-push") {
-		t.Fatalf("bash with commands on:\n%s", got)
-	}
-	t.Setenv("TACIT_DELIVERY_PUSH_COMMANDS", "")
-	if out := hookOut(t, toolPayload(cwd, "s6", "Bash", map[string]any{"command": "ls -la"}), "pre-tool"); out != "" {
-		t.Fatalf("an unmatched command: %q", out)
-	}
-	patch := "*** Begin Patch\n*** Update File: src/scheduler/pool.go\n@@\n-a\n+b\n*** End Patch\n"
-	if got := ctxOf(hookOut(t, toolPayload(cwd, "s2", "apply_patch", map[string]any{"command": patch}), "pre-tool")); !strings.Contains(got, "worker-no-globals") {
-		t.Fatalf("apply_patch:\n%s", got)
-	}
-	t.Setenv("TACIT_DELIVERY_TOOL_PUSH", "off")
-	if out := hookOut(t, toolPayload(cwd, "s3", "Edit", map[string]any{"file_path": filepath.Join(cwd, "src", "scheduler", "worker.go")}), "pre-tool"); out != "" {
-		t.Fatalf("setting off: %q", out)
-	}
-}
-
 // With no store the PreToolUse hook prints nothing and exits 0.
 func TestPreToolHookFailsOpenWithoutAStore(t *testing.T) {
 	t.Setenv("TACIT_STORE", filepath.Join(t.TempDir(), "missing"))
@@ -279,58 +222,6 @@ func TestCommandMatchThroughARunner(t *testing.T) {
 	} {
 		if got := commandMatch(c.fact, c.cmd); got != c.want {
 			t.Errorf("commandMatch(%q, %q) = %v, want %v", c.fact, c.cmd, got, c.want)
-		}
-	}
-}
-
-// A command of one word, a bare program, matches a shell command only with a
-// word of the fact's own in the command line too: not its key's, not the
-// repository's name, not a word of the session's folder or home. Words are
-// compared by stem, among the command's first terms (a word deep in a
-// heredoc does not count). A longer command, or a script's path or file
-// name, matches as before. Of the pushes keyed on a bare program in real
-// sessions, few were useful (eval/DELIVERY.md, "Pushes keyed on a bare
-// program"); command-keyed pushes themselves are off unless
-// delivery.push_commands is on.
-func TestPreToolBareProgramNeedsASecondWord(t *testing.T) {
-	r, cwd := repoFirstRig(t,
-		fact.Meta{Name: "ssh-gpubox-batchmode", Description: "Reach the widget gpubox in projects from home with ssh and BatchMode; a password prompt hangs the agent", Type: "past_mistake", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Commands: []string{"ssh"}}},
-		fact.Meta{Name: "terraform-applies-lock", Description: "terraform applies need the state lock", Type: "past_mistake", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Commands: []string{"terraform"}}},
-		fact.Meta{Name: "widget-deploy-checks", Description: "A deploy runs the smoke checks first", Type: "design_decision", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Commands: []string{"make deploy"}}},
-		fact.Meta{Name: "widget-release-script", Description: "The release script tags and signs", Type: "design_decision", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Commands: []string{"scripts/release.sh"}}},
-		fact.Meta{Name: "rsync-long-note", Description: "Copies amber basil cedar dune ember fable garnet harbor ivory jasper kettle lantern meadow nectar orchid pebble quartz raven saffron timber umber velvet willow yarrow zephyr reach the mirrorbox", Type: "past_mistake", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Commands: []string{"rsync"}}},
-	)
-	t.Setenv("TACIT_DELIVERY_REPO_START", "off")
-	t.Setenv("TACIT_DELIVERY_PUSH_COMMANDS", "on")
-	home := filepath.Join(r.root, "home")
-	// A worktree whose folder is not named for the repository.
-	wt := filepath.Join(r.root, "wt-x")
-	gitIn(t, cwd, "worktree", "add", "-q", "-b", "wt-x", wt)
-	push := func(session, command string) string {
-		t.Helper()
-		dir := cwd
-		if strings.HasPrefix(session, "wt") {
-			dir = wt
-		}
-		return preToolContext(t, hookOut(t, toolPayload(dir, session, "Bash", map[string]any{"command": command}), "pre-tool"))
-	}
-	for _, c := range []struct {
-		session, command, want string
-	}{
-		{"s1", "ssh gpubox nvidia-smi", "ssh-gpubox-batchmode"},
-		{"s2", "ssh build-host uptime", ""},
-		{"s3", "cd " + cwd + " && ssh build-host 'ls projects'", ""},
-		{"s4", "ls " + home + " && ssh build-host uptime", ""},
-		{"wt1", "ssh build-host 'ls widget'", ""},
-		{"s5", "ssh build-host one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive gpubox", ""},
-		{"s6", "terraform apply -auto-approve", "terraform-applies-lock"},
-		{"s7", "make deploy", "widget-deploy-checks"},
-		{"s8", "scripts/release.sh", "widget-release-script"},
-		{"s9", "rsync -a out mirrorbox:/srv", "rsync-long-note"},
-	} {
-		got := push(c.session, c.command)
-		if c.want == "" && got != "" || c.want != "" && !strings.Contains(got, c.want) {
-			t.Errorf("%s %q: want %q, got:\n%s", c.session, c.command, c.want, got)
 		}
 	}
 }

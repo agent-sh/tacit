@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -24,16 +23,15 @@ const toolBudget = 400 * time.Millisecond
 // detector cannot turn their answer into the empty one.
 var toolDeadline = toolBudget
 
-// toolPushTools is the PreToolUse matcher `tacit install` writes: the edit
-// tools of Claude Code, Codex's apply_patch, the shell tool of both, and
-// every MCP tool (mcp__<server>__<tool>), whose calls an area's tool
-// patterns match (areaPush). A hook process runs on every MCP call by
-// design; its cost is measured (eval/VALUE.md).
-const toolPushTools = "Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch|mcp__.*"
+// toolPushTools is the PreToolUse matcher `tacit install` writes: the shell
+// tool of both harnesses (a command a rule is keyed to is denied once) and
+// tacit's own MCP tools (the store's clickstream). No other call starts the
+// hook.
+const toolPushTools = "Bash|mcp__.*__tacit_.*"
 
 // legacyToolPushTools are matchers earlier releases wrote; install replaces
 // its entry under one of them in place (Codex keys hook trust by position).
-var legacyToolPushTools = []string{"Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch"}
+var legacyToolPushTools = []string{"Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch", "Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch|mcp__.*"}
 
 // patchFile is a file line of an apply_patch patch.
 var patchFile = regexp.MustCompile(`(?m)^\*\*\* (?:Add|Update|Delete) File: (.+)$`)
@@ -89,156 +87,52 @@ func repoRel(r repoid.Repo, cwd, p string) (string, bool) {
 }
 
 // preTool is `tacit hook pre-tool` (Claude Code's and Codex's PreToolUse):
-// before an edit, a shell command or an MCP tool call,
-//
-//   - in a repository, at most metaCeiling of this repo's rules, standards,
-//     decisions and past mistakes whose applies_to paths cover a file the
-//     call writes, or whose command the call runs; in a workspace
-//     (hooks_workspace.go) the same for the workspace repository the file
-//     is in, or for all of them for a shell command;
-//   - anywhere, in a repository or not, for each area whose tool patterns
-//     match the call's tool name or whose commands it runs, the first time
-//     in the session: a few of the area's rules, standards, decisions and
-//     past mistakes (areaPush) and a line to the area's folder. Dormant,
-//     dead and shipped areas never push.
-//
-// Each fact once per session (the session's delivered set, shared with the
-// other hooks); a fact's own path or command match comes before the area's.
-// It answers as JSON additionalContext, the only PreToolUse output both
-// harnesses give the model, never blocks or changes the call, and prints
-// nothing on any failure or after toolBudget. It reads no file beyond the
-// index (the records are in it), but after a compaction whose summary the
-// start could not read: the session's record and what its transcript gained
-// since (pendingHeld).
+// before a shell command, a deny when a rule, standard or past mistake keyed
+// to that command applies (hooks_deny.go); before a call of tacit's own MCP
+// tools, nothing but the store's clickstream (logNavigation). It delivers no
+// context: the pushes it gave before an edit or a command were read too
+// rarely for what they cost (SPEC.md, "Command rules"). It prints nothing on
+// any failure or after toolBudget, and nothing in a throwaway harness
+// instance (sessionKind's scratch).
 func preTool(s *store.Store, in hookInput) {
-	paths, command := toolTargets(in.ToolName, in.ToolInput)
-	// The store's clickstream, whether pushes are on or not, after the
-	// answer (its index lookups are not on the push's budget).
+	_, command := toolTargets(in.ToolName, in.ToolInput)
+	// The store's clickstream, after the answer.
 	defer logNavigation(s, in, navOf(in, command))
-	if !deliveryOn("TOOL_PUSH", true) {
+	if strings.HasPrefix(in.ToolName, "mcp__") || strings.TrimSpace(command) == "" || in.SessionID == "" {
 		return
 	}
-	if strings.HasPrefix(in.ToolName, "mcp__") {
-		// An MCP tool's input is its own: a "path" or "command" field
-		// there is no file the call writes and no shell command it runs.
-		paths, command = nil, ""
-	}
-	if len(paths) == 0 && strings.TrimSpace(command) == "" && in.ToolName == "" {
+	if sessionKind(in) == "scratch" {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), toolDeadline)
 	defer cancel()
-	var rel []string
-	var sit search.Situation
-	repo, inRepo := sessionRepo(in.Cwd)
-	// Outside a repository, in a workspace (hooks_workspace.go): a file the
-	// call writes narrows the session to its repository; a shell command
-	// alone is matched against every repository of the workspace.
-	var ws []repoid.Repo
-	if !inRepo && (len(paths) > 0 || command != "") {
-		home, _ := os.UserHomeDir()
-		ws = workspaceRepos(in.Cwd, home)
-		for _, p := range paths {
-			if r, ok := workspaceRepoOf(ws, in.Cwd, p); ok {
-				repo, inRepo = r, true
-				break
-			}
-		}
-	}
-	if inRepo {
-		sit = search.Situation{Repo: repo.Name, Host: store.ShortHost(), RepoAliases: repoAliases(repo)}
-		for _, p := range paths {
-			if r, ok := repoRel(repo, in.Cwd, p); ok {
-				rel = append(rel, r)
-			}
-		}
-	}
-	wsCommand := !inRepo && len(ws) > 0 && command != ""
-	if wsCommand {
-		sit = search.Situation{Host: store.ShortHost(), Workspace: workspaceNames(ws)}
-	}
-	// An area matches an MCP tool's name or a shell command (the matcher
-	// sends no other tool here but the edit tools): an edit outside a
-	// repository opens nothing, as before areas.
-	areas := deliveryOn("AREA_PUSH", true) && (strings.HasPrefix(in.ToolName, "mcp__") || command != "")
-	if !areas && !wsCommand && (!inRepo || (len(rel) == 0 && command == "")) {
+	t := loadDenyTable(ctx, s, time.Now())
+	if t == nil || len(t.Facts) == 0 {
 		return
 	}
-	ix, err := openHookIndex(ctx, s)
-	if err != nil {
+	sc := denyScope{host: store.ShortHost()}
+	if r, ok := sessionRepo(in.Cwd); ok {
+		sc.repos = repoNames(search.Situation{Repo: r.Name, RepoAliases: repoAliases(r)})
+	}
+	fs := denyFor(t, command, sc, deniedSet(in.SessionID), outcomesFor(outcomeScope(sc.repos)))
+	if len(fs) == 0 || ctx.Err() != nil {
 		return
 	}
-	defer ix.Close()
-	recs := hookRecords(ctx, ix)
-	pendingHeld(ctx, ix, in) // after a compaction: what its summary holds is in the context
-	seen := delivered(in.SessionID)
-	// The dedup corpus of this call: the repositories' AGENTS.md and the
-	// configured files, whose words the session already carries
-	// (hooks_dedup.go).
-	corpus := &lazyDedupCorpus{repos: pushDedupRepos(repo, inRepo, ws)}
-	beginLog("push", in, strings.TrimSpace(command+" "+strings.Join(rel, " ")), repoNames(sit), ix)
+	names := make([]string, len(fs))
+	hits := make([]search.Hit, len(fs))
+	for i, f := range fs {
+		names[i] = f.Name
+		hits[i] = search.Hit{Name: f.Name, Scope: f.Scope, Type: f.Type, Created: f.Created}
+	}
+	addDenied(in.SessionID, names)
+	beginLog("deny", in, command, sc.repos, nil)
 	if dlog != nil {
 		dlog.Tool = in.ToolName
 	}
-	defer endLog(nil) // a call that returned before printing delivered nothing
-	var hits []search.Hit
-	if (inRepo && (len(rel) > 0 || command != "")) || wsCommand {
-		sit = withRecordAliases(sit, recs)
-		all, err := ix.MetaFacts(ctx)
-		if err != nil || ctx.Err() != nil {
-			return
-		}
-		home, _ := os.UserHomeDir()
-		hits = metaSelect(all, repoNames(sit), rel, command, "", in.Cwd+" "+home, seen, deliveryInt("META_CEILING", metaCeiling))
-		// A command-keyed push fires on every call of a program, and of the
-		// graded ones most were noise (eval/DELIVERY.md, "Pushes keyed on a
-		// command"): off by default, on with delivery.push_commands. A path
-		// the call writes is specific evidence and always pushes.
-		if !deliveryOn("PUSH_COMMANDS", false) {
-			kept := coversAnyPath(hits, rel)
-			logDropped(hits, kept, "push_commands")
-			hits = kept
-		}
-		hits = withoutDuplicates(hits, corpus.get)
-		logChose(hits, "meta")
-	}
-	var lines, pushed []string
-	if areas && len(recs) > 0 {
-		var ah []search.Hit
-		ah, lines, pushed = areaPush(ctx, ix, recs, in.ToolName, command, withSeen(seen, hits), corpus.get)
-		logChose(ah, "area")
-		hits = append(hits, ah...)
-	}
-	kept := withoutClaims(hits)
-	logDropped(hits, kept, "withheld")
-	hits = kept
-	deduped := withoutNearDuplicates(hits)
-	logDropped(hits, deduped, "near_duplicate")
-	hits = deduped
-	if ctx.Err() != nil || (len(hits) == 0 && len(pushed) == 0) {
-		return
-	}
-	names := make([]string, 0, len(hits)+len(pushed))
-	for _, h := range hits {
-		names = append(names, h.Name)
-	}
-	for _, f := range pushed {
-		names = append(names, areaSeen(f))
-	}
-	rememberNames(in.SessionID, names)
-	if len(hits) == 0 {
-		return
-	}
-	// A shell command's push is titled, as the titles A/B measured it; an
-	// edit's push keeps whole lines: the A/B made no edit (SPEC.md, "Titles").
-	block := search.Block(hits, "# tacit: before this step")
-	if command != "" {
-		block = hookBlock(hits, "# tacit: before this step", titlesNote)
-	}
-	for _, l := range lines {
-		block += l + "\n"
-	}
-	out, _ := json.Marshal(map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse", "additionalContext": block}})
+	logChose(hits, "deny")
+	remember(in.SessionID, hits) // given: in the delivered set, and owed a mark
+	out, _ := json.Marshal(map[string]any{"hookSpecificOutput": map[string]any{
+		"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": denyReason(fs, hookMCP)}})
 	fmt.Println(string(out))
 	endLog(hits)
 }

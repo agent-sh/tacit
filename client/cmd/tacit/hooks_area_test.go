@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"sort"
@@ -33,23 +32,6 @@ func writeRecordFile(t *testing.T, root string, r *record.Record) {
 	}
 }
 
-func preToolContext(t *testing.T, out string) string {
-	t.Helper()
-	if strings.TrimSpace(out) == "" {
-		return ""
-	}
-	var v struct {
-		HookSpecificOutput struct {
-			HookEventName     string `json:"hookEventName"`
-			AdditionalContext string `json:"additionalContext"`
-		} `json:"hookSpecificOutput"`
-	}
-	if err := json.Unmarshal([]byte(out), &v); err != nil || v.HookSpecificOutput.HookEventName != "PreToolUse" {
-		t.Fatalf("not PreToolUse JSON: %v %q", err, out)
-	}
-	return v.HookSpecificOutput.AdditionalContext
-}
-
 // areaRig is a store with an active area for a ticketing tool family, a
 // dormant area for another, a shipped area, an active topic with an alias
 // and a dead project folder.
@@ -79,69 +61,6 @@ func areaRig(t *testing.T) (r *rig, cwd, outside string) {
 	outside = filepath.Join(r.root, "home", "notes")
 	os.MkdirAll(outside, 0o755)
 	return r, cwd, outside
-}
-
-// An area's tool pushes its rules, standards, decisions and past mistakes
-// before the call, outside any repository, once per session; a dormant or
-// shipped area's tool pushes nothing; the area's topics are not pushed.
-func TestPreToolPushesAnAreaOutsideARepoOncePerSession(t *testing.T) {
-	_, _, outside := areaRig(t)
-	call := func(session, tool string, input map[string]any) string {
-		return preToolContext(t, hookOut(t, toolPayload(outside, session, tool, input), "pre-tool"))
-	}
-	got := call("a1", "mcp__builder__TicketingReadActions", map[string]any{"path": "/x/y.md", "command": "make lint"})
-	// The two standards, then the first decision or past mistake.
-	for _, want := range []string{"tickets-cite-the-cr", "tickets-cli-dry-run", "tickets-resolver-mistake", "tacit_tree areas/ticketing"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("missing %s:\n%s", want, got)
-		}
-	}
-	for _, not := range []string{"tickets-tool-history", "tickets-q4-cutover", "wiki-sections"} {
-		if strings.Contains(got, not) {
-			t.Fatalf("%s pushed:\n%s", not, got)
-		}
-	}
-	if strings.Count(got, "\n- ") != areaCeiling {
-		t.Fatalf("not %d lines:\n%s", areaCeiling, got)
-	}
-	if again := call("a1", "mcp__builder__TicketingWriteActions", nil); again != "" {
-		t.Fatalf("pushed twice in a session:\n%s", again)
-	}
-	if got := call("a2", "mcp__builder__WikiRead", nil); got != "" {
-		t.Fatalf("a dormant area pushed:\n%s", got)
-	}
-	if got := call("a2", "mcp__builder__PagerSend", nil); got != "" {
-		t.Fatalf("a shipped area pushed:\n%s", got)
-	}
-	if got := call("a2", "mcp__other__Search", nil); got != "" {
-		t.Fatalf("an unmatched tool pushed:\n%s", got)
-	}
-	// The area's command: the fact whose own command the call runs first.
-	got = call("a3", "Bash", map[string]any{"command": "tix update 42 --status done"})
-	if !strings.HasPrefix(strings.SplitN(got, "\n", 3)[1], "- tickets-cli-dry-run") {
-		t.Fatalf("the command's own fact is not first:\n%s", got)
-	}
-	t.Setenv("TACIT_DELIVERY_AREA_PUSH", "off")
-	if got := call("a4", "mcp__builder__TicketingReadActions", nil); got != "" {
-		t.Fatalf("setting off:\n%s", got)
-	}
-}
-
-// In a repository an edit's own match still comes first, and the area's
-// facts follow when the same call is an area's.
-func TestPreToolRepoMatchRanksAboveTheArea(t *testing.T) {
-	t.Setenv("TACIT_DELIVERY_PUSH_COMMANDS", "on")
-	r, cwd, _ := areaRig(t)
-	writeFact(t, r.clone, fact.Meta{Name: "gadget-tix-rule", Description: "In gadget run tix with the gadget queue", Type: "user_standard", Scope: "projects/gadget", AppliesTo: fact.AppliesTo{Commands: []string{"tix update"}}}, "x\n")
-	writeRecordFile(t, r.clone, &record.Record{Folder: "projects/gadget", Kind: record.KindRepo, Name: "gadget", Description: "gadget", Status: record.StatusActive})
-	r.commitIndex(r.clone, "gadget")
-	gadget := r.checkout("gadget")
-	got := preToolContext(t, hookOut(t, toolPayload(gadget, "b1", "Bash", map[string]any{"command": "tix update 7"}), "pre-tool"))
-	lines := strings.Split(strings.TrimSpace(got), "\n")
-	if len(lines) < 3 || !strings.HasPrefix(lines[1], "- gadget-tix-rule") || !strings.Contains(got, "tickets-cli-dry-run") {
-		t.Fatalf("order:\n%s", got)
-	}
-	_ = cwd
 }
 
 // The prompt hook adds a topic's facts when the prompt names the topic or
@@ -210,46 +129,5 @@ func TestPreToolMCPLatency(t *testing.T) {
 	t.Logf("pre-tool on MCP calls, in-process: p50 %v p95 %v over %d calls", p50, p95, len(d))
 	if p95 > toolBudget {
 		t.Fatalf("p95 %v over the budget %v", p95, toolBudget)
-	}
-}
-
-// An area's tool patterns are for MCP tools: one that matches a harness's
-// own tool (Bash) pushes nothing at a shell command; the area's commands and
-// an MCP tool still reach it.
-func TestAreaToolPatternsMatchMCPToolsOnly(t *testing.T) {
-	r, cwd := repoFirstRig(t, fact.Meta{Name: "box-needs-lease", Description: "Take the box lease before any job on the box", Type: "user_standard", Scope: "areas/box"})
-	writeRecordFile(t, r.clone, &record.Record{Folder: "areas/box", Kind: record.KindArea, Name: "box", Description: "the gpu box", Status: record.StatusActive, Tools: []string{"Bash", "mcp__*__Box*"}, Commands: []string{"ssh box"}})
-	r.commitIndex(r.clone, "records")
-	if got := preToolContext(t, hookOut(t, toolPayload(cwd, "s1", "Bash", map[string]any{"command": "ls -la"}), "pre-tool")); got != "" {
-		t.Fatalf("a shell call pushed the area by its Bash pattern:\n%s", got)
-	}
-	if got := preToolContext(t, hookOut(t, toolPayload(cwd, "s2", "Bash", map[string]any{"command": "ssh box nvidia-smi"}), "pre-tool")); !strings.Contains(got, "box-needs-lease") {
-		t.Fatalf("the area's command:\n%s", got)
-	}
-	if got := preToolContext(t, hookOut(t, toolPayload(cwd, "s3", "mcp__lab__BoxStatus", map[string]any{}), "pre-tool")); !strings.Contains(got, "box-needs-lease") {
-		t.Fatalf("an MCP tool:\n%s", got)
-	}
-}
-
-// An area push every fact of which the dedup corpus holds prints nothing
-// and does not mark the area pushed: with the corpus gone the next call
-// delivers the area as though it had never fired (hooks_dedup.go).
-func TestAreaPushHeldByDedupPrintsNothingAndDoesNotMark(t *testing.T) {
-	_, cwd, _ := areaRig(t)
-	agents := filepath.Join(cwd, "AGENTS.md")
-	restate := "# widget\n\nEvery ticket comment cites the code review it rests on. A sev2 ticket pages the on-call within five minutes. Resolving with the wrong resolver group bounced a ticket for a day. Run the ticket CLI with --dry-run first.\nTickets cite sev2 pages resolver mistake cli dry run.\n"
-	if err := os.WriteFile(agents, []byte(restate), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("TACIT_DELIVERY_REPO_START", "off")
-	call := toolPayload(cwd, "a1", "Bash", map[string]any{"command": "tix update 7"})
-	if got := preToolContext(t, hookOut(t, call, "pre-tool")); got != "" {
-		t.Fatalf("an area the instructions already carry pushed:\n%s", got)
-	}
-	os.Remove(agents)
-	next := toolPayload(cwd, "a2", "Bash", map[string]any{"command": "tix update 7"})
-	got := preToolContext(t, hookOut(t, next, "pre-tool"))
-	if !strings.Contains(got, "tickets-cli-dry-run") || !strings.Contains(got, "# more on") {
-		t.Fatalf("the held area was marked pushed:\n%s", got)
 	}
 }

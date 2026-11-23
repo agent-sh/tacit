@@ -273,19 +273,6 @@ func TestFreshStoreFolderRecordsEndToEnd(t *testing.T) {
 		t.Error("no migrate commit")
 	}
 
-	// The area's tool, outside any repository: its facts before the call,
-	// once in the session.
-	push := hookOut(t, toolPayload(home, "x1", "mcp__tracker__TicketRead", map[string]any{"q": "open"}), "pre-tool")
-	if !strings.Contains(push, "tracker-triage-morning") || !strings.Contains(push, "tacit_tree areas/tracker") {
-		t.Fatalf("no area push outside a repo:\n%s", push)
-	}
-	if again := hookOut(t, toolPayload(home, "x1", "mcp__tracker__TicketList", map[string]any{"q": "open"}), "pre-tool"); again != "" {
-		t.Fatalf("pushed twice:\n%s", again)
-	}
-	if other := hookOut(t, toolPayload(home, "x2", "mcp__pager__PageSend", nil), "pre-tool"); other != "" {
-		t.Fatalf("a tool of no area pushed:\n%s", other)
-	}
-
 	// The rotation with K = 2: the two oldest live curated facts are stamped.
 	var live []*fact.Fact
 	for _, f := range factsByName(t, s.Dir) {

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -301,35 +300,6 @@ func pendingSummary(ctx context.Context, ix *search.Index, in hookInput, sit sea
 	return search.Block(summaryStep(ctx, ix, in, sit, recs, summary), summaryTitle)
 }
 
-// pendingHeld is the PreToolUse hook's part of a compaction whose summary
-// the start could not read: once the transcript holds the summary, the facts
-// given before the compaction that it holds join the delivered set, so a
-// push before the next prompt does not give them again. The record stays
-// for that prompt, which gives the summary's selection (pendingSummary).
-func pendingHeld(ctx context.Context, ix *search.Index, in hookInput) {
-	marker := heldFile(in.SessionID)
-	if marker == "" || ctx.Err() != nil {
-		return
-	}
-	p, ok := loadPending(in.SessionID)
-	if !ok || p.Offset < 0 || heldMarked(in.SessionID, p) {
-		return
-	}
-	summary, ok := pendingText(in, p)
-	if !ok {
-		return
-	}
-	// A lookup the push's deadline cut makes no marker: the next push, or
-	// the prompt, tries again.
-	if rememberHeld(ctx, ix, in, summaryOf(summary), p.Given) != nil || ctx.Err() != nil {
-		return
-	}
-	if f, err := os.OpenFile(marker, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600); err == nil {
-		fmt.Fprint(f, p.Offset)
-		f.Close()
-	}
-}
-
 // heldMarked reports a marker made for this record: it holds the record's
 // offset, so a marker a push made for an earlier compaction's record (made
 // while the next one's start replaced it) does not count for this one.
@@ -520,7 +490,7 @@ func unremember(id string, names []string) {
 		keep = append(keep, n)
 	}
 	sort.Strings(keep)
-	forget(id)
+	os.Remove(sessionFile(id)) // the delivered set only: the owed lines stay owed
 	rememberNames(id, keep)
 }
 

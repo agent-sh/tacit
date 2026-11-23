@@ -242,6 +242,9 @@ func repoStartHits(ctx context.Context, ix *search.Index, sit search.Situation) 
 	})
 	scores := startScores(ctx, ix, sit, strings.Join(repoNames(sit), " "))
 	keep = byScore(keep, scores)
+	// What marks and the judge said of each line in this repository
+	// (delivery_outcomes.go): the stopped out, the promoted first.
+	keep = outcomesFor(outcomeScope(names)).ordered(keep)
 	c := deliveryInt("START_CEILING", startCeiling)
 	// The log holds the pool's head: what was shown and as many again past
 	// the ceiling (a repository can tie thousands of facts to itself).
@@ -254,7 +257,9 @@ func repoStartHits(ctx context.Context, ix *search.Index, sit search.Situation) 
 		}
 		keep = keep[:c]
 	}
-	// The repository's org: its rules and standards, lightly.
+	// The repository's org: the owner's own rules of it, lightly. An
+	// agent's org-wide standard is not the repository's: the same few
+	// started every session of every repository of the org, related or not.
 	keep = append(keep, orgStartHits(ctx, ix, sit, keep)...)
 	// A dead repository's successor: its rules and standards, lightly.
 	keep = append(keep, successorStartHits(ctx, ix, sit, keep)...)

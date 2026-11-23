@@ -15,8 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
-
 	"github.com/agent-sh/tacit/client/internal/fact"
 	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/search"
@@ -79,7 +77,6 @@ func TestDeliveryLogRecordsHookLatency(t *testing.T) {
 // entry of its own. The log is mode 0600 in a 0700 directory, and with the setting off
 // nothing is written.
 func TestDeliveryLogRecordsEachBlockAndWhatItLeftOut(t *testing.T) {
-	t.Setenv("TACIT_DELIVERY_PUSH_COMMANDS", "on")
 	_, cwd := repoFirstRig(t,
 		fact.Meta{Name: "pool-lock-order", Description: "Take the shard lock before the slot lock in the scheduler pool", Type: "past_mistake", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Paths: []string{"src/scheduler/pool.go"}}},
 		fact.Meta{Name: "scheduler-shard-locks", Description: "The scheduler pool keeps one shard lock per tenant and a slot lock per job", Type: "design_decision", Scope: "projects/widget"},
@@ -103,21 +100,22 @@ func TestDeliveryLogRecordsEachBlockAndWhatItLeftOut(t *testing.T) {
 	hookOut(t, toolPayload(cwd, "s1", "Bash", map[string]any{"command": "cd /x && tacit search --scope projects/widget lock order | head; ~/bin/tacit fact pool-lock-order"}), "pre-tool")
 
 	log := readDeliveryLog(t, state)
-	var prompts, pushes, navs []logEntry
+	var prompts, denies, navs []logEntry
 	for _, e := range log {
 		switch e.Hook {
 		case "prompt":
 			prompts = append(prompts, e)
-		case "push":
-			pushes = append(pushes, e)
+		case "deny":
+			denies = append(denies, e)
 		case "nav":
 			navs = append(navs, e)
 		}
 	}
-	// The pushes: make lint, ls (nothing), the two MCP calls' and the
-	// shell's search (nothing).
-	if len(prompts) != 2 || len(pushes) != 5 || len(navs) != 4 {
-		t.Fatalf("entries: %d prompt, %d push, %d nav, want 2, 5, 4: %+v", len(prompts), len(pushes), len(navs), log)
+	// The tool calls: make lint is denied (a standard keyed to it); ls, the
+	// two MCP calls and the shell's search log no entry of their own but
+	// their nav steps.
+	if len(prompts) != 2 || len(denies) != 1 || len(navs) != 4 {
+		t.Fatalf("entries: %d prompt, %d deny, %d nav, want 2, 1, 4: %+v", len(prompts), len(denies), len(navs), log)
 	}
 	first := prompts[0]
 	if first.V != deliveryLogVersion || first.ID == "" || first.Session != "s1" || !subset(first.Terms, "scheduler", "pool", "shard", "lock", "slot") || first.NTerms != 7 || first.Floor != promptFloor || first.Relative != promptRelative ||
@@ -133,11 +131,8 @@ func TestDeliveryLogRecordsEachBlockAndWhatItLeftOut(t *testing.T) {
 	if again == nil || again.Delivered || again.Dropped != "seen" || again.P != 0 || !prompts[1].Nothing || prompts[1].PNothing != 1 {
 		t.Fatalf("the line the session had: %+v, nothing %v %v", again, prompts[1].Nothing, prompts[1].PNothing)
 	}
-	if p := candOf(pushes[0], "lint-before-push"); p == nil || !p.Delivered || p.Via != "meta" || p.P != 1 || p.Echo != 0 || pushes[0].Tool != "Bash" || pushes[0].NTerms != 2 || pushes[0].Nothing {
-		t.Fatalf("the push: %+v", pushes[0])
-	}
-	if p := pushes[1]; p.Tool != "Bash" || len(p.Terms) != 0 || !p.Nothing || p.PNothing != 1 || len(p.Cands) != 0 {
-		t.Fatalf("the push that showed nothing: %+v", p)
+	if p := candOf(denies[0], "lint-before-push"); p == nil || !p.Delivered || p.Via != "deny" || p.P != 1 || denies[0].Tool != "Bash" || denies[0].NTerms != 2 || denies[0].Nothing {
+		t.Fatalf("the deny: %+v", denies[0])
 	}
 	want := []logNav{
 		{Tool: "fact", Names: []string{"scheduler-shard-locks"}, Levels: -1},
@@ -185,7 +180,7 @@ func TestDeliveryLogRecordsEachBlockAndWhatItLeftOut(t *testing.T) {
 			t.Fatalf("the search's indexed terms: %+v", e.Nav)
 		}
 	}
-	if kinds["prompt"] != 1 || kinds["push"] < 2 || kinds["nav"] != 3 {
+	if kinds["prompt"] != 1 || kinds["deny"] != 1 || kinds["push"] != 0 || kinds["nav"] != 3 {
 		t.Fatalf("entries: %v", kinds)
 	}
 
@@ -693,37 +688,6 @@ func TestTitlesOnlyWhereMeasured(t *testing.T) {
 	}
 }
 
-// A shell command's push is titled, as measured; an edit's keeps whole
-// lines. The forms say so.
-func TestPushTitlesForCommandsOnly(t *testing.T) {
-	t.Setenv("TACIT_DELIVERY_PUSH_COMMANDS", "on")
-	_, cwd := repoFirstRig(t,
-		fact.Meta{Name: "lint-before-push", Description: "Run the linter with the strict profile", Type: "user_standard", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Commands: []string{"make lint"}}},
-		fact.Meta{Name: "worker-no-globals", Description: "Worker state lives in the pool, never in package globals", Type: "design_decision", Scope: "projects/widget", AppliesTo: fact.AppliesTo{Paths: []string{"src/scheduler/**"}}},
-	)
-	state := filepath.Join(t.TempDir(), "state")
-	t.Setenv("TACIT_STATE_DIR", state)
-	t.Setenv("TACIT_DELIVERY_TITLES", "on")
-	if out := hookOut(t, toolPayload(cwd, "s1", "Bash", map[string]any{"command": "make lint"}), "pre-tool", "--mcp"); strings.Contains(out, "strict profile") || !strings.Contains(out, "lint-before-push: agent note (") || !strings.Contains(out, "titles:") {
-		t.Fatalf("command push: %s", out)
-	}
-	edit := toolPayload(cwd, "s1", "Edit", map[string]any{"file_path": filepath.Join(cwd, "src", "scheduler", "worker.go"), "old_string": "a", "new_string": "b"})
-	if out := hookOut(t, edit, "pre-tool", "--mcp"); !strings.Contains(out, "package globals") || strings.Contains(out, "titles:") {
-		t.Fatalf("edit push: %s", out)
-	}
-	forms := map[string]string{}
-	for _, e := range readDeliveryLog(t, state) {
-		for _, c := range e.Cands {
-			if c.Delivered {
-				forms[c.Name] = c.Form
-			}
-		}
-	}
-	if forms["lint-before-push"] != "title" || forms["worker-no-globals"] != "full" {
-		t.Fatalf("forms: %v", forms)
-	}
-}
-
 // A block of only the owner's own lines has nothing to title: whole lines,
 // no note, and the form full.
 func TestTitlesLeaveAnOwnersBlockWhole(t *testing.T) {
@@ -745,139 +709,6 @@ func TestTitlesLeaveAnOwnersBlockWhole(t *testing.T) {
 	}
 }
 
-// A sampled prompt block asks for a self-mark (its probability logged on
-// every prompt entry, 0 where no ask could be made); the ask names the
-// block, and tacit_mark records the marks, only for a block that asked and
-// only names of the store's facts. No ask without the MCP server, for a
-// block of only the owner's lines, or at the rate 0.
-func TestSelfMarksAreSampledAndLogged(t *testing.T) {
-	r, cwd := repoFirstRig(t,
-		fact.Meta{Name: "scheduler-shard-locks", Description: "The scheduler pool keeps one shard lock per tenant and a slot lock per job", Type: "design_decision", Scope: "projects/widget"},
-	)
-	state := filepath.Join(t.TempDir(), "state")
-	t.Setenv("TACIT_STATE_DIR", state)
-	t.Setenv("TACIT_DELIVERY_REPO_START", "off")
-	t.Setenv("TACIT_DELIVERY_PROMPT_ACTION", "off")
-	t.Setenv("TACIT_DELIVERY_MARK_RATE", "0.05")
-	draw := markDraw
-	t.Cleanup(func() { markDraw, hookMCP = draw, false })
-	prompt := "Fix the scheduler pool shard lock and slot lock race"
-	markDraw = func() float64 { return 0.99 }
-	if out := hookOut(t, promptPayload(cwd, "s1", prompt), "prompt", "--mcp"); strings.Contains(out, "tacit_mark") {
-		t.Fatalf("not drawn: %s", out)
-	}
-	markDraw = func() float64 { return 0.01 }
-	out := hookOut(t, promptPayload(cwd, "s2", prompt), "prompt", "--mcp")
-	if !strings.Contains(out, "`mcp__tacit__tacit_mark` (block ") {
-		t.Fatalf("drawn: %s", out)
-	}
-	if out := hookOut(t, promptPayload(cwd, "s3", prompt), "prompt"); strings.Contains(out, "tacit_mark") {
-		t.Fatalf("no MCP server: %s", out)
-	}
-	markDraw = func() float64 { return 0 }
-	t.Setenv("TACIT_DELIVERY_MARK_RATE", "0")
-	if out := hookOut(t, promptPayload(cwd, "s4", prompt), "prompt", "--mcp"); strings.Contains(out, "tacit_mark") {
-		t.Fatalf("rate 0: %s", out)
-	}
-	t.Setenv("TACIT_DELIVERY_MARK_RATE", "0.05")
-	pm := map[string]float64{}
-	var asked logEntry
-	for _, e := range readDeliveryLog(t, state) {
-		if e.Hook != "prompt" {
-			continue
-		}
-		if e.PMark == nil {
-			t.Fatalf("a prompt entry without p_mark: %+v", e)
-		}
-		pm[e.Session] = *e.PMark
-		if e.Session == "s2" {
-			asked = e
-		}
-		if e.Session != "s2" && e.MarkAsked {
-			t.Fatalf("asked unasked: %+v", e)
-		}
-	}
-	if pm["s1"] != markRate || pm["s2"] != markRate || pm["s3"] != 0 || pm["s4"] != 0 || len(pm) != 4 {
-		t.Fatalf("p_mark: %v", pm)
-	}
-	if !asked.MarkAsked || !strings.Contains(out, asked.ID) {
-		t.Fatalf("asked: %+v", asked)
-	}
-	// A block of only the owner's lines asks nothing.
-	beginLog("prompt", hookInput{SessionID: "s5"}, "commit", nil, nil)
-	hookMCP = true
-	if ask := markAsk([]search.Hit{{Name: "signoff", Path: "user/signoff.md", Ruling: true}}); ask != "" || *dlog.PMark != 0 {
-		t.Fatalf("owner only: %q", ask)
-	}
-	endLog(nil)
-	hookMCP = false
-	// The tool: a block that asked, names the store holds; else an error.
-	ctx := context.Background()
-	st, ct := mcp.NewInMemoryTransports()
-	ss, err := storeServer(r.s, "claude").Connect(ctx, st, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ss.Close()
-	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(ctx, ct, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cs.Close()
-	call := func(args map[string]any) *mcp.CallToolResult {
-		t.Helper()
-		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "tacit_mark", Arguments: args})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return res
-	}
-	errText := func(res *mcp.CallToolResult) string {
-		t.Helper()
-		if !res.IsError {
-			return ""
-		}
-		return res.Content[0].(*mcp.TextContent).Text
-	}
-	if e := errText(call(map[string]any{"block": asked.ID, "helped": []string{"scheduler-shard-locks"}, "not_helped": []string{"scheduler-shard-locks"}})); !strings.Contains(e, "name at least one") {
-		t.Fatalf("a mark with no name left: %q", e)
-	}
-	if e := errText(call(map[string]any{"block": asked.ID, "helped": []string{"pool-lock-order", "no-such-fact", "Not A Slug"}})); !strings.Contains(e, "name at least one") {
-		t.Fatalf("names the block did not print: %q", e)
-	}
-	if res := call(map[string]any{"block": asked.ID, "not_helped": []string{"scheduler-shard-locks"}}); res.IsError {
-		t.Fatalf("tacit_mark: %+v", res)
-	}
-	if e := errText(call(map[string]any{"block": asked.ID, "helped": []string{"scheduler-shard-locks"}})); !strings.Contains(e, "marked already") {
-		t.Fatalf("a second mark: %q", e)
-	}
-	var s1 logEntry
-	for _, e := range readDeliveryLog(t, state) {
-		if e.Session == "s1" && e.Hook == "prompt" {
-			s1 = e
-		}
-	}
-	if e := errText(call(map[string]any{"block": s1.ID, "helped": []string{"scheduler-shard-locks"}})); !strings.Contains(e, "no tacit block asked") {
-		t.Fatalf("a block that did not ask: %q", e)
-	}
-	if e := errText(call(map[string]any{"block": "not-an-id"})); e == "" {
-		t.Fatal("a bad id was taken")
-	}
-	var marks []*logMarkStep
-	for _, e := range readDeliveryLog(t, state) {
-		if e.Hook == "mark" {
-			marks = append(marks, e.Mark)
-		}
-	}
-	if len(marks) != 1 || marks[0].Block != asked.ID || strings.Join(marks[0].NotHelped, ",") != "scheduler-shard-locks" || len(marks[0].Helped) != 0 {
-		t.Fatalf("marks: %+v", marks)
-	}
-	t.Setenv("TACIT_DELIVERY_LOG", "off")
-	if e := errText(call(map[string]any{"block": asked.ID, "helped": []string{"scheduler-shard-locks"}})); !strings.Contains(e, "log is off") {
-		t.Fatalf("log off: %q", e)
-	}
-}
-
 // A mark follows its block within today and the day before: a block that
 // asked three days ago is no block to mark. A local note the block printed
 // can be marked; an owner's line cannot.
@@ -887,13 +718,13 @@ func TestSelfMarksWindowAndLines(t *testing.T) {
 	now := time.Now()
 	old := &logEntry{V: 1, ID: "00000000000000aa", Hook: "prompt", MarkAsked: true, Cands: []logCand{{Name: "a-note", Delivered: true, Prov: "agent"}}}
 	writeLogEntry(old, now.AddDate(0, 0, -3))
-	if err := logMark(old.ID, []string{"a-note"}, nil); err == nil || !strings.Contains(err.Error(), "no tacit block asked") {
+	if err := logMarkErr(old.ID, used("a-note")); err == nil || !strings.Contains(err.Error(), "no tacit ask has this id") {
 		t.Fatalf("a three-day-old block: %v", err)
 	}
 	fresh := &logEntry{V: 1, ID: "00000000000000bb", Hook: "prompt", MarkAsked: true, Cands: []logCand{
 		{Name: "local-note", Delivered: true, Prov: "agent", Local: true}, {Name: "owner-rule", Delivered: true, Prov: "rule"}, {Name: "not-shown", Prov: "agent"}}}
 	writeLogEntry(fresh, now)
-	if err := logMark(fresh.ID, []string{"local-note", "owner-rule", "not-shown"}, nil); err != nil {
+	if err := logMarkErr(fresh.ID, used("local-note", "owner-rule", "not-shown")); err != nil {
 		t.Fatal(err)
 	}
 	var got *logMarkStep
@@ -908,7 +739,7 @@ func TestSelfMarksWindowAndLines(t *testing.T) {
 	// The day before is in the window.
 	yday := &logEntry{V: 1, ID: "00000000000000cc", Hook: "prompt", MarkAsked: true, Cands: []logCand{{Name: "a-note", Delivered: true, Prov: "agent"}}}
 	writeLogEntry(yday, now.AddDate(0, 0, -1))
-	if err := logMark(yday.ID, []string{"a-note"}, nil); err != nil {
+	if err := logMarkErr(yday.ID, used("a-note")); err != nil {
 		t.Fatalf("a block of the day before: %v", err)
 	}
 	// Marks at once: one is taken, one entry is written.
@@ -920,7 +751,7 @@ func TestSelfMarksWindowAndLines(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if logMark(many.ID, []string{"a-note"}, nil) == nil {
+			if logMarkErr(many.ID, used("a-note")) == nil {
 				taken.Add(1)
 			}
 		}()
@@ -941,7 +772,7 @@ func TestSelfMarksWindowAndLines(t *testing.T) {
 	if err := os.Truncate(filepath.Join(state, "delivery", now.UTC().Format("2006-01-02")+".jsonl"), deliveryLogDayCap); err != nil {
 		t.Fatal(err)
 	}
-	if err := logMark(full.ID, []string{"a-note"}, nil); err == nil || !strings.Contains(err.Error(), "not written") {
+	if err := logMarkErr(full.ID, used("a-note")); err == nil || !strings.Contains(err.Error(), "not written") {
 		t.Fatalf("a mark the full log could not take: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(state, "delivery", "marks", full.ID)); !os.IsNotExist(err) {
@@ -1002,4 +833,18 @@ func TestDeliveryLogDayCapOpenDay(t *testing.T) {
 	t.Cleanup(func() { openPrivateDir = old })
 	openPrivateDir = func(string) (*os.File, error) { return nil, os.ErrPermission }
 	TestDeliveryLogDayCap(t)
+}
+
+// used marks each name used.
+func used(names ...string) []markVerdict {
+	out := make([]markVerdict, len(names))
+	for i, n := range names {
+		out[i] = markVerdict{Name: n, Verdict: "used"}
+	}
+	return out
+}
+
+func logMarkErr(block string, marks []markVerdict) error {
+	_, err := logMark(block, marks)
+	return err
 }

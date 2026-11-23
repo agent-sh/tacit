@@ -50,6 +50,15 @@ func TestMain(m *testing.M) {
 		offHome = func() (string, error) { return d, nil }
 	}
 	store.Redact = canaryRedact
+	// The suite's sessions are a person's (sessionKind): its transcripts are
+	// under the temporary directory, which may be under the user's cache
+	// directory, and the suite may run inside an agent's SDK session. The
+	// tests of the kinds set these themselves.
+	os.Unsetenv("CLAUDE_CODE_ENTRYPOINT")
+	os.Unsetenv("TACIT_HEADLESS")
+	if d, err := os.MkdirTemp("", "xdg-cache"); err == nil {
+		os.Setenv("XDG_CACHE_HOME", d)
+	}
 	// A test that reads the delivery log back must not lose its line to a
 	// loaded machine; TestDeliveryLogWriteIsBounded checks the real bound.
 	logWriteWait = time.Minute

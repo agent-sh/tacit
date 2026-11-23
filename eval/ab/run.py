@@ -237,6 +237,9 @@ def run_once(task, arm, block_path, rep):
         path = SCRATCH / f"{task['id']}-{arm}.md"
         settings = {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": f"cat {path}"}]}]}}
         cmd += ["--settings", json.dumps(settings)]
+    # `claude -p` is a headless run, which tacit's hooks give no blocks; the
+    # A/B measures the blocks, so every arm's run counts as a person's.
+    env["TACIT_HEADLESS"] = "0"
     t0 = time.time()
     try:
         proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=task.get("timeout", 900), env=env)

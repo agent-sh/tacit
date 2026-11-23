@@ -12,7 +12,7 @@ import (
 
 // A fact whose content words the repository's own AGENTS.md already covers
 // this widely (its name and description words, its name's) reaches no prompt
-// block and no tool push: the session carries the rule already. The dedup
+// block: the session carries the rule already. The dedup
 // setting turns the gate off, and dedup_files adds files beyond the
 // repository's own instructions.
 func TestDedupHoldsFactsTheInstructionsAlreadyCarry(t *testing.T) {
@@ -32,10 +32,6 @@ func TestDedupHoldsFactsTheInstructionsAlreadyCarry(t *testing.T) {
 	}
 	if out := hookOut(t, promptPayload(cwd, "s2", "the scheduler takes the shard lock before the slot lock where"), "prompt"); !strings.Contains(out, "widget-pool-order") {
 		t.Fatalf("a fact the AGENTS.md does not hold was held:\n%s", out)
-	}
-	edit := toolPayload(cwd, "s3", "Edit", map[string]any{"file_path": filepath.Join(cwd, "src", "scheduler", "pool.go"), "old_string": "a", "new_string": "b"})
-	if got := preToolContext(t, hookOut(t, edit, "pre-tool")); !strings.Contains(got, "widget-pool-order") {
-		t.Fatalf("a path push was held:\n%s", got)
 	}
 	t.Setenv("TACIT_DELIVERY_DEDUP", "off")
 	if out := hookOut(t, promptPayload(cwd, "s4", "fix the commit signoff trailer check"), "prompt"); !strings.Contains(out, "widget-signoff") {

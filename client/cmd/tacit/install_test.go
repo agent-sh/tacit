@@ -48,6 +48,12 @@ func TestInstallHooksMergesAndIsIdempotent(t *testing.T) {
 	if ptu[1].Matcher != toolPushTools || ptu[1].Hooks[0].Command != "/bin/tacit hook pre-tool" {
 		t.Fatalf("pre-tool hook: %s", first)
 	}
+	if st := got.Hooks["Stop"]; len(st) != 1 || st[0].Matcher != "" || st[0].Hooks[0].Command != "/bin/tacit hook stop" {
+		t.Fatalf("stop hook: %s", first)
+	}
+	if toolPushTools != "Bash|mcp__.*__tacit_.*" {
+		t.Fatalf("the PreToolUse matcher starts the hook on more than the shell and tacit's tools: %q", toolPushTools)
+	}
 	ups := got.Hooks["UserPromptSubmit"]
 	if len(ups) != 1 || ups[0].Hooks[0].Command != "/bin/tacit hook prompt" {
 		t.Fatalf("prompt hook: %s", first)

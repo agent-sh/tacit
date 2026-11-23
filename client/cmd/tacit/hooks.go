@@ -92,6 +92,12 @@ type hookInput struct {
 	// its arguments.
 	ToolName  string          `json:"tool_name"`
 	ToolInput json.RawMessage `json:"tool_input"`
+	// AgentID is set by Claude Code and Codex when the hook fires inside a
+	// subagent (sessionKind).
+	AgentID string `json:"agent_id,omitempty"`
+	// StopHookActive is the Stop hook's: the turn already went on once
+	// because a Stop hook blocked it (stopHook never blocks it again).
+	StopHookActive bool `json:"stop_hook_active,omitempty"`
 }
 
 func openIndex(ctx context.Context, s *store.Store) (*search.Index, error) {
@@ -177,6 +183,19 @@ func runHook(args []string) int {
 	}
 	if args[0] == "index" {
 		buildIndexForHooks(s)
+		return 0
+	}
+	if args[0] == "stop" {
+		stopHook(in)
+		return 0
+	}
+	// A headless run (sessionKind) gets no start, prompt or compaction
+	// block; its prompt still starts the window dream, and its compaction
+	// still dreams (pre-compact above).
+	if (args[0] == "session-start" || args[0] == "prompt") && sessionKind(in) != "" {
+		if args[0] == "prompt" {
+			windowDream(s, in)
+		}
 		return 0
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), queryBudget+syncBudget)
@@ -315,7 +334,7 @@ func runHook(args []string) int {
 		strong = withoutDuplicates(strong, corpus.get)
 		remember(in.SessionID, strong)
 		if out := hookBlock(strong, "# tacit: facts matching this request", titlesNote); out != "" {
-			fmt.Print(out + markAsk(strong))
+			fmt.Print(out)
 		}
 		endLog(strong)
 	default:
@@ -412,7 +431,7 @@ func withPromptScopes(sit search.Situation, recs map[string]*record.Record, requ
 // subagent reports) are not requests. A lone syntactic identifier may reach
 // retrieval, which still enforces document frequency and score thresholds.
 func promptWorthy(p string) bool {
-	if p == "" || strings.HasPrefix(p, "<") || selfContained(p) {
+	if p == "" || strings.HasPrefix(p, "<") || strings.HasPrefix(p, stopAskTitle) || selfContained(p) {
 		return false
 	}
 	terms := search.Terms(p)
@@ -500,6 +519,11 @@ func promptHitsWith(ctx context.Context, ix *search.Index, sit search.Situation,
 			hits = hits[:ceiling*2]
 		}
 	}
+	// What marks and the judge said of each line in this scope
+	// (delivery_outcomes.go): the stopped out, the demoted at half their
+	// score, the promoted above theirs, before any floor.
+	oc := outcomesFor(outcomeScope(names))
+	hits = oc.rescored(hits)
 	sit.OnlyDerived, sit.Printable = true, true
 	dhits, err := ix.Query(ctx, sit, 1, false)
 	if err != nil {
@@ -522,11 +546,11 @@ func promptHitsWith(ctx context.Context, ix *search.Index, sit search.Situation,
 	}
 	// The repo-first lines: the fact whose metadata names a path or command
 	// of the request, and the best rule or decision for it (hooks_delivery.go).
-	meta := promptMetaHits(ctx, ix, sit, p, withSeen(seen, out))
+	meta := oc.withoutDemoted(promptMetaHits(ctx, ix, sit, p, withSeen(seen, out)))
 	logChose(meta, "meta")
 	out = append(out, meta...)
 	if !shortRequest(p) {
-		action := promptActionHits(ctx, ix, sit, p, withSeen(seen, out), out)
+		action := oc.withoutDemoted(promptActionHits(ctx, ix, sit, p, withSeen(seen, out), out))
 		logChose(action, "action")
 		out = append(out, action...)
 	}
@@ -858,6 +882,7 @@ func delivered(id string) map[string]bool {
 func forget(id string) {
 	if p := sessionFile(id); p != "" {
 		os.Remove(p)
+		os.Remove(owedFile(id)) // nor can it mark them
 	}
 }
 
@@ -867,6 +892,7 @@ func remember(id string, hits []search.Hit) {
 		names[i] = h.Name
 	}
 	rememberNames(id, names)
+	owe(id, names) // printed: the turn's Stop asks for their mark (hooks_stop.go)
 }
 
 // rememberNames adds lines to the session's delivered set: fact names, and

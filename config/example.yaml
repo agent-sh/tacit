@@ -21,7 +21,6 @@ delivery:
   prompt_metadata: on
   prompt_action: on
   instruction: on
-  tool_push: on
   tree_pointer: on
   titles: on
   start_ceiling: 6

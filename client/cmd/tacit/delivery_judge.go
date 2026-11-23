@@ -139,6 +139,9 @@ type judgeMoment struct {
 	P          float64 `json:"p,omitempty"`
 	Tries      int     `json:"tries,omitempty"`
 	Held       int     `json:"held,omitempty"` // calls that failed for a reason that says nothing about the line
+	// In is the block's scope (its first repository), which the label's
+	// outcome is kept under (delivery_outcomes.go).
+	In string `json:"in,omitempty"`
 }
 
 // judgeCase is what the judge reads of one line's moment, redacted.
@@ -885,7 +888,7 @@ func judgePool(ctx context.Context, now time.Time, through time.Time) (out []jud
 		}
 		for _, c := range e.Cands {
 			if c.Delivered {
-				out = append(out, judgeMoment{Block: e.ID, Fact: c.Name, Hook: e.Hook, Tool: e.Tool, Transcript: e.TranscriptPath, Offset: e.Transcript, FactPath: c.Path})
+				out = append(out, judgeMoment{Block: e.ID, Fact: c.Name, Hook: e.Hook, Tool: e.Tool, Transcript: e.TranscriptPath, Offset: e.Transcript, FactPath: c.Path, In: outcomeScope(e.Repos)})
 			}
 		}
 	}
@@ -1288,6 +1291,7 @@ func deliveryJudgePass(ctx context.Context, s *store.Store, now time.Time) (int,
 				st.Count++ // the call was paid either way
 				if appendJudgeLabel(e, time.Now()) == nil {
 					pass.Judged++
+					recordOutcomes(labelOutcome(v, moments[i+k].In))
 					continue
 				}
 				// A label the log could not take: the line waits for a later
@@ -1400,4 +1404,19 @@ func runDeliveryJudge(args []string) int {
 		k++
 	}
 	return 0
+}
+
+// labelOutcome is a label's outcome: relevant yes is used, no is not
+// relevant, unsure is none.
+func labelOutcome(v judgeVerdict, in string) []outcomeLine {
+	verdict := ""
+	switch v.Relevant {
+	case "yes":
+		verdict = verdictUsed
+	case "no":
+		verdict = verdictNotRelevant
+	default:
+		return nil
+	}
+	return []outcomeLine{{TS: time.Now().UTC().Format(time.RFC3339Nano), In: in, Fact: v.Fact, Verdict: verdict, Src: "judge", Block: v.Block}}
 }

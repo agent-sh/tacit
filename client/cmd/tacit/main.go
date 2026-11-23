@@ -45,7 +45,8 @@ func usage() {
   tacit episode [--harness H] [--session ID] [--fact NAME] [--before REF] [--n N] find WORDS | around REF | show REF
                                    recall this session's own history (--session ID, --fact NAME)
   tacit add --harness H --desc "..." [--type T] [--scope S] [--kind K] <name>
-  tacit hook session-start|prompt|pre-tool|pre-compact|questions  Claude Code and Codex hooks (JSON on stdin, block on stdout; pre-tool answers PreToolUse as JSON; pre-compact starts a dream of the session and returns; questions prints only the reviewer's question for the owner, for pi's extension)
+  tacit hook session-start|prompt|pre-tool|stop|pre-compact|questions  Claude Code and Codex hooks (JSON on stdin, block on stdout; pre-tool answers PreToolUse as JSON, a deny when a rule keyed to the command applies; stop asks for one mark of the turn's facts; pre-compact starts a dream of the session and returns; questions prints only the reviewer's question for the owner, for pi's extension)
+  tacit mark <id> <fact>=used|not_relevant|wrong ...   answer a tacit ask: for each fact it listed, whether it was used, not relevant or wrong (one call; tacit_mark in an MCP harness)
   tacit mcp [--harness H]          MCP stdio server: tacit_tree, tacit_search, tacit_fact, tacit_add, tacit_episode, tacit_mark
   tacit install claude|codex|hermes|grok|pi|muse|agy|follow|dream|curate|app
   tacit install claude [--no-mcp]   hooks, and the tacit MCP server in Claude Code's user config (~/.claude.json); --no-mcp: hooks only
@@ -195,6 +196,8 @@ func main() {
 		os.Exit(runEpisode(os.Args[2:]))
 	case "add":
 		os.Exit(runAdd(os.Args[2:]))
+	case "mark":
+		os.Exit(runMark(os.Args[2:]))
 	case "hook":
 		os.Exit(runHook(os.Args[2:]))
 	case "mcp":

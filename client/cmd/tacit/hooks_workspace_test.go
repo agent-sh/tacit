@@ -194,12 +194,9 @@ func TestSessionStartInAWorkspaceIsAllItsRepos(t *testing.T) {
 	}
 }
 
-// The prompt hook reads every workspace repository's scope; the PreToolUse
-// push narrows to the repository of the file an edit writes (that
-// repository's path facts, not the other's), and matches a shell command
-// run from the workspace root against all of them.
-func TestWorkspacePromptAndToolPush(t *testing.T) {
-	t.Setenv("TACIT_DELIVERY_PUSH_COMMANDS", "on")
+// The prompt hook reads every workspace repository's scope, and paths the
+// prompt names in one repository narrow it to that one.
+func TestWorkspacePrompt(t *testing.T) {
 	_, ws := workspaceRig(t, wsFixture...)
 	t.Setenv("TACIT_DELIVERY_REPO_START", "off")
 	if out := hookOut(t, promptPayload(ws, "s1", "Add retries to the private message delivery transport"), "prompt"); !strings.Contains(out, "gadget-transport-retries") {
@@ -210,19 +207,6 @@ func TestWorkspacePromptAndToolPush(t *testing.T) {
 	narrow := "Add retries to the private message delivery transport in " + filepath.Join(w, "src", "scheduler", "worker.go") + " and " + filepath.Join(w, "src", "scheduler", "pool.go")
 	if out := hookOut(t, promptPayload(ws, "s4", narrow), "prompt"); strings.Contains(out, "gadget-transport-retries") {
 		t.Fatalf("not narrowed to widget:\n%s", out)
-	}
-	edit := toolPayload(ws, "s2", "Edit", map[string]any{"file_path": filepath.Join(ws, "src", "gadget", "src", "scheduler", "worker.go"), "old_string": "a", "new_string": "b"})
-	got := preToolContext(t, hookOut(t, edit, "pre-tool"))
-	if !strings.Contains(got, "gadget-worker-paths") || strings.Contains(got, "widget-worker-paths") {
-		t.Fatalf("edit narrows to its repository:\n%s", got)
-	}
-	if got := preToolContext(t, hookOut(t, toolPayload(ws, "s2", "Bash", map[string]any{"command": "cd src/widget && make lint"}), "pre-tool")); !strings.Contains(got, "widget-lint") {
-		t.Fatalf("command from the workspace root:\n%s", got)
-	}
-	// A relative path from the workspace root narrows the same way.
-	rel := toolPayload(ws, "s3", "Edit", map[string]any{"file_path": "src/widget/src/scheduler/worker.go"})
-	if got := preToolContext(t, hookOut(t, rel, "pre-tool")); !strings.Contains(got, "widget-worker-paths") {
-		t.Fatalf("relative path:\n%s", got)
 	}
 }
 

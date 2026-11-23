@@ -98,8 +98,11 @@ type logEntry struct {
 	// Omitted is how many candidates of the block's pools the entry leaves
 	// out: past the head of the start block's pool, or past logCandCap.
 	Omitted int `json:"omitted,omitempty"`
-	// PMark is the probability the block had of asking for a self-mark,
-	// MarkAsked whether it asked; Mark is a mark entry's marks.
+	// PMark is the probability a prompt block had of asking for a
+	// self-mark: 0 since the Stop hook asks for every delivered line (it is
+	// kept so earlier entries read the same). MarkAsked: the entry asked for
+	// a mark (a Stop ask; a sampled prompt block before it). Mark is a mark
+	// entry's marks.
 	PMark     *float64     `json:"p_mark,omitempty"`
 	MarkAsked bool         `json:"mark_asked,omitempty"`
 	Mark      *logMarkStep `json:"mark,omitempty"`
@@ -156,6 +159,9 @@ type logCand struct {
 	// not say why).
 	Dropped   string `json:"dropped,omitempty"`
 	Delivered bool   `json:"delivered"`
+	// In is a Stop ask's line's scope: the session's repository the line
+	// was delivered for ("" for none), which its verdict is kept under.
+	In string `json:"in,omitempty"`
 	// P is the probability the policy had of showing it: 1 or 0 while the
 	// policy is deterministic. A policy that draws at random must log the
 	// probability it had before the draw, never the outcome: the offline
@@ -256,7 +262,7 @@ func beginLog(hook string, in hookInput, request string, repos []string, ix *sea
 	dlog.ix, dlog.req = ix, request
 	if hook == "prompt" {
 		zero := 0.0
-		dlog.PMark = &zero // the probability of a self-mark ask (markAsk); 0 when none could be asked
+		dlog.PMark = &zero // no prompt block asks for a mark: the Stop hook does (hooks_stop.go)
 	}
 	dlog.ID = logID(dlog)
 }

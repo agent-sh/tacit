@@ -99,11 +99,11 @@ func TestOrgFolderFromAnOrgNamedProjectFolder(t *testing.T) {
 		t.Fatalf("org %+v", r)
 	}
 
-	// A session in a member reads the org's standard at start; one in
-	// another repository does not.
+	// An agent's org-wide standard starts no session, in a member or in
+	// another repository: only the owner's own org rules come at start.
 	out := hookOut(t, startPayload(tc, "r1"), "session-start")
-	if !strings.Contains(out, "release-from-signed-tags") {
-		t.Fatalf("the org's standard is not delivered in its member:\n%s", out)
+	if strings.Contains(out, "release-from-signed-tags") {
+		t.Fatalf("the org's agent standard started a member's session:\n%s", out)
 	}
 	other := w.git("elsewhere", "")
 	if out := hookOut(t, startPayload(other, "r2"), "session-start"); strings.Contains(out, "release-from-signed-tags") {

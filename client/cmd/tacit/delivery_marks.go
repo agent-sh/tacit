@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,76 +14,65 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-
-	"github.com/agent-sh/tacit/client/internal/search"
 )
 
-// Sampled self-marks (SPEC.md, "Self-marks"): on a small share of the
-// prompt blocks that print an agent's notes, the block asks the agent to say
-// later which lines helped, through tacit_mark, naming the block's log id.
-// The ask never blocks: nothing waits for the answer. The draw's
-// probability is logged with the block, and a mark is a log entry of its
-// own. A mark moves no score until it is calibrated against the hand
-// grades and the hold-outs.
-
-// markRate is the share of eligible prompt blocks that ask (about 1 in
-// 20): enough asks to calibrate within weeks of a working machine's
-// traffic, few enough that the ask is rare in any one session.
-// TACIT_DELIVERY_MARK_RATE sets it, 0 for none.
-const markRate = 0.05
-
-// markDraw is the sampling draw; tests replace it.
-var markDraw = func() float64 { return rand.Float64() }
-
-func deliveryMarkRate() float64 { return deliveryFloat("MARK_RATE", markRate) }
-
-// markAsk is the line a sampled block ends with, or "": only a prompt
-// block, in a harness with tacit's MCP server (tacit_mark is a tool there),
-// that prints at least one agent's note (an owner's rule is not graded by an
-// agent). The draw and its probability go in the block's log entry.
-func markAsk(hits []search.Hit) string {
-	if dlog == nil || !hookMCP || !hasAgentLine(hits) {
-		return ""
-	}
-	p := deliveryMarkRate()
-	dlog.PMark = &p
-	if p <= 0 || markDraw() >= p {
-		return ""
-	}
-	dlog.MarkAsked = true
-	return fmt.Sprintf("# tacit: when this request is done, say which of these lines helped with `mcp__tacit__tacit_mark` (block %s); it is optional and nothing waits for it\n", dlog.ID)
-}
+// Marks (SPEC.md, "Marks"): the Stop hook (hooks_stop.go) asks the agent,
+// once a turn that was given facts, to say of each one whether it was used,
+// not relevant or wrong, in one call (tacit_mark, or `tacit mark`) naming
+// the ask's log id. A mark is a log entry of its own, and each verdict also
+// goes to the outcomes (delivery_outcomes.go), which move the line's
+// delivery in that scope.
 
 // logIDRx is a log entry's id (logID).
 var logIDRx = regexp.MustCompile(`^[0-9a-f]{16}$`)
 
-// logMarkStep is a mark entry's marks.
+// The verdicts a mark takes.
+const (
+	verdictUsed        = "used"
+	verdictNotRelevant = "not_relevant"
+	verdictWrong       = "wrong"
+)
+
+// markVerdict is one fact's verdict in a mark.
+type markVerdict struct {
+	Name    string `json:"name" jsonschema:"the fact's name as the ask listed it"`
+	Verdict string `json:"verdict" jsonschema:"used, not_relevant or wrong"`
+}
+
+// normVerdict reads a verdict, in the words an agent may use for it.
+func normVerdict(v string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(v, "-", "_"), " ", "_"))) {
+	case "used", "use", "helped", "relevant", "yes":
+		return verdictUsed, true
+	case "not_relevant", "irrelevant", "not_used", "unused", "not_helped", "no":
+		return verdictNotRelevant, true
+	case "wrong", "incorrect", "stale", "false":
+		return verdictWrong, true
+	}
+	return "", false
+}
+
+// logMarkStep is a mark entry's marks. Helped is the used lines, NotHelped
+// the not relevant ones (the names the first marks had), Wrong the wrong
+// ones.
 type logMarkStep struct {
 	Block     string   `json:"block"`
 	Helped    []string `json:"helped,omitempty"`
 	NotHelped []string `json:"not_helped,omitempty"`
-}
-
-func hasAgentLine(hits []search.Hit) bool {
-	for _, h := range hits {
-		if !h.OwnerLine() {
-			return true
-		}
-	}
-	return false
+	Wrong     []string `json:"wrong,omitempty"`
 }
 
 // markCap bounds the names one mark keeps (the log's candidate cap).
 const markCap = logCandCap
 
 // ownerProv are the provenances of the owner's own lines (OwnerLine), which
-// no agent grades.
+// no agent grades in a prompt block's ask; a Stop ask lists them too.
 var ownerProv = map[string]bool{"rule": true, "owner": true, "statement": true, "words": true, "confirmed": true}
 
 // markedBlock finds, in the window a mark can follow its block (the UTC
 // day of the mark and the one before), the block of this id that asked for
-// a self-mark. A read error answers none: the mark is refused rather than
-// taken unchecked.
+// a mark. A read error answers none: the mark is refused rather than taken
+// unchecked.
 func markedBlock(id string, now time.Time) (asked *logEntry, err error) {
 	needle := []byte(`"` + id + `"`)
 	for _, day := range []time.Time{now, now.AddDate(0, 0, -1)} {
@@ -145,83 +133,110 @@ func claimMark(id string, now time.Time) (bool, error) {
 	return true, nil
 }
 
-// markNames is xs less what the block did not print as an agent's line,
-// less doubles and what drop holds, at most markCap.
-func markNames(block *logEntry, xs []string, drop map[string]bool) []string {
-	lines := map[string]bool{}
-	for _, c := range block.Cands {
-		if c.Delivered && !ownerProv[c.Prov] {
-			lines[c.Name] = true
+// askedLines are the names a mark of this block may grade: the lines it
+// printed; a prompt block's, the agents' only.
+func askedLines(block *logEntry) map[string]*logCand {
+	lines := map[string]*logCand{}
+	for i, c := range block.Cands {
+		if c.Delivered && (block.Hook == "stop" || !ownerProv[c.Prov]) {
+			lines[c.Name] = &block.Cands[i]
 		}
 	}
-	var out []string
-	seen := map[string]bool{}
-	for _, x := range xs {
-		if len(out) >= markCap {
-			break
-		}
-		x = strings.TrimSpace(x)
-		if seen[x] || drop[x] || !lines[x] {
-			continue
-		}
-		seen[x] = true
-		out = append(out, x)
-	}
-	return out
+	return lines
 }
 
-// logMark records an agent's self-mark of a block that asked for one: the
-// agent's lines the block printed, a name in both lists in neither; one
-// mark a block. It reports why nothing was recorded.
-func logMark(block string, helped, not []string) error {
+// logMark records a mark of a block that asked for one: each named line
+// the block printed with its verdict, a name given two verdicts in none;
+// one mark a block. It reports why nothing was recorded, and what it left
+// out (names the block did not print, verdicts it does not know).
+func logMark(block string, marks []markVerdict) (skipped []string, err error) {
 	if !deliveryLogOn() {
-		return errors.New("the delivery log is off; nothing was recorded")
+		return nil, errors.New("the delivery log is off; nothing was recorded")
 	}
 	now := time.Now()
 	asked, err := markedBlock(block, now)
 	switch {
 	case err != nil:
-		return fmt.Errorf("the delivery log could not be read: %w", err)
+		return nil, fmt.Errorf("the delivery log could not be read: %w", err)
 	case asked == nil:
-		return errors.New("no tacit block asked for a mark with this id")
+		return nil, errors.New("no tacit ask has this id")
 	}
+	lines := askedLines(asked)
+	verdict := map[string]string{}
+	var order []string
 	both := map[string]bool{}
-	for _, h := range helped {
-		for _, n := range not {
-			if strings.TrimSpace(h) == strings.TrimSpace(n) {
-				both[strings.TrimSpace(h)] = true
-			}
+	for _, m := range marks {
+		name := strings.TrimSpace(m.Name)
+		v, ok := normVerdict(m.Verdict)
+		if !ok || lines[name] == nil {
+			skipped = append(skipped, name)
+			continue
 		}
+		if old, seen := verdict[name]; seen {
+			if old != v {
+				both[name] = true
+			}
+			continue
+		}
+		verdict[name] = v
+		order = append(order, name)
 	}
-	m := &logMarkStep{Block: block, Helped: markNames(asked, helped, both), NotHelped: markNames(asked, not, both)}
-	if len(m.Helped)+len(m.NotHelped) == 0 {
-		return errors.New("name at least one of the agent's lines the block printed")
+	m := &logMarkStep{Block: block}
+	var outs []outcomeLine
+	for _, name := range order {
+		if both[name] || len(m.Helped)+len(m.NotHelped)+len(m.Wrong) >= markCap {
+			continue
+		}
+		switch verdict[name] {
+		case verdictUsed:
+			m.Helped = append(m.Helped, name)
+		case verdictNotRelevant:
+			m.NotHelped = append(m.NotHelped, name)
+		case verdictWrong:
+			m.Wrong = append(m.Wrong, name)
+		}
+		in := lines[name].In
+		if asked.Hook != "stop" {
+			in = outcomeScope(asked.Repos)
+		}
+		outs = append(outs, outcomeLine{TS: now.UTC().Format(time.RFC3339Nano), In: in, Fact: name, Verdict: verdict[name], Src: "mark", Block: block})
+	}
+	if len(outs) == 0 {
+		return skipped, errors.New("name at least one of the facts the ask listed, with used, not_relevant or wrong")
 	}
 	switch ok, err := claimMark(block, now); {
 	case err != nil:
-		return fmt.Errorf("the mark could not be claimed: %w", err)
+		return skipped, fmt.Errorf("the mark could not be claimed: %w", err)
 	case !ok:
-		return errors.New("this block is marked already")
+		return skipped, errors.New("this ask is marked already")
 	}
-	e := &logEntry{V: deliveryLogVersion, TS: now.UTC().Format(time.RFC3339Nano), Hook: "mark", Mark: m}
+	e := &logEntry{V: deliveryLogVersion, TS: now.UTC().Format(time.RFC3339Nano), Hook: "mark", Session: asked.Session, Mark: m}
 	e.ID = logID(e)
 	if err := appendLogEntry(e, now); err != nil {
 		os.Remove(filepath.Join(deliveryLogDir(), "marks", block)) // a retry may claim it again
-		return fmt.Errorf("the mark was not written: %w", err)
+		return skipped, fmt.Errorf("the mark was not written: %w", err)
 	}
-	return nil
+	recordOutcomes(outs)
+	return skipped, nil
+}
+
+// markAnswer is what a mark call says back.
+func markAnswer(skipped []string) string {
+	if len(skipped) == 0 {
+		return "noted"
+	}
+	return "noted; left out (not in the ask, or no verdict of used, not_relevant, wrong): " + strings.Join(skipped, ", ")
 }
 
 // addMarkTool registers tacit_mark on the store's MCP server.
 func addMarkTool(server *mcp.Server) {
 	type markArgs struct {
-		Block     string   `json:"block" jsonschema:"the block id tacit's line named"`
-		Helped    []string `json:"helped,omitempty" jsonschema:"names of the block's facts that helped with the request"`
-		NotHelped []string `json:"not_helped,omitempty" jsonschema:"names of the block's facts that did not help"`
+		Block string        `json:"block" jsonschema:"the ask id tacit's message named"`
+		Marks []markVerdict `json:"marks" jsonschema:"one entry for each fact the ask listed: its name and used, not_relevant or wrong"`
 	}
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "tacit_mark",
-		Description: "When a tacit block asked for it: say which of its lines helped with the request and which did not. Optional; it changes nothing the session sees.",
+		Description: "When tacit asks for a mark: in this one call, say for each fact it listed whether you used it, it was not relevant, or it was wrong.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a markArgs) (*mcp.CallToolResult, any, error) {
 		fail := func(msg string) (*mcp.CallToolResult, any, error) {
 			res := text(msg)
@@ -229,11 +244,37 @@ func addMarkTool(server *mcp.Server) {
 			return res, nil, nil
 		}
 		if !logIDRx.MatchString(a.Block) {
-			return fail("give the block id tacit's line named")
+			return fail("give the ask id tacit's message named")
 		}
-		if err := logMark(a.Block, a.Helped, a.NotHelped); err != nil {
+		skipped, err := logMark(a.Block, a.Marks)
+		if err != nil {
 			return fail(err.Error())
 		}
-		return text("noted"), nil, nil
+		return text(markAnswer(skipped)), nil, nil
 	})
+}
+
+// runMark is `tacit mark <id> <name>=<verdict>...`: the same mark from a
+// shell, for a harness without tacit's MCP server.
+func runMark(args []string) int {
+	if len(args) < 2 || !logIDRx.MatchString(args[0]) {
+		fmt.Fprintln(os.Stderr, "usage: tacit mark <id> <fact>=used|not_relevant|wrong ...")
+		return 2
+	}
+	var marks []markVerdict
+	for _, a := range args[1:] {
+		name, v, ok := strings.Cut(a, "=")
+		if !ok {
+			fmt.Fprintln(os.Stderr, "tacit mark: give each fact as <name>=<verdict>:", a)
+			return 2
+		}
+		marks = append(marks, markVerdict{Name: name, Verdict: v})
+	}
+	skipped, err := logMark(args[0], marks)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "tacit mark:", err)
+		return 1
+	}
+	fmt.Println(markAnswer(skipped))
+	return 0
 }

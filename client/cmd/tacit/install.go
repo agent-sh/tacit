@@ -485,10 +485,12 @@ func installHooksWith(path, exe, goos string, startArgs []string) error {
 		"SessionStart":     {{startSources, "session-start", startArgs}},
 		"UserPromptSubmit": {{"", "prompt", startArgs}},
 		"PreCompact":       {{"", "pre-compact", nil}},
-		// PreToolUse: before an edit or a shell command, the one rule,
-		// decision or past mistake whose applies_to names that file or
-		// command (preTool). It never blocks the call.
+		// PreToolUse: before a shell command, a deny when a rule keyed to
+		// it applies, once a fact a session (preTool).
 		"PreToolUse": {{toolPushTools, "pre-tool", startArgs}},
+		// Stop: a turn that was given facts asks for their mark once
+		// (stopHook).
+		"Stop": {{"", "stop", startArgs}},
 	}
 	for event, specs := range events {
 		handlers := make([]map[string]any, len(specs))
