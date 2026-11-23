@@ -11,7 +11,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
-	"github.com/agent-sh/tacit/client/internal/search"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
@@ -201,37 +200,5 @@ func TestSessionStartPointsToTheRepoFolder(t *testing.T) {
 	t.Setenv("TACIT_DELIVERY_TREE_POINTER", "off")
 	if out := hookOut(t, startPayload(cwd, "s4"), "session-start", "--mcp"); strings.Contains(out, "tacit_tree") {
 		t.Fatalf("setting off:\n%s", out)
-	}
-}
-
-// A shell command runs a fact's command when a part starts with it, or
-// goes on with it after its first word when the second is no flag: a
-// program that runs the next one (npx, sudo, a loop's do).
-func TestCommandMatchThroughARunner(t *testing.T) {
-	for _, c := range []struct {
-		fact, cmd string
-		want      bool
-	}{
-		{"vitest", "npx vitest run ts/test/a.test.ts", true},
-		{"make lint", "sudo make lint", true},
-		{"make lint", "for d in a b; do make lint; done", true},
-		{"git commit", "FOO=1 git commit -s -m x", true},
-		{"vitest", "npx -y vitest run", false},
-		{"make lint", "sudo make test", false},
-		{"git stash", "git status && npm test", false},
-	} {
-		if got := commandMatch(c.fact, c.cmd); got != c.want {
-			t.Errorf("commandMatch(%q, %q) = %v, want %v", c.fact, c.cmd, got, c.want)
-		}
-	}
-}
-
-// Every word of the session's repository names and folders is left out of a
-// command's words, however many repositories the workspace has.
-func TestCommandWordsLeaveOutEveryFolderWord(t *testing.T) {
-	names := []string{"amber-anchor-atlas", "basil-beacon-bridge", "cedar-canyon-comet", "dune-delta-drift", "ember-echo-eagle", "fable-falcon-fjord", "garnet-glacier-grove", "harbor-heron-helix", "ivory-island-iris"}
-	got := commandWords("ssh build-host 'ls projects'", names, "/srv/projects/amber-anchor-atlas")
-	if got[search.TermKey("projects")] || !got[search.TermKey("build")] {
-		t.Fatalf("command words %v", got)
 	}
 }

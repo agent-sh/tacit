@@ -26,7 +26,9 @@ import (
 //   - a line with outcomeStop or more bad and no used is stopped there: no
 //     hook delivers it in that scope; search and fact still show it;
 //   - a line with more used than bad is promoted: a prompt line's score is
-//     outcomePromote times its own, a start line sorts first in its tier.
+//     outcomePromote times its own, a start line sorts first in its tier;
+//   - the owner's own lines are never moved, and a deny reads only the
+//     wrong verdicts (a prohibition is "not relevant" to most turns).
 //
 // The outcomes are an append-only file of their own in the delivery log's
 // directory (outcomes/verdicts.jsonl, one line a verdict; not a day file of
@@ -53,8 +55,9 @@ type outcomeLine struct {
 
 // outcomeTally is a line's count in a scope.
 type outcomeTally struct {
-	Used int `json:"u"`
-	Bad  int `json:"b"`
+	Used  int `json:"u"`
+	Bad   int `json:"b"`
+	Wrong int `json:"w,omitempty"` // of Bad, the wrong verdicts
 }
 
 // outcomeClass of a tally.
@@ -166,8 +169,11 @@ func tallyOutcomes(now time.Time) map[string]map[string]outcomeTally {
 		switch l.Verdict {
 		case "used":
 			t.Used++
-		case "not_relevant", "wrong":
+		case "not_relevant":
 			t.Bad++
+		case "wrong":
+			t.Bad++
+			t.Wrong++
 		default:
 			continue
 		}
@@ -192,6 +198,17 @@ func outcomesFor(scope string) outcomes {
 	return outcomes(loadOutcomes(time.Now())[strings.ToLower(scope)])
 }
 
+// classOf is a line's class; the owner's own lines (OwnerLine) are never
+// moved: an agent's marks and a model's labels do not turn off a rule of
+// theirs, which is "not relevant" to most turns by nature.
+func (o outcomes) classOf(h search.Hit) int {
+	if h.OwnerLine() {
+		return outcomeNeutral
+	}
+	return o[h.Name].class()
+}
+
+// class is a line's class by name, for a line no hit stands for.
 func (o outcomes) class(name string) int { return o[name].class() }
 
 // withoutStopped is hits less the lines stopped in this scope, logged
@@ -202,7 +219,7 @@ func (o outcomes) withoutStopped(hits []search.Hit) []search.Hit {
 	}
 	var keep []search.Hit
 	for _, h := range hits {
-		if o.class(h.Name) == outcomeStopped {
+		if o.classOf(h) == outcomeStopped {
 			continue
 		}
 		keep = append(keep, h)
@@ -220,7 +237,7 @@ func (o outcomes) withoutDemoted(hits []search.Hit) []search.Hit {
 	}
 	var keep []search.Hit
 	for _, h := range hits {
-		if c := o.class(h.Name); c == outcomeStopped || c == outcomeDemoted {
+		if c := o.classOf(h); c == outcomeStopped || c == outcomeDemoted {
 			continue
 		}
 		keep = append(keep, h)
@@ -238,7 +255,7 @@ func (o outcomes) rescored(hits []search.Hit) []search.Hit {
 	out := o.withoutStopped(hits)
 	moved := false
 	for i, h := range out {
-		switch o.class(h.Name) {
+		switch o.classOf(h) {
 		case outcomeDemoted:
 			out[i].Score /= outcomeDemote
 			moved = true
@@ -261,7 +278,7 @@ func (o outcomes) ordered(hits []search.Hit) []search.Hit {
 	}
 	out := o.withoutStopped(hits)
 	rank := func(h search.Hit) int {
-		switch o.class(h.Name) {
+		switch o.classOf(h) {
 		case outcomePromoted:
 			return 0
 		case outcomeDemoted:

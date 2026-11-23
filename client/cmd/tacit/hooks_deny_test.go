@@ -54,6 +54,11 @@ func TestDenyMatcherIsPrecise(t *testing.T) {
 		{"git push", "git pushx", false},
 		{"cargo test", "cargo build --tests", false},
 		{"systemctl --user restart", "systemctl restart x", false},
+		{"git branch -D", "git branch -d old", false},
+		{"git branch -D", "git branch -D old", true},
+		{"sudo rm -rf /", "sudo rm -rf /", true},
+		{"gh pr merge", "git commit -m \"$(cat <<'EOF'\nfix (a\ngh pr merge 1\nEOF\n)\"", false},
+		{"gh pr merge", "echo x > \"out file\" gh pr merge", false},
 	}
 	for _, c := range cases {
 		got := false
@@ -95,6 +100,7 @@ func TestDenyTableKeepsForbiddenCommands(t *testing.T) {
 		mk("sparks-avoid-hf-download", "past_mistake", "Fetch with the resumable script", "hf download", false),
 		mk("never-npm-publish", "past_mistake", "CI publishes", "npm publish", false),
 		mk("k", "user_standard", "Do not run `cargo publish`.", "cargo publish", false),
+		mk("l", "user_standard", "Never run git push --force.", "git push --force", false),
 	}
 	tab := denyTableOf(all, time.Now())
 	if o := only("In gadget, never git push --force; ask"); o != "gadget" {
@@ -104,7 +110,7 @@ func TestDenyTableKeepsForbiddenCommands(t *testing.T) {
 	for _, f := range tab.Facts {
 		names = append(names, f.Name)
 	}
-	if strings.Join(names, ",") != "a,b,no-make-release,f,never-npm-publish,k" {
+	if strings.Join(names, ",") != "a,b,no-make-release,f,never-npm-publish,k,l" {
 		t.Fatalf("table: %v", names)
 	}
 }

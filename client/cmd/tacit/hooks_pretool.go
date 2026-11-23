@@ -101,9 +101,11 @@ func preTool(s *store.Store, in hookInput) {
 	if strings.HasPrefix(in.ToolName, "mcp__") || strings.TrimSpace(command) == "" || in.SessionID == "" {
 		return
 	}
-	if sessionKind(in) == "scratch" {
+	kind := sessionKind(in)
+	if kind == "scratch" {
 		return
 	}
+	hookHeadless = kind != ""
 	ctx, cancel := context.WithTimeout(context.Background(), toolDeadline)
 	defer cancel()
 	t := loadDenyTable(time.Now())

@@ -64,6 +64,8 @@ type denyFact struct {
 	// Only is the repository the description starts by naming ("In widget,
 	// ..."): the fact is that repository's, whatever its scope says.
 	Only string `json:"only,omitempty"`
+	// Owner: the owner's own line (OwnerLine), which outcomes never turn off.
+	Owner bool `json:"owner,omitempty"`
 }
 
 // onlyIn reads the repository a description starts by naming.
@@ -114,7 +116,7 @@ func denyTableOf(all []search.Hit, now time.Time) *denyTable {
 				continue
 			}
 			t.Facts = append(t.Facts, denyFact{Key: k, Name: h.Name, Scope: h.Scope, Repos: h.Applies.Repos, Hosts: h.Applies.Hosts,
-				Type: h.Type, Text: denyText(h), Created: h.Created, Only: only(h.Description)})
+				Type: h.Type, Text: denyText(h), Created: h.Created, Only: only(h.Description), Owner: h.OwnerLine()})
 		}
 	}
 	return t
@@ -131,7 +133,7 @@ func only(desc string) string {
 // say the command is not to be run.
 var negations = map[string]bool{"never": true, "not": true, "don't": true, "dont": true, "no": true, "avoid": true, "without": true}
 
-var textToken = regexp.MustCompile("[a-z0-9][a-z0-9'._/=+:-]*[a-z0-9]|[a-z0-9]|--?[a-z0-9][a-z0-9._=-]*|[`\"]|[;:,!?()]|\\.(?:\\s|$)")
+var textToken = regexp.MustCompile("[a-z0-9][a-z0-9'._/=+:-]*[a-z0-9]|[a-z0-9]|--?[a-z0-9](?:[a-z0-9._=-]*[a-z0-9])?|[`\"]|[;:,!?()]|\\.(?:\\s|$)")
 
 // quoteToken: a mark around a command, no word of the sentence.
 func quoteToken(t string) bool { return t == "`" || t == `"` }
@@ -167,6 +169,11 @@ func forbids(h search.Hit, key []string) bool {
 }
 
 func forbidsIn(w, key []string) bool {
+	low := make([]string, len(key))
+	for i, k := range key {
+		low[i] = strings.ToLower(k)
+	}
+	key = low
 	for i := 0; i+len(key) <= len(w); i++ {
 		if filepath.Base(w[i]) != key[0] || !slicesEqual(w[i+1:i+len(key)], key[1:]) {
 			continue
@@ -261,14 +268,16 @@ func readDenyTable() *denyTable {
 // writeDenyTable is `tacit hook deny-table`: the table built from the
 // index and saved, the building marker removed.
 func writeDenyTable(s *store.Store) {
-	defer os.Remove(denyTablePath() + ".building")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	t, err := buildDenyTable(ctx, s, time.Now())
 	if err != nil {
+		// The marker stays: the next try waits out its two minutes, so a
+		// store that cannot build starts no build on every command.
 		fmt.Fprintln(os.Stderr, "tacit hook deny-table:", err)
 		return
 	}
+	defer os.Remove(denyTablePath() + ".building")
 	b, err := json.Marshal(t)
 	if err != nil {
 		return
@@ -300,19 +309,21 @@ var startDenyBuild = func() {
 	}
 }
 
-// denyKey is a key's words, lowercase, up to its first placeholder
-// (<pr>, $X, {n}, ...): what the command must start with.
+// denyKey is a key's words from its program on (program: wrappers and
+// assignments dropped), up to its first placeholder (<pr>, $X, {n}, ...):
+// what the command must run. Words are lowercase but options, whose case is
+// their meaning (-d and -D).
 func denyKey(c string) []string {
 	cmds := denyCommands(c)
 	if len(cmds) != 1 {
 		return nil // a key of two commands, or none, is no prefix of one
 	}
 	var out []string
-	for _, w := range cmds[0] {
+	for _, w := range program(cmds[0]) {
 		if strings.ContainsAny(w, "<>${}*?[]|") || w == "..." {
 			break
 		}
-		out = append(out, strings.ToLower(w))
+		out = append(out, foldWord(w))
 	}
 	if len(out) == 0 {
 		return nil
@@ -373,6 +384,15 @@ func isAssignment(w string) bool {
 	return true
 }
 
+// foldWord is a word as keys and commands are compared: lowercase, but an
+// option keeps its case.
+func foldWord(w string) string {
+	if strings.HasPrefix(w, "-") {
+		return w
+	}
+	return strings.ToLower(w)
+}
+
 // denyMatch reports whether the simple command w (its words, as
 // denyCommands reads them) runs the key: the same program by base name,
 // the key's non-option words as the command's first non-option words, the
@@ -384,7 +404,7 @@ func denyMatch(key, w []string) bool {
 	}
 	var args, opts []string
 	for _, x := range w[1:] {
-		x = strings.ToLower(x)
+		x = foldWord(x)
 		if strings.HasPrefix(x, "-") {
 			opts = append(opts, x)
 		} else {
@@ -468,7 +488,11 @@ func denyCommands(line string) [][]string {
 					j += 2
 				case rs[j] == '$' && j+1 < len(rs) && rs[j+1] == '(':
 					k := closingParen(rs, j+1)
-					nested = append(nested, denyCommands(string(rs[j+2:k]))...)
+					if inner := string(rs[j+2 : k]); !strings.Contains(inner, "<<") {
+						// One with a here-document is read as no command:
+						// its body's parentheses and quotes are text.
+						nested = append(nested, denyCommands(inner)...)
+					}
 					j = min(k+1, len(rs))
 				default:
 					word.WriteRune(rs[j])
@@ -533,6 +557,10 @@ func denyCommands(line string) [][]string {
 				j++
 			}
 			for j < len(rs) && !unicode.IsSpace(rs[j]) && !strings.ContainsRune(";&|()", rs[j]) {
+				if q := rs[j]; q == '"' || q == '\'' {
+					for j++; j < len(rs) && rs[j] != q; j++ {
+					}
+				}
 				j++
 			}
 			i = j - 1
@@ -671,8 +699,8 @@ func denyFor(t *denyTable, command string, sc denyScope, denied map[string]bool,
 		if denied[f.Name] || denied[denyKeyLine(f.Key)] || seen[f.Name] || !sc.fits(f) {
 			continue
 		}
-		if c := oc.class(f.Name); c == outcomeStopped || c == outcomeDemoted {
-			continue
+		if t := oc[f.Name]; !f.Owner && t.Wrong > 0 && t.Wrong >= t.Used {
+			continue // marked wrong, more than used: the rule is no rule here
 		}
 		for _, w := range cmds {
 			if denyMatch(f.Key, w) {

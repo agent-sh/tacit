@@ -10,12 +10,16 @@ import (
 
 // Headless sessions (SPEC.md, "Headless sessions"): a run no person types
 // into gets no unsolicited delivery. The start, prompt and compaction blocks
-// print nothing there, the PreToolUse hook denies nothing, and the Stop hook
-// asks for no mark; tacit's MCP tools stay, so an agent there still pulls
+// print nothing there, and the Stop hook asks for no mark (the PreToolUse
+// deny still runs, but in a throwaway harness instance); tacit's MCP tools stay, so an agent there still pulls
 // what it needs. Measured on a real machine: most of the prompt hook's lines
 // went to such runs (SDK and `-p` runs, exec runs, subagents, throwaway
 // harness instances of test suites), where nobody reads them and nothing
 // marks them.
+
+// hookHeadless: this hook's session is headless (set by the PreToolUse
+// hook, which still denies there); its lines are owed no mark.
+var hookHeadless bool
 
 // headlessScan is how much of a transcript's head the kind is read from:
 // the first entries carry the entrypoint, the session's metadata and the
@@ -36,9 +40,10 @@ const keelSubagentBrief = "You are a subagent of a Keel session"
 //     inside a subagent), the transcript's first entry on a sidechain, or a
 //     Keel subagent's brief as the first prompt;
 //   - automation: Hermes's agent_context other than primary (cron, subagent);
-//   - sdk: a Claude Code transcript whose entrypoint is an SDK one (sdk-cli
-//     is `claude -p`, sdk-ts and sdk-py the Agent SDK), or, with no
-//     transcript to read, CLAUDE_CODE_ENTRYPOINT saying so;
+//   - sdk: a Claude Code transcript whose entrypoint is sdk-cli (`claude
+//     -p`), or, with no transcript to read, CLAUDE_CODE_ENTRYPOINT saying
+//     so; the Agent SDK's own entrypoints are not read as headless, since
+//     interactive front ends are built on it too;
 //   - exec: a Codex transcript of `codex exec`;
 //   - scratch: a transcript under the user's cache directory, where only
 //     throwaway harness instances (test suites, e2e runs) keep their state.
@@ -93,7 +98,7 @@ func transcriptKind(path string) (kind string, final bool) {
 	}
 	head := readHead(path)
 	if head == nil {
-		if ep := os.Getenv("CLAUDE_CODE_ENTRYPOINT"); strings.HasPrefix(ep, "sdk") {
+		if os.Getenv("CLAUDE_CODE_ENTRYPOINT") == "sdk-cli" {
 			return "sdk", false
 		}
 		return "", false
@@ -107,7 +112,7 @@ func transcriptKind(path string) (kind string, final bool) {
 		return "subagent", true
 	case bytes.Contains(head, []byte(`"originator":"codex_exec"`)) || bytes.Contains(first, []byte(`"source":"exec"`)):
 		return "exec", true
-	case bytes.Contains(head, []byte(`"entrypoint":"sdk`)):
+	case bytes.Contains(head, []byte(`"entrypoint":"sdk-cli"`)):
 		return "sdk", true
 	case bytes.Contains(head, []byte(`"content":"`+keelSubagentBrief)) || bytes.Contains(head, []byte(`"text":"`+keelSubagentBrief)):
 		return "subagent", true

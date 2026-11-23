@@ -445,9 +445,8 @@ type metaMatch struct {
 // python3) matches a shell command only with a second tie (secondWord);
 // folders are the words of the session's folder and home, which, like the
 // repository's names, tie a call to nothing more.
-func metaSelect(all []search.Hit, names []string, paths []string, command, prompt, folders string, seen map[string]bool, limit int) []search.Hit {
+func metaSelect(all []search.Hit, names []string, paths []string, prompt string, seen map[string]bool, limit int) []search.Hit {
 	var ms []metaMatch
-	words := commandWords(command, names, folders)
 	for _, h := range all {
 		if tier(h) > 1 || h.HeldBack() || !repoTied(h, names) {
 			continue
@@ -461,7 +460,7 @@ func metaSelect(all []search.Hit, names []string, paths []string, command, promp
 			}
 		}
 		for _, c := range h.Applies.Commands {
-			if (command != "" && commandMatch(c, command) && (len(cmdWords(c)) > 1 || scriptKey(c) || secondWord(h, c, words))) || (prompt != "" && promptNamesCommand(c, prompt)) {
+			if prompt != "" && promptNamesCommand(c, prompt) {
 				spec = max(spec, 1+len(cmdWords(c)))
 			}
 		}
@@ -491,55 +490,7 @@ func metaSelect(all []search.Hit, names []string, paths []string, command, promp
 	return out
 }
 
-// commandWords are the term keys of a shell command line's first terms (as
-// search.Terms caps them), less every word of the session's repository
-// names and folders: those are where the call runs, which every fact tied
-// to the repository shares. Past the first terms a line is mostly a
-// heredoc's or a script's text, not the command: counting the whole line
-// added mostly noise lines on the graded pushes (eval/DELIVERY.md, "Pushes
-// keyed on a bare program").
-func commandWords(command string, names []string, folders string) map[string]bool {
-	if command == "" {
-		return nil
-	}
-	out := map[string]bool{}
-	for _, t := range search.Terms(command) {
-		out[search.TermKey(t)] = true
-	}
-	for _, t := range search.AllTerms(strings.Join(names, " ") + " " + folders) {
-		delete(out, search.TermKey(t))
-	}
-	return out
-}
-
-// scriptKey: a command of one word that is a script's path or file name
-// (scripts/release.sh, tools/lint.py) names one program of one repository,
-// not a program every session runs, so it needs no second word.
-func scriptKey(c string) bool {
-	w := cmdWords(c)
-	return len(w) == 1 && (strings.Contains(w[0], "/") || scriptExt.MatchString(w[0]))
-}
-
 var scriptExt = regexp.MustCompile(`[^./]\.[a-z][a-z0-9]{0,4}$`)
-
-// secondWord: a word of the fact's whole name and description, other than
-// its command's own, is in the command line (words, commandWords). A key of one
-// word matched every call of that program: of the pushes so keyed (ssh,
-// python3, git, sed) few were useful and most were noise, against far more
-// useful and far less noise for the longer keys (eval/DELIVERY.md, "Pushes
-// keyed on a bare program").
-func secondWord(h search.Hit, key string, words map[string]bool) bool {
-	own := map[string]bool{}
-	for _, t := range search.Terms(key) {
-		own[search.TermKey(t)] = true
-	}
-	for _, t := range search.AllTerms(h.Name + " " + h.Description) {
-		if k := search.TermKey(t); !own[k] && words[k] {
-			return true
-		}
-	}
-	return false
-}
 
 // withoutClaims is hits less the facts that claim the owner's authority
 // without their verified words (search.Hit.Claim): no hook pushes one until
@@ -583,7 +534,7 @@ func promptMetaHits(ctx context.Context, ix *search.Index, sit search.Situation,
 	if err != nil {
 		return nil
 	}
-	return metaSelect(all, repoNames(sit), promptPathRx.FindAllString(p, -1), "", p, "", seen, deliveryInt("META_CEILING", metaCeiling))
+	return metaSelect(all, repoNames(sit), promptPathRx.FindAllString(p, -1), p, seen, deliveryInt("META_CEILING", metaCeiling))
 }
 
 // promptActionHits is the prompt block's action line: the best-scoring rule,

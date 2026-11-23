@@ -76,6 +76,25 @@ func TestStopAsksOnceForTheTurnsMarks(t *testing.T) {
 	if out := hookOut(t, stopPayload(cwd, "s1", false), "stop", "--mcp"); out != "" {
 		t.Fatalf("asked again for the same lines: %q", out)
 	}
+	// A resume's block is owed under the repository too (the restart paths
+	// log before they remember).
+	beginLog("resume", hookInput{SessionID: "s9"}, "", []string{"widget"}, nil)
+	endLog(nil)
+	owe("s9", []string{"slot-lock-order"})
+	if b, _ := os.ReadFile(owedFile("s9")); string(b) != "slot-lock-order\twidget\n" {
+		t.Fatalf("owed after its entry ended: %q", b)
+	}
+	os.Remove(owedFile("s1"))
+	// A headless session's stop asks nothing and drops what it owes.
+	os.WriteFile(owedFile("h1"), []byte("slot-lock-order\twidget\n"), 0o600)
+	t.Setenv("TACIT_HEADLESS", "1")
+	if out := hookOut(t, stopPayload(cwd, "h1", false), "stop", "--mcp"); out != "" {
+		t.Fatalf("a headless stop: %q", out)
+	}
+	t.Setenv("TACIT_HEADLESS", "")
+	if _, err := os.Stat(owedFile("h1")); err == nil {
+		t.Fatal("a headless session kept its owed lines")
+	}
 	// Codex sends the reason as the next prompt: it is no request.
 	if out := hookOut(t, promptPayload(cwd, "s1", reason), "prompt", "--mcp"); out != "" {
 		t.Fatalf("the ask as a prompt: %q", out)
@@ -121,7 +140,7 @@ func TestStopAsksOnceForTheTurnsMarks(t *testing.T) {
 		t.Fatalf("logged mark: %+v", mark)
 	}
 	o := loadOutcomes(time.Now())["widget"]
-	if o["scheduler-shard-locks"] != (outcomeTally{Used: 1}) || o["slot-lock-order"] != (outcomeTally{Bad: 1}) {
+	if o["scheduler-shard-locks"] != (outcomeTally{Used: 1}) || o["slot-lock-order"] != (outcomeTally{Bad: 1, Wrong: 1}) {
 		t.Fatalf("outcomes: %+v", o)
 	}
 }
@@ -195,13 +214,15 @@ func TestHeadlessSessionsGetNoBlocks(t *testing.T) {
 		t.Error("TACIT_HEADLESS=1")
 	}
 	t.Setenv("TACIT_HEADLESS", "")
-	t.Setenv("CLAUDE_CODE_ENTRYPOINT", "sdk-ts")
+	t.Setenv("CLAUDE_CODE_ENTRYPOINT", "sdk-cli")
 	if sessionKind(hookInput{SessionID: "noscript"}) != "sdk" {
 		t.Error("an SDK run with no transcript")
 	}
-	t.Setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
-	if sessionKind(hookInput{SessionID: "noscript2"}) != "" {
-		t.Error("a person's run with no transcript")
+	for _, ep := range []string{"cli", "sdk-ts"} {
+		t.Setenv("CLAUDE_CODE_ENTRYPOINT", ep)
+		if sessionKind(hookInput{SessionID: "noscript-" + ep}) != "" {
+			t.Errorf("%s with no transcript: headless", ep)
+		}
 	}
 }
 
@@ -234,6 +255,10 @@ func TestOutcomesDemoteStopAndPromote(t *testing.T) {
 	}
 	if outcomesFor("gadget").class("good") != outcomeStopped {
 		t.Error("another scope's verdicts")
+	}
+	// The owner's own lines are never moved.
+	if o.classOf(search.Hit{Name: "noisy", Ruling: true}) != outcomeNeutral || o.classOf(search.Hit{Name: "noisy"}) != outcomeStopped {
+		t.Error("an owner's line was moved, or an agent's was not")
 	}
 	hits := []search.Hit{{Name: "noisy", Score: 30}, {Name: "mixed", Score: 28}, {Name: "fresh", Score: 20}, {Name: "good", Score: 16}}
 	var names []string

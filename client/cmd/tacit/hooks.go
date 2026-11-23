@@ -262,7 +262,8 @@ func runHook(args []string) int {
 		logChose(hits, "start")
 		defer endLog(hits)
 		if in.Source == "clear" {
-			forget(in.SessionID) // the context the record speaks of is gone
+			forget(in.SessionID)              // the context the record speaks of is gone
+			os.Remove(owedFile(in.SessionID)) // nor can it mark what it was given
 			clearPending(in.SessionID)
 		}
 		remember(in.SessionID, hits)
@@ -886,7 +887,6 @@ func delivered(id string) map[string]bool {
 func forget(id string) {
 	if p := sessionFile(id); p != "" {
 		os.Remove(p)
-		os.Remove(owedFile(id)) // nor can it mark them
 	}
 }
 

@@ -20,7 +20,7 @@ import (
 // runInstall wires tacit into a harness. Idempotent: existing tacit
 // entries are replaced.
 //
-//   - claude: SessionStart, UserPromptSubmit, PreToolUse and PreCompact hooks in ~/.claude/settings.json,
+//   - claude: SessionStart, UserPromptSubmit, PreToolUse, Stop and PreCompact hooks in ~/.claude/settings.json,
 //     and the MCP server (tacit_tree, tacit_search, tacit_fact, tacit_add, tacit_episode, tacit_mark) in the user
 //     scope of ~/.claude.json; --no-mcp installs the hooks only and removes
 //     the server.
@@ -65,7 +65,7 @@ func runInstall(args []string) int {
 			fmt.Fprintln(os.Stderr, "install:", err)
 			return 1
 		}
-		fmt.Println("installed SessionStart, UserPromptSubmit, PreToolUse and PreCompact hooks in", path)
+		fmt.Println("installed SessionStart, UserPromptSubmit, PreToolUse, Stop and PreCompact hooks in", path)
 		fmt.Println("Codex skips new hooks until you trust them: run /hooks in Codex once.")
 		fmt.Printf("MCP (~/.codex/config.toml):\n[mcp_servers.tacit]\ncommand = %q\nargs = %s\n", exe, mcpArguments("codex"))
 	case "hermes":
@@ -428,7 +428,7 @@ func installClaude(home, exe string, args []string) int {
 		fmt.Fprintln(os.Stderr, "install:", err)
 		return 1
 	}
-	fmt.Println("installed SessionStart, UserPromptSubmit, PreToolUse and PreCompact hooks in", path)
+	fmt.Println("installed SessionStart, UserPromptSubmit, PreToolUse, Stop and PreCompact hooks in", path)
 	switch {
 	case *noMCP && changed:
 		fmt.Println("removed the tacit MCP server from", cfg, "(the file as it was:", claudeConfigBackup(cfg)+")")

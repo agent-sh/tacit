@@ -27,17 +27,19 @@ func owedFile(id string) string {
 	return ""
 }
 
-// owe adds printed lines to the session's owed set, under the scope of the
-// hook's log entry (its first repository).
+// owedScope is the scope of the hook's block (its first repository), set by
+// beginLog and kept after endLog: the restart paths log before they
+// remember.
+var owedScope string
+
+// owe adds printed lines to the session's owed set, under owedScope. A
+// headless session owes nothing: nobody is asked there.
 func owe(id string, names []string) {
 	p := owedFile(id)
-	if p == "" || len(names) == 0 || !deliveryLogOn() {
+	if p == "" || len(names) == 0 || !deliveryLogOn() || hookHeadless {
 		return
 	}
-	scope := ""
-	if dlog != nil {
-		scope = outcomeScope(dlog.Repos)
-	}
+	scope := owedScope
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
@@ -96,6 +98,10 @@ const stopAskCap = logCandCap
 // the block decision with the ask as its reason.
 func stopHook(in hookInput) {
 	if in.StopHookActive || in.SessionID == "" || !deliveryLogOn() {
+		return
+	}
+	if sessionKind(in) != "" {
+		takeOwed(in.SessionID) // a headless run, or a subagent's stop: nobody to ask
 		return
 	}
 	owed := takeOwed(in.SessionID)

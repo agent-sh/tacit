@@ -246,6 +246,7 @@ func hermesLogOffset(session string) int64 {
 // beginLog opens an entry for a block of hook, writing the one before it.
 func beginLog(hook string, in hookInput, request string, repos []string, ix *search.Index) {
 	endLog(nil)
+	owedScope = outcomeScope(repos) // the lines this hook prints are owed under it, after endLog too
 	if !deliveryLogOn() {
 		return
 	}
@@ -253,7 +254,7 @@ func beginLog(hook string, in hookInput, request string, repos []string, ix *sea
 	dlog = &logEntry{V: deliveryLogVersion, TS: now.UTC().Format(time.RFC3339Nano), Hook: hook, Session: in.SessionID, Policy: "gates",
 		Cwd: in.Cwd, Repos: repos, Transcript: transcriptSize(in.TranscriptPath), TranscriptPath: in.TranscriptPath,
 		HermesSession: in.HermesSession, started: now}
-	if in.TranscriptPath == "" && in.HermesSession != "" && (hook == "prompt" || hook == "push") {
+	if in.TranscriptPath == "" && in.HermesSession != "" && hook == "prompt" {
 		dlog.Transcript = hermesLogOffset(in.HermesSession)
 	}
 	if hook == "prompt" || hook == "summary" {
