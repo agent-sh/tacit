@@ -277,7 +277,7 @@ func runDedupeNear(dry bool, o nearOpts, out string) int {
 		_ = writeNearState(s.Dir, st)
 	}
 	if unanswered > 0 {
-		fmt.Printf("dedupe --near: %d cluster(s) have no answer for the store as it is now (changed since they were asked); the next run asks them\n", unanswered)
+		fmt.Printf("dedupe --near: %d cluster(s) have no answer yet (not asked, failed, or changed since they were asked); the next run asks them\n", unanswered)
 	}
 	sort.SliceStable(copies, func(i, j int) bool { return copies[i].Kept.Path < copies[j].Kept.Path })
 	printDedupe(copies, dry)
