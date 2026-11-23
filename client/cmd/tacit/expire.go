@@ -108,9 +108,9 @@ func realPath(full string) string {
 // name an entry by its last part (its name) at another key, the old prefix
 // is gone, and the path with that prefix replaced exists. Exactly one such
 // place, or none.
-func moved(regs []registry, full string) (oldPrefix, newPrefix string, ok bool) {
+func moved(regs []registry, full string) (newPath string, ok bool) {
 	full = realPath(full)
-	var found [][2]string
+	var found []string
 	for _, r := range regs {
 		rel, err := filepath.Rel(r.root, full)
 		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
@@ -132,16 +132,16 @@ func moved(regs []registry, full string) (oldPrefix, newPrefix string, ok bool) 
 				}
 				np := filepath.Join(r.root, filepath.FromSlash(k), filepath.FromSlash(strings.Join(parts[i:], "/")))
 				if _, err := os.Stat(np); err == nil {
-					found = append(found, [2]string{old, filepath.Join(r.root, filepath.FromSlash(k))})
+					found = append(found, np)
 				}
 			}
 			break
 		}
 	}
 	if len(found) != 1 {
-		return "", "", false
+		return "", false
 	}
-	return found[0][0], found[0][1], true
+	return found[0], true
 }
 
 // deadFolders are the project folders the registries mark dead or
@@ -224,14 +224,17 @@ func expirePlan(facts []*fact.Fact, g *goneProbe, regs []registry, home, today s
 				if strings.HasPrefix(p, "~/") {
 					full = filepath.Join(home, p[2:])
 				}
-				oldP, newP, ok := moved(regs, full)
+				np, ok := moved(regs, full)
 				if !ok {
 					it.Why, it.Action, it.Notes = "gone", expireRetire, nil
 					break
 				}
-				np := newP + strings.TrimPrefix(full, oldP)
+				// The new path as the fact writes paths: under ~ when the old
+				// one was and the new one is under home (as resolved).
 				if strings.HasPrefix(p, "~/") {
-					np = "~/" + strings.TrimPrefix(np, home+string(filepath.Separator))
+					if rel, err := filepath.Rel(realPath(home), np); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+						np = "~/" + filepath.ToSlash(rel)
+					}
 				}
 				l, err := fact.NoteLine(today, p, np)
 				if err != nil {

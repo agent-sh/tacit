@@ -130,13 +130,13 @@ func TestExpireMovesAndDeadFoldersHoldOnlyWhereTheyMust(t *testing.T) {
 	os.MkdirAll(data, 0o755)
 	os.WriteFile(filepath.Join(data, "data.json"), []byte(`{"entries": {"sets/sprocket": {}}}`), 0o644)
 	regs := readRegistries([]string{filepath.Join(projects, "projects.json"), filepath.Join(data, "data.json")})
-	if _, _, ok := moved(regs, filepath.Join(projects, "apps", "widget", "build", "out")); ok {
+	if _, ok := moved(regs, filepath.Join(projects, "apps", "widget", "build", "out")); ok {
 		t.Error("a path gone inside a live entry was moved to another entry's name")
 	}
-	if _, _, ok := moved(regs, filepath.Join(projects, "gizmo", "src")); ok {
+	if _, ok := moved(regs, filepath.Join(projects, "gizmo", "src")); ok {
 		t.Error("a move whose old place is still there")
 	}
-	if np, _, ok := moved(regs, filepath.Join(projects, "widget", "x")); ok {
+	if np, ok := moved(regs, filepath.Join(projects, "widget", "x")); ok {
 		t.Errorf("a move to a path that is not there: %s", np)
 	}
 	if d := deadFolders(regs); len(d) != 0 {
@@ -169,6 +169,31 @@ func TestExpireMovesAndDeadFoldersHoldOnlyWhereTheyMust(t *testing.T) {
 		switch it.Name {
 		case "said-dir", "job-dir-record", "job-dir-mirror", "job-dirs-two":
 			t.Errorf("%s is an item: %+v", it.Name, it)
+		}
+	}
+}
+
+// A home whose projects directory is a symlink: the registry read through
+// either path finds the move, and the note names the new path in the
+// fact's own ~ form.
+func TestExpireMoveThroughASymlinkedRoot(t *testing.T) {
+	home := t.TempDir()
+	real := filepath.Join(home, "disk", "projects")
+	os.MkdirAll(filepath.Join(real, "apps", "widget", "src"), 0o755)
+	if err := os.Symlink(real, filepath.Join(home, "projects")); err != nil {
+		t.Skip("no symlinks here")
+	}
+	os.WriteFile(filepath.Join(real, "projects.json"), []byte(`{"entries": {"apps/widget": {}}}`), 0o644)
+	f := &fact.Fact{Path: "machines/host-a/widget-src.md", Meta: fact.Meta{Name: "widget-src", Scope: "machines/host-a", Type: "machine_fact",
+		Description: "The widget sources live in ~/projects/widget/src on this box", Created: "2026-10-01", Source: fact.Source{Harness: "curator", Host: "host-a", Kind: "observed"}}, Body: "x\n"}
+	for _, reg := range []string{filepath.Join(home, "projects", "projects.json"), filepath.Join(real, "projects.json")} {
+		regs := readRegistries([]string{reg})
+		items := expirePlan([]*fact.Fact{f}, newGoneProbe("host-a", home, nil), regs, home, "2026-11-20", nil)
+		if len(items) != 1 || items[0].Action != expireFix || len(items[0].Notes) != 1 {
+			t.Fatalf("registry %s: %+v", reg, items)
+		}
+		if want := "> superseded 2026-11-20: ~/projects/widget/src -> ~/disk/projects/apps/widget/src"; items[0].Notes[0] != want {
+			t.Errorf("registry %s: note %q, want %q", reg, items[0].Notes[0], want)
 		}
 	}
 }
