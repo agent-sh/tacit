@@ -67,10 +67,14 @@ func addFact(ctx context.Context, s *store.Store, harness string, m fact.Meta, b
 	if red[3] != m.Scope {
 		return "", errors.New("refused: scope: the redaction masked part of it; give a scope without secrets (user, projects/<repo>, machines/<host>)")
 	}
-	if !fact.IsSlug(m.Name) {
+	if strings.TrimSpace(m.Name) == "" {
+		// No name given: one from the description's first words, which the
+		// tree and the blocks show, else from its hash.
+		m.Name = importer.Slug(m.Description, 60)
+	} else if !fact.IsSlug(m.Name) {
 		m.Name = importer.Slug(m.Name, 80)
 	}
-	if m.Name == "" {
+	if m.Name == "" || m.Name == "fact" {
 		m.Name = "fact-" + shortHash(m.Description+body)
 	}
 	// Defaults for what the writer left out; anything it gave is checked

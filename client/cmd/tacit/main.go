@@ -143,6 +143,9 @@ func main() {
 		}
 		usage()
 	}
+	if jobOff(os.Args[1]) {
+		os.Exit(0)
+	}
 	switch os.Args[1] {
 	case "doctor":
 		os.Exit(runDoctor(os.Args[2:]))

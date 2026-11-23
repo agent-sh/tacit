@@ -184,7 +184,20 @@ func doctorChecks(models bool, role string) ([]doctorCheck, bool) {
 			add(j.name, status, detail)
 		}
 	}
+	if reason, off := tacitOff(); off {
+		add("off switch", "warn", offLine(reason)+": every hook, job and MCP tool does nothing; remove the file to turn tacit on")
+	}
 	if s, err := store.Default(); err == nil && s.Exists() {
+		for _, c := range doctorKeyChecks(func(writer string) error {
+			wctx, wcancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer wcancel()
+			if err := writerCheck(wctx, s, writer); err != nil && !errors.Is(err, store.ErrReadOnly) {
+				return err
+			}
+			return nil
+		}) {
+			add(c.Name, c.Status, c.Detail)
+		}
 		switch f, ok, err := ledger.ReadFormat(s.Dir); {
 		case err != nil:
 			add("store format", "warn", "the marker "+ledger.FormatPath+" cannot be read; folder records are not written")

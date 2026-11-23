@@ -77,6 +77,9 @@ type Env struct {
 	StoreRepos map[string]bool
 	// Hosts are the machines a machines/<host> scope may name.
 	Hosts map[string]bool
+	// Host is this machine's short host name, which a refusal of an unknown
+	// machine names.
+	Host string
 	// Records are the folder records of the store and, with the local
 	// layer, of its curated directory (a store record wins), folder ->
 	// record.
@@ -99,6 +102,7 @@ func NewEnv(storeDir, layer string, catalog *repoid.Catalog, host string) Env {
 	e := Env{Catalog: catalog, StoreRepos: map[string]bool{}, Hosts: map[string]bool{}, Records: map[string]*record.Record{}}
 	if h := strings.ToLower(host); fact.IsSlug(h) {
 		e.Hosts[h] = true
+		e.Host = h
 	}
 	if storeDir != "" {
 		e.Format, _ = fact.FormatWrites(storeDir)
@@ -301,7 +305,11 @@ func (e Env) Scope(scope string) *Problem {
 		if e.Hosts[rest] {
 			return nil
 		}
-		return &Problem{Field: "scope", Rule: "names no known machine", Hint: fmt.Sprintf("machines/%s; known machines: %s", rest, strings.Join(sorted(e.Hosts), ", "))}
+		here := ""
+		if e.Host != "" {
+			here = "this machine is machines/" + e.Host + "; "
+		}
+		return &Problem{Field: "scope", Rule: "names no known machine", Hint: fmt.Sprintf("machines/%s; a machine is named by its host name, not an alias: %sknown machines: %s", rest, here, strings.Join(sorted(e.Hosts), ", "))}
 	}
 	return nil
 }

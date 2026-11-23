@@ -142,7 +142,7 @@ func openDetail(mcp bool) string {
 // `tacit hook index` is no harness's hook: the background build the hooks
 // start when they read an older index (openHookIndex).
 func runHook(args []string) int {
-	if os.Getenv("TACIT_MODEL_JOB") == "1" {
+	if _, off := tacitOff(); off || os.Getenv("TACIT_MODEL_JOB") == "1" {
 		return 0
 	}
 	defer func() {

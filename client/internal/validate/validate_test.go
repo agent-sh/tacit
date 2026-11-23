@@ -295,3 +295,14 @@ func TestClaimsOwnerWording(t *testing.T) {
 		t.Error("a claim after a negated mention passed")
 	}
 }
+
+// A machines/<name> scope that names no machine says which one this machine
+// is: agents call a machine by an alias of their own, and the refusal is
+// answered at once when it names the host the scope wants.
+func TestUnknownMachineNamesThisMachine(t *testing.T) {
+	e := env(t)
+	p := e.Scope("machines/workbox")
+	if p == nil || !strings.Contains(p.Hint, "this machine is machines/box") {
+		t.Fatalf("hint does not name this machine: %v", p)
+	}
+}

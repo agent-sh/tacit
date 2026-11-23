@@ -66,6 +66,7 @@ func storeServer(s *store.Store, harness string) *mcp.Server {
 		opts = &mcp.ServerOptions{Instructions: mcpInstructions}
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "tacit", Version: "0.1.0"}, opts)
+	server.AddReceivingMiddleware(offMiddleware)
 	addTreeTool(server, s)
 	addMarkTool(server)
 
@@ -142,10 +143,10 @@ func storeServer(s *store.Store, harness string) *mcp.Server {
 	})
 
 	type addArgs struct {
-		Name        string `json:"name" jsonschema:"short slug, e.g. demo-api-precommit-cargo-path"`
+		Name        string `json:"name,omitempty" jsonschema:"short slug, e.g. demo-api-precommit-cargo-path; default: one made from the description"`
 		Description string `json:"description" jsonschema:"one line (max 200 chars) that states the fact itself with the concrete path, command, host or number"`
 		Body        string `json:"body,omitempty" jsonschema:"one to three sentences: the fact and the why"`
-		Type        string `json:"type" jsonschema:"user_standard | design_decision | past_mistake | machine_fact | code_change | structure | history | reference | user (who the owner is, user scope only)"`
+		Type        string `json:"type,omitempty" jsonschema:"default unclassified (the curator sorts it); user_standard | design_decision | past_mistake | machine_fact | code_change | structure | history | reference | user (who the owner is, user scope only)"`
 		Scope       string `json:"scope,omitempty" jsonschema:"projects/<repo> | machines/<host> | user | system; default projects/<current repo>"`
 		Kind        string `json:"kind,omitempty" jsonschema:"user if the owner said it, observed if you found it out (default), web if it came from a fetched page"`
 	}
