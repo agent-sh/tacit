@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/repoid"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
@@ -57,7 +58,11 @@ func readRegistries(files []string) []registry {
 		if json.Unmarshal(b, &v) != nil || len(v.Entries) == 0 {
 			continue
 		}
-		r := registry{root: filepath.Dir(p), entries: map[string]string{}}
+		root := filepath.Dir(p)
+		if real, err := filepath.EvalSymlinks(root); err == nil {
+			root = real
+		}
+		r := registry{root: root, entries: map[string]string{}}
 		for k, e := range v.Entries {
 			k = strings.Trim(filepath.ToSlash(k), "/")
 			if k != "" && !strings.Contains(k, "..") {
@@ -78,11 +83,32 @@ func registryFiles(home string) []string {
 	return []string{filepath.Join(projectsRoot(home), "projects.json")}
 }
 
+// realPath is full with its longest existing ancestor's symlinks resolved,
+// so a path written under a link (a bind mount, a moved home's old link)
+// and a registry read through its real path meet.
+func realPath(full string) string {
+	dir, rest := full, ""
+	for {
+		if real, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(real, rest)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return full
+		}
+		rest = filepath.Join(filepath.Base(dir), rest)
+		dir = parent
+	}
+}
+
 // moved is where a gone path is now by the registries: full is the gone
-// path, absolute. The path's first parts under a registry's root name an
-// entry by its last part (its name) at another key; the path with that
-// prefix replaced must exist. Exactly one such place, or none.
+// path, absolute. The path's first parts under a registry's root (up to the
+// first part that is itself an entry, which is there and holds the rest)
+// name an entry by its last part (its name) at another key, the old prefix
+// is gone, and the path with that prefix replaced exists. Exactly one such
+// place, or none.
 func moved(regs []registry, full string) (oldPrefix, newPrefix string, ok bool) {
+	full = realPath(full)
 	var found [][2]string
 	for _, r := range regs {
 		rel, err := filepath.Rel(r.root, full)
@@ -93,17 +119,22 @@ func moved(regs []registry, full string) (oldPrefix, newPrefix string, ok bool) 
 		for i := 1; i <= len(parts) && i <= 3; i++ {
 			prefix := strings.Join(parts[:i], "/")
 			if _, here := r.entries[prefix]; here {
-				continue
+				break // a live entry: what is gone is inside it, not moved
+			}
+			old := filepath.Join(r.root, filepath.FromSlash(prefix))
+			if _, err := os.Stat(old); err == nil {
+				continue // the old place is there: no move at this prefix
 			}
 			for k := range r.entries {
-				if k == prefix || k[strings.LastIndex(k, "/")+1:] != parts[i-1] {
+				if k[strings.LastIndex(k, "/")+1:] != parts[i-1] {
 					continue
 				}
 				np := filepath.Join(r.root, filepath.FromSlash(k), filepath.FromSlash(strings.Join(parts[i:], "/")))
 				if _, err := os.Stat(np); err == nil {
-					found = append(found, [2]string{filepath.Join(r.root, filepath.FromSlash(prefix)), filepath.Join(r.root, filepath.FromSlash(k))})
+					found = append(found, [2]string{old, filepath.Join(r.root, filepath.FromSlash(k))})
 				}
 			}
+			break
 		}
 	}
 	if len(found) != 1 {
@@ -113,14 +144,29 @@ func moved(regs []registry, full string) (oldPrefix, newPrefix string, ok bool) 
 }
 
 // deadFolders are the project folders the registries mark dead or
-// archived, by the entry's name: projects/<name>.
+// archived, by the entry's name as a project scope is made of it
+// (projects/<slug>): only a name every entry that holds it, in every
+// registry, marks so.
 func deadFolders(regs []registry) map[string]string {
-	out := map[string]string{}
+	status := map[string]string{}
+	live := map[string]bool{}
 	for _, r := range regs {
 		for k, st := range r.entries {
-			if st == "dead" || st == "archived" {
-				out["projects/"+k[strings.LastIndex(k, "/")+1:]] = st
+			name := repoid.Slug(k[strings.LastIndex(k, "/")+1:])
+			if name == "" {
+				continue
 			}
+			if st == "dead" || st == "archived" {
+				status[name] = st
+			} else {
+				live[name] = true
+			}
+		}
+	}
+	out := map[string]string{}
+	for name, st := range status {
+		if !live[name] {
+			out["projects/"+name] = st
 		}
 	}
 	return out
@@ -133,6 +179,7 @@ type expireItem struct {
 	Scope  string   `json:"scope"`
 	Action string   `json:"action"` // retire, fix, ask
 	Why    string   `json:"why"`    // gone, moved, dead
+	Detail string   `json:"detail,omitempty"`
 	Paths  []string `json:"paths,omitempty"`
 	Notes  []string `json:"notes,omitempty"` // fix: the in-place lines
 }
@@ -144,9 +191,10 @@ const (
 )
 
 // ownersFact is a fact only the owner changes: their ruling, a fact they
-// wrote, a fact with their words.
+// wrote, a fact with any evidence of theirs (their words, a quote, their
+// endorsement, backed or not).
 func ownersFact(f *fact.Fact) bool {
-	return fact.IsRuling(f) || fact.OwnerWrote(f) || fact.OwnerWordsOf(f) != ""
+	return fact.IsRuling(f) || fact.OwnerWrote(f) || fact.ClaimsEvidence(f)
 }
 
 // expirePlan reads facts: g finds the paths gone (the writer's machine:
@@ -158,14 +206,16 @@ func expirePlan(facts []*fact.Fact, g *goneProbe, regs []registry, home, today s
 	var out []expireItem
 	for _, f := range facts {
 		m := f.Meta
-		if f.InInbox() || strings.HasPrefix(m.Scope, "derived/") || m.SupersededBy != "" || m.Retired != "" || fact.IsResult(m.Type) || m.Type == "hot_spot" {
+		// A statement is what the owner said once: history, which no agent
+		// changes (Statements).
+		if f.InInbox() || strings.HasPrefix(m.Scope, "derived/") || m.SupersededBy != "" || m.Retired != "" || fact.IsResult(m.Type) || m.Type == "hot_spot" || m.Type == fact.StatementType {
 			continue
 		}
 		it := expireItem{Name: m.Name, Path: f.Path, Scope: m.Scope}
 		if st, ok := dead[m.Scope]; ok {
 			it.Why, it.Action = "dead", expireRetire
-			it.Paths = []string{"the registry marks " + m.Scope + " " + st}
-		} else if gone := g.paths(f); len(gone) > 0 {
+			it.Detail = "the registry marks " + m.Scope + " " + st
+		} else if gone := notNoted(f, g.paths(f)); len(gone) > 0 {
 			it.Paths = gone
 			it.Why, it.Action = "moved", expireFix
 			for _, p := range gone {
@@ -201,6 +251,28 @@ func expirePlan(facts []*fact.Fact, g *goneProbe, regs []registry, home, today s
 		out = append(out, it)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
+}
+
+// notNoted are the gone paths an in-place note of f does not already
+// replace: a fix the step wrote before leaves the description as it was,
+// so the path reads as gone again.
+func notNoted(f *fact.Fact, gone []string) []string {
+	notes, _ := fact.Notes(f.Body)
+	done := map[string]bool{}
+	for _, l := range notes {
+		if m := strings.TrimPrefix(l, fact.NotePrefix); len(m) > 12 {
+			if old, _, ok := strings.Cut(m[12:], " -> "); ok {
+				done[old] = true
+			}
+		}
+	}
+	var out []string
+	for _, p := range gone {
+		if !done[p] {
+			out = append(out, p)
+		}
+	}
 	return out
 }
 
@@ -249,12 +321,16 @@ func expireFiles(dir string, items []expireItem, today string) (map[string][]byt
 				return nil, "", fmt.Errorf("%s: %w", it.Path, err)
 			}
 			files[it.Path] = data
-			lines = append(lines, fmt.Sprintf("- %s %s (%s): %s", it.Action, it.Name, it.Why, strings.Join(it.Paths, ", ")))
+			what := strings.Join(it.Paths, ", ")
+			if it.Detail != "" {
+				what = it.Detail
+			}
+			lines = append(lines, fmt.Sprintf("- %s %s (%s): %s", it.Action, it.Name, it.Why, what))
 			n[it.Action+" "+it.Why]++
 		case expireAsk:
 			why := "names a path that is not on this machine: " + strings.Join(it.Paths, ", ")
 			if it.Why == "dead" {
-				why = "is in a folder that " + strings.Join(it.Paths, ", ")
+				why = "is in a folder dead in the registry (" + it.Detail + ")"
 			} else if it.Why == "moved" {
 				why = "names a path the registry says moved: " + strings.Join(it.Notes, "; ")
 			}
@@ -335,7 +411,12 @@ func runExpire(args []string) int {
 	n := map[string]int{}
 	for _, it := range items {
 		n[it.Action]++
-		fmt.Printf("%s%s %s (%s, %s): %s\n", verb, it.Action, it.Name, it.Scope, it.Why, strings.Join(append(append([]string(nil), it.Paths...), it.Notes...), "; "))
+		var what []string
+		if it.Detail != "" {
+			what = append(what, it.Detail)
+		}
+		what = append(append(what, it.Paths...), it.Notes...)
+		fmt.Printf("%s%s %s (%s, %s): %s\n", verb, it.Action, it.Name, it.Scope, it.Why, strings.Join(what, "; "))
 	}
 	fmt.Printf("expire: %sretire %d, %sfix %d, %sask %d\n", verb, n[expireRetire], verb, n[expireFix], verb, n[expireAsk])
 	if *jsonOut != "" {
