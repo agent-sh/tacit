@@ -12,6 +12,21 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
+// mergeTables merges src into dst the way Codex layers a profile over its
+// base configuration: a table into a table, key by key, at every depth; any
+// other value from src replaces dst's.
+func mergeTables(dst, src map[string]any) {
+	for k, v := range src {
+		if sv, ok := v.(map[string]any); ok {
+			if dv, ok := dst[k].(map[string]any); ok {
+				mergeTables(dv, sv)
+				continue
+			}
+		}
+		dst[k] = v
+	}
+}
+
 // codexProfile preserves the user's provider and model settings while excluding
 // hooks, MCP servers, instructions and tool permissions. Auth stays in the real
 // CODEX_HOME; no auth files are copied or read by Tacit. The selected profile is
@@ -92,9 +107,7 @@ func codexProfile(args []string) ([]string, func(), error) {
 		if len(overlay) == 0 {
 			return nil, cleanup, fmt.Errorf("Codex profile %q was not found", profile)
 		}
-		for k, v := range overlay {
-			config[k] = v
-		}
+		mergeTables(config, overlay)
 	}
 	selected := map[string]any{}
 	for _, key := range []string{"model", "model_provider", "model_providers", "model_catalog_json", "model_reasoning_effort", "model_reasoning_summary", "model_verbosity", "model_context_window", "model_auto_compact_token_limit", "service_tier", "preferred_auth_method", "forced_login_method", "forced_chatgpt_workspace_id"} {

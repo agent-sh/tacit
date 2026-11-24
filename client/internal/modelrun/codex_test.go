@@ -147,3 +147,46 @@ func TestExplicitCodexOptionsOverrideProfileDefaults(t *testing.T) {
 		t.Fatal("explicit options lost", got)
 	}
 }
+
+// A profile that sets one nested key of a provider keeps the rest of the
+// base configuration's provider table, as Codex merges it.
+func TestCodexProfileMergesNestedTables(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	base := `model="base-model"
+model_provider="amazon-bedrock"
+[model_providers.amazon-bedrock]
+name="Bedrock"
+base_url="https://provider.example/v1"
+[model_providers.amazon-bedrock.aws]
+profile="default"
+`
+	profile := `model="profile-model"
+[model_providers.amazon-bedrock.aws]
+region="us-west-2"
+`
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(base), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "regional.config.toml"), []byte(profile), 0600); err != nil {
+		t.Fatal(err)
+	}
+	args, cleanup, err := codexProfile([]string{"exec", "--profile", "regional", "--ignore-user-config", "-"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	got := overrides(t, args)
+	if got["model"] != "profile-model" {
+		t.Fatalf("the profile's value did not win: %v", got["model"])
+	}
+	providers, _ := got["model_providers"].(map[string]any)
+	provider, _ := providers["amazon-bedrock"].(map[string]any)
+	if provider["base_url"] != "https://provider.example/v1" || provider["name"] != "Bedrock" {
+		t.Fatalf("the base provider's settings were dropped: %v", provider)
+	}
+	aws, _ := provider["aws"].(map[string]any)
+	if aws["region"] != "us-west-2" || aws["profile"] != "default" {
+		t.Fatalf("nested provider settings not merged: %v", aws)
+	}
+}
