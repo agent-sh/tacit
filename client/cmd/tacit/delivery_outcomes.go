@@ -33,7 +33,8 @@ import (
 // The outcomes are an append-only file of their own in the delivery log's
 // directory (outcomes/verdicts.jsonl, one line a verdict; not a day file of
 // the log), read through a summary rebuilt when the file grows
-// (outcomes/summary.json).
+// (outcomes/summary.json). Before it is read, the delivery log's marks
+// whose verdicts the file lacks are appended to it (delivery_reconcile.go).
 
 const (
 	outcomeStop    = 3
@@ -126,6 +127,7 @@ type outcomeSum struct {
 // matches the file's size (and was built within a day: the window moves),
 // else rebuilt from the file. No file: none.
 func loadOutcomes(now time.Time) map[string]map[string]outcomeTally {
+	reconcileMarks(now)
 	fi, err := os.Stat(outcomesPath())
 	if err != nil || fi.Size() == 0 {
 		return nil
@@ -151,7 +153,8 @@ func loadOutcomes(now time.Time) map[string]map[string]outcomeTally {
 
 // tallyOutcomes reads the file: per scope and fact, used and bad in the
 // window. A mark and the judge's label of the same line in the same block
-// both count: they are two readings.
+// both count: they are two readings. A block has one mark, so a mark's
+// verdict of a line in a block counts once, however often it was written.
 func tallyOutcomes(now time.Time) map[string]map[string]outcomeTally {
 	f, err := os.Open(outcomesPath())
 	if err != nil {
@@ -161,10 +164,18 @@ func tallyOutcomes(now time.Time) map[string]map[string]outcomeTally {
 	out := map[string]map[string]outcomeTally{}
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<16), 1<<20)
+	marked := map[string]bool{}
 	for sc.Scan() {
 		var l outcomeLine
 		if json.Unmarshal(sc.Bytes(), &l) != nil || l.Fact == "" {
 			continue
+		}
+		if l.Src == "mark" && l.Block != "" {
+			key := l.Block + "\x00" + l.Fact
+			if marked[key] {
+				continue
+			}
+			marked[key] = true
 		}
 		if t, err := time.Parse(time.RFC3339Nano, l.TS); err != nil || now.Sub(t) > outcomeWindow {
 			continue

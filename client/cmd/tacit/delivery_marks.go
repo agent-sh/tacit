@@ -145,6 +145,15 @@ func askedLines(block *logEntry) map[string]*logCand {
 	return lines
 }
 
+// markScope is the scope and hook a mark's verdict of a line is kept
+// under: a Stop ask's line's own, else the asked block's.
+func markScope(asked *logEntry, line *logCand) (in, hook string) {
+	if asked.Hook == "stop" {
+		return line.In, line.Via
+	}
+	return outcomeScope(asked.Repos), asked.Hook
+}
+
 // logMark records a mark of a block that asked for one: each named line
 // the block printed with its verdict, a name given two verdicts in none;
 // one mark a block. It reports why nothing was recorded, and what it left
@@ -195,10 +204,7 @@ func logMark(block string, marks []markVerdict) (skipped []string, err error) {
 		case verdictWrong:
 			m.Wrong = append(m.Wrong, name)
 		}
-		in, hook := lines[name].In, lines[name].Via
-		if asked.Hook != "stop" {
-			in, hook = outcomeScope(asked.Repos), asked.Hook
-		}
+		in, hook := markScope(asked, lines[name])
 		outs = append(outs, outcomeLine{TS: now.UTC().Format(time.RFC3339Nano), In: in, Fact: name, Verdict: verdict[name], Src: "mark", Block: block, Hook: hook})
 	}
 	if len(outs) == 0 {
