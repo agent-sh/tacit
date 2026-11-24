@@ -1,9 +1,10 @@
 Tacit keeps memory for coding agents in Markdown and git. Use a local store or share one across machines.
 
-This release asks for marks less often (#178).
+This release makes every logged mark count, and makes the model runner read Codex profiles as Codex does (#179).
 
-- **About one turn in ten.** The Stop hook asked for a mark on every turn that was given facts, which cost the agent a call nearly every turn. Now each such turn is drawn on its own with a one-in-ten chance, from a hash of the session and the turn's count, so the marks are a sample of all turns rather than mostly first ones. A turn whose ask could not be logged keeps its place, so the next turn draws again.
+- **Every logged mark counts.** A mark's verdicts reached the outcomes only when the process that took the mark recorded them, so an MCP server still running an older binary logged marks that never moved delivery. Before the hooks read the outcomes, the delivery log's marks are now matched against the verdicts by block and fact, and the missing ones are appended under the asked block's scope. It reads at most 8 MiB of the log a call and resumes where it stopped, so no hook waits on it. A verdict already recorded is never written twice.
+- **Codex profiles merge deeply.** A profile that set one nested provider key, such as a region, replaced the base configuration's whole provider table and lost its endpoint, so verify runs reached the wrong service. Profile tables now merge into the base configuration at every depth, as in Codex.
 
-Upgrading: install the new binary on every machine whose hooks run. No hook, store format or protocol change; the server needs no deploy.
+Upgrading: install the new binary on every machine whose hooks run, and restart long-running `tacit mcp` servers when convenient. No hook, store format or protocol change; the server needs no deploy.
 
 Builds for Linux, macOS and Windows on amd64 and arm64 include the CLI, the browser app and a compatible scrump redactor. Git 2.29+ is required. [Setup and platform validation](https://github.com/agent-sh/tacit/blob/main/docs/portable.md).
