@@ -143,7 +143,13 @@ func (r *reconciler) run(cur markCursor) (markCursor, bool) {
 				if stop {
 					return cur, true
 				}
-				break // the file's end: the next day's
+				// The file's end: the next day's, once no mark can still
+				// come to this one (a mark goes to the day it was taken
+				// in, which may end while it is being written).
+				if dayEnd, err := time.Parse("2006-01-02", name[:10]); err != nil || r.now.UTC().Before(dayEnd.AddDate(0, 0, 1).Add(markGrace)) {
+					return cur, true
+				}
+				break
 			}
 			missing, ok := r.missing(mark)
 			if !ok {
@@ -298,8 +304,12 @@ func (r *reconciler) search(p *markPending) (done, ok bool) {
 }
 
 // searchFile reads a day file backward from pos (-1: its end) for the
-// entry of this id, a chunk at a time within the budget: the entry, where
-// the search stopped, and whether the file has more to read.
+// entry of this id that asked for a mark (markedBlock's), a chunk at a
+// time within the budget: the entry, where
+// the search stopped, and whether the file has more to read. It looks for
+// the id's bytes, not for whole lines, so a line of any length is passed
+// in steps: each chunk reaches a needle's length past the last one, which
+// finds an id the boundary cuts.
 func (r *reconciler) searchFile(path string, pos int64, needle []byte, id string) (asked *logEntry, at int64, more, ok bool) {
 	fi, err := os.Lstat(path)
 	if err != nil || !fi.Mode().IsRegular() {
@@ -310,48 +320,64 @@ func (r *reconciler) searchFile(path string, pos int64, needle []byte, id string
 		return nil, pos, true, false
 	}
 	defer f.Close()
-	if pos < 0 || pos > fi.Size() {
-		pos = fi.Size()
+	size := fi.Size()
+	if pos < 0 || pos > size {
+		pos = size
 	}
-	chunk := markChunk
 	for pos > 0 {
 		if r.budget <= 0 {
 			return nil, pos, true, true
 		}
-		start := max(pos-chunk, 0)
-		buf := make([]byte, pos-start)
+		start := max(pos-min(markChunk, r.budget), 0)
+		end := min(pos+int64(len(needle))-1, size)
+		buf := make([]byte, end-start)
 		if _, err := f.ReadAt(buf, start); err != nil {
 			return nil, pos, true, false
 		}
-		r.budget -= int64(len(buf))
-		whole, from := buf, start
-		if start > 0 {
-			i := bytes.IndexByte(buf, '\n')
-			if i < 0 {
-				chunk *= 2 // one line longer than the chunk
-				continue
-			}
-			whole, from = buf[i+1:], start+int64(i)+1
-		}
-		for rest := whole; ; {
+		r.budget -= pos - start
+		for rest := buf; ; {
 			i := bytes.LastIndex(rest, needle)
 			if i < 0 {
 				break
 			}
-			ls := bytes.LastIndexByte(rest[:i], '\n') + 1
-			le := i + bytes.IndexByte(rest[i:], '\n')
-			if le < i {
-				le = len(rest)
+			if e := entryAt(f, start+int64(i)); e != nil && e.ID == id && e.MarkAsked {
+				return e, start, true, true
 			}
-			var e logEntry
-			if json.Unmarshal(rest[ls:le], &e) == nil && e.ID == id && e.Hook != "mark" {
-				return &e, from, true, true
-			}
-			rest = rest[:ls]
+			rest = rest[:i]
 		}
-		pos = from
+		pos = start
 	}
 	return nil, 0, false, true
+}
+
+// entryAt is the log entry whose line holds the offset, nil when the line
+// does not read as one.
+func entryAt(f *os.File, off int64) *logEntry {
+	// The line's start: an entry's id is among its first fields, so the
+	// newline before it is near.
+	ls := int64(0)
+	for back := off; back > 0; {
+		from := max(back-4096, 0)
+		buf := make([]byte, back-from)
+		if _, err := f.ReadAt(buf, from); err != nil {
+			return nil
+		}
+		if i := bytes.LastIndexByte(buf, '\n'); i >= 0 {
+			ls = from + int64(i) + 1
+			break
+		}
+		back = from
+	}
+	br := bufio.NewReaderSize(io.NewSectionReader(f, ls, 1<<26), 1<<16)
+	line, err := br.ReadBytes('\n')
+	if err != nil && err != io.EOF {
+		return nil
+	}
+	var e logEntry
+	if json.Unmarshal(line, &e) != nil {
+		return nil
+	}
+	return &e
 }
 
 // appendMissing appends the mark's verdicts the outcomes lack, each kept

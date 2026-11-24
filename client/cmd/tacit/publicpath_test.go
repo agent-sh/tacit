@@ -27,6 +27,11 @@ import (
 // a clone's credential helper is the running binary (store.helperExe).
 func TestMain(m *testing.M) {
 	judgeFakeCLI() // run as the judge's claude, it exits here
+	// A test that sets no home of its own reads none of the machine's
+	// outcomes, and writes no reconcile of its delivery log.
+	if u, err := user.Current(); err == nil && u.HomeDir != "" {
+		machineState = platform.StateDir(u.HomeDir)
+	}
 	if os.Getenv("TACIT_TEST_MAIN") == "1" {
 		main()
 		os.Exit(0)
@@ -65,11 +70,6 @@ func TestMain(m *testing.M) {
 	os.Unsetenv("TACIT_HEADLESS")
 	if d, err := os.MkdirTemp("", "xdg-cache"); err == nil {
 		os.Setenv("XDG_CACHE_HOME", d)
-	}
-	// A test that sets no home of its own reads none of the machine's
-	// outcomes, and writes no reconcile of its delivery log.
-	if u, err := user.Current(); err == nil && u.HomeDir != "" {
-		machineState = platform.StateDir(u.HomeDir)
 	}
 	// A test that reads the delivery log back must not lose its line to a
 	// loaded machine; TestDeliveryLogWriteIsBounded checks the real bound.

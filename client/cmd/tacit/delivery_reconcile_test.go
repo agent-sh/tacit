@@ -189,3 +189,69 @@ func TestReconcileCrossesDays(t *testing.T) {
 		t.Fatal("a mark of the next day did not count")
 	}
 }
+
+// The search for a block steps through a line longer than its chunk, even
+// one whose chunk holds nothing but the line's newline.
+func TestReconcileSearchPassesLongLines(t *testing.T) {
+	t.Setenv("TACIT_STATE_DIR", t.TempDir())
+	chunk := markChunk
+	markChunk = 1
+	t.Cleanup(func() { markChunk = chunk })
+	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	asked := &logEntry{V: deliveryLogVersion, ID: "aaaaaaaaaaaaaaaa", TS: now.Format(time.RFC3339Nano), Hook: "prompt", MarkAsked: true}
+	long := &logEntry{V: deliveryLogVersion, ID: "0000000000000001", TS: asked.TS, Hook: "prompt", Terms: []string{strings.Repeat("x", 2000)}}
+	for _, e := range []*logEntry{asked, long} {
+		if err := appendLogEntry(e, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &reconciler{dir: deliveryLogDir(), now: now, budget: 1 << 20}
+	got, _, _, ok := r.searchFile(deliveryLogDir()+"/2026-01-10.jsonl", -1, []byte(`"id":"aaaaaaaaaaaaaaaa"`), asked.ID)
+	if !ok || got == nil || got.ID != asked.ID {
+		t.Fatalf("the block was not found past a long line: %v %v", got, ok)
+	}
+}
+
+// A verdict line a failed write cut short does not swallow the next one.
+func TestOutcomesAppendAfterATornLine(t *testing.T) {
+	t.Setenv("TACIT_STATE_DIR", t.TempDir())
+	if err := os.MkdirAll(outcomesDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outcomesPath(), []byte(`{"ts":"2026-01-10T11:00:00Z","in":"","fact":"to`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	if err := appendOutcomes([]outcomeLine{{TS: now.Format(time.RFC3339Nano), Fact: "alpha", Verdict: verdictUsed, Src: "judge"}}); err != nil {
+		t.Fatal(err)
+	}
+	if outcomes(tallyOutcomes(now)[""]).class("alpha") != outcomePromoted {
+		t.Fatal("the verdict after a torn line was lost")
+	}
+}
+
+// A mark taken just before midnight may reach its day's file after the
+// next day's has begun: the cursor stays on a day until it is a minute
+// over, so the mark is read.
+func TestReconcileWaitsForTheDayToEnd(t *testing.T) {
+	t.Setenv("TACIT_STATE_DIR", t.TempDir())
+	day1 := time.Date(2026, 1, 9, 23, 59, 0, 0, time.UTC)
+	midnight := day1.Add(time.Minute)
+	asked := &logEntry{V: deliveryLogVersion, ID: "aaaaaaaaaaaaaaaa", TS: day1.Format(time.RFC3339Nano), Hook: "prompt", MarkAsked: true, Cands: []logCand{{Name: "alpha", Delivered: true}}}
+	if err := appendLogEntry(asked, day1); err != nil {
+		t.Fatal(err)
+	}
+	next := &logEntry{V: deliveryLogVersion, ID: "0000000000000001", TS: midnight.Format(time.RFC3339Nano), Hook: "prompt"}
+	if err := appendLogEntry(next, midnight); err != nil {
+		t.Fatal(err)
+	}
+	loadOutcomes(midnight.Add(20 * time.Second))
+	late := day1.Add(59*time.Second + 900*time.Millisecond)
+	mark := &logEntry{V: deliveryLogVersion, ID: "cccccccccccccccc", TS: late.Format(time.RFC3339Nano), Hook: "mark", Mark: &logMarkStep{Block: asked.ID, Helped: []string{"alpha"}}}
+	if err := appendLogEntry(mark, late); err != nil {
+		t.Fatal(err)
+	}
+	if outcomes(loadOutcomes(midnight.Add(5 * time.Minute))[""]).class("alpha") != outcomePromoted {
+		t.Fatal("a mark that reached the day's file late was lost")
+	}
+}

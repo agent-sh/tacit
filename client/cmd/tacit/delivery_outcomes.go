@@ -114,6 +114,18 @@ func appendOutcomes(lines []outcomeLine) error {
 		return err
 	}
 	var b strings.Builder
+	// A line a failed write cut short ends here first, so the new lines
+	// are lines of their own (two writers at once may leave an empty line
+	// between, which reads as nothing).
+	if fi, err := f.Stat(); err == nil && fi.Size() > 0 {
+		last := make([]byte, 1)
+		if r, err := os.Open(outcomesPath()); err == nil {
+			if _, err := r.ReadAt(last, fi.Size()-1); err == nil && last[0] != '\n' {
+				b.WriteByte('\n')
+			}
+			r.Close()
+		}
+	}
 	for _, l := range lines {
 		j, _ := json.Marshal(l)
 		b.Write(j)
