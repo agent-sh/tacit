@@ -3,7 +3,9 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -60,13 +62,22 @@ func TestLoggedMarksReachTheOutcomes(t *testing.T) {
 		t.Fatalf("a logged used mark did not count: class %d", got)
 	}
 	// A mark too young for the grace waits; then it counts too.
+	later := &logEntry{V: deliveryLogVersion, ID: "ffffffffffffffff", TS: ts(20 * time.Second), Hook: "prompt", MarkAsked: true,
+		Cands: []logCand{{Name: "epsilon", Delivered: true}}}
 	young := &logEntry{V: deliveryLogVersion, ID: "eeeeeeeeeeeeeeee", TS: ts(10 * time.Second), Hook: "mark",
-		Mark: &logMarkStep{Block: prompt.ID, Helped: []string{"beta"}}}
-	if err := appendLogEntry(young, now); err != nil {
-		t.Fatal(err)
+		Mark: &logMarkStep{Block: later.ID, Helped: []string{"epsilon"}}}
+	for _, e := range []*logEntry{later, young} {
+		if err := appendLogEntry(e, now); err != nil {
+			t.Fatal(err)
+		}
 	}
-	loadOutcomes(now)
-	loadOutcomes(now.Add(2 * time.Minute))
+	if outcomes(loadOutcomes(now)[""]).class("epsilon") != outcomeNeutral {
+		t.Fatal("a mark within the grace was taken")
+	}
+	if outcomes(loadOutcomes(now.Add(2 * time.Minute))[""]).class("epsilon") != outcomePromoted {
+		t.Fatal("a mark past the grace was not taken")
+	}
+	loadOutcomes(now.Add(3 * time.Minute))
 
 	var got []string
 	for _, l := range readVerdicts(t) {
@@ -78,8 +89,103 @@ func TestLoggedMarksReachTheOutcomes(t *testing.T) {
 		"a beta not_relevant widget prompt mark",
 		"a gamma wrong widget prompt mark",
 		"b delta not_relevant gadget start mark",
+		"f epsilon used  prompt mark",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("verdicts:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// A reconcile reads a bounded part of the log, the search for a mark's
+// block included, and the next goes on where it stopped: a mark far from
+// its block still counts, after some reconciles, once.
+func TestReconcileIsBoundedAndResumes(t *testing.T) {
+	t.Setenv("TACIT_STATE_DIR", t.TempDir())
+	budget, chunk := markReadBudget, markChunk
+	markReadBudget, markChunk = 4096, 512
+	t.Cleanup(func() { markReadBudget, markChunk = budget, chunk })
+	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	ts := now.Add(-time.Hour).Format(time.RFC3339Nano)
+
+	asked := &logEntry{V: deliveryLogVersion, ID: "aaaaaaaaaaaaaaaa", TS: ts, Hook: "prompt", MarkAsked: true, Cands: []logCand{{Name: "alpha", Delivered: true}}}
+	if err := appendLogEntry(asked, now); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 200; i++ {
+		e := &logEntry{V: deliveryLogVersion, ID: fmt.Sprintf("%016x", i+1), TS: ts, Hook: "prompt", Terms: []string{strings.Repeat("filler", 30)}}
+		if err := appendLogEntry(e, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mark := &logEntry{V: deliveryLogVersion, ID: "cccccccccccccccc", TS: ts, Hook: "mark", Mark: &logMarkStep{Block: asked.ID, Helped: []string{"alpha"}}}
+	if err := appendLogEntry(mark, now); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	for ; calls < 100 && outcomes(loadOutcomes(now)[""]).class("alpha") != outcomePromoted; calls++ {
+	}
+	if calls == 0 || calls == 100 {
+		t.Fatalf("reconciled after %d calls: want more than one, and an end", calls)
+	}
+	for i := 0; i < 5; i++ {
+		loadOutcomes(now)
+	}
+	if n := len(readVerdicts(t)); n != 1 {
+		t.Fatalf("%d verdicts, want 1", n)
+	}
+}
+
+// A verdict that could not be appended is not skipped: the cursor stays,
+// and the next reconcile appends it.
+func TestReconcileKeepsTheCursorOnAFailedAppend(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a file this user cannot write")
+	}
+	t.Setenv("TACIT_STATE_DIR", t.TempDir())
+	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	ts := now.Add(-time.Hour).Format(time.RFC3339Nano)
+	asked := &logEntry{V: deliveryLogVersion, ID: "aaaaaaaaaaaaaaaa", TS: ts, Hook: "prompt", MarkAsked: true, Cands: []logCand{{Name: "alpha", Delivered: true}}}
+	mark := &logEntry{V: deliveryLogVersion, ID: "cccccccccccccccc", TS: ts, Hook: "mark", Mark: &logMarkStep{Block: asked.ID, Helped: []string{"alpha"}}}
+	for _, e := range []*logEntry{asked, mark} {
+		if err := appendLogEntry(e, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recordOutcomes([]outcomeLine{{TS: ts, Fact: "other", Verdict: verdictUsed, Src: "judge"}})
+	if err := os.Chmod(outcomesPath(), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	loadOutcomes(now)
+	if err := os.Chmod(outcomesPath(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if outcomes(loadOutcomes(now)[""]).class("alpha") != outcomePromoted {
+		t.Fatal("a verdict whose append failed was skipped")
+	}
+}
+
+// The cursor goes on to the next day's file, past an older day's last line
+// a crash cut short, and a mark of the day before finds its block there.
+func TestReconcileCrossesDays(t *testing.T) {
+	t.Setenv("TACIT_STATE_DIR", t.TempDir())
+	day1 := time.Date(2026, 1, 9, 23, 59, 0, 0, time.UTC)
+	day2 := day1.Add(2 * time.Minute)
+	now := day2.Add(time.Hour)
+	asked := &logEntry{V: deliveryLogVersion, ID: "aaaaaaaaaaaaaaaa", TS: day1.Format(time.RFC3339Nano), Hook: "prompt", MarkAsked: true, Cands: []logCand{{Name: "alpha", Delivered: true}}}
+	if err := appendLogEntry(asked, day1); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(deliveryLogDir()+"/2026-01-09.jsonl", os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString(`{"v":1,"id":"0000000000000001","hook":"mark","mark":{"blo`) // cut short
+	f.Close()
+	mark := &logEntry{V: deliveryLogVersion, ID: "cccccccccccccccc", TS: day2.Format(time.RFC3339Nano), Hook: "mark", Mark: &logMarkStep{Block: asked.ID, Helped: []string{"alpha"}}}
+	if err := appendLogEntry(mark, day2); err != nil {
+		t.Fatal(err)
+	}
+	if outcomes(loadOutcomes(now)[""]).class("alpha") != outcomePromoted {
+		t.Fatal("a mark of the next day did not count")
 	}
 }

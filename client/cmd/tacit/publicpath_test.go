@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/agent-sh/tacit/client/internal/auth"
 	"github.com/agent-sh/tacit/client/internal/check"
+	"github.com/agent-sh/tacit/client/internal/platform"
 	"github.com/agent-sh/tacit/client/internal/store"
 )
 
@@ -63,6 +65,11 @@ func TestMain(m *testing.M) {
 	os.Unsetenv("TACIT_HEADLESS")
 	if d, err := os.MkdirTemp("", "xdg-cache"); err == nil {
 		os.Setenv("XDG_CACHE_HOME", d)
+	}
+	// A test that sets no home of its own reads none of the machine's
+	// outcomes, and writes no reconcile of its delivery log.
+	if u, err := user.Current(); err == nil && u.HomeDir != "" {
+		machineState = platform.StateDir(u.HomeDir)
 	}
 	// A test that reads the delivery log back must not lose its line to a
 	// loaded machine; TestDeliveryLogWriteIsBounded checks the real bound.

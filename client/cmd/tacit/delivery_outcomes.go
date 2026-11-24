@@ -44,6 +44,11 @@ const (
 	outcomeWindow = 180 * 24 * time.Hour
 )
 
+// machineState is, in the test suite, the machine's own state directory,
+// whose outcomes no test reads or reconciles (publicpath_test.go); ""
+// otherwise.
+var machineState string
+
 // outcomeLine is one verdict.
 type outcomeLine struct {
 	TS      string `json:"ts"`
@@ -92,27 +97,33 @@ func (t outcomeTally) class() int {
 func outcomesDir() string  { return filepath.Join(deliveryLogDir(), "outcomes") }
 func outcomesPath() string { return filepath.Join(outcomesDir(), "verdicts.jsonl") }
 
-// recordOutcomes appends verdicts. A failure loses them: the mark itself
-// is in the delivery log.
-func recordOutcomes(lines []outcomeLine) {
+// recordOutcomes appends verdicts. A failure loses them here: the mark
+// itself is in the delivery log, and the reconcile takes it from there.
+func recordOutcomes(lines []outcomeLine) { _ = appendOutcomes(lines) }
+
+// appendOutcomes is recordOutcomes with its failure.
+func appendOutcomes(lines []outcomeLine) error {
 	if len(lines) == 0 {
-		return
+		return nil
 	}
-	if os.MkdirAll(outcomesDir(), 0o700) != nil {
-		return
+	if err := os.MkdirAll(outcomesDir(), 0o700); err != nil {
+		return err
 	}
 	f, err := os.OpenFile(outcomesPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
-		return
+		return err
 	}
-	defer f.Close()
 	var b strings.Builder
 	for _, l := range lines {
 		j, _ := json.Marshal(l)
 		b.Write(j)
 		b.WriteByte('\n')
 	}
-	f.WriteString(b.String()) // one write: lines of two writers do not interleave
+	if _, err := f.WriteString(b.String()); err != nil { // one write: lines of two writers do not interleave
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // outcomeSum is the summary: the file's size it was built at, and each
@@ -127,6 +138,9 @@ type outcomeSum struct {
 // matches the file's size (and was built within a day: the window moves),
 // else rebuilt from the file. No file: none.
 func loadOutcomes(now time.Time) map[string]map[string]outcomeTally {
+	if machineState != "" && deliveryLogDir() == filepath.Join(machineState, "delivery") {
+		return nil
+	}
 	reconcileMarks(now)
 	fi, err := os.Stat(outcomesPath())
 	if err != nil || fi.Size() == 0 {
@@ -154,7 +168,8 @@ func loadOutcomes(now time.Time) map[string]map[string]outcomeTally {
 // tallyOutcomes reads the file: per scope and fact, used and bad in the
 // window. A mark and the judge's label of the same line in the same block
 // both count: they are two readings. A block has one mark, so a mark's
-// verdict of a line in a block counts once, however often it was written.
+// verdict of a line in a block counts once, the first written, however
+// often it was written.
 func tallyOutcomes(now time.Time) map[string]map[string]outcomeTally {
 	f, err := os.Open(outcomesPath())
 	if err != nil {
