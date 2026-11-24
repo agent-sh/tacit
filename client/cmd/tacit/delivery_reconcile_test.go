@@ -22,6 +22,9 @@ func readVerdicts(t *testing.T) []outcomeLine {
 	var out []outcomeLine
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
+		if len(sc.Bytes()) == 0 {
+			continue // a reconcile's write starts a line of its own
+		}
 		var l outcomeLine
 		if err := json.Unmarshal(sc.Bytes(), &l); err != nil {
 			t.Fatal(err)
@@ -222,8 +225,16 @@ func TestOutcomesAppendAfterATornLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
-	if err := appendOutcomes([]outcomeLine{{TS: now.Format(time.RFC3339Nano), Fact: "alpha", Verdict: verdictUsed, Src: "judge"}}); err != nil {
-		t.Fatal(err)
+	for _, own := range []bool{false, true} {
+		if err := appendOutcomes([]outcomeLine{{TS: now.Format(time.RFC3339Nano), Fact: "alpha", Verdict: verdictUsed, Src: "judge"}}, own); err != nil {
+			t.Fatal(err)
+		}
+		f, _ := os.OpenFile(outcomesPath(), os.O_APPEND|os.O_WRONLY, 0o600)
+		f.WriteString(`{"ts":"2026-01-10T11:00:00Z","in":"","fact":"to`) // cut short again
+		f.Close()
+	}
+	if got := tallyOutcomes(now)[""]["alpha"].Used; got != 2 {
+		t.Fatalf("%d of 2 verdicts after torn lines", got)
 	}
 	if outcomes(tallyOutcomes(now)[""]).class("alpha") != outcomePromoted {
 		t.Fatal("the verdict after a torn line was lost")

@@ -393,7 +393,7 @@ func (r *reconciler) appendMissing(mark, asked *logEntry) bool {
 		in, hook := markScope(asked, lines[g[0]])
 		outs = append(outs, outcomeLine{TS: mark.TS, In: in, Fact: g[0], Verdict: g[1], Src: "mark", Block: mark.Mark.Block, Hook: hook})
 	}
-	if appendOutcomes(outs) != nil {
+	if appendOutcomes(outs, true) != nil {
 		return false
 	}
 	for _, o := range outs {

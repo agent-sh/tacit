@@ -99,10 +99,15 @@ func outcomesPath() string { return filepath.Join(outcomesDir(), "verdicts.jsonl
 
 // recordOutcomes appends verdicts. A failure loses them here: the mark
 // itself is in the delivery log, and the reconcile takes it from there.
-func recordOutcomes(lines []outcomeLine) { _ = appendOutcomes(lines) }
+func recordOutcomes(lines []outcomeLine) { _ = appendOutcomes(lines, false) }
 
-// appendOutcomes is recordOutcomes with its failure.
-func appendOutcomes(lines []outcomeLine) error {
+// appendOutcomes is recordOutcomes with its failure. A last line a failed
+// write cut short is ended first, so the new lines are lines of their own;
+// with own, the write starts with a newline whatever the file ends with,
+// which no other writer's torn line between the check and the write can
+// join (the reconcile's, whose cursor moves on once it succeeds). An empty
+// line reads as nothing.
+func appendOutcomes(lines []outcomeLine, own bool) error {
 	if len(lines) == 0 {
 		return nil
 	}
@@ -114,16 +119,16 @@ func appendOutcomes(lines []outcomeLine) error {
 		return err
 	}
 	var b strings.Builder
-	// A line a failed write cut short ends here first, so the new lines
-	// are lines of their own (two writers at once may leave an empty line
-	// between, which reads as nothing).
 	if fi, err := f.Stat(); err == nil && fi.Size() > 0 {
-		last := make([]byte, 1)
-		if r, err := os.Open(outcomesPath()); err == nil {
-			if _, err := r.ReadAt(last, fi.Size()-1); err == nil && last[0] != '\n' {
-				b.WriteByte('\n')
+		last := []byte{'\n'}
+		if !own {
+			if r, err := os.Open(outcomesPath()); err == nil {
+				r.ReadAt(last, fi.Size()-1)
+				r.Close()
 			}
-			r.Close()
+		}
+		if own || last[0] != '\n' {
+			b.WriteByte('\n')
 		}
 	}
 	for _, l := range lines {
