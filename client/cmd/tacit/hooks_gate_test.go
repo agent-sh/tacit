@@ -256,3 +256,16 @@ func TestGateRedactsEachLineOfTheRequest(t *testing.T) {
 		t.Fatalf("sent: %q", sent)
 	}
 }
+
+// Cut with its lines kept, a text clipped after redaction reads as the
+// clip of the clip did (judgeClip twice), so the judge's cases and the
+// gate's request read the same text, less what redaction masks.
+func TestRuneCutReadsAsTheClipDid(t *testing.T) {
+	for _, s := range []string{"", "  a  b\n\n c ", strings.Repeat("word \n\t  ", 900), "x" + strings.Repeat(" ", 5000) + "y z", "\u00e4\u00f6  \u00fc\n\u00df " + strings.Repeat("ab ", 2000)} {
+		for _, n := range []int{1, 3, 10, 800} {
+			if got, want := judgeClip(runeCut(s, 4*n), n), judgeClip(judgeClip(s, 4*n), n); got != want {
+				t.Fatalf("n %d: %q, want %q", n, got, want)
+			}
+		}
+	}
+}

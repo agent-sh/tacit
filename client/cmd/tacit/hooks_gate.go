@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/agent-sh/tacit/client/internal/digest"
 	"github.com/agent-sh/tacit/client/internal/search"
@@ -233,10 +234,26 @@ func gateScores(ctx context.Context, c gateConfig, repo, request string, hits []
 	return parseGateScores(text, len(hits))
 }
 
-// runeCut is s cut to at most n runes, its lines kept.
+// runeCut is the head of s that judgeClip(s, n) is drawn from, its lines
+// and spaces kept: as many runes as it takes for n runes once each run of
+// white space is one space and the ends are trimmed. Redacted and clipped
+// to m <= n, it reads as judgeClip(judgeClip(s, n), m) does, less what
+// redaction masks: the judge's cases read as before.
 func runeCut(s string, n int) string {
-	if r := []rune(s); len(r) > n {
-		return string(r[:n])
+	count, space := 0, false
+	for i, r := range s {
+		if unicode.IsSpace(r) {
+			space = count > 0
+			continue
+		}
+		if space {
+			count++ // the one space a run of white space becomes
+			space = false
+		}
+		if count >= n {
+			return s[:i]
+		}
+		count++
 	}
 	return s
 }

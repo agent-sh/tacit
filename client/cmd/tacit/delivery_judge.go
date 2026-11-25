@@ -1077,9 +1077,11 @@ func hermesMomentOf(ctx context.Context, s *store.Store, m judgeMoment) (judgeCa
 }
 
 func judgeCaseFromEvents(ctx context.Context, s *store.Store, m judgeMoment, owner, last *events.Event, after []events.Event) (judgeCase, bool) {
-	// Cut to pre before redaction, lines kept (a text flattened first could
-	// let a hit that starts on one line take the next line's secret), and
-	// flattened and cut to judgeTextLen after.
+	// Before redaction each text is cut to what clips to pre, its lines kept
+	// (flattened first, a hit that starts on one line could take the next
+	// line's secret); after it, flattened and clipped to judgeTextLen. The
+	// case reads as it did, less what redaction masks (runeCut), so the
+	// case builder's version stands.
 	const pre = 4 * judgeTextLen
 	var req []string
 	switch m.Hook {
