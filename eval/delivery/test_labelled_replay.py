@@ -78,7 +78,6 @@ class LabelledReplay(unittest.TestCase):
         # Its words are not mostly the prompt's: the prompt block leaves out a
         # line that says the request back (SPEC, the echo rule).
         fact(store, "projects/demo-api", "release-tags-are-signed", "Release tags of demo-api are signed with the hardware release key kept in the vault")
-        fact(store, "projects/demo-api", "deploy-runs-the-smoke-suite", "A deploy of demo-api runs the smoke suite first", typ="design_decision", commands=["make deploy"])
         for i in range(30):
             fact(store, "user", f"filler-{i}", f"Unrelated filler note number {i} about gardening and tea")
         commit(store, "first", "2026-10-20T10:00:00Z")
@@ -86,15 +85,12 @@ class LabelledReplay(unittest.TestCase):
         os.makedirs(repo)
         run("git", "init", "-q", repo)
         prompt = "check how release tags of demo-api are signed before the next release"
-        # The hook as it ran then: the prompt block and a push at the commit.
+        # The hook as it ran then: the prompt block at the commit. (The
+        # PreToolUse push ended; the hook prints no context before a tool.)
         state = os.path.join(t, "live")
         os.makedirs(os.path.join(state, "sessions"))
         block = self.hook(store, state, "prompt", {"session_id": "s1", "cwd": repo, "prompt": prompt})
         self.assertIn("release-tags-are-signed", block)
-        push = self.hook(store, state, "pre-tool", {"session_id": "s1", "cwd": repo, "hook_event_name": "PreToolUse",
-                                                    "tool_name": "Bash", "tool_input": {"command": "make deploy"}})
-        push_ctx = json.loads(push)["hookSpecificOutput"]["additionalContext"]
-        self.assertIn("deploy-runs-the-smoke-suite", push_ctx)
         # A later commit adds a fact the same prompt would get today.
         fact(store, "projects/demo-api", "release-tags-signed-since-v2", "Release tags of demo-api are signed since v2 with a hardware key")
         commit(store, "second", "2026-10-22T10:00:00Z")
@@ -102,7 +98,7 @@ class LabelledReplay(unittest.TestCase):
         os.makedirs(os.path.join(today, "sessions"))
         self.assertIn("release-tags-signed-since-v2", self.hook(store, today, "prompt", {"session_id": "s9", "cwd": repo, "prompt": prompt}),
                       "the later fact answers the prompt at HEAD, so pinning is what keeps it out")
-        # The transcript of that session, with both blocks and a repeat of the prompt.
+        # The transcript of that session, with the block and a repeat of the prompt.
         orphan = "# tacit: facts matching this request\n- orphan-fact: agent note (2026-10-21): a block whose prompt record is gone\n"
         lines = [
             {"type": "attachment", "uuid": "a0", "parentUuid": "gone", "sessionId": "s1", "cwd": repo, "timestamp": "2026-10-21T08:59:00.000Z",
@@ -110,11 +106,7 @@ class LabelledReplay(unittest.TestCase):
             {"type": "user", "uuid": "u1", "parentUuid": None, "sessionId": "s1", "cwd": repo, "timestamp": "2026-10-21T09:00:00.000Z", "message": {"role": "user", "content": prompt}},
             {"type": "attachment", "uuid": "a1", "parentUuid": "u1", "sessionId": "s1", "cwd": repo, "timestamp": "2026-10-21T09:00:00.100Z",
              "attachment": {"type": "hook_success", "hookEvent": "UserPromptSubmit", "content": block, "stdout": block}},
-            {"type": "assistant", "uuid": "m1", "parentUuid": "a1", "sessionId": "s1", "cwd": repo, "timestamp": "2026-10-21T09:00:05.000Z",
-             "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "make deploy"}}]}},
-            {"type": "attachment", "uuid": "a2", "parentUuid": "m1", "sessionId": "s1", "cwd": repo, "timestamp": "2026-10-21T09:00:05.100Z",
-             "attachment": {"type": "hook_additional_context", "hookEvent": "PreToolUse", "toolUseID": "toolu_1", "content": [push_ctx]}},
-            {"type": "user", "uuid": "u2", "parentUuid": "a2", "sessionId": "s1", "cwd": repo, "timestamp": "2026-10-21T09:05:00.000Z", "message": {"role": "user", "content": prompt}},
+            {"type": "user", "uuid": "u2", "parentUuid": "a1", "sessionId": "s1", "cwd": repo, "timestamp": "2026-10-21T09:05:00.000Z", "message": {"role": "user", "content": prompt}},
             {"type": "user", "uuid": "c1", "parentUuid": "u2", "sessionId": "s1", "cwd": repo, "timestamp": "2026-10-21T09:04:00.000Z", "isCompactSummary": True,
              "isVisibleInTranscriptOnly": True, "message": {"role": "user", "content": "This session is being continued from a previous conversation"}},
             {"type": "attachment", "uuid": "a3", "parentUuid": "u2", "sessionId": "s1", "cwd": repo, "timestamp": "2026-10-21T09:05:00.100Z",
@@ -127,18 +119,17 @@ class LabelledReplay(unittest.TestCase):
         out = os.path.join(t, "home", "replay")
         subprocess.run([sys.executable, "-I", os.path.join(HERE, "deliveries.py"), "--store", store, "--out", out, tr], check=True, capture_output=True)
         cases = load(os.path.join(out, "cases.jsonl"))
-        self.assertEqual([c["event"] for c in cases], ["prompt", "pre-tool"])
+        self.assertEqual([c["event"] for c in cases], ["prompt"])
         first = run("git", "-C", store, "rev-list", "--max-parents=0", "HEAD").strip()
         self.assertTrue(all(c["commit"] == first for c in cases), "a case reads the commit its hook read")
-        self.assertIn("release-tags-are-signed", cases[1]["seen"])
         self.assertIn("orphan-fact", cases[0]["seen"], "a block that makes no case still joins the session's facts")
         # Grades for the lines printed then, and a probe for the prompt.
         lab = os.path.join(t, "labels.tsv")
         write(lab, "".join(f"{c['id']}\t{n}\tR\n" for c in cases for n in c["delivered"]))
         subprocess.run([sys.executable, "-I", os.path.join(HERE, "deliveries.py"), "--store", store, "--out", out, "--labels", lab, "--silent", tr], check=True, capture_output=True)
         cases = load(os.path.join(out, "cases.jsonl"))
-        self.assertEqual([(c["event"], c["silent"]) for c in cases], [("prompt", False), ("pre-tool", False), ("prompt", True)])
-        self.assertTrue(all(c["labels"] for c in cases[:2]))
+        self.assertEqual([(c["event"], c["silent"]) for c in cases], [("prompt", False), ("prompt", True)])
+        self.assertTrue(cases[0]["labels"])
         clone = os.path.join(t, "clone")
         run("git", "clone", "-q", store, clone)
         replay = [sys.executable, "-I", os.path.join(HERE, "labelled_replay.py")]
@@ -154,15 +145,14 @@ class LabelledReplay(unittest.TestCase):
         res = {r["case"]: r for r in load(os.path.join(runs, "results.jsonl"))}
         self.assertEqual(res[cases[0]["id"]]["names"], cases[0]["delivered"], "the prompt block replays as printed")
         self.assertNotIn("release-tags-signed-since-v2", res[cases[0]["id"]]["names"], "a later commit's fact is not in the replay")
-        self.assertEqual(res[cases[1]["id"]]["names"], cases[1]["delivered"], "the push replays as printed")
-        self.assertEqual(res[cases[2]["id"]]["names"], [], "the repeated prompt's fact is in the session already")
+        self.assertEqual(res[cases[1]["id"]]["names"], [], "the repeated prompt's fact is in the session already")
         score = subprocess.run([sys.executable, "-I", os.path.join(HERE, "labelled_replay.py"), "score", "--cases", os.path.join(out, "cases.jsonl"),
                                 "--out", runs], check=True, capture_output=True, text=True).stdout
-        self.assertIn("reproduced=2/2", score)
-        self.assertIn("useful_kept=2/2", score)
+        self.assertIn("reproduced=1/1", score)
+        self.assertIn("useful_kept=1/1", score)
         cmp = subprocess.run(replay + ["compare", "--cases", os.path.join(out, "cases.jsonl"), "--out", runs, "--arms", "base,base"],
                              check=True, capture_output=True, text=True).stdout
-        self.assertIn("3 cases, 0 changed, 0 left out", cmp)
+        self.assertIn("2 cases, 0 changed, 0 left out", cmp)
         again = subprocess.run(replay + ["run", "--store", clone, "--cases", os.path.join(out, "cases.jsonl"), "--out", runs, "--arm", "base=" + shutil.which("true")],
                                capture_output=True, text=True, env=env)
         self.assertNotEqual(again.returncode, 0, "an arm name keeps its binary within one --out")
@@ -171,14 +161,14 @@ class LabelledReplay(unittest.TestCase):
                        check=True, capture_output=True, env=env)
         cmp = subprocess.run(replay + ["compare", "--cases", os.path.join(out, "cases.jsonl"), "--out", runs, "--arms", "base,broken"],
                              check=True, capture_output=True, text=True).stdout
-        self.assertIn("(3 left out: an arm failed)", cmp)
+        self.assertIn("(2 left out: an arm failed)", cmp)
         # A graded case the arm did not run is no useful line lost.
         extra = dict(cases[0], id="never-ran")
         with open(os.path.join(out, "cases.jsonl"), "a") as fh:
             fh.write(json.dumps(extra) + "\n")
         score = subprocess.run([sys.executable, "-I", os.path.join(HERE, "labelled_replay.py"), "score", "--cases", os.path.join(out, "cases.jsonl"),
                                 "--out", runs], check=True, capture_output=True, text=True).stdout
-        self.assertIn("useful_kept=2/2", score)
+        self.assertIn("useful_kept=1/1", score)
 
 
 if __name__ == "__main__":
