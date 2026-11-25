@@ -628,7 +628,8 @@ Judge the line's worth at that moment, not whether it is true. Answer JSON only:
 
 // judgeCaseVersion is the version of how a case is built from its moment
 // (momentOf, judgeText): raise it with any change to what the model reads.
-const judgeCaseVersion = 1
+// Version 2 masks each text whole and line by line before it is flattened.
+const judgeCaseVersion = 2
 
 // judgePromptID names the judge: a digest of its prompt, the case builder's
 // version, its bounds and its words for a hook. A change to any of them is a
@@ -1080,8 +1081,8 @@ func judgeCaseFromEvents(ctx context.Context, s *store.Store, m judgeMoment, own
 	// Before redaction each text is cut to what clips to pre, its lines kept
 	// (flattened first, a hit that starts on one line could take the next
 	// line's secret); after it, flattened and clipped to judgeTextLen. The
-	// case reads as it did, less what redaction masks (runeCut), so the
-	// case builder's version stands.
+	// case reads as it did, less what redaction masks (runeCut); what it
+	// masks is new, so the case builder's version is 2.
 	const pre = 4 * judgeTextLen
 	var req []string
 	switch m.Hook {
