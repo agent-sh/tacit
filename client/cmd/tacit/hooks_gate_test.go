@@ -17,6 +17,12 @@ import (
 func gateRig(t *testing.T) (cwd, state string) {
 	t.Helper()
 	stubScrump(t)
+	return gateStore(t)
+}
+
+// gateStore is gateRig with the redactor as installed.
+func gateStore(t *testing.T) (cwd, state string) {
+	t.Helper()
 	_, cwd = repoFirstRig(t,
 		fact.Meta{Name: "scheduler-shard-locks", Description: "The scheduler pool keeps one shard lock per tenant and a slot lock per job", Type: "design_decision", Scope: "projects/widget", AppliesTo: widgetRepo},
 		fact.Meta{Name: "slot-lock-order", Description: "Take the shard lock before the slot lock in the scheduler pool, never the other way", Type: "past_mistake", Scope: "projects/widget", AppliesTo: widgetRepo},
@@ -89,9 +95,12 @@ func TestGateLeavesOutTheLinesItScoresUnderItsThreshold(t *testing.T) {
 		if !strings.Contains(user, "Session repository: widget") || !strings.Contains(user, gateRequestText) || !strings.Contains(user, "slot-lock-order: Take the shard lock") {
 			t.Errorf("user turn: %q", user)
 		}
+		if strings.Contains(user, "Zq7Vx9") { // the stub redactor's canary: redacted before it is sent
+			t.Errorf("sent unredacted: %q", user)
+		}
 		return 200, converseReply(lineScores(user))
 	})
-	out := hookOut(t, promptPayload(cwd, "g1", gateRequestText), "prompt", "--no-mcp")
+	out := hookOut(t, promptPayload(cwd, "g1", gateRequestText+" with the key Zq7Vx9"), "prompt", "--no-mcp")
 	if *calls != 1 || !strings.Contains(out, "scheduler-shard-locks") || strings.Contains(out, "slot-lock-order") {
 		t.Fatalf("calls %d, block: %s", *calls, out)
 	}
@@ -137,8 +146,12 @@ func TestGateLoopbackRouteFromTheKeyFile(t *testing.T) {
 		t.Fatalf("calls %d, block: %s", *calls, out)
 	}
 	os.WriteFile(keys, []byte("ANTHROPIC_BEDROCK_BASE_URL=http://gateway.example:8080/x\nCLAUDE_CODE_SKIP_BEDROCK_AUTH=1\n"), 0o600)
+	t.Setenv("TACIT_STATE_DIR", filepath.Join(t.TempDir(), "state"))
 	if out := hookOut(t, promptPayload(cwd, "g3", gateRequestText), "prompt", "--no-mcp"); *calls != 1 || !strings.Contains(out, "slot-lock-order") {
 		t.Fatalf("an endpoint off this machine: calls %d, block: %s", *calls, out)
+	}
+	if s := gateStatus(t, os.Getenv("TACIT_STATE_DIR")); s != "no_route" {
+		t.Fatalf("gate status %q", s)
 	}
 }
 
@@ -152,13 +165,28 @@ func TestGateFailsOpen(t *testing.T) {
 		{"server error", "http_500", func() (int, any) { return 500, map[string]string{"message": "boom"} }},
 		{"no score for a line", "response_invalid", func() (int, any) { return 200, converseReply(`{"0": 90}`) }},
 		{"a score out of range", "response_invalid", func() (int, any) { return 200, converseReply(`{"0": 90, "1": 400}`) }},
-		{"past the deadline", "deadline", func() (int, any) { time.Sleep(600 * time.Millisecond); return 200, converseReply(`{"0": 1, "1": 1}`) }},
+		{"past the deadline", "deadline", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cwd, state := gateRig(t)
 			t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-placeholder")
-			t.Setenv("TACIT_GATE_TIMEOUT", "100ms")
-			fakeTransport(t, func(*http.Request, map[string]any) (int, any) { return tc.reply() })
+			t.Setenv("TACIT_GATE_TIMEOUT", "2s")
+			if tc.reply == nil {
+				t.Setenv("TACIT_GATE_TIMEOUT", "100ms")
+			}
+			fakeTransport(t, func(r *http.Request, _ map[string]any) (int, any) {
+				if tc.reply != nil {
+					return tc.reply()
+				}
+				// A call that answers only after the deadline, and ends when
+				// the gate's cancellation reaches it.
+				select {
+				case <-r.Context().Done():
+					return 499, nil
+				case <-time.After(5 * time.Second):
+					return 200, converseReply(`{"0": 1, "1": 1}`)
+				}
+			})
 			start := time.Now()
 			out := hookOut(t, promptPayload(cwd, "g4", gateRequestText), "prompt", "--no-mcp")
 			if !strings.Contains(out, "slot-lock-order") || !strings.Contains(out, "scheduler-shard-locks") {
@@ -167,11 +195,64 @@ func TestGateFailsOpen(t *testing.T) {
 			if tc.status == "deadline" && time.Since(start) > 2*time.Second {
 				t.Fatalf("the hook waited %s past a 100ms gate", time.Since(start))
 			}
-			for _, e := range readDeliveryLog(t, state) {
-				if e.Hook == "prompt" && (e.Gate == nil || e.Gate.Status != tc.status) {
-					t.Fatalf("gate entry %+v, want status %s", e.Gate, tc.status)
-				}
+			if s := gateStatus(t, state); s != tc.status {
+				t.Fatalf("gate status %q, want %s", s, tc.status)
 			}
 		})
+	}
+}
+
+// gateStatus is the gate's status in the one prompt entry of the log.
+func gateStatus(t *testing.T, state string) string {
+	t.Helper()
+	var got []string
+	for _, e := range readDeliveryLog(t, state) {
+		if e.Hook == "prompt" {
+			if e.Gate == nil {
+				got = append(got, "")
+			} else {
+				got = append(got, e.Gate.Status)
+			}
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("prompt entries' gate statuses: %q", got)
+	}
+	return got[0]
+}
+
+// A redactor that fails sends nothing: the block stands, and the log says
+// why.
+func TestGateSendsNothingWhenRedactionFails(t *testing.T) {
+	cwd, state := gateStore(t)
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "scrump"), []byte("#!/bin/sh\nexit 1\n"), 0o755)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-placeholder")
+	calls := fakeTransport(t, func(*http.Request, map[string]any) (int, any) { return 200, converseReply(`{"0": 1, "1": 1}`) })
+	if out := hookOut(t, promptPayload(cwd, "g6", gateRequestText), "prompt", "--no-mcp"); *calls != 0 || !strings.Contains(out, "slot-lock-order") {
+		t.Fatalf("calls %d, block: %s", *calls, out)
+	}
+	if s := gateStatus(t, state); s != "redaction_failed" {
+		t.Fatalf("gate status %q", s)
+	}
+}
+
+// A request of several lines is redacted before it is flattened: a password
+// on the line after an open setting's value is masked, as it is alone.
+func TestGateRedactsEachLineOfTheRequest(t *testing.T) {
+	requireScrump(t)
+	cwd, _ := gateStore(t)
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-placeholder")
+	secret := "Zq7Vx9" + "Lm2Kp4"
+	request := gateRequestText + "\ndeploy token_url: 'https://auth.example.invalid/oauth/" + strings.Repeat("p", 80) + "\n" + "pass" + "word: '" + secret + "' and the rest"
+	var sent string
+	fakeTransport(t, func(_ *http.Request, body map[string]any) (int, any) {
+		sent = gateUser(body)
+		return 200, converseReply(lineScores(sent))
+	})
+	hookOut(t, promptPayload(cwd, "g5", request), "prompt", "--no-mcp")
+	if sent == "" || strings.Contains(sent, secret) {
+		t.Fatalf("sent: %q", sent)
 	}
 }

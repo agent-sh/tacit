@@ -37,7 +37,7 @@ const (
 	gateDefaultTimeout = 1500 * time.Millisecond
 	gateMaxTimeout     = 2 * time.Second
 	gateTextLen        = 800 // runes of the request, and of each line, the model reads
-	gateMaxTokens      = 200
+	gateMinTokens      = 200 // the reply's budget: this, or more for a long block (gateTokens)
 )
 
 // The Bedrock route's names a gate reads, from the environment or its
@@ -147,14 +147,18 @@ func gateRequest(repo, request string, lines []string) string {
 	return b.String()
 }
 
-// gateBody is the provider's request body.
-func gateBody(c gateConfig, user string) []byte {
+// gateTokens is the reply's token budget for n lines: a score is a few
+// tokens, so a block past the default ceiling still gets its whole answer.
+func gateTokens(n int) int { return max(gateMinTokens, 32+16*n) }
+
+// gateBody is the provider's request body for n lines.
+func gateBody(c gateConfig, user string, n int) []byte {
 	var body map[string]any
 	if c.Provider == providerBedrock {
 		body = map[string]any{
 			"system":          []map[string]string{{"text": gateSystemPrompt}},
 			"messages":        []map[string]any{{"role": "user", "content": []map[string]string{{"text": user}}}},
-			"inferenceConfig": map[string]int{"maxTokens": gateMaxTokens},
+			"inferenceConfig": map[string]int{"maxTokens": gateTokens(n)},
 		}
 		if len(c.Fields) > 0 {
 			body["additionalModelRequestFields"] = c.Fields
@@ -165,7 +169,7 @@ func gateBody(c gateConfig, user string) []byte {
 			body[k] = v
 		}
 		body["model"] = c.Model
-		body["max_tokens"] = gateMaxTokens
+		body["max_tokens"] = gateTokens(n)
 		body["messages"] = []map[string]string{{"role": "system", "content": gateSystemPrompt}, {"role": "user", "content": user}}
 	}
 	b, _ := json.Marshal(body)
@@ -196,26 +200,29 @@ func parseGateScores(text string, count int) ([]float64, error) {
 }
 
 // gateScores asks the model for one score in [0,1] per line, in order.
-// The request and the lines are redacted first; a redaction that fails
-// sends nothing.
+// The repository's name, the request and the lines are redacted first, as
+// whole texts and line by line, then flattened and cut; a redaction that
+// fails sends nothing.
 func gateScores(ctx context.Context, c gateConfig, repo, request string, hits []search.Hit) ([]float64, error) {
 	endpoint, key, err := gateRoute(c)
 	if err != nil {
 		return nil, err
 	}
-	texts := []string{judgeClip(request, 4*gateTextLen)}
+	// Lines stay lines until redaction is done: flattened first, a hit
+	// that starts on one line could take the next line's secret with it.
+	texts := []string{runeCut(repo, gateTextLen), runeCut(request, 4*gateTextLen)}
 	for _, h := range hits {
-		texts = append(texts, judgeClip(h.Name+": "+h.Description, 4*gateTextLen))
+		texts = append(texts, runeCut(h.Name+": "+h.Description, 4*gateTextLen))
 	}
-	red, err := digest.RedactAllContext(ctx, texts)
+	red, err := digest.RedactLinesContext(ctx, texts)
 	if err != nil || len(red) != len(texts) {
 		return nil, errors.New("redaction_failed")
 	}
 	lines := make([]string, len(hits))
 	for i := range hits {
-		lines[i] = judgeClip(red[i+1], gateTextLen)
+		lines[i] = judgeClip(red[i+2], gateTextLen)
 	}
-	raw, err := postJSON(ctx, endpoint, key, gateBody(c, gateRequest(repo, judgeClip(red[0], gateTextLen), lines)))
+	raw, err := postJSON(ctx, endpoint, key, gateBody(c, gateRequest(judgeClip(red[0], gateTextLen), judgeClip(red[1], gateTextLen), lines), len(hits)))
 	if err != nil {
 		return nil, err
 	}
@@ -224,6 +231,14 @@ func gateScores(ctx context.Context, c gateConfig, repo, request string, hits []
 		return nil, err
 	}
 	return parseGateScores(text, len(hits))
+}
+
+// runeCut is s cut to at most n runes, its lines kept.
+func runeCut(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
 }
 
 // gateRepo is what the gate is told of the session's place: its first
@@ -284,8 +299,8 @@ func gated(ctx context.Context, request, repo string, hits []search.Hit) []searc
 		r = result{err: errors.New("deadline")}
 	}
 	rec.MS = time.Since(start).Milliseconds()
-	if r.err == nil && ctx.Err() != nil {
-		r.err = errors.New("deadline")
+	if ctx.Err() != nil {
+		r.err = errors.New("deadline") // whatever the late call said: it was cut short
 	}
 	if r.err != nil {
 		rec.Status = r.err.Error()

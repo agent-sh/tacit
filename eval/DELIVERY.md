@@ -292,8 +292,8 @@ Method. Every logged prompt block replayed under the current floors (rule slot a
 
 What it showed:
 
-- **Claude Haiku 5.5** was the fastest and left out much of the noise, but it scored the two lines the agents had marked used, in a block whose request was short and vague, under every useful threshold, with either prompt. Not shipped.
-- **Claude Sonnet 5.5** with the second prompt and thinking off, at 0.30: in every run it kept both lines the agents used and left out most of the lines they had marked not relevant; on the held-out half the judge's precision rose clearly, and most of its relevant lines stayed. The block printed about a quarter fewer lines. At 0.40 one of the two used lines fell under the threshold in one run of three, so the threshold stays with that margin. With Sonnet's default thinking on it was slower and less precise.
+- **Claude Haiku 5.5** was the fastest and left out much of the noise, but it scored the lines the agents had marked used, in a block whose request was short and vague, under every useful threshold, with either prompt. Not shipped.
+- **Claude Sonnet 5.5** with the second prompt and thinking off, at 0.30: in every run it kept the lines the agents used and left out most of the lines they had marked not relevant; on the held-out half the judge's precision rose clearly, and most of its relevant lines stayed. The block printed about a quarter fewer lines. At 0.40 a used line fell under the threshold in one of the runs, so the threshold stays with that margin. With Sonnet's default thinking on it was slower and less precise.
 - **Latency.** The model's answer took about 0.7 to 0.9 s at the median on the hook's route; its slow tail varied from run to run, up to about 2 s at the 95th percentile in one. The hook with the gate, end to end on real requests: about 1 s more at the median. The default deadline is 1.5 s; a late answer is dropped and the block stands as the selection made it, which on the live run was a few percent of the blocks.
 - **Cost.** One call a block with lines, a few hundred input tokens and a few dozen output tokens.
 
@@ -303,7 +303,7 @@ Shipped as an option, off by default (SPEC.md, "The relevance gate"). Not measur
 
 - Summaries keep few facts of any kind, by this test: the lines that came back at a compaction were kept by the next one at a rate no lower than the prompt lines of the same sessions, and the summary's selection a little more often.
 - Not sending again the facts the session had been given before (the compaction dropped them, or holds them already) would have cut most of the block after a compaction, left every line the agents had marked untouched (the marked ones were all new to their sessions), and lost about half of the lines the next summary kept.
-- The gate on these lines, with the last request before the compaction or the first one after it, left out every marked line but one, and also most of the lines the next summary kept, at about the rate it left out the dropped ones: for lines carried for the whole session it does not tell the kept from the dropped.
-- The marked lines of these blocks all came from one compaction of one session.
+- The gate on these lines, with the last request before the compaction or the first one after it, left out nearly every marked line, and also most of the lines the next summary kept, at about the rate it left out the dropped ones: for lines carried for the whole session it does not tell the kept from the dropped.
+- The marked lines of these blocks all came from a single compaction.
 
 Not cut: no rule tried keeps what that signal calls relevant while removing the noise, and the marks are too few to weigh against it. The asks now cover these lines, so their marks will say more.

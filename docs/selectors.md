@@ -100,7 +100,7 @@ Cost follows from the request size (the rubric, the prompt and the candidates' s
 
 ## Relevance gate
 
-The gate is the other way to put a model on the prompt path: the lexical selection still picks the block, and a model then scores each of its lines for the request and the session's repository, leaving out the lines under the threshold. It never adds a line, so it cannot lower recall below what the gate keeps, and a slow or failing model leaves the block as it was. It is off by default.
+The gate is the other way to put a model on the prompt path: the lexical selection still picks the block, and a model then scores each of its lines for the request and the session's repository, leaving out the lines under the threshold. It only removes lines, so it adds no noise of its own, and a slow or failing model leaves the block as it was. It is off by default.
 
 ```yaml
 gate:
@@ -108,15 +108,15 @@ gate:
   model: global.anthropic.claude-sonnet-5-5
   threshold: 0.30                             # required: the score cut, in [0,1]
   timeout: 1500ms                             # default 1.5s, at most 2s
-  fields:                                     # extra request fields: here, thinking off
+  fields:                                     # extra request fields: thinking off (Sonnet 5.5's between_tools)
     thinking:
       type: between_tools
   key_file: ~/.config/tacit/bedrock.env       # AWS_BEARER_TOKEN_BEDROCK=... (or the loopback route below)
 ```
 
-On Bedrock the gate uses the bearer token, or a Bedrock endpoint on this machine's loopback with the auth skipped (`ANTHROPIC_BEDROCK_BASE_URL` and `CLAUDE_CODE_SKIP_BEDROCK_AUTH=1`, as Claude Code's Bedrock settings write them), read from the environment or from `key_file`. Each call sends the redacted request and the lines' names and descriptions, never fact bodies.
+On Bedrock the gate uses the bearer token, or a Bedrock endpoint on this machine's loopback with the auth skipped (`ANTHROPIC_BEDROCK_BASE_URL` and `CLAUDE_CODE_SKIP_BEDROCK_AUTH=1`, as Claude Code's Bedrock settings write them), read from the environment or from `key_file`. Each call sends the session's repository name (or the folder's), the request and the lines' names and descriptions, all redacted, never fact bodies.
 
-What we measured (2026-11, one owner's store; the numbers stay with the owner): on the graded prompt blocks of a real installation (the agents' own marks and the dreamer's judge), replayed under the current floors, the gate with Claude Sonnet 5.5 at 0.30 left out most of the lines the agents had marked not relevant and kept every line they had marked used, raised the judge's precision clearly on a held-out half of the sessions while keeping most of its relevant lines, and printed about a quarter fewer lines. Claude Haiku 5.5 was faster but scored the lines the agents had used under any useful threshold. The judge is a Claude model too, so part of the agreement on its labels may be two similar models agreeing; the agents' marks moved the same way. The call adds about a second to a prompt with a block (one call a block, a few hundred input tokens); the timeout bounds it, and a late answer is dropped. Method: [eval/DELIVERY.md](../eval/DELIVERY.md#a-relevance-gate-2026-11-25).
+What we measured (2026-11, one owner's store; the numbers stay with the owner): on the graded prompt blocks of a real installation (the agents' own marks and the dreamer's judge), replayed under the current floors, the gate with Claude Sonnet 5.5 at 0.30 left out most of the lines the agents had marked not relevant and kept the lines they had marked used, raised the judge's precision clearly on a held-out half of the sessions while keeping most of its relevant lines, and printed about a quarter fewer lines. Claude Haiku 5.5 was faster but scored the lines the agents had used under any useful threshold. The judge is a Claude model too, so part of the agreement on its labels may be two similar models agreeing; the agents' marks moved the same way. The call adds about a second to a prompt with a block (one call a block, a few hundred input tokens); the timeout bounds it, and a late answer is dropped. Method: [eval/DELIVERY.md](../eval/DELIVERY.md#a-relevance-gate-2026-11-25).
 
 ## Measure your own
 
