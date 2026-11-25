@@ -67,14 +67,14 @@ func TestStopAsksOnceForTheTurnsMarks(t *testing.T) {
 	if out := hookOut(t, stopPayload(cwd, "s1", false), "stop", "--mcp"); out != "" {
 		t.Fatalf("nothing given, nothing asked: %q", out)
 	}
-	// The start block is background for every turn: its lines are owed no
-	// mark, so a turn given only them is not asked.
+	// The start block's lines are owed a mark like any line: a turn given
+	// only them is asked.
 	start, _ := json.Marshal(map[string]any{"session_id": "s0", "cwd": cwd, "source": "startup"})
 	if out := hookOut(t, string(start), "session-start", "--mcp"); !strings.Contains(out, "slot-lock-order") {
 		t.Fatalf("start: %s", out)
 	}
-	if out := hookOut(t, stopPayload(cwd, "s0", false), "stop", "--mcp"); out != "" {
-		t.Fatalf("asked for the start block's lines: %q", out)
+	if reason := stopReason(t, hookOut(t, stopPayload(cwd, "s0", false), "stop", "--mcp")); !strings.HasPrefix(reason, stopAskTitle) || !strings.Contains(reason, "slot-lock-order") {
+		t.Fatalf("the start block's lines were not asked for: %q", reason)
 	}
 	// The prompt block's lines were given for the turn's request: asked.
 	if out := hookOut(t, promptPayload(cwd, "s1", "why does the scheduler pool hold a shard lock for each tenant"), "prompt", "--mcp"); !strings.Contains(out, "slot-lock-order") || !strings.Contains(out, "scheduler-shard-locks") {
@@ -96,25 +96,19 @@ func TestStopAsksOnceForTheTurnsMarks(t *testing.T) {
 		t.Fatalf("asked again for the same lines: %q", out)
 	}
 	// A deny's line is owed under the repository too (it logs before it
-	// remembers); a resume's, a compaction's and its summary's lines, like
-	// the start's, are background and owed nothing.
+	// remembers), and so are a resume's, a compaction's and its summary's.
 	beginLog("deny", hookInput{SessionID: "s9"}, "", []string{"widget"}, nil)
 	endLog(nil)
 	owe("s9", []string{"slot-lock-order"})
 	if b, _ := os.ReadFile(owedFile("s9")); string(b) != "slot-lock-order\twidget\tdeny\n" {
 		t.Fatalf("owed after its entry ended: %q", b)
 	}
-	// A standing line an older binary owed is not asked for either.
-	os.WriteFile(owedFile("s7"), []byte("slot-lock-order\twidget\tstart\n"), 0o600)
-	if out := hookOut(t, stopPayload(cwd, "s7", false), "stop", "--mcp"); out != "" {
-		t.Fatalf("asked for a start line an older binary owed: %q", out)
-	}
 	for _, hook := range []string{"start", "resume", "compact", "summary"} {
 		beginLog(hook, hookInput{SessionID: "s8"}, "", []string{"widget"}, nil)
 		endLog(nil)
 		owe("s8", []string{"slot-lock-order"})
-		if b, err := os.ReadFile(owedFile("s8")); err == nil {
-			t.Fatalf("a %s line owed a mark: %q", hook, b)
+		if lines := takeOwed("s8"); len(lines) != 1 || lines[0] != (owedLine{"slot-lock-order", "widget", hook}) {
+			t.Fatalf("a %s line owed: %v", hook, lines)
 		}
 	}
 	os.Remove(owedFile("s1"))

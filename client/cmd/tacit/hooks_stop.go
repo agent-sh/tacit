@@ -34,24 +34,19 @@ func owedFile(id string) string {
 // remember.
 var owedScope string
 
-// owedHook is the hook that printed them (prompt, deny, start, ...).
+// owedHook is the hook that printed them (prompt, deny, start, compact,
+// summary, resume, ...). Every printed line is owed a mark, the start
+// block's and what returns after a compaction or a resume too, so every
+// line a session was given is graded. A standing line's "not relevant"
+// still does not count against it in the outcomes (delivery_outcomes.go,
+// standing).
 var owedHook string
 
-// askedHooks are the hooks whose lines are owed a mark: the ones that give a
-// line for the turn's own situation, its request (prompt) or a command about
-// to run (deny). The start block and what returns after a compaction or a
-// resume (compact, summary, resume) are background for the whole session,
-// "not relevant" to most turns by nature (delivery_outcomes.go, standing),
-// so asking for their marks spent the agent's call on lines whose verdict
-// says nothing of them.
-var askedHooks = map[string]bool{"prompt": true, "deny": true}
-
-// owe adds printed lines to the session's owed set, under owedScope, when
-// owedHook is one of askedHooks. A headless session owes nothing: nobody is
-// asked there.
+// owe adds printed lines to the session's owed set, under owedScope. A
+// headless session owes nothing: nobody is asked there.
 func owe(id string, names []string) {
 	p := owedFile(id)
-	if p == "" || len(names) == 0 || !askedHooks[owedHook] || !deliveryLogOn() || hookHeadless {
+	if p == "" || len(names) == 0 || !deliveryLogOn() || hookHeadless {
 		return
 	}
 	scope, hook := owedScope, owedHook
@@ -96,8 +91,8 @@ func takeOwed(id string) []owedLine {
 			f = append(f, "")
 		}
 		name, scope, hook := f[0], f[1], f[2]
-		if name == "" || seen[name] || hook != "" && !askedHooks[hook] {
-			continue // a standing line an older binary owed is not asked for either
+		if name == "" || seen[name] {
+			continue
 		}
 		seen[name] = true
 		out = append(out, owedLine{name, scope, hook})
