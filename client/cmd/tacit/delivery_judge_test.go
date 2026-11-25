@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-sh/tacit/client/internal/events"
 	"github.com/agent-sh/tacit/client/internal/hermes"
 	"github.com/agent-sh/tacit/client/internal/hermes/hermestest"
 )
@@ -1248,4 +1249,18 @@ func TestJudgeReadsHermesMoments(t *testing.T) {
 		t.Fatalf("Hermes delivery boundary %+v", dlog)
 	}
 	dlog = nil
+}
+
+// What the judge reads is redacted before it is flattened: a password on the
+// line after an open setting's value is masked, as it is alone.
+func TestJudgeCaseRedactsEachLine(t *testing.T) {
+	requireScrump(t)
+	secret := "Zq7Vx9" + "Lm2Kp4"
+	text := "deploy token_url: 'https://auth.example.invalid/oauth/" + strings.Repeat("p", 80) + "\n" + "pass" + "word: '" + secret + "' and the rest"
+	owner := &events.Event{Kind: events.KindOwnerText, Text: text}
+	c, ok := judgeCaseFromEvents(context.Background(), nil, judgeMoment{Block: "b", Fact: "f", Hook: "prompt", Line: "f: a line"}, owner, owner,
+		[]events.Event{{Kind: events.KindAgentText, Text: "next line\n" + text}})
+	if !ok || strings.Contains(c.Request, secret) || len(c.Next) != 1 || strings.Contains(c.Next[0], secret) {
+		t.Fatalf("ok %v, request %q, next %q", ok, c.Request, c.Next)
+	}
 }

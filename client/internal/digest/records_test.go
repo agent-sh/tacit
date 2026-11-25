@@ -171,3 +171,26 @@ func TestRedactionReadyNamesTheScrumpToInstall(t *testing.T) {
 		t.Fatalf("a scrump that masks the open value: %v", err)
 	}
 }
+
+// A text of several lines flattened after redaction: the issue's repro's
+// password, on the line after an open setting, is masked as it is alone.
+func TestRedactLinesMasksEachLineAsAlone(t *testing.T) {
+	requireScrump(t)
+	for _, p := range crossing() {
+		text := p[0] + "\n" + p[1]
+		out, err := RedactLinesContext(context.Background(), []string{text, "plain words"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		alone, err := RedactErr(p[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.SplitN(out[0], "\n", 2)[1]; strings.Contains(got, "Zq7Vx9") || len(got) != len(alone) {
+			t.Fatalf("the second line: %q, alone %q", got, alone)
+		}
+		if out[1] != "plain words" {
+			t.Fatalf("a plain text changed: %q", out[1])
+		}
+	}
+}

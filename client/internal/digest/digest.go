@@ -94,6 +94,48 @@ func RedactAllContext(ctx context.Context, texts []string) ([]string, error) {
 	return out, err
 }
 
+// RedactLinesContext is RedactAllContext for texts of several lines that
+// are flattened after redaction: each text is masked as one text and line
+// by line, and a byte stays masked when either masked it, as Finish does. As
+// one text a secret whose keyword ends the line before is masked; line by
+// line a hit that starts on one line cannot run into the next and keep its
+// secret. A text whose two maskings do not line up is an error: nothing of
+// it is to leave the machine.
+func RedactLinesContext(ctx context.Context, texts []string) ([]string, error) {
+	all := append([]string(nil), texts...)
+	counts := make([]int, len(texts))
+	for i, t := range texts {
+		lines := strings.Split(t, "\n")
+		counts[i] = len(lines)
+		all = append(all, lines...)
+	}
+	red, err := RedactAllContext(ctx, all)
+	if err != nil {
+		return nil, err
+	}
+	if len(red) != len(all) {
+		return nil, errors.New("redaction returned another count of texts")
+	}
+	out := make([]string, len(texts))
+	k := len(texts)
+	for i := range texts {
+		whole := strings.Split(red[i], "\n")
+		if len(whole) != counts[i] {
+			return nil, errors.New("a mask ran across lines")
+		}
+		for j := range whole {
+			alone := red[k+j]
+			if len(whole[j]) != len(alone) {
+				return nil, errors.New("the two maskings of a line differ in length")
+			}
+			whole[j] = union(whole[j], alone)
+		}
+		k += counts[i]
+		out[i] = strings.Join(whole, "\n")
+	}
+	return out, nil
+}
+
 // Warm is a scrump records call started before its texts are known
 // (StartWarm), so scrump loads its rules while the caller does other work.
 // It redacts once (RedactAll); End stops one that is not used.

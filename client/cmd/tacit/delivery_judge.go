@@ -960,8 +960,9 @@ func readJudgeDays(since time.Time) []logEntry {
 }
 
 // judgeRedactTexts redacts what the judge reads (the dreamer's redactor,
-// which fails closed); tests stand in for it.
-var judgeRedactTexts = digest.RedactAllContext
+// which fails closed), each text as a whole and line by line, before it is
+// flattened (judgeCaseFromEvents); tests stand in for it.
+var judgeRedactTexts = digest.RedactLinesContext
 
 // judgeRand is the draw's source; tests fix it.
 var judgeRand = rand.Float64
@@ -1076,15 +1077,18 @@ func hermesMomentOf(ctx context.Context, s *store.Store, m judgeMoment) (judgeCa
 }
 
 func judgeCaseFromEvents(ctx context.Context, s *store.Store, m judgeMoment, owner, last *events.Event, after []events.Event) (judgeCase, bool) {
-	const pre = 4 * judgeTextLen // clipped to this before redaction, to judgeTextLen after
+	// Cut to pre before redaction, lines kept (a text flattened first could
+	// let a hit that starts on one line take the next line's secret), and
+	// flattened and cut to judgeTextLen after.
+	const pre = 4 * judgeTextLen
 	var req []string
 	switch m.Hook {
 	case "prompt":
 		// The hook may run before the harness writes the prompt.
 		if len(after) > 0 && judgeOwnerTurn(after[0]) {
-			req, after = append(req, judgeClip(after[0].Text, pre)), after[1:]
+			req, after = append(req, runeCut(after[0].Text, pre)), after[1:]
 		} else if owner != nil {
-			req = append(req, judgeClip(owner.Text, pre))
+			req = append(req, runeCut(owner.Text, pre))
 		}
 	case "push":
 		// The call is the last event before the block, or the first after
@@ -1096,12 +1100,12 @@ func judgeCaseFromEvents(ctx context.Context, s *store.Store, m judgeMoment, own
 			call = last
 		}
 		if call != nil {
-			req = append(req, "the tool call "+call.ToolName+": "+judgeClip(call.ToolInput, pre))
+			req = append(req, "the tool call "+call.ToolName+": "+runeCut(call.ToolInput, pre))
 		} else {
 			req = append(req, "a tool call ("+m.Tool+")")
 		}
 		if owner != nil {
-			req = append(req, "made for the request: "+judgeClip(owner.Text, pre))
+			req = append(req, "made for the request: "+runeCut(owner.Text, pre))
 		}
 	}
 	if len(after) > judgeAfter {
@@ -1111,7 +1115,7 @@ func judgeCaseFromEvents(ctx context.Context, s *store.Store, m judgeMoment, own
 	if line == "" {
 		line = m.Fact + ": " + factDescription(s, m.FactPath)
 	}
-	texts := []string{strings.Join(req, "; "), judgeClip(line, pre)}
+	texts := []string{strings.Join(req, "; "), runeCut(line, pre)}
 	for _, ev := range after {
 		texts = append(texts, eventWords(ev, pre))
 	}
@@ -1133,13 +1137,13 @@ func judgeOwnerTurn(ev events.Event) bool {
 func eventWords(ev events.Event, n int) string {
 	switch ev.Kind {
 	case events.KindToolCall:
-		return "tool call " + ev.ToolName + ": " + judgeClip(ev.ToolInput, n)
+		return "tool call " + ev.ToolName + ": " + runeCut(ev.ToolInput, n)
 	case events.KindToolResult:
-		return "tool result: " + judgeClip(ev.ToolOutput, n)
+		return "tool result: " + runeCut(ev.ToolOutput, n)
 	case events.KindOwnerText:
-		return "owner: " + judgeClip(ev.Text, n)
+		return "owner: " + runeCut(ev.Text, n)
 	}
-	return "agent: " + judgeClip(ev.Text, n)
+	return "agent: " + runeCut(ev.Text, n)
 }
 
 func alignedLineStart(path string, off int64) int64 {
