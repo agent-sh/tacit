@@ -48,6 +48,20 @@ type Utility struct {
 	AuditDir  string   `yaml:"audit_dir"`
 }
 
+// Gate is the relevance gate on the prompt block (SPEC.md, "The relevance
+// gate"): a model that scores each line for the request; off without a
+// provider.
+type Gate struct {
+	Provider  string         `yaml:"provider"` // bedrock or openai
+	Model     string         `yaml:"model"`
+	Endpoint  string         `yaml:"endpoint"` // openai: the base URL
+	Region    string         `yaml:"region"`   // bedrock
+	Threshold *float64       `yaml:"threshold"`
+	Timeout   string         `yaml:"timeout"`
+	KeyFile   string         `yaml:"key_file"`
+	Fields    map[string]any `yaml:"fields"` // extra request fields the model takes
+}
+
 // Delivery switches and bounds the hooks' repo-first delivery (SPEC.md,
 // Delivery). Each switch is on or off; every one defaults to on.
 type Delivery struct {
@@ -72,6 +86,7 @@ type Delivery struct {
 
 type Config struct {
 	Utility         Utility  `yaml:"utility"`
+	Gate            Gate     `yaml:"gate"`
 	Delivery        Delivery `yaml:"delivery"`
 	DreamMaxRuntime string   `yaml:"dream_max_runtime"`
 	// DreamAgentWindows is what the dreamer does with a window that holds no
@@ -273,6 +288,45 @@ func Load(path string, required bool) error {
 			return fmt.Errorf("utility timeout must be positive and no more than 2s")
 		}
 	}
+	switch c.Gate.Provider {
+	case "":
+	case "bedrock":
+		if c.Gate.Model == "" {
+			return fmt.Errorf("gate provider bedrock needs model")
+		}
+	case "openai":
+		if c.Gate.Endpoint == "" || c.Gate.Model == "" {
+			return fmt.Errorf("gate provider openai needs endpoint and model")
+		}
+	default:
+		return fmt.Errorf("gate provider must be bedrock, openai or empty")
+	}
+	if c.Gate.Provider != "" {
+		v := c.Gate.Threshold
+		if v == nil || math.IsNaN(*v) || *v < 0 || *v > 1 {
+			return fmt.Errorf("gate provider %s needs a threshold in [0,1]: scores from different models are not on one scale", c.Gate.Provider)
+		}
+		values["TACIT_GATE_THRESHOLD"] = strconv.FormatFloat(*v, 'g', -1, 64)
+	}
+	if c.Gate.Timeout != "" {
+		v, err := time.ParseDuration(c.Gate.Timeout)
+		if err != nil || v <= 0 || v > 2*time.Second {
+			return fmt.Errorf("gate timeout must be positive and no more than 2s")
+		}
+	}
+	if len(c.Gate.Fields) > 0 {
+		b, err := json.Marshal(c.Gate.Fields)
+		if err != nil {
+			return fmt.Errorf("gate fields must be a map of JSON values: %v", err)
+		}
+		values["TACIT_GATE_FIELDS"] = string(b)
+	}
+	values["TACIT_GATE_PROVIDER"] = c.Gate.Provider
+	values["TACIT_GATE_MODEL"] = c.Gate.Model
+	values["TACIT_GATE_ENDPOINT"] = c.Gate.Endpoint
+	values["TACIT_GATE_REGION"] = c.Gate.Region
+	values["TACIT_GATE_TIMEOUT"] = c.Gate.Timeout
+	values["TACIT_GATE_KEY_FILE"] = resolve(c.Gate.KeyFile)
 	for key, v := range map[string]string{"REPO_START": c.Delivery.RepoStart, "REPO_ALIASES": c.Delivery.RepoAliases, "PROMPT_METADATA": c.Delivery.PromptMetadata, "PROMPT_ACTION": c.Delivery.PromptAction, "INSTRUCTION": c.Delivery.Instruction, "TOOL_PUSH": c.Delivery.ToolPush, "PUSH_COMMANDS": c.Delivery.PushCommands, "DEDUP": c.Delivery.Dedup, "TREE_POINTER": c.Delivery.TreePointer, "LOG": c.Delivery.Log, "TITLES": c.Delivery.Titles} {
 		values["TACIT_DELIVERY_"+key] = strings.ToLower(v)
 	}

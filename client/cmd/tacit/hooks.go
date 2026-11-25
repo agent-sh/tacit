@@ -347,6 +347,10 @@ func runHook(args []string) int {
 		}
 		corpus := &lazyDedupCorpus{repos: append(drepos, ws...)}
 		strong = withoutDuplicates(strong, corpus.get)
+		// Last, the relevance gate, when one is set: a model scores each
+		// line for the request and leaves out the ones under its threshold
+		// (hooks_gate.go); off, failing or late, the block stands.
+		strong = gated(ctx, p, gateRepo(repoNames(sit), in.Cwd), strong)
 		remember(in.SessionID, strong)
 		if out := hookBlock(strong, "# tacit: facts matching this request", titlesNote); out != "" {
 			fmt.Print(out)

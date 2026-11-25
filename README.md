@@ -132,6 +132,8 @@ utility:
 
 Code still decides scope and limits first, and a failed or slow model falls back to the lexical selection. Setup for every provider, the thresholds and the full benchmark: [Choosing what each prompt sees](docs/selectors.md).
 
+A lighter option keeps the lexical selection and adds a relevance gate after it: a model scores each line of the block for the request and the lines under a threshold are left out (`gate:` in the settings; [Relevance gate](docs/selectors.md#relevance-gate)).
+
 ### Client settings
 
 Every YAML option is listed here:

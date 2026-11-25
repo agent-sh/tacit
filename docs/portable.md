@@ -97,6 +97,10 @@ utility:
 
 The audit directory is optional. It contains private daily JSONL files with redacted task and summary text, scores, selected flags and fallback reasons. Keep it out of the store and source control. On Unix, the directory must be owned by the caller and private (0700); files use mode 0600, a best-effort 10 MiB daily cap, and eight-day retention. Symlinks, hard links and special files are refused. Private audit is currently disabled on non-Unix systems rather than claiming Unix permissions enforce Windows ACLs; scoring still works. Audit failure or a stalled filesystem does not block a prompt. See [the measured comparison](../eval/JEV.md) for limits and the threshold tradeoff.
 
+### Optional relevance gate
+
+A model scores each line of the prompt block for the request, and the lines under `threshold` are left out (SPEC.md, "The relevance gate"; [Choosing what each prompt sees](selectors.md#relevance-gate)). `bedrock` reads `AWS_BEARER_TOKEN_BEDROCK`, or the loopback route (`ANTHROPIC_BEDROCK_BASE_URL` on this machine's loopback with `CLAUDE_CODE_SKIP_BEDROCK_AUTH` on, sent no credential); `openai` reads `TACIT_GATE_API_KEY`, optional. Each from the environment or else `key_file`. `threshold` is required; `timeout` defaults to 1.5s and cannot exceed 2s; `fields` are extra request fields (Bedrock's `additionalModelRequestFields`). Any failure or a late answer leaves the block as the selection made it.
+
 ### Verifier
 
 `tacit verify --requeue all` (or finding ids, separated by commas) sends findings that reached the verifier's attempt limit again; it calls no model, and `--dry-run` only prints what it would clear. `tacit verify --max 0` only moves the pair findings whose fact a third fact replaced to the live facts, or closes them as moot, reopens the curator's closures the store no longer agrees with, and sends nothing; `--dry-run` prints what it would close or reopen.
@@ -116,6 +120,15 @@ The audit directory is optional. It contains private daily JSONL files with reda
 | `TYPESAFE_API_KEY` | empty | `jev` credential, sent only to the official TypeSafe origin |
 | `AWS_BEARER_TOKEN_BEDROCK` | empty | `bedrock` credential, sent only to `bedrock-runtime.<region>.amazonaws.com` |
 | `TACIT_UTILITY_API_KEY` | empty | `systemone`/`openai` credential, sent only to the configured endpoint |
+| `TACIT_GATE_PROVIDER` | empty (no gate) | `bedrock` or `openai` enables the relevance gate |
+| `TACIT_GATE_MODEL` | empty | the gate's model |
+| `TACIT_GATE_ENDPOINT` | empty | `openai` base URL; HTTPS unless loopback |
+| `TACIT_GATE_REGION` | `us-east-1` | Bedrock region for `bedrock` |
+| `TACIT_GATE_THRESHOLD` | required | score cut in [0,1] |
+| `TACIT_GATE_TIMEOUT` | `1500ms` | redaction + request deadline, positive and at most `2s` |
+| `TACIT_GATE_KEY_FILE` | empty | dotenv file; only the route's names are read |
+| `TACIT_GATE_FIELDS` | empty | JSON object of extra request fields |
+| `TACIT_GATE_API_KEY` | empty | `openai` gate credential, sent only to the configured endpoint |
 | `TACIT_SETTINGS` | platform config file above | optional client YAML settings |
 | `TACIT_STORE` | `~/.local/share/tacit/store` | the store clone |
 | `TACIT_CONFIG` | `~/.config/tacit` | keys |

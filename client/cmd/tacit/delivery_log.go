@@ -88,9 +88,12 @@ type logEntry struct {
 	// Policy is what chose the block: "gates" (the deterministic gates and
 	// floors) or "utility" (the utility provider's scores, when they did),
 	// then with the threshold they were held to.
-	Policy           string    `json:"policy,omitempty"`
-	UtilityThreshold *float64  `json:"utility_threshold,omitempty"`
-	Cands            []logCand `json:"cands,omitempty"`
+	Policy           string   `json:"policy,omitempty"`
+	UtilityThreshold *float64 `json:"utility_threshold,omitempty"`
+	// Gate is what the relevance gate did with a prompt block's lines
+	// (hooks_gate.go), when one is set.
+	Gate  *logGate  `json:"gate,omitempty"`
+	Cands []logCand `json:"cands,omitempty"`
 	// Nothing: the block showed no line. It is an option the policy chose
 	// like any line, with PNothing its probability.
 	Nothing  bool    `json:"nothing"`
@@ -127,6 +130,17 @@ type logEntry struct {
 	started time.Time
 }
 
+// logGate is the relevance gate's part of a prompt block: "ok" when its
+// scores decided, else why the block stands as the selection made it (the
+// deadline, a failed call, a setting); the model, the threshold, and the
+// milliseconds it took.
+type logGate struct {
+	Status    string  `json:"status"`
+	Model     string  `json:"model,omitempty"`
+	Threshold float64 `json:"threshold"`
+	MS        int64   `json:"ms,omitempty"`
+}
+
 // logCand is one candidate of a block, delivered or not.
 type logCand struct {
 	Name      string  `json:"name"`
@@ -153,8 +167,9 @@ type logCand struct {
 	Via string `json:"via,omitempty"`
 	// Dropped is the gate that left it out: floor, relative, ceiling,
 	// seen, echo, held (a compaction's summary holds it), utility (the
-	// provider's scores), withheld (a claim of the owner's authority, or a
-	// note the reviewer turned down: withoutClaims), local (this machine's
+	// provider's scores), gate (the relevance gate's score), withheld (a
+	// claim of the owner's authority, or a note the reviewer turned down:
+	// withoutClaims), local (this machine's
 	// notes past their share of the start block), other (a path that does
 	// not say why).
 	Dropped   string `json:"dropped,omitempty"`
@@ -169,6 +184,8 @@ type logCand struct {
 	P float64 `json:"p"`
 	// Utility is the utility provider's score, when its scores chose.
 	Utility *float64 `json:"utility,omitempty"`
+	// Gate is the relevance gate's score of a line it scored, in [0,1].
+	Gate *float64 `json:"gate,omitempty"`
 	// Form is how a printed line read: "title" (no description: the agent
 	// opens it) or "full".
 	Form string `json:"form,omitempty"`
