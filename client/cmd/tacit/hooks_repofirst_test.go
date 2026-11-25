@@ -121,6 +121,11 @@ func TestPromptBlockMatchesAppliesToPathsAndCommands(t *testing.T) {
 	)
 	t.Setenv("TACIT_DELIVERY_REPO_START", "off") // the start block would carry both facts
 	t.Setenv("TACIT_DELIVERY_PROMPT_ACTION", "off")
+	// Off by default: on graded prompt blocks the line was nearly all noise.
+	if out := hookOut(t, promptPayload(cwd, "s0", "Fix the race in src/scheduler/pool.go when two jobs finish"), "prompt"); strings.Contains(out, "pool-lock-order") {
+		t.Fatalf("metadata line by default:\n%s", out)
+	}
+	t.Setenv("TACIT_DELIVERY_PROMPT_METADATA", "on")
 	if out := hookOut(t, promptPayload(cwd, "s1", "Fix the race in src/scheduler/pool.go when two jobs finish"), "prompt"); !strings.Contains(out, "pool-lock-order") || strings.Contains(out, "other-pool-note") {
 		t.Fatalf("path match:\n%s", out)
 	}

@@ -208,7 +208,7 @@ func TestDeliveryLogNamesEachPromptGate(t *testing.T) {
 	derived := []search.Hit{{Name: "hot", Path: "derived/demo/hot.md", Scope: "derived/demo", Score: derivedPromptFloor - 1}}
 	rec := &logEntry{}
 	rec.pool(hits, nil)
-	got := promptSelectionLogged("fix the widget queue retries now", hits, derived, map[string]bool{"seen": true}, promptFloor, rec)
+	got := promptSelectionLogged("fix the widget queue retries now", hits, derived, map[string]bool{"seen": true}, selFloor, rec)
 	if names(got) != "best,rule" {
 		t.Fatalf("selected %s", names(got))
 	}
@@ -227,12 +227,12 @@ func TestDeliveryLogNamesEachPromptGate(t *testing.T) {
 	}
 	t.Setenv("TACIT_DELIVERY_PROMPT_RELATIVE", "0")
 	rec = &logEntry{}
-	promptSelectionLogged("fix the widget queue retries now", []search.Hit{{Name: "low", Path: "user/low.md", Score: promptFloor - 1}}, nil, nil, promptFloor, rec)
+	promptSelectionLogged("fix the widget queue retries now", []search.Hit{{Name: "low", Path: "user/low.md", Score: selFloor - 1}}, nil, nil, selFloor, rec)
 	if c := candOf(*rec, "low"); c == nil || c.Dropped != "floor" {
 		t.Errorf("under the floor: %+v", c)
 	}
 	// No entry, nothing logged and no panic: the provider's worker.
-	if names(promptSelectionLogged("fix the widget queue retries now", hits, nil, nil, promptFloor, nil)) == "" {
+	if names(promptSelectionLogged("fix the widget queue retries now", hits, nil, nil, selFloor, nil)) == "" {
 		t.Error("nothing selected without an entry")
 	}
 }

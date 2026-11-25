@@ -34,16 +34,24 @@ func owedFile(id string) string {
 // remember.
 var owedScope string
 
-// owedHook is the hook that printed them (start, prompt, deny, ...): a
-// line a session start or a deny gave is owed a mark like any, but its
-// "not relevant" does not count against it (delivery_outcomes.go).
+// owedHook is the hook that printed them (prompt, deny, start, ...).
 var owedHook string
 
-// owe adds printed lines to the session's owed set, under owedScope. A
-// headless session owes nothing: nobody is asked there.
+// askedHooks are the hooks whose lines are owed a mark: the ones that give a
+// line for the turn's own situation, its request (prompt) or a tool call
+// (push, deny). The start block and what returns after a compaction or a
+// resume (compact, summary, resume) are background for the whole session,
+// "not relevant" to most turns by nature (delivery_outcomes.go, standing),
+// so asking for their marks spent the agent's call on lines whose verdict
+// says nothing of them.
+var askedHooks = map[string]bool{"prompt": true, "push": true, "deny": true}
+
+// owe adds printed lines to the session's owed set, under owedScope, when
+// owedHook is one of askedHooks. A headless session owes nothing: nobody is
+// asked there.
 func owe(id string, names []string) {
 	p := owedFile(id)
-	if p == "" || len(names) == 0 || !deliveryLogOn() || hookHeadless {
+	if p == "" || len(names) == 0 || !askedHooks[owedHook] || !deliveryLogOn() || hookHeadless {
 		return
 	}
 	scope, hook := owedScope, owedHook

@@ -149,7 +149,7 @@ Every YAML option is listed here:
 | `hermes_db` | `TACIT_HERMES_DB` | Hermes session store the dreamer and the owner's words read; `~/.hermes/state.db` when it exists, `off` for none |
 | `delivery.repo_start` | `TACIT_DELIVERY_REPO_START` | `on` (default): in a repo the SessionStart block is the repo's own rules and standards, then decisions and past mistakes; `off`: the release 0.7.1 block |
 | `delivery.repo_aliases` | `TACIT_DELIVERY_REPO_ALIASES` | `on` (default): a checkout also answers to every remote's repository name in its git config and its root manifest's package name |
-| `delivery.prompt_metadata` | `TACIT_DELIVERY_PROMPT_METADATA` | `on` (default): the prompt block adds the repo's fact whose `applies_to` paths or commands the prompt names |
+| `delivery.prompt_metadata` | `TACIT_DELIVERY_PROMPT_METADATA` | `off` (default): `on` makes the prompt block add the repo's fact whose `applies_to` paths or commands the prompt names; off since graded prompt blocks found that line nearly all noise |
 | `delivery.prompt_action` | `TACIT_DELIVERY_PROMPT_ACTION` | `on` (default): the prompt block adds the repo's best rule or decision for the request when it has none |
 | `delivery.instruction` | `TACIT_DELIVERY_INSTRUCTION` | `on` (default): the SessionStart title and the MCP server's instructions say what tacit holds and ask for one search before an action that changes something (the server's also point to `tacit_tree`); `off`: neither, and the server has no instructions |
 | `delivery.tool_push` | `TACIT_DELIVERY_TOOL_PUSH` | No effect: the PreToolUse hook pushes no context any more (SPEC.md, Delivery); read so older config files load |

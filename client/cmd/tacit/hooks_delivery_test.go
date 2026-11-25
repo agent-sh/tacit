@@ -92,17 +92,17 @@ func TestPromptRuleSlotFloor(t *testing.T) {
 		{Name: "a", Score: 30}, {Name: "b", Score: 25}, {Name: "c", Score: 20},
 		{Name: "weak-rule", Score: ruleSlotFloor - 0.1, Ruling: true},
 	}
-	if got := names(promptSelection(hits, nil, nil, promptFloor)); got != "a,b,c" {
+	if got := names(promptSelection(hits, nil, nil, selFloor)); got != "a,b,c" {
 		t.Fatalf("weak ruling added: %s", got)
 	}
 	hits[3].Score = ruleSlotFloor
-	if got := names(promptSelection(hits, nil, nil, promptFloor)); got != "a,b,c,weak-rule" {
+	if got := names(promptSelection(hits, nil, nil, selFloor)); got != "a,b,c,weak-rule" {
 		t.Fatalf("ruling at the slot floor: %s", got)
 	}
 	// Derived facts are never in the slot; a ruling under the floor that the
 	// selection already holds through relationship evidence is not doubled.
 	hits = []search.Hit{{Name: "a", Score: 30}, {Name: "r", Score: 11, Ruling: true, Evidence: &search.RetrievalEvidence{Supported: true}}}
-	if got := names(promptSelection(hits, nil, nil, promptFloor)); got != "a,r" {
+	if got := names(promptSelection(hits, nil, nil, selFloor)); got != "a,r" {
 		t.Fatalf("supported ruling: %s", got)
 	}
 }
@@ -116,20 +116,20 @@ func TestPromptRuleSlotTwoRulings(t *testing.T) {
 		{Name: "a", Score: 30}, {Name: "b", Score: 25}, {Name: "c", Score: 20},
 		{Name: "r1", Score: 14, Ruling: true}, {Name: "r2", Score: 12, Ruling: true},
 	}
-	if got := names(promptSelection(hits, nil, nil, promptFloor)); got != "a,b,c,r1" {
+	if got := names(promptSelection(hits, nil, nil, selFloor)); got != "a,b,c,r1" {
 		t.Fatalf("best ruling: %s", got)
 	}
-	if got := names(promptSelection(hits, nil, map[string]bool{"r1": true}, promptFloor)); got != "a,b,c" {
+	if got := names(promptSelection(hits, nil, map[string]bool{"r1": true}, selFloor)); got != "a,b,c" {
 		t.Fatalf("the slot was refilled after its ruling was seen: %s", got)
 	}
 	inThree := []search.Hit{
 		{Name: "a", Score: 30}, {Name: "r0", Score: 25, Ruling: true}, {Name: "c", Score: 20},
 		{Name: "r1", Score: 14, Ruling: true},
 	}
-	if got := names(promptSelection(inThree, nil, nil, promptFloor)); got != "a,r0,c" {
+	if got := names(promptSelection(inThree, nil, nil, selFloor)); got != "a,r0,c" {
 		t.Fatalf("a ruling in the three got a second: %s", got)
 	}
-	if got := names(promptSelection(inThree, nil, map[string]bool{"r0": true}, promptFloor)); got != "a,c" {
+	if got := names(promptSelection(inThree, nil, map[string]bool{"r0": true}, selFloor)); got != "a,c" {
 		t.Fatalf("a seen ruling in the three still counts: %s", got)
 	}
 }
@@ -209,19 +209,19 @@ func releaseCaps(t *testing.T) {
 // does not ride on a strong head, and an even field fills to the ceiling.
 func TestPromptSelectionThresholdAndCeiling(t *testing.T) {
 	hits := []search.Hit{{Name: "a", Score: 40}, {Name: "b", Score: 30}, {Name: "c", Score: 27.9}, {Name: "d", Score: 26}}
-	if got := names(promptSelection(hits, nil, nil, promptFloor)); got != "a,b" {
+	if got := names(promptSelection(hits, nil, nil, selFloor)); got != "a,b" {
 		t.Fatalf("0.7 of 40 is 28: %s", got)
 	}
 	even := []search.Hit{{Name: "a", Score: 30}, {Name: "b", Score: 29}, {Name: "c", Score: 28}, {Name: "d", Score: 27}, {Name: "e", Score: 26}, {Name: "f", Score: 25}}
-	if got := names(promptSelection(even, nil, nil, promptFloor)); got != "a,b,c,d,e" {
+	if got := names(promptSelection(even, nil, nil, selFloor)); got != "a,b,c,d,e" {
 		t.Fatalf("ceiling 5: %s", got)
 	}
 	t.Setenv("TACIT_DELIVERY_PROMPT_RELATIVE", "0")
-	if got := names(promptSelection(hits, nil, nil, promptFloor)); got != "a,b,c,d" {
+	if got := names(promptSelection(hits, nil, nil, selFloor)); got != "a,b,c,d" {
 		t.Fatalf("no threshold: %s", got)
 	}
 	t.Setenv("TACIT_DELIVERY_PROMPT_CEILING", "2")
-	if got := names(promptSelection(even, nil, nil, promptFloor)); got != "a,b" {
+	if got := names(promptSelection(even, nil, nil, selFloor)); got != "a,b" {
 		t.Fatalf("ceiling 2: %s", got)
 	}
 }
@@ -239,7 +239,7 @@ func TestPromptShortRequestHasNoRuleSlot(t *testing.T) {
 		"deploy the widget now":    "a,b,c,r1",
 		"the deploy, the deploys?": "a,b,c",
 	} {
-		if got := names(promptSelectionFor(p, hits, nil, nil, promptFloor)); got != want {
+		if got := names(promptSelectionFor(p, hits, nil, nil, selFloor)); got != want {
 			t.Errorf("%q: %s, want %s", p, got, want)
 		}
 	}

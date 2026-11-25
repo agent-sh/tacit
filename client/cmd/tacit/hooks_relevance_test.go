@@ -163,13 +163,13 @@ func TestHookRepoAliasesVerifiedCheckout(t *testing.T) {
 func TestPromptRelevanceBeforeLimit(t *testing.T) {
 	var specs []fact.Meta
 	for i := 0; i < 30; i++ {
-		specs = append(specs, fact.Meta{Name: fmt.Sprintf("restricted-%d", i), Description: "endpoint api", AppliesTo: fact.AppliesTo{Repos: []string{"other"}}})
+		specs = append(specs, fact.Meta{Name: fmt.Sprintf("restricted-%d", i), Description: "endpoint api gateway timeout", AppliesTo: fact.AppliesTo{Repos: []string{"other"}}})
 	}
-	specs = append(specs, fact.Meta{Name: "valid", Description: "endpoint api conventions"})
+	specs = append(specs, fact.Meta{Name: "valid", Description: "endpoint api gateway timeout conventions"})
 	ix := relevanceIndex(t, specs)
 	// Use the project floor here so this isolates candidate starvation, not
 	// the separate precision/recall policy for repo-less prompts.
-	got, err := promptHits(context.Background(), ix, search.Situation{Repo: "demo"}, "endpoint api", nil)
+	got, err := promptHits(context.Background(), ix, search.Situation{Repo: "demo"}, "endpoint api gateway timeout", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

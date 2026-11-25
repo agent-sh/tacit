@@ -67,9 +67,18 @@ func TestStopAsksOnceForTheTurnsMarks(t *testing.T) {
 	if out := hookOut(t, stopPayload(cwd, "s1", false), "stop", "--mcp"); out != "" {
 		t.Fatalf("nothing given, nothing asked: %q", out)
 	}
-	start, _ := json.Marshal(map[string]any{"session_id": "s1", "cwd": cwd, "source": "startup"})
+	// The start block is background for every turn: its lines are owed no
+	// mark, so a turn given only them is not asked.
+	start, _ := json.Marshal(map[string]any{"session_id": "s0", "cwd": cwd, "source": "startup"})
 	if out := hookOut(t, string(start), "session-start", "--mcp"); !strings.Contains(out, "slot-lock-order") {
 		t.Fatalf("start: %s", out)
+	}
+	if out := hookOut(t, stopPayload(cwd, "s0", false), "stop", "--mcp"); out != "" {
+		t.Fatalf("asked for the start block's lines: %q", out)
+	}
+	// The prompt block's lines were given for the turn's request: asked.
+	if out := hookOut(t, promptPayload(cwd, "s1", "why does the scheduler pool hold a shard lock for each tenant"), "prompt", "--mcp"); !strings.Contains(out, "slot-lock-order") || !strings.Contains(out, "scheduler-shard-locks") {
+		t.Fatalf("prompt: %s", out)
 	}
 	reason := stopReason(t, hookOut(t, stopPayload(cwd, "s1", false), "stop", "--mcp"))
 	if !strings.HasPrefix(reason, stopAskTitle) || !strings.Contains(reason, "scheduler-shard-locks") || !strings.Contains(reason, "slot-lock-order") ||
@@ -86,13 +95,22 @@ func TestStopAsksOnceForTheTurnsMarks(t *testing.T) {
 	if out := hookOut(t, stopPayload(cwd, "s1", false), "stop", "--mcp"); out != "" {
 		t.Fatalf("asked again for the same lines: %q", out)
 	}
-	// A resume's block is owed under the repository too (the restart paths
-	// log before they remember).
-	beginLog("resume", hookInput{SessionID: "s9"}, "", []string{"widget"}, nil)
+	// A deny's line is owed under the repository too (it logs before it
+	// remembers); a resume's, a compaction's and its summary's lines, like
+	// the start's, are background and owed nothing.
+	beginLog("deny", hookInput{SessionID: "s9"}, "", []string{"widget"}, nil)
 	endLog(nil)
 	owe("s9", []string{"slot-lock-order"})
-	if b, _ := os.ReadFile(owedFile("s9")); string(b) != "slot-lock-order\twidget\tresume\n" {
+	if b, _ := os.ReadFile(owedFile("s9")); string(b) != "slot-lock-order\twidget\tdeny\n" {
 		t.Fatalf("owed after its entry ended: %q", b)
+	}
+	for _, hook := range []string{"start", "resume", "compact", "summary"} {
+		beginLog(hook, hookInput{SessionID: "s8"}, "", []string{"widget"}, nil)
+		endLog(nil)
+		owe("s8", []string{"slot-lock-order"})
+		if b, err := os.ReadFile(owedFile("s8")); err == nil {
+			t.Fatalf("a %s line owed a mark: %q", hook, b)
+		}
 	}
 	os.Remove(owedFile("s1"))
 	// A headless session's stop asks nothing and drops what it owes.
@@ -256,13 +274,14 @@ func TestOutcomesDemoteStopAndPromote(t *testing.T) {
 	add("gadget", "good", verdictNotRelevant, 3)
 	for i := 0; i < 3; i++ {
 		lines = append(lines, outcomeLine{TS: now, In: "widget", Fact: "standing-rule", Verdict: verdictNotRelevant, Src: "mark", Hook: "start"})
+		lines = append(lines, outcomeLine{TS: now, In: "widget", Fact: "summary-line", Verdict: verdictNotRelevant, Src: "mark", Hook: "summary"})
 	}
 	lines = append(lines, outcomeLine{TS: now, In: "widget", Fact: "standing-wrong", Verdict: verdictWrong, Src: "mark", Hook: "deny"})
 	old := outcomeLine{TS: time.Now().Add(-outcomeWindow - time.Hour).UTC().Format(time.RFC3339Nano), In: "widget", Fact: "good", Verdict: verdictNotRelevant, Src: "judge"}
 	lines = append(lines, old, old, old, old)
 	recordOutcomes(lines)
 	o := outcomesFor("widget")
-	for name, want := range map[string]int{"noisy": outcomeStopped, "mixed": outcomeDemoted, "good": outcomePromoted, "saved": outcomeDemoted, "fresh": outcomeNeutral, "standing-rule": outcomeNeutral, "standing-wrong": outcomeDemoted} {
+	for name, want := range map[string]int{"noisy": outcomeStopped, "mixed": outcomeDemoted, "good": outcomePromoted, "saved": outcomeDemoted, "fresh": outcomeNeutral, "standing-rule": outcomeNeutral, "summary-line": outcomeNeutral, "standing-wrong": outcomeDemoted} {
 		if got := o.class(name); got != want {
 			t.Errorf("%s: class %d, want %d", name, got, want)
 		}
@@ -300,9 +319,9 @@ func TestStopAsksAboutOneTurnInTen(t *testing.T) {
 		fact.Meta{Name: "slot-lock-order", Description: "Take the shard lock before the slot lock in the scheduler pool, never the other way", Type: "past_mistake", Scope: "projects/widget", AppliesTo: widgetRepo},
 	)
 	t.Setenv("TACIT_STATE_DIR", filepath.Join(t.TempDir(), "state"))
-	start, _ := json.Marshal(map[string]any{"session_id": "s2", "cwd": cwd, "source": "startup"})
-	hookOut(t, string(start), "session-start", "--mcp")
-	takeOwed("s2")
+	beginLog("prompt", hookInput{SessionID: "s2"}, "", []string{"widget"}, nil) // the lines below are a prompt block's
+	endLog(nil)
+	os.MkdirAll(filepath.Dir(owedFile("s2")), 0o700) // the session's folder, as a hook that remembers makes it
 	const turns = 300
 	asked, firsts := 0, 0
 	for turn := 0; turn < turns; turn++ {

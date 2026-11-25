@@ -54,12 +54,12 @@ func restartRig(t *testing.T) (r *rig, home string, payload func(session, source
 }
 
 // heronPrompt is a request the heron fact answers, without saying it back.
-const heronPrompt = "why did the heron uploader give up on a chunk"
+const heronPrompt = "why did the heron uploader give up on a chunk after three tries"
 
 // otterPrompt is a request the otter fact answers and the summary does not
 // name. It does not say the fact back, which the prompt's echo filter would
 // leave out.
-const otterPrompt = "why did the otter loop stop retrying in production"
+const otterPrompt = "why did the otter loop stop retrying after it backed off twice"
 
 // sessionSet is the session's delivered set as the hooks keep it.
 func sessionSet(t *testing.T, home, session string) []string {

@@ -525,9 +525,12 @@ func withSeen(seen map[string]bool, hits ...[]search.Hit) map[string]bool {
 
 // promptMetaHits is the prompt block's metadata line: a fact of this repo
 // whose applies_to paths cover a path the prompt names, or whose command
-// the prompt names.
+// the prompt names. Off by default: on graded prompt blocks the line was
+// nearly all noise, twice (eval/DELIVERY.md, "Real traffic, graded" and
+// "Floors from marks and labels"); a command the prompt names in passing
+// says little about what the turn needs.
 func promptMetaHits(ctx context.Context, ix *search.Index, sit search.Situation, p string, seen map[string]bool) []search.Hit {
-	if len(repoNames(sit)) == 0 || !deliveryOn("PROMPT_METADATA", true) {
+	if len(repoNames(sit)) == 0 || !deliveryOn("PROMPT_METADATA", false) {
 		return nil
 	}
 	all, err := ix.MetaFacts(ctx)

@@ -37,11 +37,21 @@ const (
 	// overlay) in the SessionStart block: the prompt hook's count, so a
 	// session starts with no more of them than one prompt can add.
 	startLocalLimit = promptLimit
-	// bm25 floors: below these a match is one or two common words.
-	promptFloor = 15.0 // project-scoped prompts retain the existing floor
-	// The repo-less pool needs a stricter floor: the current-corpus replay
-	// selected 20 for precision, at a documented recall cost (eval/DELIVERY.md).
-	repoLessPromptFloor = 20.0
+	// bm25 floors, on the score after the repository ranking and the
+	// outcomes. Graded prompt lines (the agents' marks and the dreamer's
+	// judge) below them were mostly noise and above them far less so
+	// (eval/DELIVERY.md, "Floors from marks and labels"). In a known
+	// repository the floor is the higher one: the repository's own rules and
+	// decisions reach the session by the start block and, at the prompt, by
+	// the repository boost, and what cleared the old floor besides them was
+	// mostly other subjects' facts matched on a few common words.
+	promptFloor         = 30.0
+	repoLessPromptFloor = 25.0
+	// The compaction summary's selection (summaryStep) keeps the floors the
+	// prompt had before: its query is the summary's terms, whose scores run
+	// on another scale, and no graded line of it measured a new one.
+	summaryFloor         = 15.0
+	repoLessSummaryFloor = 20.0
 	// ruleSlotFloor is the floor for the one owner ruling a prompt block may
 	// add when none of its facts is a ruling. Rulings are stated in general
 	// words ("one approval", "no rotation") and the request in task words, so
@@ -535,7 +545,12 @@ func promptHitsWith(ctx context.Context, ix *search.Index, sit search.Situation,
 		dhits = nil // the curated block stands without them
 	}
 	floor := promptFloor
-	if len(names) == 0 {
+	switch {
+	case local && len(names) == 0:
+		floor = repoLessSummaryFloor
+	case local:
+		floor = summaryFloor
+	case len(names) == 0:
 		floor = repoLessPromptFloor
 	}
 	logPool(hits, nil)
