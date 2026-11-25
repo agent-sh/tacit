@@ -1,10 +1,11 @@
 Tacit keeps memory for coding agents in Markdown and git. Use a local store or share one across machines.
 
-This release makes every logged mark count, and makes the model runner read Codex profiles as Codex does (#179).
+This release delivers fewer prompt lines and asks agents to grade only the lines given for their turn (#180).
 
-- **Every logged mark counts.** A mark's verdicts reached the outcomes only when the process that took the mark recorded them, so an MCP server still running an older binary logged marks that never moved delivery. Before the hooks read the outcomes, the delivery log's marks are now matched against the verdicts by block and fact, and the missing ones are appended under the asked block's scope. It reads at most 8 MiB of the log a call and resumes where it stopped, so no hook waits on it. A verdict already recorded is never written twice.
-- **Codex profiles merge deeply.** A profile that set one nested provider key, such as a region, replaced the base configuration's whole provider table and lost its endpoint, so verify runs reached the wrong service. Profile tables now merge into the base configuration at every depth, as in Codex.
+- **Higher prompt floors.** A ranked prompt line now needs a score of 30 in a known repository and 25 without one (were 15 and 20). On graded prompt lines, the agents' marks and the dreamer's judge, lines under those scores were mostly noise; in a repository the repository's own rules and decisions still reach the session through the start block and the repository boost. The compaction summary's selection keeps 15 and 20.
+- **The metadata line is off by default.** The prompt block's line for a fact whose `applies_to` paths or commands the prompt names was nearly all noise on graded blocks. `delivery.prompt_metadata: on` brings it back.
+- **The Stop hook asks only for the turn's own lines.** It asked for a mark of every line a hook printed, the start block and the blocks after a compaction or a resume included, which are background for the session. It now asks for the prompt block's lines and a deny's. The summary's selection after a compaction counts as standing in the outcomes, like the start block.
 
-Upgrading: install the new binary on every machine whose hooks run, and restart long-running `tacit mcp` servers when convenient. No hook, store format or protocol change; the server needs no deploy.
+Upgrading: install the new binary on every machine whose hooks run. No store format or protocol change; the server needs no deploy.
 
 Builds for Linux, macOS and Windows on amd64 and arm64 include the CLI, the browser app and a compatible scrump redactor. Git 2.29+ is required. [Setup and platform validation](https://github.com/agent-sh/tacit/blob/main/docs/portable.md).
