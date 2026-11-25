@@ -1,8 +1,12 @@
 package main
 
 import (
-	"github.com/agent-sh/tacit/client/internal/search"
+	"context"
+	"fmt"
 	"testing"
+
+	"github.com/agent-sh/tacit/client/internal/fact"
+	"github.com/agent-sh/tacit/client/internal/search"
 )
 
 // selFloor is a floor under the scores of the tests of the rule slot, the
@@ -39,5 +43,31 @@ func TestPromptFloorsInAndOutOfARepository(t *testing.T) {
 	}
 	if got := names(promptSelection(hits, nil, nil, repoLessPromptFloor)); got != "strong,middling" {
 		t.Fatalf("without one: %s", got)
+	}
+}
+
+// The hook picks the floor by the session's repositories: the same fact,
+// tied to no repository and scoring between the two floors, is printed
+// without a repository and left out in one.
+func TestPromptHookFloorFollowsTheRepository(t *testing.T) {
+	var specs []fact.Meta
+	for i := 0; i < 40; i++ {
+		specs = append(specs, fact.Meta{Name: fmt.Sprintf("route-%d", i), Description: "endpoint api routes"})
+		specs = append(specs, fact.Meta{Name: fmt.Sprintf("gw-%d", i), Description: "gateway timeouts"})
+	}
+	specs = append(specs, fact.Meta{Name: "ingress-note", Description: "endpoint api gateway"})
+	ix := relevanceIndex(t, specs)
+	ctx := context.Background()
+	probe, err := ix.Query(ctx, search.Situation{Query: "endpoint api gateway", PromptRelevance: true}, 1, false)
+	if err != nil || len(probe) == 0 || probe[0].Name != "ingress-note" || probe[0].Score < 25 || probe[0].Score >= 30 {
+		t.Fatalf("setup: the fact must score between the floors: %+v %v", probe, err)
+	}
+	got, err := promptHits(ctx, ix, search.Situation{}, "endpoint api gateway", nil)
+	if err != nil || names(got) != "ingress-note" {
+		t.Fatalf("without a repository: %s %v", names(got), err)
+	}
+	got, err = promptHits(ctx, ix, search.Situation{Repo: "demo"}, "endpoint api gateway", nil)
+	if err != nil || names(got) != "" {
+		t.Fatalf("in a repository: %s %v", names(got), err)
 	}
 }

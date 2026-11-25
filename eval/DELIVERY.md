@@ -42,7 +42,7 @@ The selected policy favors precision for unsolicited memory in repo-less
 sessions. It loses useful recall: the baseline hits every positive request, and
 the selected policy misses some. This is a cost, not a free improvement.
 Explicit search remains available and retains its previous broad retrieval
-behavior. Known-project requests keep floor 15; computed facts keep floor 12.
+behavior. Known-project requests keep floor 15; computed facts keep floor 12. (Both prompt floors rose later: "Floors from marks and labels".)
 
 A sweep of repo-less floors 15 through 20 used the real tokenizer and boosted
 query scores. Higher floors progressively suppressed more weak matches; 20
@@ -276,10 +276,10 @@ What the measurement showed:
 
 The rule now: a ranked prompt line needs 30 in a known repository and 25 without one, on the score after the ranking and the outcomes; the metadata line is off by default (`delivery.prompt_metadata`). The compaction summary's selection keeps 15 and 20: its query is the summary's terms, on another scale, and none of its lines was graded.
 
-Replay: every logged prompt block re-filtered by the new gates. Every change here only removes a line and nothing backfills, so a re-filtered block is what the hook would print, except where dropping a ranked ruling would have opened the rule slot, which the replay does not model. Against the logged blocks it prints far fewer lines, keeps every line the agents marked used, drops close to half the lines they marked not relevant, keeps most of the judge's relevant lines and drops more than half of its not relevant ones. The recall cost is real: some judge-relevant lines under the new floors are gone.
+Replay: every logged prompt block re-filtered by the new gates. The gates only remove lines and nothing backfills, but two lines can open where the floor dropped one: the rule slot, when the block keeps no owner rule, and the action line, when in a repository it keeps no rule or decision tied to the repository. The replay models both by bringing back the best dropped line of that kind; the action line's own pick, made without the coherence gate, may be another fact, which the log cannot show. With or without that, against the logged blocks it prints far fewer lines, keeps every line the agents marked used, drops close to half the lines they marked not relevant, keeps most of the judge's relevant lines and drops more than half of its not relevant ones. The recall cost is real: some judge-relevant lines under the new floors are gone.
 
-This ships without the live comparison step 6 asks for: it was asked for on the agents' marks, which the hold-outs and the marks themselves keep measuring after it.
+Shipped without step 6's live comparison; the marks and the hold-outs measure it after release.
 
-**What the Stop hook asks.** It asked for a mark of every line a hook printed, the start block and the blocks after a compaction or a resume included. Those lines are background for the whole session, and the outcomes count no "not relevant" against them; an ask after a compaction listed mostly them, and agents marked them not relevant, as their nature says. The ask now covers the lines given for the turn's own situation: the prompt block's and a deny's. The summary's selection after a compaction is counted as standing too.
+**What the Stop hook asks.** It asked for a mark of every line a hook printed, the start block and the blocks after a compaction or a resume included. Those lines are background for the whole session, and the outcomes count no "not relevant" against them; an ask after a compaction listed mostly them, and agents marked them not relevant, as their nature says. The ask now covers the lines given for the turn's own situation: the prompt block's and a deny's. The summary's selection after a compaction is counted as standing too. Standing lines get no new verdicts so: a wrong one is for the store's own checks to fix.
 
 **The blocks after a compaction.** The start block's return is the start block less the facts the summary holds; summaries rarely held any, so it is the start block again, within `start_ceiling`, and the summary's selection is within `prompt_ceiling`. No graded measure of those lines exists (the judge reads prompt and push lines), so they are not cut further here.

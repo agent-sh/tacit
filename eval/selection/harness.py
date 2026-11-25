@@ -53,6 +53,8 @@ def context_query(case, arm):
 
 
 def baseline_select(candidates, derived, repo, seen=()):
+    # The baseline this harness measured against: the floors of its time (the
+    # hook's are higher now, eval/DELIVERY.md, "Floors from marks and labels").
     floor = 15 if repo else 20
     strong = [h for h in candidates if not h['Scope'].startswith('derived/') and
               (h['Score'] >= floor or (h.get('Evidence') or {}).get('Supported'))][:3]

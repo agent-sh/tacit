@@ -72,7 +72,7 @@ is exercised, never the syncing `hook session-start` path.
 
 Selectors on identical pools:
 
-* Baseline floors: current 15 repo / 20 repo-less or supported relationship route,
+* Baseline floors: then current 15 repo / 20 repo-less (since raised, eval/DELIVERY.md, "Floors from marks and labels") or supported relationship route,
   derived 12. Keep three curated before removing seen facts. No backfill.
 * Learned: four standardized features: log1p(current score), IDF coverage,
   log1p(max discounted phrase lift), current-repo scope indicator. Optional fifth

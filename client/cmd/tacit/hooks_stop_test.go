@@ -104,6 +104,11 @@ func TestStopAsksOnceForTheTurnsMarks(t *testing.T) {
 	if b, _ := os.ReadFile(owedFile("s9")); string(b) != "slot-lock-order\twidget\tdeny\n" {
 		t.Fatalf("owed after its entry ended: %q", b)
 	}
+	// A standing line an older binary owed is not asked for either.
+	os.WriteFile(owedFile("s7"), []byte("slot-lock-order\twidget\tstart\n"), 0o600)
+	if out := hookOut(t, stopPayload(cwd, "s7", false), "stop", "--mcp"); out != "" {
+		t.Fatalf("asked for a start line an older binary owed: %q", out)
+	}
 	for _, hook := range []string{"start", "resume", "compact", "summary"} {
 		beginLog(hook, hookInput{SessionID: "s8"}, "", []string{"widget"}, nil)
 		endLog(nil)

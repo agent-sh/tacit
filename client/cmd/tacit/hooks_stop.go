@@ -38,13 +38,13 @@ var owedScope string
 var owedHook string
 
 // askedHooks are the hooks whose lines are owed a mark: the ones that give a
-// line for the turn's own situation, its request (prompt) or a tool call
-// (push, deny). The start block and what returns after a compaction or a
+// line for the turn's own situation, its request (prompt) or a command about
+// to run (deny). The start block and what returns after a compaction or a
 // resume (compact, summary, resume) are background for the whole session,
 // "not relevant" to most turns by nature (delivery_outcomes.go, standing),
 // so asking for their marks spent the agent's call on lines whose verdict
 // says nothing of them.
-var askedHooks = map[string]bool{"prompt": true, "push": true, "deny": true}
+var askedHooks = map[string]bool{"prompt": true, "deny": true}
 
 // owe adds printed lines to the session's owed set, under owedScope, when
 // owedHook is one of askedHooks. A headless session owes nothing: nobody is
@@ -96,8 +96,8 @@ func takeOwed(id string) []owedLine {
 			f = append(f, "")
 		}
 		name, scope, hook := f[0], f[1], f[2]
-		if name == "" || seen[name] {
-			continue
+		if name == "" || seen[name] || hook != "" && !askedHooks[hook] {
+			continue // a standing line an older binary owed is not asked for either
 		}
 		seen[name] = true
 		out = append(out, owedLine{name, scope, hook})
